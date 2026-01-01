@@ -344,7 +344,7 @@ class PlexTVRecommender:
         self.sonarr_config = self.config.get('sonarr', {})
 
         # Load user preferences for per-user customization
-        self.user_preferences = self.config.get('user_preferences', {})
+        self.user_preferences = self.config.get('users', {}).get('preferences', {})
 
         # Get user context for cache files
         if single_user:
