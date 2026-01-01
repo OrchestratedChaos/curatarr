@@ -369,7 +369,7 @@ class PlexMovieRecommender:
         self.exclude_genres = [g.strip().lower() for g in exclude_genre_str.split(',') if g.strip()] if exclude_genre_str else []
 
         # Load user preferences for per-user customization
-        self.user_preferences = self.config.get('user_preferences', {})
+        self.user_preferences = self.config.get('users', {}).get('preferences', {})
 
         weights_config = self.config.get('weights', {})
         self.weights = {
