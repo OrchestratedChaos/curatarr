@@ -1,0 +1,5 @@
+plexapi>=4.15.4
+PyYAML>=6.0.1
+requests>=2.31.0
+trakt>=3.4.0
+urllib3>=2.1.0
