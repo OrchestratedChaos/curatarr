@@ -230,7 +230,7 @@ main() {
     echo ""
 
     # Step 6: Generate external recommendations (watchlist)
-    if grep -q "enabled: true" config.yml | grep -A 2 "external_recommendations" | grep -q "enabled: true" 2>/dev/null; then
+    if grep -A 2 "external_recommendations:" config.yml | grep -q "enabled: true" 2>/dev/null; then
         echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
         if python3 generate-external-recommendations.py; then
             echo -e "${GREEN}✓ External watchlists generated${NC}"

@@ -7,6 +7,8 @@ logs/
 
 # Cache and generated data
 cache/
+
+# Generated recommendations
 recommendations/external/
 
 # Python cache
