@@ -1,0 +1,25 @@
+# Configuration (contains sensitive tokens)
+config.yml
+
+# Logs
+logs/
+*.log
+
+# Cache and generated data
+cache/
+recommendations/external/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+.claude/
+*.xml

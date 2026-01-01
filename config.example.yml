@@ -1,0 +1,140 @@
+# Plex Recommendation System - Configuration
+# Single consolidated config for both Movies and TV Shows
+
+# Plex Server Connection
+plex:
+  url: http://YOUR_PLEX_URL:32400  # Or https://YOUR-SERVER.plex.direct:32400
+  token: YOUR_PLEX_TOKEN  # Get from: https://support.plex.tv/articles/204059436
+  movie_library: Movies
+  tv_library: TV Shows
+
+# TMDB API
+tmdb:
+  api_key: YOUR_TMDB_API_KEY  # Get free key from: https://www.themoviedb.org/settings/api
+
+# Users and Preferences
+users:
+  list: user1, user2, user3  # Your Plex usernames (comma-separated)
+  preferences:
+    user1:
+      display_name: User One
+      exclude_genres:
+        - horror  # Optional: genres to exclude from recommendations
+      streaming_services:  # Optional: your streaming subscriptions (US region)
+        - netflix
+        - hulu
+        - disney_plus
+        - amazon_prime
+    user2:
+      display_name: User Two
+      streaming_services:
+        - netflix
+    user3:
+      display_name: User Three
+
+# General Settings
+general:
+  confirm_operations: false
+  plex_only: true
+  combine_watch_history: false
+  log_retention_days: 7  # Keep logs for 7 days (0 = keep all)
+
+# Movies Settings
+movies:
+  limit_results: 50
+  randomize_recommendations: false
+  show_summary: true
+  show_cast: true
+  show_director: true
+  show_genres: true
+  show_language: true
+  show_rating: true
+  show_imdb_link: true
+  quality_filters:
+    min_rating: 5.0
+    min_vote_count: 15
+  weights:
+    genre: 0.20
+    director: 0.25
+    actor: 0.15
+    keyword: 0.30
+    language: 0.10
+  radarr:
+    enabled: false
+    url: http://localhost:7878
+    api_key: null
+    root_folder: /path/to/movies
+    quality_profile: HD-1080p
+    tag: RecommendForPlex
+    monitor: false
+    search_for_movie: false
+    append_usernames: false
+
+# TV Shows Settings
+tv:
+  limit_results: 20
+  randomize_recommendations: false
+  normalize_counters: true
+  show_summary: true
+  show_cast: true
+  show_language: true
+  show_rating: true
+  show_imdb_link: true
+  quality_filters:
+    min_rating: 0.0
+    min_vote_count: 0
+  weights:
+    genre: 0.20
+    studio: 0.20
+    actor: 0.15
+    keyword: 0.35
+    language: 0.10
+  sonarr:
+    enabled: false
+    url: http://localhost:8989
+    api_key: null
+    root_folder: /path/to/tv
+    quality_profile: HD-1080p
+    tag: RecommendForPlex
+    season_folder: true
+    monitor: false
+    monitor_option: none
+    search_missing: false
+    append_usernames: false
+
+# Collection Settings
+collections:
+  add_label: true
+  label_name: Recommended
+  append_usernames: true
+  remove_previous_recommendations: false  # Changed: use stale removal instead
+  stale_removal_days: 7  # Remove unwatched recs after 7 days (configurable)
+
+# Recency Decay (shared)
+recency_decay:
+  enabled: true
+  days_0_30: 1.0
+  days_31_90: 0.75
+  days_91_180: 0.50
+  days_181_365: 0.25
+  days_365_plus: 0.10
+
+# Trakt Integration (optional)
+trakt:
+  access_token: YOUR_TRAKT_ACCESS_TOKEN  # Optional - for Trakt integration (currently disabled)
+  refresh_token: YOUR_TRAKT_REFRESH_TOKEN
+  client_id: YOUR_TRAKT_CLIENT_ID  # Create app at: https://trakt.tv/oauth/applications/new
+  client_secret: YOUR_TRAKT_CLIENT_SECRET
+  clear_watch_history: false
+  sync_watch_history: false
+
+# External Recommendations (watchlist of content NOT in library)
+external_recommendations:
+  enabled: true  # Generate external watchlists
+  movie_limit: 30  # Number of movie recommendations per user
+  show_limit: 20  # Number of TV show recommendations per user
+
+# Platform Settings
+platform:
+  type: darwin
+  path_mappings: null
