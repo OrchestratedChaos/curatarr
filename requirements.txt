@@ -1,0 +1,20 @@
+# Python dependencies for Plex recommendation system
+# Based on netplexflix script requirements
+
+# Core Plex API client
+plexapi>=4.13.0
+
+# The Movie Database API client
+tmdbv3api>=1.7.0
+
+# Trakt API client for external recommendations
+trakt>=3.4.0
+
+# HTTP requests library
+requests>=2.28.0
+
+# YAML configuration parser
+pyyaml>=6.0
+
+# Environment variable management
+python-dotenv>=1.0.0
