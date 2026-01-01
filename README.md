@@ -1,5 +1,8 @@
 # Plex Recommendation System
 
+> **⚠️ Note:** This is a personal project. Not accepting contributions or pull requests.
+> Feel free to fork for your own use. For questions or access requests, open an issue.
+
 Extended fork of [netplexflix's](https://github.com/netplexflix) excellent Movie/TV Recommendations for Plex, enhanced with multi-user support, per-user preferences, and smart collections automation.
 
 ## Features
