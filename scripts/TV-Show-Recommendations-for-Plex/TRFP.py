@@ -27,7 +27,7 @@ from shared_plex_utils import (
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
-    log_warning, log_error, update_plex_collection
+    log_warning, log_error, update_plex_collection, cleanup_old_collections
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -371,7 +371,7 @@ class PlexTVRecommender:
         self.sonarr_config = self.config.get('sonarr', {})
 
         # Load user preferences for per-user customization
-        self.user_preferences = self.config.get('user_preferences', {})
+        self.user_preferences = self.config.get('users', {}).get('preferences', {})
 
         # Get user context for cache files
         if single_user:
@@ -388,9 +388,11 @@ class PlexTVRecommender:
         self.watched_cache_path = os.path.join(self.cache_dir, f"tv_watched_cache_{safe_ctx}.json")
         self.trakt_cache_path = os.path.join(self.cache_dir, f"trakt_sync_cache_{safe_ctx}.json")
         self.trakt_sync_cache_path = os.path.join(self.cache_dir, "trakt_sync_cache.json")
-         
-            #         # Load watched cache 
-            #         watched_cache = {}
+
+        # Initialize label_dates before cache loading
+        self.label_dates = {}
+        watched_cache = {}
+
         if os.path.exists(self.watched_cache_path):
             try:
                 with open(self.watched_cache_path, 'r', encoding='utf-8') as f:
@@ -399,7 +401,8 @@ class PlexTVRecommender:
                     self.watched_data_counters = watched_cache.get('watched_data_counters', {})
                     self.plex_tmdb_cache = {str(k): v for k, v in watched_cache.get('plex_tmdb_cache', {}).items()}
                     self.tmdb_keywords_cache = {str(k): v for k, v in watched_cache.get('tmdb_keywords_cache', {}).items()}
-                    
+                    self.label_dates = watched_cache.get('label_dates', {})
+
                     # Load watched show IDs
                     watched_ids = watched_cache.get('watched_show_ids', [])
                     if isinstance(watched_ids, list):
@@ -608,6 +611,30 @@ class PlexTVRecommender:
 
         return multiplier
 
+    def _get_excluded_genres_for_user(self, username=None):
+        """
+        Get excluded genres including user-specific preferences
+
+        Args:
+            username: Username to get excluded genres for (defaults to single_user)
+
+        Returns:
+            Set of excluded genre names (lowercase)
+        """
+        # Start with global excluded genres
+        excluded = set(self.exclude_genres)
+
+        # Get current username
+        current_user = username or self.single_user
+
+        # Add user-specific excluded genres if configured
+        if current_user and current_user in self.user_preferences:
+            user_prefs = self.user_preferences[current_user]
+            user_excluded = user_prefs.get('exclude_genres', [])
+            excluded.update([g.lower() for g in user_excluded])
+
+        return excluded
+
     def _get_plex_user_ids(self):
         """Resolve configured Plex usernames to their user IDs"""
         user_ids = []
@@ -787,6 +814,7 @@ class PlexTVRecommender:
                 'plex_tmdb_cache': {str(k): v for k, v in self.plex_tmdb_cache.items()},
                 'tmdb_keywords_cache': {str(k): v for k, v in self.tmdb_keywords_cache.items()},
                 'watched_show_ids': list(self.watched_show_ids),
+                'label_dates': getattr(self, 'label_dates', {}),
                 'last_updated': datetime.now().isoformat()
             }
             
@@ -1958,6 +1986,10 @@ class PlexTVRecommender:
     
             # If we have history, proceed with getting recommendations
             print(f"Fetching recommendations from Trakt...")
+
+            # Get user-specific excluded genres
+            excluded_genres = self._get_excluded_genres_for_user()
+
             url = "https://api.trakt.tv/recommendations/tv"
             collected_recs = []
             page = 1
@@ -2023,7 +2055,7 @@ class PlexTVRecommender:
                             'imdb_id': show.get('ids', {}).get('imdb')
                         }
     
-                        if any(g in self.exclude_genres for g in sd['genres']):
+                        if any(g.lower() in excluded_genres for g in sd['genres']):
                             continue
     
                         tmdb_id = show.get('ids', {}).get('tmdb')
@@ -2112,6 +2144,9 @@ class PlexTVRecommender:
         excluded_count = 0
         quality_filtered_count = 0
 
+        # Get user-specific excluded genres
+        excluded_genres = self._get_excluded_genres_for_user()
+
         # Get quality filters from config (Netflix-style)
         quality_filters = self.config.get('quality_filters', {})
         min_rating = quality_filters.get('min_rating', 0.0)
@@ -2122,8 +2157,8 @@ class PlexTVRecommender:
             if int(str(show_id)) in self.watched_show_ids:
                 continue
 
-            # Skip if show has excluded genres
-            if any(g in self.exclude_genres for g in show_info.get('genres', [])):
+            # Skip if show has excluded genres (case-insensitive)
+            if any(g.lower() in excluded_genres for g in show_info.get('genres', [])):
                 excluded_count += 1
                 continue
 
@@ -2286,9 +2321,9 @@ class PlexTVRecommender:
             # INCREMENTAL UPDATE: Keep unwatched (and fresh), remove watched and stale, fill gaps
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
-            # Load label dates from cache (track when each label was added)
+            # Ensure label_dates exists (should be initialized in __init__)
             if not hasattr(self, 'label_dates'):
-                self.label_dates = self.watched_cache.get('label_dates', {})
+                self.label_dates = {}
 
             # Get staleness threshold from config
             stale_days = self.config.get('plex', {}).get('stale_removal_days', 7)
@@ -2401,7 +2436,6 @@ class PlexTVRecommender:
                     print(f"{GREEN}Added: {show.title}{RESET}")
 
             # Save label dates to cache for persistence
-            self.watched_cache['label_dates'] = self.label_dates
             self._save_watched_cache()
 
             # RE-SORT: Calculate similarity for all shows and sort by score
@@ -2457,6 +2491,9 @@ class PlexTVRecommender:
 
                 collection_name = f"📺 {display_name} - Recommendation"
                 update_plex_collection(shows_section, collection_name, final_collection_shows, logger)
+
+                # Clean up old collection naming patterns for this user
+                cleanup_old_collections(shows_section, collection_name, username, "📺", logger)
 
         except Exception as e:
             log_error(f"Error managing Plex labels: {e}")
@@ -2907,6 +2944,8 @@ def adapt_root_config_to_legacy(root_config):
             'token': root_config.get('plex', {}).get('token', ''),
             'TV_library_title': root_config.get('plex', {}).get('tv_library', 'TV Shows'),
             'managed_users': root_config.get('plex', {}).get('managed_users', 'Admin'),
+        },
+        'collections': {
             'add_label': root_config.get('collections', {}).get('add_label', True),
             'label_name': root_config.get('collections', {}).get('label_name', 'Recommended'),
             'append_usernames': root_config.get('collections', {}).get('append_usernames', True),

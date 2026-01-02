@@ -26,7 +26,7 @@ from shared_plex_utils import (
     RATING_MULTIPLIERS,
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
-    log_warning, log_error, update_plex_collection
+    log_warning, log_error, update_plex_collection, cleanup_old_collections
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -407,7 +407,7 @@ class PlexMovieRecommender:
         self.exclude_genres = [g.strip().lower() for g in exclude_genre_str.split(',') if g.strip()] if exclude_genre_str else []
 
         # Load user preferences for per-user customization
-        self.user_preferences = self.config.get('user_preferences', {})
+        self.user_preferences = self.config.get('users', {}).get('preferences', {})
 
         weights_config = self.config.get('weights', {})
         self.weights = {
@@ -2799,6 +2799,9 @@ class PlexMovieRecommender:
                 collection_name = f"🎬 {display_name} - Recommendation"
                 update_plex_collection(movies_section, collection_name, final_collection_movies, logger)
 
+                # Clean up old collection naming patterns for this user
+                cleanup_old_collections(movies_section, collection_name, username, "🎬", logger)
+
         except Exception as e:
             log_error(f"Error managing Plex labels: {e}")
             import traceback
@@ -3178,6 +3181,8 @@ def adapt_root_config_to_legacy(root_config):
             'token': root_config.get('plex', {}).get('token', ''),
             'movie_library_title': root_config.get('plex', {}).get('movie_library', 'Movies'),
             'managed_users': root_config.get('plex', {}).get('managed_users', 'Admin'),
+        },
+        'collections': {
             'add_label': root_config.get('collections', {}).get('add_label', True),
             'label_name': root_config.get('collections', {}).get('label_name', 'Recommended'),
             'append_usernames': root_config.get('collections', {}).get('append_usernames', True),
