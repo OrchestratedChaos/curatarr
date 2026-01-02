@@ -27,7 +27,7 @@ from shared_plex_utils import (
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
-    log_warning, log_error
+    log_warning, log_error, update_plex_collection, cleanup_old_collections
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -388,9 +388,11 @@ class PlexTVRecommender:
         self.watched_cache_path = os.path.join(self.cache_dir, f"tv_watched_cache_{safe_ctx}.json")
         self.trakt_cache_path = os.path.join(self.cache_dir, f"trakt_sync_cache_{safe_ctx}.json")
         self.trakt_sync_cache_path = os.path.join(self.cache_dir, "trakt_sync_cache.json")
-         
-            #         # Load watched cache 
-            #         watched_cache = {}
+
+        # Initialize label_dates before cache loading
+        self.label_dates = {}
+        watched_cache = {}
+
         if os.path.exists(self.watched_cache_path):
             try:
                 with open(self.watched_cache_path, 'r', encoding='utf-8') as f:
@@ -399,7 +401,8 @@ class PlexTVRecommender:
                     self.watched_data_counters = watched_cache.get('watched_data_counters', {})
                     self.plex_tmdb_cache = {str(k): v for k, v in watched_cache.get('plex_tmdb_cache', {}).items()}
                     self.tmdb_keywords_cache = {str(k): v for k, v in watched_cache.get('tmdb_keywords_cache', {}).items()}
-                    
+                    self.label_dates = watched_cache.get('label_dates', {})
+
                     # Load watched show IDs
                     watched_ids = watched_cache.get('watched_show_ids', [])
                     if isinstance(watched_ids, list):
@@ -608,6 +611,30 @@ class PlexTVRecommender:
 
         return multiplier
 
+    def _get_excluded_genres_for_user(self, username=None):
+        """
+        Get excluded genres including user-specific preferences
+
+        Args:
+            username: Username to get excluded genres for (defaults to single_user)
+
+        Returns:
+            Set of excluded genre names (lowercase)
+        """
+        # Start with global excluded genres
+        excluded = set(self.exclude_genres)
+
+        # Get current username
+        current_user = username or self.single_user
+
+        # Add user-specific excluded genres if configured
+        if current_user and current_user in self.user_preferences:
+            user_prefs = self.user_preferences[current_user]
+            user_excluded = user_prefs.get('exclude_genres', [])
+            excluded.update([g.lower() for g in user_excluded])
+
+        return excluded
+
     def _get_plex_user_ids(self):
         """Resolve configured Plex usernames to their user IDs"""
         user_ids = []
@@ -787,6 +814,7 @@ class PlexTVRecommender:
                 'plex_tmdb_cache': {str(k): v for k, v in self.plex_tmdb_cache.items()},
                 'tmdb_keywords_cache': {str(k): v for k, v in self.tmdb_keywords_cache.items()},
                 'watched_show_ids': list(self.watched_show_ids),
+                'label_dates': getattr(self, 'label_dates', {}),
                 'last_updated': datetime.now().isoformat()
             }
             
@@ -1958,6 +1986,10 @@ class PlexTVRecommender:
     
             # If we have history, proceed with getting recommendations
             print(f"Fetching recommendations from Trakt...")
+
+            # Get user-specific excluded genres
+            excluded_genres = self._get_excluded_genres_for_user()
+
             url = "https://api.trakt.tv/recommendations/tv"
             collected_recs = []
             page = 1
@@ -2023,7 +2055,7 @@ class PlexTVRecommender:
                             'imdb_id': show.get('ids', {}).get('imdb')
                         }
     
-                        if any(g in self.exclude_genres for g in sd['genres']):
+                        if any(g.lower() in excluded_genres for g in sd['genres']):
                             continue
     
                         tmdb_id = show.get('ids', {}).get('tmdb')
@@ -2112,6 +2144,9 @@ class PlexTVRecommender:
         excluded_count = 0
         quality_filtered_count = 0
 
+        # Get user-specific excluded genres
+        excluded_genres = self._get_excluded_genres_for_user()
+
         # Get quality filters from config (Netflix-style)
         quality_filters = self.config.get('quality_filters', {})
         min_rating = quality_filters.get('min_rating', 0.0)
@@ -2122,8 +2157,8 @@ class PlexTVRecommender:
             if int(str(show_id)) in self.watched_show_ids:
                 continue
 
-            # Skip if show has excluded genres
-            if any(g in self.exclude_genres for g in show_info.get('genres', [])):
+            # Skip if show has excluded genres (case-insensitive)
+            if any(g.lower() in excluded_genres for g in show_info.get('genres', [])):
                 excluded_count += 1
                 continue
 
@@ -2286,9 +2321,9 @@ class PlexTVRecommender:
             # INCREMENTAL UPDATE: Keep unwatched (and fresh), remove watched and stale, fill gaps
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
-            # Load label dates from cache (track when each label was added)
+            # Ensure label_dates exists (should be initialized in __init__)
             if not hasattr(self, 'label_dates'):
-                self.label_dates = self.watched_cache.get('label_dates', {})
+                self.label_dates = {}
 
             # Get staleness threshold from config
             stale_days = self.config.get('plex', {}).get('stale_removal_days', 7)
@@ -2299,15 +2334,25 @@ class PlexTVRecommender:
             currently_labeled = shows_section.search(label=label_name)
             print(f"Found {len(currently_labeled)} currently labeled shows")
 
-            # Separate into watched, unwatched-fresh, and unwatched-stale
+            # Get excluded genres for this user (for checking existing items)
+            excluded_genres = self._get_excluded_genres_for_user()
+
+            # Separate into watched, unwatched-fresh, stale, and excluded
             unwatched_labeled = []
             watched_labeled = []
             stale_labeled = []
+            excluded_labeled = []
 
             for show in currently_labeled:
                 show.reload()  # Ensure fresh data
                 show_id = int(show.ratingKey)
                 label_key = f"{show_id}_{label_name}"
+
+                # Check if this show has excluded genres
+                show_genres = [g.tag.lower() for g in show.genres]
+                if any(g in excluded_genres for g in show_genres):
+                    excluded_labeled.append(show)
+                    continue
 
                 # Check if this show has been watched by any of the users
                 if show_id in self.watched_show_ids:
@@ -2330,6 +2375,7 @@ class PlexTVRecommender:
             print(f"{GREEN}Keeping {len(unwatched_labeled)} fresh unwatched recommendations{RESET}")
             print(f"{YELLOW}Removing {len(watched_labeled)} watched shows from recommendations{RESET}")
             print(f"{YELLOW}Removing {len(stale_labeled)} stale recommendations (unwatched > {stale_days} days){RESET}")
+            print(f"{YELLOW}Removing {len(excluded_labeled)} shows with excluded genres{RESET}")
 
             # Remove labels from watched shows
             for show in watched_labeled:
@@ -2346,6 +2392,14 @@ class PlexTVRecommender:
                 if label_key in self.label_dates:
                     del self.label_dates[label_key]
                 log_warning(f"Removed (stale): {show.title}")
+
+            # Remove labels from excluded genre shows
+            for show in excluded_labeled:
+                show.removeLabel(label_name)
+                label_key = f"{int(show.ratingKey)}_{label_name}"
+                if label_key in self.label_dates:
+                    del self.label_dates[label_key]
+                log_warning(f"Removed (excluded genre): {show.title}")
 
             # Get target count from config
             target_count = self.config['general'].get('limit_plex_results', 20)
@@ -2382,7 +2436,6 @@ class PlexTVRecommender:
                     print(f"{GREEN}Added: {show.title}{RESET}")
 
             # Save label dates to cache for persistence
-            self.watched_cache['label_dates'] = self.label_dates
             self._save_watched_cache()
 
             # RE-SORT: Calculate similarity for all shows and sort by score
@@ -2427,94 +2480,23 @@ class PlexTVRecommender:
             print(f"{GREEN}Final collection size: {len(final_collection_shows)} shows (sorted by similarity){RESET}")
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
 
-            # Store labeled show objects for collection creation
-            self._labeled_shows_for_collection = final_collection_shows
+            # Update the Plex collection with sorted shows
+            if final_collection_shows:
+                # Get display name for collection title
+                username = label_name.replace('Recommended_', '')
+                if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
+                    display_name = self.user_preferences[username]['display_name']
+                else:
+                    display_name = username.capitalize()
+
+                collection_name = f"📺 {display_name} - Recommendation"
+                update_plex_collection(shows_section, collection_name, final_collection_shows, logger)
+
+                # Clean up old collection naming patterns for this user
+                cleanup_old_collections(shows_section, collection_name, username, "📺", logger)
 
         except Exception as e:
             log_error(f"Error managing Plex labels: {e}")
-            import traceback
-            print(traceback.format_exc())
-
-    def manage_plex_collections(self) -> None:
-        """
-        Automatically manage Plex Collections based on labeled items.
-        Deletes old collections and creates new ones from labeled TV shows.
-        """
-        if not self.config.get('collections', {}).get('add_label'):
-            return
-
-        try:
-            shows_section = self.plex.library.section(self.library_title)
-            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
-
-            # Handle username appending for collection names (same logic as labels)
-            if self.config.get('collections', {}).get('append_usernames', False):
-                if self.single_user:
-                    user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
-                    label_name = f"{label_name}_{user_suffix}"
-                else:
-                    users = []
-                    if self.users['plex_users']:
-                        users = self.users['plex_users']
-                    else:
-                        users = self.users['managed_users']
-
-                    if users:
-                        sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
-                        user_suffix = '_'.join(sanitized_users)
-                        label_name = f"{label_name}_{user_suffix}"
-
-            # Create collection name - extract first name
-            username = label_name.replace('Recommended_', '')
-
-            # Check if user has a configured display name
-            if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
-                first_name = self.user_preferences[username]['display_name']
-            else:
-                # Fallback: extract first name (text before any numbers or second capital letter)
-                first_name_match = re.match(r'^([a-zA-Z]+)', username)
-                if first_name_match:
-                    first_name = first_name_match.group(1).capitalize()
-                else:
-                    first_name = username
-
-            collection_name = f"# {first_name}'s - Recommended"
-
-            # Reload section to ensure labels are fresh
-            shows_section = self.plex.library.section(self.library_title)
-
-            # Use the show objects that were just labeled (more reliable than searching)
-            labeled_shows = getattr(self, '_labeled_shows_for_collection', None)
-
-            if not labeled_shows:
-                pass
-                # Fallback: search for labeled shows
-                log_warning(f"Using fallback: searching for labeled shows...")
-                labeled_shows = shows_section.search(label=label_name)
-
-            if not labeled_shows:
-                log_warning(f"No labeled shows found to create collection from.")
-                return
-
-            print(f"{GREEN}Found {len(labeled_shows)} labeled shows to create collection from{RESET}")
-
-            # Delete old collections with this name
-            print(f"{YELLOW}Checking for existing collections: {collection_name}{RESET}")
-            for collection in shows_section.collections():
-                if collection.title == collection_name:
-                    log_warning(f"Deleting old collection: {collection_name}")
-                    collection.delete()
-
-            # Create new collection from labeled shows
-            print(f"{GREEN}Creating collection: {collection_name} with {len(labeled_shows)} shows{RESET}")
-            shows_section.createCollection(
-                title=collection_name,
-                items=labeled_shows
-            )
-            print(f"{GREEN}Successfully created collection for {first_name}!{RESET}")
-
-        except Exception as e:
-            log_error(f"Error managing Plex collections: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -2962,6 +2944,8 @@ def adapt_root_config_to_legacy(root_config):
             'token': root_config.get('plex', {}).get('token', ''),
             'TV_library_title': root_config.get('plex', {}).get('tv_library', 'TV Shows'),
             'managed_users': root_config.get('plex', {}).get('managed_users', 'Admin'),
+        },
+        'collections': {
             'add_label': root_config.get('collections', {}).get('add_label', True),
             'label_name': root_config.get('collections', {}).get('label_name', 'Recommended'),
             'append_usernames': root_config.get('collections', {}).get('append_usernames', True),
@@ -3141,7 +3125,6 @@ def process_recommendations(config, config_path, log_retention_days, single_user
 
         # Always manage labels (to remove old ones even if no new recommendations)
         recommender.manage_plex_labels(plex_recs)
-        recommender.manage_plex_collections()
 
         if not recommender.plex_only:
             print(f"\n{GREEN}=== Recommended Shows to Add to Your Library ==={RESET}")
