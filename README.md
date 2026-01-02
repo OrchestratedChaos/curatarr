@@ -17,7 +17,7 @@ Extended fork of [netplexflix's](https://github.com/netplexflix) excellent Movie
 **Enhancements (this fork):**
 - **Multi-User Support**: Separate recommendations for each Plex user
 - **Per-User Preferences**: Individual genre exclusions, display names, streaming services
-- **Smart Collections**: Auto-updating Plex collections (🎬/📺 Recommended - {User})
+- **Smart Collections**: Auto-updating Plex collections (🎬/📺 {User} - Recommendation)
 - **External Watchlists**: Streaming-service-grouped shopping lists with genre balancing
 - **Flexible Account Matching**: Handles username variations
 - **Cron Scheduling**: Automated daily updates
@@ -51,13 +51,13 @@ Extended fork of [netplexflix's](https://github.com/netplexflix) excellent Movie
 ## Quick Overview
 
 **Collections Created:**
-- 🎬 Recommended - User1 (Movies)
-- 🎬 Recommended - User2 (Movies)
-- 🎬 Recommended - User3 (Movies)
-- 🎬 Recommended - User4 (Movies)
-- 🎬 Recommended - User5 (Movies)
-- 🎬 Recommended - User6 (Movies)
-- 📺 Recommended - [each user] (TV Shows)
+- 🎬 User1 - Recommendation (Movies)
+- 🎬 User2 - Recommendation (Movies)
+- 🎬 User3 - Recommendation (Movies)
+- 🎬 User4 - Recommendation (Movies)
+- 🎬 User5 - Recommendation (Movies)
+- 🎬 User6 - Recommendation (Movies)
+- 📺 [each user] - Recommendation (TV Shows)
 
 **Current Users:**
 - user1 (User1) - excludes horror

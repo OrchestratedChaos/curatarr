@@ -203,42 +203,19 @@ def get_watched_show_count(config, users_to_check):
         Integer count of unique watched TV shows
     """
     try:
-        from plexapi.myplex import MyPlexAccount
+        from plexapi.server import PlexServer
 
-        if not users_to_check:
-            return 0
+        plex = PlexServer(config['plex']['url'], config['plex']['token'])
+        library_title = config.get('plex', {}).get('tv_library', 'TV Shows')
+        shows_section = plex.library.section(library_title)
 
-        # Get account IDs for all users
-        account_ids = []
-        account = MyPlexAccount(token=config['plex']['token'])
-        all_users = {u.title.lower(): u.id for u in account.users()}
-        admin_username = account.username.lower()
-        admin_account_id = account.id
+        # Count shows that have at least one watched episode
+        watched_count = 0
+        for show in shows_section.all():
+            if show.isWatched or any(ep.isWatched for ep in show.episodes()):
+                watched_count += 1
 
-        for username in users_to_check:
-            username_lower = username.lower()
-            if username_lower in ['admin', 'administrator', admin_username]:
-                account_ids.append(admin_account_id)
-            elif username_lower in all_users:
-                account_ids.append(all_users[username_lower])
-
-        # Get unique watched show count (grandparent keys) using Plex history API
-        watched_shows = set()
-        for account_id in account_ids:
-            url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
-            response = requests.get(url, verify=False)
-            root = ET.fromstring(response.content)
-
-            for video in root.findall('.//Video'):
-                if video.get('type') == 'episode':
-                    # Get grandparent key path (e.g., '/library/metadata/1085')
-                    grandparent_key_path = video.get('grandparentKey')
-                    if grandparent_key_path:
-                        # Extract rating key from path
-                        grandparent_key = grandparent_key_path.split('/')[-1]
-                        watched_shows.add(grandparent_key)
-
-        return len(watched_shows)
+        return watched_count
     except Exception as e:
         print(f"{YELLOW}Error getting watched show count: {e}{RESET}")
         return 0
@@ -337,13 +314,14 @@ def fetch_plex_watch_history_movies(config, account_ids, movies_section):
         return [], {}
 
 
-def fetch_plex_watch_history_shows(config, account_ids):
+def fetch_plex_watch_history_shows(config, account_ids, tv_section):
     """
     Fetch TV show watch history for specified account IDs using direct Plex API
 
     Args:
         config: Configuration dict with plex URL and token
         account_ids: List of account ID strings
+        tv_section: PlexAPI TV library section
 
     Returns:
         Set of watched show IDs (rating keys)
@@ -362,6 +340,7 @@ def fetch_plex_watch_history_shows(config, account_ids):
         params = {
             'X-Plex-Token': config['plex']['token'],
             'accountID': account_id,
+            'librarySectionID': tv_section.key,
             'sort': 'viewedAt:desc',
             'X-Plex-Container-Size': 5000
         }
@@ -392,3 +371,81 @@ def fetch_plex_watch_history_shows(config, account_ids):
             continue
 
     return watched_show_ids
+
+
+def fetch_watch_history_with_tmdb(plex, config, account_ids, section, media_type='movie'):
+    """
+    Fetch watch history with TMDB IDs for external recommendations
+
+    Args:
+        plex: PlexServer instance
+        config: Configuration dict
+        account_ids: List of account ID strings
+        section: PlexAPI library section
+        media_type: 'movie' or 'show'
+
+    Returns:
+        List of dicts: [{'tmdb_id': int, 'title': str, 'year': int}, ...]
+    """
+    watched_items = []
+    seen_tmdb_ids = set()
+
+    for account_id in account_ids:
+        url = f"{config['plex']['url']}/status/sessions/history/all"
+        params = {
+            'X-Plex-Token': config['plex']['token'],
+            'accountID': account_id,
+            'librarySectionID': section.key,
+            'sort': 'viewedAt:desc'
+        }
+
+        try:
+            response = requests.get(url, params=params, verify=False)
+            if response.status_code != 200:
+                continue
+
+            root = ET.fromstring(response.content)
+
+            for video in root.findall('.//Video'):
+                video_type = video.get('type')
+
+                # Match video type to media type
+                if (media_type == 'movie' and video_type == 'movie') or \
+                   (media_type == 'show' and video_type == 'episode'):
+
+                    # Get rating key
+                    rating_key = video.get('ratingKey')
+                    if media_type == 'show':
+                        # For shows, get grandparent (show) key from path
+                        grandparent_key_path = video.get('grandparentKey')
+                        if grandparent_key_path:
+                            rating_key = grandparent_key_path.split('/')[-1]
+                        else:
+                            rating_key = None
+
+                    if rating_key and str(rating_key) not in seen_tmdb_ids:
+                        try:
+                            item = plex.fetchItem(int(rating_key))
+
+                            # Extract TMDB ID
+                            tmdb_id = None
+                            for guid in item.guids:
+                                if 'tmdb://' in guid.id:
+                                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                                    break
+
+                            if tmdb_id and tmdb_id not in seen_tmdb_ids:
+                                watched_items.append({
+                                    'tmdb_id': tmdb_id,
+                                    'title': item.title,
+                                    'year': item.year if hasattr(item, 'year') else None
+                                })
+                                seen_tmdb_ids.add(str(rating_key))
+                                seen_tmdb_ids.add(tmdb_id)
+                        except:
+                            pass
+
+        except Exception as e:
+            continue
+
+    return watched_items
