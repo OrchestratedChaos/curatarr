@@ -2232,9 +2232,9 @@ class PlexTVRecommender:
 
     def manage_plex_labels(self, recommended_shows: List[Dict]) -> None:
         # Check if label management is enabled
-        if not self.config['plex'].get('add_label'):
+        if not self.config.get('collections', {}).get('add_label'):
             return
-    
+
         # If there are recommendations and confirmation is required, let user select
         if recommended_shows and self.confirm_operations:
             selected_shows = self._user_select_recommendations(recommended_shows, "label in Plex")
@@ -2243,13 +2243,13 @@ class PlexTVRecommender:
         else:
             # Use all recommendations (or empty list if none)
             selected_shows = recommended_shows
-    
+
         try:
             shows_section = self.plex.library.section(self.library_title)
-            label_name = self.config['plex'].get('label_name', 'Recommended')
-    
+            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
+
             # Handle username appending for labels
-            if self.config['plex'].get('append_usernames', False):
+            if self.config.get('collections', {}).get('append_usernames', False):
                 if self.single_user:
                     # For single user mode, only append the current user
                     user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
@@ -2440,15 +2440,15 @@ class PlexTVRecommender:
         Automatically manage Plex Collections based on labeled items.
         Deletes old collections and creates new ones from labeled TV shows.
         """
-        if not self.config['plex'].get('add_label'):
+        if not self.config.get('collections', {}).get('add_label'):
             return
 
         try:
             shows_section = self.plex.library.section(self.library_title)
-            label_name = self.config['plex'].get('label_name', 'Recommended')
+            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
 
             # Handle username appending for collection names (same logic as labels)
-            if self.config['plex'].get('append_usernames', False):
+            if self.config.get('collections', {}).get('append_usernames', False):
                 if self.single_user:
                     user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
                     label_name = f"{label_name}_{user_suffix}"

@@ -369,6 +369,7 @@ class PlexMovieRecommender:
         self.tmdb_keywords_cache = {}
         self.plex_watched_rating_keys = set()
         self.watched_movie_ids = set()
+        self.label_dates = {}
         self.users = self._get_configured_users()
 
         print("Initializing recommendation system...")
@@ -472,6 +473,7 @@ class PlexMovieRecommender:
                     self.watched_data_counters = watched_cache.get('watched_data_counters', {})
                     self.plex_tmdb_cache = {str(k): v for k, v in watched_cache.get('plex_tmdb_cache', {}).items()}
                     self.tmdb_keywords_cache = {str(k): v for k, v in watched_cache.get('tmdb_keywords_cache', {}).items()}
+                    self.label_dates = watched_cache.get('label_dates', {})
                     
                     # Load watched movie IDs
                     watched_ids = watched_cache.get('watched_movie_ids', [])
@@ -944,6 +946,7 @@ class PlexMovieRecommender:
                 'plex_tmdb_cache': {str(k): v for k, v in self.plex_tmdb_cache.items()},
                 'tmdb_keywords_cache': {str(k): v for k, v in self.tmdb_keywords_cache.items()},
                 'watched_movie_ids': list(self.watched_movie_ids),
+                'label_dates': self.label_dates if hasattr(self, 'label_dates') else {},
                 'last_updated': datetime.now().isoformat()
             }
             
@@ -2558,7 +2561,7 @@ class PlexMovieRecommender:
     # PLEX LABELS
     # ------------------------------------------------------------------------
     def manage_plex_labels(self, recommended_movies: List[Dict]) -> None:
-        if not self.config['plex'].get('add_label'):
+        if not self.config.get('collections', {}).get('add_label'):
             return
 
         # Ensure recommended_movies is always a list (even if empty)
@@ -2573,10 +2576,10 @@ class PlexMovieRecommender:
 
         try:
             movies_section = self.plex.library.section(self.library_title)
-            label_name = self.config['plex'].get('label_name', 'Recommended')
+            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
 
             # Handle username appending for labels
-            if self.config['plex'].get('append_usernames', False):
+            if self.config.get('collections', {}).get('append_usernames', False):
                 if self.single_user:
                     # For single user mode, only append the current user
                     user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
@@ -2621,11 +2624,11 @@ class PlexMovieRecommender:
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
             # Load label dates from cache (track when each label was added)
-            if not hasattr(self, 'label_dates'):
-                self.label_dates = self.watched_cache.get('label_dates', {})
+            if not hasattr(self, 'label_dates') or not self.label_dates:
+                self.label_dates = {}
 
             # Get staleness threshold from config
-            stale_days = self.config.get('plex', {}).get('stale_removal_days', 7)
+            stale_days = self.config.get('collections', {}).get('stale_removal_days', 7)
             from datetime import datetime, timedelta
             stale_threshold = datetime.now() - timedelta(days=stale_days)
 
@@ -2721,9 +2724,7 @@ class PlexMovieRecommender:
                     self.label_dates[label_key] = datetime.now().isoformat()
                     print(f"{GREEN}Added: {movie.title}{RESET}")
 
-            # Save label dates to cache for persistence
-            self.watched_cache['label_dates'] = self.label_dates
-            self._save_watched_cache()
+            # Note: label_dates will be saved in _save_watched_cache()
 
             # RE-SORT: Calculate similarity for all movies and sort by score
             print(f"{GREEN}Re-calculating similarity scores for entire collection...{RESET}")
@@ -2780,15 +2781,15 @@ class PlexMovieRecommender:
         Automatically manage Plex Collections based on labeled items.
         Deletes old collections and creates new ones from labeled movies.
         """
-        if not self.config['plex'].get('add_label'):
+        if not self.config.get('collections', {}).get('add_label'):
             return
 
         try:
             movies_section = self.plex.library.section(self.library_title)
-            label_name = self.config['plex'].get('label_name', 'Recommended')
+            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
 
             # Handle username appending for collection names (same logic as labels)
-            if self.config['plex'].get('append_usernames', False):
+            if self.config.get('collections', {}).get('append_usernames', False):
                 if self.single_user:
                     user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
                     label_name = f"{label_name}_{user_suffix}"
