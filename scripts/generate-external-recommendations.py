@@ -21,7 +21,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
 from shared_plex_utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    get_plex_account_ids
+    get_plex_account_ids,
+    fetch_watch_history_with_tmdb
 )
 
 # TMDB Genre ID mappings
@@ -76,7 +77,7 @@ SERVICE_DISPLAY_NAMES = {
 
 def load_config():
     """Load configuration from root config.yml"""
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yml')
     try:
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
@@ -209,7 +210,7 @@ def get_genre_distribution(plex, config, username, media_type='movie'):
         return {}, 0
 
 def get_user_watch_history(plex, config, username, media_type='movie'):
-    """Get user's watch history from Plex"""
+    """Get user's watch history from Plex using shared utility"""
     print(f"  Fetching {media_type} watch history for {username}...")
 
     try:
@@ -224,77 +225,8 @@ def get_user_watch_history(plex, config, username, media_type='movie'):
             print(f"{YELLOW}  Warning: User {username} not found{RESET}")
             return []
 
-        account_id = account_ids[0]
-        account = MyPlexAccount(token=config['plex']['token'])
-
-        # Check if this is the admin user
-        if str(account_id) == str(account.id):
-            # Admin user - can access directly
-            watched_items = []
-            for item in library.all():
-                if item.isWatched:
-                    # Get TMDB ID
-                    tmdb_id = None
-                    for guid in item.guids:
-                        if 'tmdb://' in guid.id:
-                            tmdb_id = int(guid.id.split('tmdb://')[1])
-                            break
-                    if tmdb_id:
-                        watched_items.append({
-                            'tmdb_id': tmdb_id,
-                            'title': item.title,
-                            'year': item.year
-                        })
-            return watched_items
-        else:
-            # Managed user - use history API with account_id from flexible matching
-            watched_items = []
-            url = f"{config['plex']['url']}/status/sessions/history/all"
-            params = {
-                'X-Plex-Token': config['plex']['token'],
-                'accountID': account_id,
-                'sort': 'viewedAt:desc'
-            }
-
-            response = requests.get(url, params=params, verify=False)
-            if response.status_code != 200:
-                return []
-
-            import xml.etree.ElementTree as ET
-            root = ET.fromstring(response.content)
-
-            seen_tmdb_ids = set()
-            for video in root.findall('.//Video'):
-                video_type = video.get('type')
-                if (media_type == 'movie' and video_type == 'movie') or \
-                   (media_type == 'show' and video_type == 'episode'):
-
-                    # Get rating key to fetch full metadata
-                    rating_key = video.get('ratingKey')
-                    if media_type == 'show':
-                        # For shows, get grandparent (show) key
-                        rating_key = video.get('grandparentRatingKey')
-
-                    if rating_key and rating_key not in seen_tmdb_ids:
-                        try:
-                            item = plex.fetchItem(int(rating_key))
-                            tmdb_id = None
-                            for guid in item.guids:
-                                if 'tmdb://' in guid.id:
-                                    tmdb_id = int(guid.id.split('tmdb://')[1])
-                                    break
-
-                            if tmdb_id and tmdb_id not in seen_tmdb_ids:
-                                watched_items.append({
-                                    'tmdb_id': tmdb_id,
-                                    'title': item.title,
-                                    'year': item.year if hasattr(item, 'year') else None
-                                })
-                                seen_tmdb_ids.add(tmdb_id)
-                        except:
-                            pass
-
-            return watched_items
+        # Use shared utility to fetch watch history with TMDB IDs
+        return fetch_watch_history_with_tmdb(plex, config, account_ids, library, media_type)
 
     except Exception as e:
         print(f"{YELLOW}  Warning: Could not fetch watch history: {e}{RESET}")
@@ -703,8 +635,8 @@ def process_user(config, plex, username):
     movies_list = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
     shows_list = sorted(show_cache.values(), key=lambda x: x['score'], reverse=True)
 
-    # Get user's streaming services
-    user_services = user_prefs.get('streaming_services', [])
+    # Get household streaming services from top-level config
+    user_services = config.get('streaming_services', [])
 
     # Categorize by streaming service availability
     print(f"  Categorizing by streaming service availability...")

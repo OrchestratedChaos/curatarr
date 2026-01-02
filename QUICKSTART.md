@@ -63,10 +63,10 @@ That's it! The script will:
 ## What Gets Created
 
 **Smart collections for each user** (in Plex):
-- 🎬 Recommended - User1 (Movies)
-- 🎬 Recommended - User2 (Movies)
-- 📺 Recommended - User1 (TV Shows)
-- 📺 Recommended - User2 (TV Shows)
+- 🎬 User1 - Recommendation (Movies)
+- 🎬 User2 - Recommendation (Movies)
+- 📺 User1 - Recommendation (TV Shows)
+- 📺 User2 - Recommendation (TV Shows)
 - ... and so on for each user
 
 **External watchlists** (markdown files):
@@ -86,7 +86,7 @@ These auto-update daily with new recommendations!
 In Plex Web App:
 
 1. Go to Movies library → Collections tab
-2. Find your collection (e.g., "🎬 Recommended - User1")
+2. Find your collection (e.g., "🎬 User1 - Recommendation")
 3. Click the three dots (⋮) → **"Pin to Home"**
 4. Repeat for TV Shows library
 

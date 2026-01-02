@@ -9,20 +9,20 @@ Make your personalized recommendation collections visible on Plex landing pages.
 The system creates these smart collections:
 
 **Movies:**
-- 🎬 Recommended - User1
-- 🎬 Recommended - User2
-- 🎬 Recommended - User3
-- 🎬 Recommended - User4
-- 🎬 Recommended - User5
-- 🎬 Recommended - User6
+- 🎬 User1 - Recommendation
+- 🎬 User2 - Recommendation
+- 🎬 User3 - Recommendation
+- 🎬 User4 - Recommendation
+- 🎬 User5 - Recommendation
+- 🎬 User6 - Recommendation
 
 **TV Shows:**
-- 📺 Recommended - User1
-- 📺 Recommended - User2
-- 📺 Recommended - User3
-- 📺 Recommended - User4
-- 📺 Recommended - User5
-- 📺 Recommended - User6
+- 📺 User1 - Recommendation
+- 📺 User2 - Recommendation
+- 📺 User3 - Recommendation
+- 📺 User4 - Recommendation
+- 📺 User5 - Recommendation
+- 📺 User6 - Recommendation
 
 Each collection auto-updates based on labels (`Recommended_{username}`).
 
@@ -44,7 +44,7 @@ Click the **Collections** tab at the top.
 
 ### Step 4: Pin Your Collection
 
-1. Find your collection (e.g., "🎬 Recommended - User1")
+1. Find your collection (e.g., "🎬 User1 - Recommendation")
 2. Click the three dots (⋮) on the collection
 3. Select **"Pin to Home"**
 
@@ -110,7 +110,7 @@ python3 create-smart-collections.py
 
 **Solution 2**: Check if collections exist
 1. Plex Web → Movies → Collections tab
-2. Look for "🎬 Recommended - [username]" collections
+2. Look for "🎬 [username] - Recommendation" collections
 3. If missing, run the script above
 
 ### Can't Pin Collection

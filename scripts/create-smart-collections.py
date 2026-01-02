@@ -8,8 +8,8 @@ import os
 import yaml
 from plexapi.server import PlexServer
 
-# Load config from root
-config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+# Load config from root (parent directory)
+config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yml')
 try:
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
@@ -29,9 +29,9 @@ def create_smart_collection(section, user, label):
     display_name = USER_PREFS.get(user, {}).get('display_name', user)
 
     if section.type == 'movie':
-        collection_name = f"🎬 Recommended - {display_name}"
+        collection_name = f"🎬 {display_name} - Recommendation"
     else:
-        collection_name = f"📺 Recommended - {display_name}"
+        collection_name = f"📺 {display_name} - Recommendation"
 
     # Check if collection already exists
     try:
