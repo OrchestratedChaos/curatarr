@@ -2557,24 +2557,23 @@ class PlexMovieRecommender:
     # PLEX LABELS
     # ------------------------------------------------------------------------
     def manage_plex_labels(self, recommended_movies: List[Dict]) -> None:
-        if not recommended_movies:
-            log_warning(f"No movies to add labels to.")
-            return
-        
         if not self.config['plex'].get('add_label'):
             return
-        
-        if self.confirm_operations:
+
+        # Ensure recommended_movies is always a list (even if empty)
+        recommended_movies = recommended_movies or []
+
+        if self.confirm_operations and recommended_movies:
             selected_movies = self._user_select_recommendations(recommended_movies, "label in Plex")
             if not selected_movies:
-                return
+                selected_movies = []
         else:
             selected_movies = recommended_movies
-        
+
         try:
             movies_section = self.plex.library.section(self.library_title)
             label_name = self.config['plex'].get('label_name', 'Recommended')
-        
+
             # Handle username appending for labels
             if self.config['plex'].get('append_usernames', False):
                 if self.single_user:
@@ -2588,12 +2587,13 @@ class PlexMovieRecommender:
                         users = self.users['plex_users']
                     else:
                         users = self.users['managed_users']
-                    
+
                     if users:
                         sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
                         user_suffix = '_'.join(sanitized_users)
                         label_name = f"{label_name}_{user_suffix}"
-        
+
+            # Find new movies in Plex (if any were recommended)
             movies_to_update = []
             skipped_movies = []
             for rec in selected_movies:
@@ -2607,7 +2607,7 @@ class PlexMovieRecommender:
                     movies_to_update.append(plex_movie)
                 else:
                     skipped_movies.append(f"{rec['title']} ({rec.get('year', 'N/A')})")
-        
+
             if skipped_movies:
                 log_warning(f"Skipped {len(skipped_movies)} movies not found in Plex:")
                 for movie in skipped_movies[:5]:  # Show first 5
@@ -2615,10 +2615,7 @@ class PlexMovieRecommender:
                 if len(skipped_movies) > 5:
                     print(f"  ... and {len(skipped_movies) - 5} more")
 
-            if not movies_to_update:
-                log_warning(f"No matching movies found in Plex to add labels to.")
-                return
-
+            # ALWAYS run cleanup to remove watched/stale movies, even if no new recommendations
             # INCREMENTAL UPDATE: Keep unwatched (and fresh), remove watched and stale, fill gaps
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
@@ -2697,15 +2694,21 @@ class PlexMovieRecommender:
 
             # Filter new recommendations to exclude already labeled movies
             new_recommendations = []
-            for movie in movies_to_update:
-                movie_id = int(movie.ratingKey)
-                if movie_id not in already_labeled_ids and movie_id not in self.watched_movie_ids:
-                    new_recommendations.append(movie)
+            if movies_to_update:
+                for movie in movies_to_update:
+                    movie_id = int(movie.ratingKey)
+                    if movie_id not in already_labeled_ids and movie_id not in self.watched_movie_ids:
+                        new_recommendations.append(movie)
+            else:
+                print(f"{YELLOW}No new recommendations available - cleanup only mode{RESET}")
 
             # Take only what we need to fill gaps
             movies_to_add = new_recommendations[:max(0, slots_available)]
 
-            print(f"{GREEN}Adding {len(movies_to_add)} new recommendations to fill gaps{RESET}")
+            if movies_to_add:
+                print(f"{GREEN}Adding {len(movies_to_add)} new recommendations to fill gaps{RESET}")
+            elif slots_available > 0:
+                print(f"{YELLOW}Need {slots_available} more movies but none available to add{RESET}")
 
             # Add labels to new recommendations
             for movie in movies_to_add:
