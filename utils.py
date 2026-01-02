@@ -4,10 +4,20 @@ Contains common functions for account management and watch history fetching
 """
 
 import os
+import sys
+import re
+import math
 import logging
 import requests
+import yaml
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+import urllib3
+import plexapi.server
+from plexapi.myplex import MyPlexAccount
+from datetime import datetime, timedelta, timezone
+
+# Suppress SSL warnings for self-signed Plex certificates (common for home servers)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
@@ -696,3 +706,306 @@ def cleanup_old_collections(section, current_collection_name: str, username: str
             logger.warning(error_msg)
         else:
             print(f"WARNING: {error_msg}")
+
+
+# ANSI pattern for stripping color codes from log files
+ANSI_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
+
+
+class TeeLogger:
+    """
+    A simple 'tee' class that writes to both console and a file,
+    stripping ANSI color codes for the file and handling Unicode characters.
+    """
+    def __init__(self, logfile):
+        self.logfile = logfile
+        # Force UTF-8 encoding for stdout
+        if hasattr(sys.stdout, 'buffer'):
+            self.stdout_buffer = sys.stdout.buffer
+        else:
+            self.stdout_buffer = sys.stdout
+
+    def write(self, text):
+        try:
+            # Write to console
+            if hasattr(sys.stdout, 'buffer'):
+                self.stdout_buffer.write(text.encode('utf-8'))
+            else:
+                sys.__stdout__.write(text)
+
+            # Write to file (strip ANSI codes)
+            stripped = ANSI_PATTERN.sub('', text)
+            self.logfile.write(stripped)
+        except UnicodeEncodeError:
+            # Fallback for problematic characters
+            safe_text = text.encode('ascii', 'replace').decode('ascii')
+            if hasattr(sys.stdout, 'buffer'):
+                self.stdout_buffer.write(safe_text.encode('utf-8'))
+            else:
+                sys.__stdout__.write(safe_text)
+            stripped = ANSI_PATTERN.sub('', safe_text)
+            self.logfile.write(stripped)
+
+    def flush(self):
+        if hasattr(sys.stdout, 'buffer'):
+            self.stdout_buffer.flush()
+        else:
+            sys.__stdout__.flush()
+        self.logfile.flush()
+
+
+def load_config(config_path: str) -> dict:
+    """
+    Load YAML configuration file.
+
+    Args:
+        config_path: Path to config.yml file
+
+    Returns:
+        Parsed config dictionary
+    """
+    try:
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file)
+            print(f"Successfully loaded configuration from {config_path}")
+            return config
+    except Exception as e:
+        log_error(f"Error loading config from {config_path}: {e}")
+        raise
+
+
+def init_plex(config: dict) -> plexapi.server.PlexServer:
+    """
+    Initialize connection to Plex server.
+
+    Args:
+        config: Configuration dictionary with plex.url and plex.token
+
+    Returns:
+        PlexServer instance
+    """
+    try:
+        return plexapi.server.PlexServer(
+            config['plex']['url'],
+            config['plex']['token']
+        )
+    except Exception as e:
+        log_error(f"Error connecting to Plex server: {e}")
+        raise
+
+
+def get_configured_users(config: dict) -> dict:
+    """
+    Get and validate configured Plex users.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Dictionary with 'managed_users', 'plex_users', and 'admin_user'
+    """
+    # Get raw managed users list from config
+    raw_managed = config['plex'].get('managed_users', '')
+    managed_users = [u.strip() for u in raw_managed.split(',') if u.strip()]
+
+    # Get Plex users
+    plex_users = []
+
+    # Check if Plex users is 'none' or empty
+    plex_user_config = config.get('plex_users', {}).get('users')
+    if plex_user_config and str(plex_user_config).lower() != 'none':
+        if isinstance(plex_user_config, list):
+            plex_users = plex_user_config
+        elif isinstance(plex_user_config, str):
+            plex_users = [u.strip() for u in plex_user_config.split(',') if u.strip()]
+
+    # Resolve admin account
+    account = MyPlexAccount(token=config['plex']['token'])
+    admin_user = account.username
+
+    # User validation logic
+    all_users = account.users()
+    all_usernames_lower = {u.title.lower(): u.title for u in all_users}
+
+    processed_managed = []
+    for user in managed_users:
+        user_lower = user.lower()
+        if user_lower in ['admin', 'administrator']:
+            # Special case for admin keywords
+            processed_managed.append(admin_user)
+        elif user_lower == admin_user.lower():
+            # Direct match with admin username (case-insensitive)
+            processed_managed.append(admin_user)
+        elif user_lower in all_usernames_lower:
+            # Match with shared users
+            processed_managed.append(all_usernames_lower[user_lower])
+        else:
+            log_error(f"Error: Managed user '{user}' not found")
+            raise ValueError(f"User '{user}' not found in Plex account")
+
+    # Remove duplicates while preserving order
+    seen = set()
+    managed_users = [u for u in processed_managed if not (u in seen or seen.add(u))]
+
+    return {
+        'managed_users': managed_users,
+        'plex_users': plex_users,
+        'admin_user': admin_user
+    }
+
+
+def get_current_users(users: dict) -> str:
+    """
+    Get formatted string of current users being processed.
+
+    Args:
+        users: Dictionary with 'plex_users' and 'managed_users'
+
+    Returns:
+        Formatted string describing current users
+    """
+    if users['plex_users']:
+        return f"Plex users: {', '.join(users['plex_users'])}"
+    return f"Managed users: {', '.join(users['managed_users'])}"
+
+
+def get_excluded_genres_for_user(exclude_genres: set, user_preferences: dict, username: str = None) -> set:
+    """
+    Get excluded genres including user-specific preferences.
+
+    Args:
+        exclude_genres: Global set of excluded genres
+        user_preferences: User preferences dictionary
+        username: Username to get excluded genres for
+
+    Returns:
+        Set of excluded genre names (lowercase)
+    """
+    # Start with global excluded genres
+    excluded = set(exclude_genres)
+
+    # Add user-specific excluded genres if configured
+    if username and username in user_preferences:
+        user_prefs = user_preferences[username]
+        user_excluded = user_prefs.get('exclude_genres', [])
+        excluded.update([g.lower() for g in user_excluded])
+
+    return excluded
+
+
+def get_user_specific_connection(plex, config: dict, users: dict):
+    """
+    Get Plex connection for specific user context.
+
+    Args:
+        plex: PlexServer instance
+        config: Configuration dictionary
+        users: Users dictionary from get_configured_users()
+
+    Returns:
+        PlexServer instance (possibly switched to managed user)
+    """
+    if users['plex_users']:
+        return plex
+    try:
+        account = MyPlexAccount(token=config['plex']['token'])
+        user = account.user(users['managed_users'][0])
+        return plex.switchUser(user)
+    except Exception as e:
+        log_warning(f"Could not switch to managed user context: {e}")
+        return plex
+
+
+def calculate_recency_multiplier(viewed_at, recency_config: dict) -> float:
+    """
+    Calculate recency decay multiplier based on when content was watched.
+
+    Args:
+        viewed_at: Timestamp of when content was viewed
+        recency_config: Recency decay configuration from config
+
+    Returns:
+        Multiplier value (0.1 to 1.0)
+    """
+    # Check if recency decay is enabled
+    if not recency_config.get('enabled', True):
+        return 1.0
+
+    # Calculate days since watched
+    now = datetime.now(timezone.utc)
+    viewed_date = datetime.fromtimestamp(int(viewed_at), tz=timezone.utc)
+    days_ago = (now - viewed_date).days
+
+    # Apply time-based decay weights
+    if days_ago <= 30:
+        multiplier = recency_config.get('days_0_30', 1.0)
+    elif days_ago <= 90:
+        multiplier = recency_config.get('days_31_90', 0.75)
+    elif days_ago <= 180:
+        multiplier = recency_config.get('days_91_180', 0.50)
+    elif days_ago <= 365:
+        multiplier = recency_config.get('days_181_365', 0.25)
+    else:
+        multiplier = recency_config.get('days_365_plus', 0.10)
+
+    return multiplier
+
+
+def calculate_rewatch_multiplier(view_count: int) -> float:
+    """
+    Calculate rewatch multiplier using logarithmic scaling.
+
+    Rewatch scale (log2(views) + 1):
+    - 1 view: 1.0x weight
+    - 2 views: 2.0x weight
+    - 4 views: 3.0x weight
+    - 8 views: 4.0x weight
+    - 16 views: 5.0x weight
+
+    Args:
+        view_count: Number of times content was viewed
+
+    Returns:
+        Multiplier value (1.0+)
+    """
+    if not view_count or view_count <= 1:
+        return 1.0
+    return math.log2(view_count) + 1
+
+
+def map_path(path: str, path_mappings: dict) -> str:
+    """
+    Apply path mappings for cross-platform compatibility.
+
+    Args:
+        path: Original file path
+        path_mappings: Dictionary of path prefix replacements
+
+    Returns:
+        Mapped path string
+    """
+    if not path_mappings:
+        return path
+
+    for from_path, to_path in path_mappings.items():
+        if path.startswith(from_path):
+            return path.replace(from_path, to_path, 1)
+
+    return path
+
+
+def show_progress(prefix: str, current: int, total: int):
+    """
+    Display progress indicator on console.
+
+    Args:
+        prefix: Text prefix for progress line
+        current: Current item number
+        total: Total number of items
+    """
+    pct = int((current / total) * 100) if total > 0 else 0
+    msg = f"\r{CYAN}{prefix} {current}/{total} ({pct}%){RESET}"
+    sys.stdout.write(msg)
+    sys.stdout.flush()
+    if current == total:
+        sys.stdout.write("\n")
