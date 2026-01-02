@@ -27,7 +27,7 @@ from shared_plex_utils import (
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
-    log_warning, log_error, update_plex_collection, cleanup_old_collections
+    log_warning, log_error, update_plex_collection
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -371,7 +371,7 @@ class PlexTVRecommender:
         self.sonarr_config = self.config.get('sonarr', {})
 
         # Load user preferences for per-user customization
-        self.user_preferences = self.config.get('users', {}).get('preferences', {})
+        self.user_preferences = self.config.get('user_preferences', {})
 
         # Get user context for cache files
         if single_user:
@@ -2491,9 +2491,6 @@ class PlexTVRecommender:
 
                 collection_name = f"📺 {display_name} - Recommendation"
                 update_plex_collection(shows_section, collection_name, final_collection_shows, logger)
-
-                # Clean up old collection naming patterns for this user
-                cleanup_old_collections(shows_section, collection_name, username, "📺", logger)
 
         except Exception as e:
             log_error(f"Error managing Plex labels: {e}")
