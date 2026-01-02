@@ -4,9 +4,58 @@ Contains common functions for account management and watch history fetching
 """
 
 import os
+import logging
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+
+
+def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
+    """
+    Configure logging for recommendation scripts.
+
+    Args:
+        debug: If True, set level to DEBUG. Otherwise use config or default to INFO.
+        config: Optional config dict that may contain logging.level setting.
+
+    Returns:
+        Configured logger instance.
+    """
+    # Determine log level
+    if debug:
+        level = logging.DEBUG
+    elif config and config.get('logging', {}).get('level'):
+        level_str = config['logging']['level'].upper()
+        level = getattr(logging, level_str, logging.INFO)
+    else:
+        level = logging.INFO
+
+    # Create handler with colored formatter
+    handler = logging.StreamHandler()
+    handler.setLevel(level)
+
+    # Import here to avoid circular import (ColoredFormatter defined below)
+    formatter = logging.Formatter(
+        fmt='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    # Remove existing handlers to avoid duplicates
+    root_logger.handlers = []
+    root_logger.addHandler(handler)
+
+    # Suppress noisy third-party loggers
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+
+    logger = logging.getLogger('plex_recommender')
+    logger.setLevel(level)
+
+    return logger
 
 # ANSI color codes
 RED = '\033[91m'
@@ -14,6 +63,68 @@ GREEN = '\033[92m'
 YELLOW = '\033[93m'
 CYAN = '\033[96m'
 RESET = '\033[0m'
+
+
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter that adds colors to log levels"""
+
+    LEVEL_COLORS = {
+        logging.DEBUG: CYAN,
+        logging.INFO: GREEN,
+        logging.WARNING: YELLOW,
+        logging.ERROR: RED,
+        logging.CRITICAL: RED,
+    }
+
+    def format(self, record):
+        # Add color to the level name
+        color = self.LEVEL_COLORS.get(record.levelno, '')
+        record.levelname = f"{color}{record.levelname}{RESET}"
+        return super().format(record)
+
+
+# Status output helpers - consistent patterns across all scripts
+def print_user_header(username: str):
+    """Print header when starting to process a user"""
+    print(f"\n{GREEN}Processing recommendations for user: {username}{RESET}")
+    print("-" * 50)
+
+
+def print_user_footer(username: str):
+    """Print footer when done processing a user"""
+    print(f"\n{GREEN}Completed processing for user: {username}{RESET}")
+    print("-" * 50)
+
+
+def print_status(message: str, level: str = "info"):
+    """Print a status message with appropriate color and log to file"""
+    logger = logging.getLogger('plex_recommender')
+    if level == "success":
+        print(f"{GREEN}✓ {message}{RESET}")
+        logger.info(message)
+    elif level == "warning":
+        log_warning(f"{message}")
+        logger.warning(message)
+    elif level == "error":
+        log_error(f"{message}")
+        logger.error(message)
+    else:
+        print(message)
+        logger.info(message)
+
+
+def log_warning(message: str):
+    """Log warning and print with yellow color"""
+    logger = logging.getLogger('plex_recommender')
+    logger.warning(message)
+    print(f"{YELLOW}{message}{RESET}")
+
+
+def log_error(message: str):
+    """Log error and print with red color"""
+    logger = logging.getLogger('plex_recommender')
+    logger.error(message)
+    print(f"{RED}{message}{RESET}")
 
 # Language code mappings
 LANGUAGE_CODES = {
@@ -65,12 +176,12 @@ def cleanup_old_logs(log_dir: str, retention_days: int):
                 file_mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
                 if file_mtime < cutoff_time:
                     os.remove(filepath)
-                    print(f"{YELLOW}Removed old log: {filename} (age: {(datetime.now() - file_mtime).days} days){RESET}")
+                    log_warning(f"Removed old log: {filename} (age: {(datetime.now() - file_mtime).days} days)")
             except Exception as e:
-                print(f"{YELLOW}Failed to remove old log {filename}: {e}{RESET}")
+                log_warning(f"Failed to remove old log {filename}: {e}")
 
     except Exception as e:
-        print(f"{YELLOW}Error during log cleanup: {e}{RESET}")
+        log_warning(f"Error during log cleanup: {e}")
 
 
 def get_full_language_name(lang_code: str) -> str:
@@ -133,10 +244,10 @@ def get_plex_account_ids(config, users_to_match):
             if account is not None:
                 account_ids.append(str(account.get('id')))
             else:
-                print(f"{RED}User '{username}' not found in Plex accounts!{RESET}")
+                log_error(f"User '{username}' not found in Plex accounts!")
 
     except Exception as e:
-        print(f"{RED}Error getting Plex account IDs: {e}{RESET}")
+        log_error(f"Error getting Plex account IDs: {e}")
 
     return account_ids
 
@@ -187,7 +298,7 @@ def get_watched_movie_count(config, users_to_check):
 
         return len(watched_movies)
     except Exception as e:
-        print(f"{YELLOW}Error getting watched movie count: {e}{RESET}")
+        log_warning(f"Error getting watched movie count: {e}")
         return 0
 
 
@@ -203,21 +314,42 @@ def get_watched_show_count(config, users_to_check):
         Integer count of unique watched TV shows
     """
     try:
-        from plexapi.server import PlexServer
+        from plexapi.myplex import MyPlexAccount
 
-        plex = PlexServer(config['plex']['url'], config['plex']['token'])
-        library_title = config.get('plex', {}).get('tv_library', 'TV Shows')
-        shows_section = plex.library.section(library_title)
+        if not users_to_check:
+            return 0
 
-        # Count shows that have at least one watched episode
-        watched_count = 0
-        for show in shows_section.all():
-            if show.isWatched or any(ep.isWatched for ep in show.episodes()):
-                watched_count += 1
+        # Get account IDs for all users
+        account_ids = []
+        account = MyPlexAccount(token=config['plex']['token'])
+        all_users = {u.title.lower(): u.id for u in account.users()}
+        admin_username = account.username.lower()
+        admin_account_id = account.id
 
-        return watched_count
+        for username in users_to_check:
+            username_lower = username.lower()
+            if username_lower in ['admin', 'administrator', admin_username]:
+                account_ids.append(admin_account_id)
+            elif username_lower in all_users:
+                account_ids.append(all_users[username_lower])
+
+        # Get unique watched show count (grandparent rating keys) using Plex history API
+        watched_shows = set()
+        for account_id in account_ids:
+            url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
+            response = requests.get(url, verify=False)
+            root = ET.fromstring(response.content)
+
+            for video in root.findall('.//Video'):
+                if video.get('type') == 'episode':
+                    # For episodes, use grandparentRatingKey (the show's ID)
+                    show_key = video.get('grandparentRatingKey')
+                    if show_key:
+                        watched_shows.add(show_key)
+
+        return len(watched_shows)
     except Exception as e:
-        print(f"{YELLOW}Error getting watched show count: {e}{RESET}")
+        log_warning(f"Error getting watched show count: {e}")
         return 0
 
 
@@ -310,7 +442,7 @@ def fetch_plex_watch_history_movies(config, account_ids, movies_section):
         return all_history_items, watched_movie_dates
 
     except Exception as e:
-        print(f"{RED}Error fetching watch history: {e}{RESET}")
+        log_error(f"Error fetching watch history: {e}")
         return [], {}
 
 
@@ -367,7 +499,7 @@ def fetch_plex_watch_history_shows(config, account_ids, tv_section):
             print(f"Fetched {episode_count} watched episodes from {len(watched_show_ids)} shows")
 
         except Exception as e:
-            print(f"{RED}Error fetching Plex history: {e}{RESET}")
+            log_error(f"Error fetching Plex history: {e}")
             continue
 
     return watched_show_ids

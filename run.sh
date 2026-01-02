@@ -5,6 +5,16 @@
 
 set -e  # Exit on error
 
+# Parse arguments
+DEBUG_FLAG=""
+for arg in "$@"; do
+    case $arg in
+        --debug)
+            DEBUG_FLAG="--debug"
+            ;;
+    esac
+done
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -200,7 +210,7 @@ main() {
 
     echo -e "${YELLOW}Step 1/2: Movie recommendations...${NC}"
     cd "$SCRIPT_DIR/scripts/Movie-Recommendations-for-Plex"
-    if python3 MRFP.py; then
+    if python3 MRFP.py $DEBUG_FLAG; then
         echo -e "${GREEN}✓ Movie recommendations complete${NC}"
     else
         echo -e "${RED}❌ Movie recommendations failed${NC}"
@@ -211,7 +221,7 @@ main() {
 
     echo -e "${YELLOW}Step 2/2: TV recommendations...${NC}"
     cd "$SCRIPT_DIR/scripts/TV-Show-Recommendations-for-Plex"
-    if python3 TRFP.py; then
+    if python3 TRFP.py $DEBUG_FLAG; then
         echo -e "${GREEN}✓ TV recommendations complete${NC}"
     else
         echo -e "${RED}❌ TV recommendations failed${NC}"

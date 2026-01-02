@@ -39,6 +39,10 @@ general:
   combine_watch_history: false
   log_retention_days: 7  # Keep logs for 7 days (0 = keep all)
 
+# Logging (optional)
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR (--debug flag overrides to DEBUG)
+
 # Movies Settings
 movies:
   limit_results: 50
