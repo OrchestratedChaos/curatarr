@@ -667,8 +667,7 @@ def process_user(config, plex, username):
                   sum(len(items) for items in shows_categorized['other_services'].values()) + \
                   len(shows_categorized['acquire'])
 
-    print_status(f"Generated watchlist: {output_file}", "success")
-    print(f"{total_movies} movies, {total_shows} TV shows")
+    print_status(f"Watchlist generated: {total_movies} movies, {total_shows} shows", "success")
     print_user_footer(f"{display_name} (external recommendations)")
 
 def main():

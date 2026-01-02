@@ -651,7 +651,8 @@ class PlexMovieRecommender:
             account = MyPlexAccount(token=self.config['plex']['token'])
             user = account.user(self.users['managed_users'][0])
             return self.plex.switchUser(user)
-        except:
+        except Exception as e:
+            log_warning(f"Could not switch to managed user context: {e}")
             return self.plex
     
     def _get_watched_count(self) -> int:
@@ -3347,6 +3348,15 @@ def process_recommendations(config, config_path, log_retention_days, single_user
         print(f"\n{RED}An error occurred: {e}{RESET}")
         import traceback
         print(traceback.format_exc())
+
+        # Check if this is a fatal error that should stop all processing
+        error_msg = str(e).lower()
+        fatal_keywords = ['connection', 'plex server', 'unauthorized', 'authentication', 'config']
+        is_fatal = any(keyword in error_msg for keyword in fatal_keywords)
+
+        if is_fatal:
+            log_error(f"Fatal error detected - stopping execution")
+            sys.exit(1)
 
     finally:
         if log_retention_days > 0 and sys.stdout is not original_stdout:
