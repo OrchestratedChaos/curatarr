@@ -582,3 +582,117 @@ def fetch_watch_history_with_tmdb(plex, config, account_ids, section, media_type
             continue
 
     return watched_items
+
+
+def update_plex_collection(section, collection_name: str, items: list, logger=None):
+    """
+    Create or update a Plex collection with items in the specified order.
+
+    If collection exists: clears and refills (preserves pins/settings).
+    If collection doesn't exist: creates new collection.
+
+    Args:
+        section: PlexAPI library section (movies or shows)
+        collection_name: Name of the collection to create/update
+        items: List of Plex media items in desired order (best first)
+        logger: Optional logger instance
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not items:
+        if logger:
+            logger.warning(f"No items provided for collection: {collection_name}")
+        return False
+
+    try:
+        existing_collection = None
+        for collection in section.collections():
+            if collection.title == collection_name:
+                existing_collection = collection
+                break
+
+        if existing_collection:
+            # Clear and refill to preserve settings/pins
+            current_items = existing_collection.items()
+            if current_items:
+                existing_collection.removeItems(current_items)
+            existing_collection.addItems(items)
+            if logger:
+                logger.info(f"Updated collection: {collection_name} ({len(items)} items)")
+            else:
+                print(f"Updated collection: {collection_name} ({len(items)} items)")
+        else:
+            # Create new collection
+            section.createCollection(title=collection_name, items=items)
+            if logger:
+                logger.info(f"Created collection: {collection_name} ({len(items)} items)")
+            else:
+                print(f"Created collection: {collection_name} ({len(items)} items)")
+
+        return True
+
+    except Exception as e:
+        error_msg = f"Error updating collection {collection_name}: {e}"
+        if logger:
+            logger.error(error_msg)
+        else:
+            print(f"ERROR: {error_msg}")
+        return False
+
+
+def cleanup_old_collections(section, current_collection_name: str, username: str, emoji: str, logger=None):
+    """
+    Delete old collection patterns for a user that don't match current naming.
+
+    Cleans up collections from previous naming schemes (e.g., username-based
+    when we now use display_name-based).
+
+    Args:
+        section: PlexAPI library section
+        current_collection_name: The current/correct collection name
+        username: The username to check for old patterns
+        emoji: The emoji prefix (🎬 for movies, 📺 for TV)
+        logger: Optional logger instance
+    """
+    # Patterns that might exist from old naming schemes
+    old_patterns = [
+        f"{emoji} {username} - Recommendation",
+        f"{emoji} {username.capitalize()} - Recommendation",
+        f"{emoji} {username.title()} - Recommendation",
+        f"# {username}'s - Recommended",
+        f"# {username.capitalize()}'s - Recommended",
+        f"{username}'s - Recommended",
+        f"{username.capitalize()}'s - Recommended",
+        f"{username} - Recommendation",
+        f"{username.capitalize()} - Recommendation",
+        # Smart collection patterns
+        f"{emoji} {username} - Recommendation",
+        f"{emoji} {username.capitalize()} - Recommendation",
+    ]
+
+    try:
+        for collection in section.collections():
+            # Skip the current collection
+            if collection.title == current_collection_name:
+                continue
+
+            # Check if this matches an old pattern for this user
+            # Also check if collection contains the username (broader match)
+            matches_pattern = collection.title in old_patterns
+            contains_username = username.lower() in collection.title.lower() and "Recommend" in collection.title
+
+            if matches_pattern or contains_username:
+                collection.delete()
+                msg = f"Deleted old collection: {collection.title}"
+                if logger:
+                    logger.info(msg)
+                else:
+                    print(msg)
+
+    except Exception as e:
+        error_msg = f"Error cleaning up old collections: {e}"
+        if logger:
+            logger.warning(error_msg)
+        else:
+            print(f"WARNING: {error_msg}")

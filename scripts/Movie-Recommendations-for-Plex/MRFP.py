@@ -26,7 +26,7 @@ from shared_plex_utils import (
     RATING_MULTIPLIERS,
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
-    log_warning, log_error
+    log_warning, log_error, update_plex_collection, cleanup_old_collections
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -2229,7 +2229,7 @@ class PlexMovieRecommender:
 
                 # Skip excluded genres (including user-specific exclusions)
                 excluded_genres = self._get_excluded_genres_for_user()
-                if any(g in excluded_genres for g in movie_data['genres']):
+                if any(g.lower() in excluded_genres for g in movie_data['genres']):
                     continue
 
                 all_processed_movies.append((movie_data, tmdb_id))
@@ -2311,7 +2311,7 @@ class PlexMovieRecommender:
 
                         # Skip excluded genres (including user-specific exclusions)
                         excluded_genres = self._get_excluded_genres_for_user()
-                        if any(g in excluded_genres for g in movie_data['genres']):
+                        if any(g.lower() in excluded_genres for g in movie_data['genres']):
                             continue
 
                         all_processed_movies.append((movie_data, tmdb_id))
@@ -2450,7 +2450,7 @@ class PlexMovieRecommender:
             if excluded_count == 0:  # Debug: print excluded genres once
                 pass
             movie_genres = movie_info.get('genres', [])
-            if any(g in excluded_genres for g in movie_genres):
+            if any(g.lower() in excluded_genres for g in movie_genres):
                 excluded_count += 1
                 continue
 
@@ -2636,15 +2636,25 @@ class PlexMovieRecommender:
             currently_labeled = movies_section.search(label=label_name)
             print(f"Found {len(currently_labeled)} currently labeled movies")
 
-            # Separate into watched, unwatched-fresh, and unwatched-stale
+            # Get excluded genres for this user (for checking existing items)
+            excluded_genres = self._get_excluded_genres_for_user()
+
+            # Separate into watched, unwatched-fresh, stale, and excluded
             unwatched_labeled = []
             watched_labeled = []
             stale_labeled = []
+            excluded_labeled = []
 
             for movie in currently_labeled:
                 movie.reload()  # Ensure fresh data
                 movie_id = int(movie.ratingKey)
                 label_key = f"{movie_id}_{label_name}"
+
+                # Check if this movie has excluded genres
+                movie_genres = [g.tag.lower() for g in movie.genres]
+                if any(g in excluded_genres for g in movie_genres):
+                    excluded_labeled.append(movie)
+                    continue
 
                 # Check if this movie has been watched by any of the users
                 if movie_id in self.watched_movie_ids:
@@ -2667,6 +2677,7 @@ class PlexMovieRecommender:
             print(f"{GREEN}Keeping {len(unwatched_labeled)} fresh unwatched recommendations{RESET}")
             print(f"{YELLOW}Removing {len(watched_labeled)} watched movies from recommendations{RESET}")
             print(f"{YELLOW}Removing {len(stale_labeled)} stale recommendations (unwatched > {stale_days} days){RESET}")
+            print(f"{YELLOW}Removing {len(excluded_labeled)} movies with excluded genres{RESET}")
 
             # Remove labels from watched movies
             for movie in watched_labeled:
@@ -2683,6 +2694,14 @@ class PlexMovieRecommender:
                 if label_key in self.label_dates:
                     del self.label_dates[label_key]
                 log_warning(f"Removed (stale): {movie.title}")
+
+            # Remove labels from excluded genre movies
+            for movie in excluded_labeled:
+                movie.removeLabel(label_name)
+                label_key = f"{int(movie.ratingKey)}_{label_name}"
+                if label_key in self.label_dates:
+                    del self.label_dates[label_key]
+                log_warning(f"Removed (excluded genre): {movie.title}")
 
             # Get target count from config
             target_count = self.config['general'].get('limit_plex_results', 50)
@@ -2768,94 +2787,23 @@ class PlexMovieRecommender:
             print(f"{GREEN}Final collection size: {len(final_collection_movies)} movies (sorted by similarity){RESET}")
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
 
-            # Store labeled movie objects for collection creation
-            self._labeled_movies_for_collection = final_collection_movies
+            # Update the Plex collection with sorted movies
+            if final_collection_movies:
+                # Get display name for collection title
+                username = label_name.replace('Recommended_', '')
+                if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
+                    display_name = self.user_preferences[username]['display_name']
+                else:
+                    display_name = username.capitalize()
+
+                collection_name = f"🎬 {display_name} - Recommendation"
+                update_plex_collection(movies_section, collection_name, final_collection_movies, logger)
+
+                # Clean up old collection naming patterns for this user
+                cleanup_old_collections(movies_section, collection_name, username, "🎬", logger)
 
         except Exception as e:
             log_error(f"Error managing Plex labels: {e}")
-            import traceback
-            print(traceback.format_exc())
-
-    def manage_plex_collections(self) -> None:
-        """
-        Automatically manage Plex Collections based on labeled items.
-        Deletes old collections and creates new ones from labeled movies.
-        """
-        if not self.config.get('collections', {}).get('add_label'):
-            return
-
-        try:
-            movies_section = self.plex.library.section(self.library_title)
-            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
-
-            # Handle username appending for collection names (same logic as labels)
-            if self.config.get('collections', {}).get('append_usernames', False):
-                if self.single_user:
-                    user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
-                    label_name = f"{label_name}_{user_suffix}"
-                else:
-                    users = []
-                    if self.users['plex_users']:
-                        users = self.users['plex_users']
-                    else:
-                        users = self.users['managed_users']
-
-                    if users:
-                        sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
-                        user_suffix = '_'.join(sanitized_users)
-                        label_name = f"{label_name}_{user_suffix}"
-
-            # Create collection name - extract first name
-            username = label_name.replace('Recommended_', '')
-
-            # Check if user has a configured display name
-            if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
-                first_name = self.user_preferences[username]['display_name']
-            else:
-                # Fallback: extract first name (text before any numbers or second capital letter)
-                first_name_match = re.match(r'^([a-zA-Z]+)', username)
-                if first_name_match:
-                    first_name = first_name_match.group(1).capitalize()
-                else:
-                    first_name = username
-
-            collection_name = f"# {first_name}'s - Recommended"
-
-            # Reload section to ensure labels are fresh
-            movies_section = self.plex.library.section(self.library_title)
-
-            # Use the movie objects that were just labeled (more reliable than searching)
-            labeled_movies = getattr(self, '_labeled_movies_for_collection', None)
-
-            if not labeled_movies:
-                pass
-                # Fallback: search for labeled movies
-                log_warning(f"Using fallback: searching for labeled movies...")
-                labeled_movies = movies_section.search(label=label_name)
-
-            if not labeled_movies:
-                log_warning(f"No labeled movies found to create collection from.")
-                return
-
-            print(f"{GREEN}Found {len(labeled_movies)} labeled movies to create collection from{RESET}")
-
-            # Delete old collections with this name
-            print(f"{YELLOW}Checking for existing collections: {collection_name}{RESET}")
-            for collection in movies_section.collections():
-                if collection.title == collection_name:
-                    log_warning(f"Deleting old collection: {collection_name}")
-                    collection.delete()
-
-            # Create new collection from labeled movies
-            print(f"{GREEN}Creating collection: {collection_name} with {len(labeled_movies)} movies{RESET}")
-            movies_section.createCollection(
-                title=collection_name,
-                items=labeled_movies
-            )
-            print(f"{GREEN}Successfully created collection for {first_name}!{RESET}")
-
-        except Exception as e:
-            log_error(f"Error managing Plex collections: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -3233,6 +3181,8 @@ def adapt_root_config_to_legacy(root_config):
             'token': root_config.get('plex', {}).get('token', ''),
             'movie_library_title': root_config.get('plex', {}).get('movie_library', 'Movies'),
             'managed_users': root_config.get('plex', {}).get('managed_users', 'Admin'),
+        },
+        'collections': {
             'add_label': root_config.get('collections', {}).get('add_label', True),
             'label_name': root_config.get('collections', {}).get('label_name', 'Recommended'),
             'append_usernames': root_config.get('collections', {}).get('append_usernames', True),
@@ -3318,7 +3268,6 @@ def process_recommendations(config, config_path, log_retention_days, single_user
                 ))
                 print()
             recommender.manage_plex_labels(plex_recs)
-            recommender.manage_plex_collections()
         else:
             log_warning(f"No recommendations found in your Plex library matching your criteria.")
      

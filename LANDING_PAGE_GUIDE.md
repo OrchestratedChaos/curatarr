@@ -6,7 +6,7 @@ Make your personalized recommendation collections visible on Plex landing pages.
 
 ## Collections Created
 
-The system creates these smart collections:
+The system creates these collections:
 
 **Movies:**
 - 🎬 User1 - Recommendation
@@ -86,7 +86,7 @@ Pinned collections will appear:
 ## Collection Details
 
 ### Auto-Updating
-Collections are **smart collections** - they automatically update when:
+Collections automatically update when:
 - Daily cron job runs (3 AM)
 - Labels change based on new watch history
 - No manual intervention needed
@@ -103,9 +103,9 @@ Collections are **smart collections** - they automatically update when:
 
 ### Collections Not Appearing
 
-**Solution 1**: Recreate collections
+**Solution 1**: Re-run recommendations (collections are created automatically)
 ```bash
-python3 create-smart-collections.py
+./run.sh
 ```
 
 **Solution 2**: Check if collections exist
