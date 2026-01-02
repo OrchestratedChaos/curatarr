@@ -1,4 +1,6 @@
 import os
+import argparse
+import logging
 import plexapi.server
 from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
@@ -22,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from shared_plex_utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     RATING_MULTIPLIERS,
-    get_full_language_name, cleanup_old_logs
+    get_full_language_name, cleanup_old_logs, setup_logging
 )
 
 __version__ = "3.2"
@@ -676,6 +678,24 @@ class PlexMovieRecommender:
         else:  # 1-2 stars
             return 0.25
 
+    def _calculate_rewatch_multiplier(self, view_count):
+        """Calculate rewatch multiplier using logarithmic scaling.
+
+        Rewatch scale (log2(views) + 1):
+        - 1 view: 1.0x weight
+        - 2 views: 2.0x weight
+        - 4 views: 3.0x weight
+        - 8 views: 4.0x weight
+        - 16 views: 5.0x weight
+
+        This prevents obsessive rewatches from completely dominating preferences
+        while still giving meaningful weight to rewatched content.
+        """
+        import math
+        if not view_count or view_count <= 1:
+            return 1.0
+        return math.log2(view_count) + 1
+
     def _get_plex_user_ids(self):
         """Resolve configured Plex usernames to their user IDs"""
         user_ids = []
@@ -727,7 +747,8 @@ class PlexMovieRecommender:
         }
         watched_movie_ids = set()
         watched_movie_dates = {}  # Store watch timestamps for recency decay
-        user_ratings = {}  # NEW: Store user ratings for each movie
+        user_ratings = {}  # Store user ratings for each movie
+        watched_movie_views = {}  # Store view counts for rewatch weighting
         not_found_count = 0
 
         # Get watched movies using library filter (more reliable than history API)
@@ -757,6 +778,10 @@ class PlexMovieRecommender:
                     user_rating = float(movie.userRating)
                     if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
                         user_ratings[movie_id] = user_rating
+
+                # Get view count for rewatch weighting
+                if hasattr(movie, 'viewCount') and movie.viewCount:
+                    watched_movie_views[movie_id] = int(movie.viewCount)
 
             print(f"Fetched {movie_count} watched movies from library filter")
 
@@ -790,8 +815,11 @@ class PlexMovieRecommender:
                 # Calculate rating multiplier based on user's star rating
                 rating_multiplier = self._calculate_rating_multiplier(user_ratings.get(movie_id))
 
-                # Combine both multipliers
-                multiplier = recency_multiplier * rating_multiplier
+                # Calculate rewatch multiplier based on view count
+                rewatch_multiplier = self._calculate_rewatch_multiplier(watched_movie_views.get(movie_id, 1))
+
+                # Combine all multipliers
+                multiplier = recency_multiplier * rating_multiplier * rewatch_multiplier
 
                 # Process with weighted counters
                 self._process_movie_counters_from_cache(movie_info, counters, multiplier)
@@ -3322,6 +3350,12 @@ def main():
     if sys.stdout.encoding.lower() != 'utf-8':
         sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
 
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Movie Recommendations for Plex')
+    parser.add_argument('username', nargs='?', help='Process recommendations for only this user')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    args = parser.parse_args()
+
     start_time = datetime.now()
     print(f"{CYAN}Movie Recommendations for Plex{RESET}")
     print("-" * 50)
@@ -3342,27 +3376,18 @@ def main():
         print(f"{YELLOW}Looking for config at: {config_path}{RESET}")
         sys.exit(1)
 
+    # Setup logging (--debug flag overrides config)
+    logger = setup_logging(debug=args.debug, config=root_config)
+    logger.debug("Debug logging enabled")
+
     general = base_config.get('general', {})
     log_retention_days = general.get('log_retention_days', 7)
     combine_watch_history = general.get('combine_watch_history', True)
 
-    # Process command line arguments
-    single_user = None
-    if len(sys.argv) > 1:
-        if sys.argv[1].lower() in ['-h', '--help']:
-            print("\nUsage:")
-            print("  python MRFP.py [username]")
-            print("\nOptions:")
-            print("  username    Process recommendations for only this user")
-            print("  --help      Show this help message")
-            sys.exit(0)
-        elif sys.argv[1].startswith('--'):
-            pass
-            # Ignore flags like --movies, --tv  (these are legacy/unused)
-            pass
-        else:
-            single_user = sys.argv[1]
-            print(f"{YELLOW}Single user mode: {single_user}{RESET}")
+    # Process single user mode
+    single_user = args.username
+    if single_user:
+        print(f"{YELLOW}Single user mode: {single_user}{RESET}")
     
     # Get all users that need to be processed
     all_users = []

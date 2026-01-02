@@ -4,9 +4,47 @@ Contains common functions for account management and watch history fetching
 """
 
 import os
+import logging
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+
+
+def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
+    """
+    Configure logging for recommendation scripts.
+
+    Args:
+        debug: If True, set level to DEBUG. Otherwise use config or default to INFO.
+        config: Optional config dict that may contain logging.level setting.
+
+    Returns:
+        Configured logger instance.
+    """
+    # Determine log level
+    if debug:
+        level = logging.DEBUG
+    elif config and config.get('logging', {}).get('level'):
+        level_str = config['logging']['level'].upper()
+        level = getattr(logging, level_str, logging.INFO)
+    else:
+        level = logging.INFO
+
+    # Configure root logger
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # Suppress noisy third-party loggers
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+
+    logger = logging.getLogger('plex_recommender')
+    logger.setLevel(level)
+
+    return logger
 
 # ANSI color codes
 RED = '\033[91m'

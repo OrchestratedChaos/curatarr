@@ -1,4 +1,6 @@
 import os
+import argparse
+import logging
 import plexapi.server
 from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
@@ -22,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from shared_plex_utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     RATING_MULTIPLIERS,
-    get_full_language_name, cleanup_old_logs,
+    get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows
 )
@@ -640,6 +642,16 @@ class PlexTVRecommender:
         # Store watched show IDs
         self.watched_show_ids.update(watched_show_ids)
 
+        # Build view count map for rewatch weighting
+        show_view_counts = {}
+        try:
+            for show in shows_section.all():
+                show_id = int(show.ratingKey)
+                if show_id in watched_show_ids and hasattr(show, 'viewCount') and show.viewCount:
+                    show_view_counts[show_id] = int(show.viewCount)
+        except Exception:
+            pass  # Fall back to no rewatch weighting if this fails
+
         # Process show metadata from cache
         print(f"")
         print(f"Processing {len(watched_show_ids)} unique watched shows from Plex history:")
@@ -648,7 +660,9 @@ class PlexTVRecommender:
 
             show_info = self.show_cache.cache['shows'].get(str(show_id))
             if show_info:
-                self._process_show_counters_from_cache(show_info, counters)
+                # Calculate rewatch multiplier based on view count
+                rewatch_multiplier = self._calculate_rewatch_multiplier(show_view_counts.get(show_id, 1))
+                self._process_show_counters_from_cache(show_info, counters, rewatch_multiplier)
 
                 if tmdb_id := show_info.get('tmdb_id'):
                     counters['tmdb_ids'].add(tmdb_id)
@@ -776,13 +790,32 @@ class PlexTVRecommender:
     def _save_cache(self):
         self._save_watched_cache()
 
-    def _process_show_counters_from_cache(self, show_info: Dict, counters: Dict) -> None:
+    def _calculate_rewatch_multiplier(self, view_count):
+        """Calculate rewatch multiplier using logarithmic scaling.
+
+        For TV shows, view_count is the total episode views (includes rewatches).
+
+        Rewatch scale (log2(views) + 1):
+        - 1 view: 1.0x weight
+        - 2 views: 2.0x weight
+        - 4 views: 3.0x weight
+        - 8 views: 4.0x weight
+
+        This prevents binge-watched shows from completely dominating preferences
+        while still giving meaningful weight to frequently rewatched content.
+        """
+        import math
+        if not view_count or view_count <= 1:
+            return 1.0
+        return math.log2(view_count) + 1
+
+    def _process_show_counters_from_cache(self, show_info: Dict, counters: Dict, rewatch_multiplier: float = 1.0) -> None:
         try:
             rating = float(show_info.get('user_rating', 0))
             if not rating:
                 rating = float(show_info.get('audience_rating', 5.0))
             rating = max(0, min(10, int(round(rating))))
-            multiplier = RATING_MULTIPLIERS.get(rating, 1.0)
+            multiplier = RATING_MULTIPLIERS.get(rating, 1.0) * rewatch_multiplier
     
             # Process all counters using cached data
             for genre in show_info.get('genres', []):
@@ -2948,6 +2981,12 @@ def adapt_root_config_to_legacy(root_config):
     return adapted
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='TV Show Recommendations for Plex')
+    parser.add_argument('username', nargs='?', help='Process recommendations for only this user')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    args = parser.parse_args()
+
     start_time = datetime.now()
     print(f"{CYAN}TV Show Recommendations for Plex{RESET}")
     print("-" * 50)
@@ -2968,9 +3007,18 @@ def main():
         print(f"{YELLOW}Looking for config at: {config_path}{RESET}")
         sys.exit(1)
 
+    # Setup logging (--debug flag overrides config)
+    logger = setup_logging(debug=args.debug, config=root_config)
+    logger.debug("Debug logging enabled")
+
     general = base_config.get('general', {})
     log_retention_days = general.get('log_retention_days', 7)
     combine_watch_history = general.get('combine_watch_history', True)
+
+    # Process single user mode
+    single_user = args.username
+    if single_user:
+        print(f"{YELLOW}Single user mode: {single_user}{RESET}")
 
     # Get all users that need to be processed
     all_users = []
