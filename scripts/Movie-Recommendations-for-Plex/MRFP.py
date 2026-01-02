@@ -1,4 +1,6 @@
 import os
+import argparse
+import logging
 import plexapi.server
 from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
@@ -22,8 +24,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from shared_plex_utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     RATING_MULTIPLIERS,
-    get_full_language_name, cleanup_old_logs
+    get_full_language_name, cleanup_old_logs, setup_logging,
+    get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
+    log_warning, log_error
 )
+
+# Module-level logger - configured by setup_logging() in main()
+logger = logging.getLogger('plex_recommender')
 
 __version__ = "3.2"
 REPO_URL = "https://github.com/netplexflix/Movie-Recommendations-for-Plex"
@@ -42,12 +49,20 @@ def check_version():
             else:
                 print(f"{GREEN}You are running the latest version (v{__version__}){RESET}")
         else:
-            print(f"{YELLOW}Unable to check for updates. Status code: {response.status_code}{RESET}")
+            log_warning(f"Unable to check for updates. Status code: {response.status_code}")
     except Exception as e:
-        print(f"{YELLOW}Unable to check for updates: {str(e)}{RESET}")
+        log_warning(f"Unable to check for updates: {str(e)}")
 
 class MovieCache:
+    """Cache for movie metadata including TMDB data, genres, and keywords."""
+
     def __init__(self, cache_dir: str, recommender=None):
+        """Initialize the movie cache.
+
+        Args:
+            cache_dir: Directory path where cache files are stored
+            recommender: Reference to parent PlexMovieRecommender instance
+        """
         self.all_movies_cache_path = os.path.join(cache_dir, "all_movies_cache.json")
         self.cache = self._load_cache()
         self.recommender = recommender  # Store reference to recommender
@@ -58,11 +73,21 @@ class MovieCache:
                 with open(self.all_movies_cache_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
-                print(f"{YELLOW}Error loading all movies cache: {e}{RESET}")
+                log_warning(f"Error loading all movies cache: {e}")
                 return {'movies': {}, 'last_updated': None, 'library_count': 0}
         return {'movies': {}, 'last_updated': None, 'library_count': 0}
     
     def update_cache(self, plex, library_title: str, tmdb_api_key: Optional[str] = None):
+        """Update movie cache with current library contents and TMDB metadata.
+
+        Args:
+            plex: PlexServer instance
+            library_title: Name of the movies library section
+            tmdb_api_key: Optional TMDB API key for fetching additional metadata
+
+        Returns:
+            bool: True if cache was updated, False if already up to date
+        """
         movies_section = plex.library.section(library_title)
         all_movies = movies_section.all()
         current_count = len(all_movies)
@@ -130,7 +155,7 @@ class MovieCache:
                                 
                                 if resp.status_code == 429:
                                     sleep_time = 2 * (attempt + 1)
-                                    print(f"{YELLOW}TMDB rate limit hit, waiting {sleep_time}s...{RESET}")
+                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
                                     time.sleep(sleep_time)
                                     continue
                                     
@@ -143,12 +168,12 @@ class MovieCache:
                             except (requests.exceptions.ConnectionError, 
                                    requests.exceptions.Timeout,
                                    requests.exceptions.ChunkedEncodingError) as e:
-                                print(f"{YELLOW}Connection error, retrying... ({attempt+1}/{max_retries}){RESET}")
+                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
                                 time.sleep(1)
                                 if attempt == max_retries - 1:
-                                    print(f"{YELLOW}Failed to get TMDB ID for {movie.title} after {max_retries} tries{RESET}")
+                                    log_warning(f"Failed to get TMDB ID for {movie.title} after {max_retries} tries")
                             except Exception as e:
-                                print(f"{YELLOW}Error getting TMDB ID for {movie.title}: {e}{RESET}")
+                                log_warning(f"Error getting TMDB ID for {movie.title}: {e}")
                                 break
     
                     # Fetch TMDB metadata (rating, votes, keywords)
@@ -169,7 +194,7 @@ class MovieCache:
 
                                 if detail_resp.status_code == 429:
                                     sleep_time = 2 * (attempt + 1)
-                                    print(f"{YELLOW}TMDB rate limit hit, waiting {sleep_time}s...{RESET}")
+                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
                                     time.sleep(sleep_time)
                                     continue
 
@@ -182,10 +207,10 @@ class MovieCache:
                             except (requests.exceptions.ConnectionError,
                                    requests.exceptions.Timeout,
                                    requests.exceptions.ChunkedEncodingError) as e:
-                                print(f"{YELLOW}Connection error, retrying... ({attempt+1}/{max_retries}){RESET}")
+                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
                                 time.sleep(1)
                             except Exception as e:
-                                print(f"{YELLOW}Error getting TMDB details for {movie.title}: {e}{RESET}")
+                                log_warning(f"Error getting TMDB details for {movie.title}: {e}")
                                 break
 
                         # Get keywords
@@ -199,7 +224,7 @@ class MovieCache:
 
                                 if kw_resp.status_code == 429:
                                     sleep_time = 2 * (attempt + 1)
-                                    print(f"{YELLOW}TMDB rate limit hit, waiting {sleep_time}s...{RESET}")
+                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
                                     time.sleep(sleep_time)
                                     continue
 
@@ -211,12 +236,12 @@ class MovieCache:
                             except (requests.exceptions.ConnectionError,
                                    requests.exceptions.Timeout,
                                    requests.exceptions.ChunkedEncodingError) as e:
-                                print(f"{YELLOW}Connection error, retrying... ({attempt+1}/{max_retries}){RESET}")
+                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
                                 time.sleep(1)
                                 if attempt == max_retries - 1:
-                                    print(f"{YELLOW}Failed to get keywords for {movie.title} after {max_retries} tries{RESET}")
+                                    log_warning(f"Failed to get keywords for {movie.title} after {max_retries} tries")
                             except Exception as e:
-                                print(f"{YELLOW}Error getting TMDB keywords for {movie.title}: {e}{RESET}")
+                                log_warning(f"Error getting TMDB keywords for {movie.title}: {e}")
                                 break
     
                     # Store in recommender's caches if available
@@ -251,9 +276,8 @@ class MovieCache:
                                         except (ValueError, AttributeError):
                                             pass
                     except Exception as e:
-                        if False:  # DEBUG DISABLED
-                            pass
-                    
+                        logger.debug(f"Error fetching ratings for movie: {e}")
+
                     # Add the rating to the movie_info
                     movie_info = {
                         'title': movie.title,
@@ -276,7 +300,7 @@ class MovieCache:
                     self.cache['movies'][movie_id] = movie_info
                     
                 except Exception as e:
-                    print(f"{YELLOW}Error processing movie {movie.title}: {e}{RESET}")
+                    log_warning(f"Error processing movie {movie.title}: {e}")
                     continue
                     
         self.cache['library_count'] = current_count
@@ -290,7 +314,7 @@ class MovieCache:
             with open(self.all_movies_cache_path, 'w', encoding='utf-8') as f:
                 json.dump(self.cache, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"{RED}Error saving all movies cache: {e}{RESET}")
+            log_error(f"Error saving all movies cache: {e}")
 
     def _get_movie_language(self, movie) -> str:
         """Get movie's primary audio language"""
@@ -316,7 +340,20 @@ class MovieCache:
         return "N/A"
 			
 class PlexMovieRecommender:
+    """Generates personalized movie recommendations based on Plex watch history.
+
+    Analyzes watched movies to build preference profiles based on genres, directors,
+    actors, languages, and TMDB keywords. Uses similarity scoring to rank unwatched
+    movies and optionally integrates with Trakt for additional recommendations.
+    """
+
     def __init__(self, config_path: str, single_user: str = None):
+        """Initialize the movie recommender.
+
+        Args:
+            config_path: Path to the config.yml configuration file
+            single_user: Optional username to generate recommendations for a single user
+        """
         self.single_user = single_user
         self.config = self._load_config(config_path)
         self.library_title = self.config['plex'].get('movie_library_title', 'Movies')
@@ -382,7 +419,7 @@ class PlexMovieRecommender:
     
         total_weight = sum(self.weights.values())
         if not abs(total_weight - 1.0) < 1e-6:
-            print(f"{YELLOW}Warning: Weights sum to {total_weight}, expected 1.0.{RESET}")
+            log_warning(f"Warning: Weights sum to {total_weight}, expected 1.0.")
             
         trakt_config = self.config.get('trakt', {})
         self.sync_watch_history = trakt_config.get('sync_watch_history', False)
@@ -441,16 +478,16 @@ class PlexMovieRecommender:
                     if isinstance(watched_ids, list):
                         self.watched_movie_ids = {int(id_) for id_ in watched_ids if str(id_).isdigit()}
                     else:
-                        print(f"{YELLOW}Warning: Invalid watched_movie_ids format in cache{RESET}")
+                        log_warning(f"Warning: Invalid watched_movie_ids format in cache")
                         self.watched_movie_ids = set()
                     
                     if not self.watched_movie_ids and self.cached_watched_count > 0:
-                        print(f"{RED}Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded{RESET}")
+                        log_error(f"Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded")
                         # Force a refresh of watched data
                         self._refresh_watched_data()
                     
             except Exception as e:
-                print(f"{YELLOW}Error loading watched cache: {e}{RESET}")
+                log_warning(f"Error loading watched cache: {e}")
                 self._refresh_watched_data()  
         current_library_ids = self._get_library_movies_set()
         
@@ -476,6 +513,9 @@ class PlexMovieRecommender:
 
         if (not cache_exists) or (current_watched_count != self.cached_watched_count):
             print("Watched count changed or no cache found; gathering watched data now. This may take a while...\n")
+            # Clear existing data to force actual fetch (prevents early returns in fetch functions)
+            self.watched_data_counters = None
+            self.watched_movie_ids = set()
             if self.users['plex_users']:
                 self.watched_data = self._get_plex_watched_data()
             else:
@@ -489,9 +529,8 @@ class PlexMovieRecommender:
             # Ensure watched_movie_ids are preserved
             if not self.watched_movie_ids and 'watched_movie_ids' in watched_cache:
                 self.watched_movie_ids = {int(id_) for id_ in watched_cache['watched_movie_ids'] if str(id_).isdigit()}
-            if False:  # DEBUG DISABLED
-                pass
-            
+            logger.debug(f"Using cached data: {self.cached_watched_count} watched movies, {len(self.watched_movie_ids)} IDs")
+
         print("Fetching library metadata (for existing Movies checks)...")
         self.library_movies = self._get_library_movies_set()
         self.library_movie_titles = self._get_library_movie_titles()
@@ -507,7 +546,7 @@ class PlexMovieRecommender:
                 print(f"Successfully loaded configuration from {config_path}")
                 return config
         except Exception as e:
-            print(f"{RED}Error loading config from {config_path}: {e}{RESET}")
+            log_error(f"Error loading config from {config_path}: {e}")
             raise
     
     def _init_plex(self) -> plexapi.server.PlexServer:
@@ -517,7 +556,7 @@ class PlexMovieRecommender:
                 self.config['plex']['token']
             )
         except Exception as e:
-            print(f"{RED}Error connecting to Plex server: {e}{RESET}")
+            log_error(f"Error connecting to Plex server: {e}")
             raise
     
     # ------------------------------------------------------------------------
@@ -563,7 +602,7 @@ class PlexMovieRecommender:
                 # Match with shared users
                 processed_managed.append(all_usernames_lower[user_lower])
             else:
-                print(f"{RED}Error: Managed user '{user}' not found{RESET}")
+                log_error(f"Error: Managed user '{user}' not found")
                 raise ValueError(f"User '{user}' not found in Plex account")
         
         # Remove duplicates while preserving order
@@ -617,13 +656,8 @@ class PlexMovieRecommender:
     
     def _get_watched_count(self) -> int:
         """Get count of watched movies from Plex (for cache invalidation)"""
-        try:
-            movies_section = self.plex.library.section(self.library_title)
-            watched_movies = movies_section.search(unwatched=False)
-            return len(watched_movies)
-        except Exception as e:
-            print(f"{YELLOW}Error getting watched count: {e}{RESET}")
-            return 0
+        users_to_check = [self.single_user] if self.single_user else self.users['plex_users']
+        return get_watched_movie_count(self.config, users_to_check)
 
     def _calculate_recency_multiplier(self, viewed_at):
         """Calculate recency decay multiplier based on when movie was watched"""
@@ -676,6 +710,24 @@ class PlexMovieRecommender:
         else:  # 1-2 stars
             return 0.25
 
+    def _calculate_rewatch_multiplier(self, view_count):
+        """Calculate rewatch multiplier using logarithmic scaling.
+
+        Rewatch scale (log2(views) + 1):
+        - 1 view: 1.0x weight
+        - 2 views: 2.0x weight
+        - 4 views: 3.0x weight
+        - 8 views: 4.0x weight
+        - 16 views: 5.0x weight
+
+        This prevents obsessive rewatches from completely dominating preferences
+        while still giving meaningful weight to rewatched content.
+        """
+        import math
+        if not view_count or view_count <= 1:
+            return 1.0
+        return math.log2(view_count) + 1
+
     def _get_plex_user_ids(self):
         """Resolve configured Plex usernames to their user IDs"""
         user_ids = []
@@ -704,10 +756,10 @@ class PlexMovieRecommender:
                 if user:
                     user_ids.append(str(user['user_id']))
                 else:
-                    print(f"{RED}User '{username}' not found in Plex accounts!{RESET}")
+                    log_error(f"User '{username}' not found in Plex accounts!")
     
         except Exception as e:
-            print(f"{RED}Error resolving Plex users: {e}{RESET}")
+            log_error(f"Error resolving Plex users: {e}")
         
         return user_ids
 
@@ -727,49 +779,48 @@ class PlexMovieRecommender:
         }
         watched_movie_ids = set()
         watched_movie_dates = {}  # Store watch timestamps for recency decay
-        user_ratings = {}  # NEW: Store user ratings for each movie
+        user_ratings = {}  # Store user ratings for each movie
+        watched_movie_views = {}  # Store view counts for rewatch weighting
         not_found_count = 0
 
-        # Get watched movies using library filter (more reliable than history API)
-        print(f"")
-        print(f"{GREEN}Fetching watched movies using library filter...{RESET}")
+        # Get account IDs for users to process
+        users_to_match = [self.single_user] if self.single_user else self.users['plex_users']
+        account_ids = get_plex_account_ids(self.config, users_to_match)
 
+        if not account_ids:
+            log_error(f"No valid users found!")
+            return counters
+
+        # Fetch watch history using the history API (properly per-user)
+        history_items, _ = fetch_plex_watch_history_movies(self.config, account_ids, movies_section)
+
+        # Process history items to extract IDs, dates, and ratings
+        for item in history_items:
+            movie_id = int(item.ratingKey)
+            watched_movie_ids.add(movie_id)
+
+            # Get watch date
+            if hasattr(item, 'viewedAt') and item.viewedAt:
+                viewed_at = int(item.viewedAt.timestamp())
+                if movie_id not in watched_movie_dates or viewed_at > int(watched_movie_dates.get(movie_id, 0)):
+                    watched_movie_dates[movie_id] = str(viewed_at)
+
+            # Get user rating if available
+            if hasattr(item, 'userRating') and item.userRating:
+                user_rating = float(item.userRating)
+                if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
+                    user_ratings[movie_id] = user_rating
+
+        # Get view counts from library (history API doesn't provide this)
         try:
-            # Get all watched movies for the current user using Plex's unwatched filter
-            watched_movies = movies_section.search(unwatched=False)
-            print(f" {GREEN}OK - Found {len(watched_movies)} watched movies{RESET}")
-
-            # Process each watched movie to get rating keys and metadata
-            movie_count = 0
-            for movie in watched_movies:
+            for movie in movies_section.all():
                 movie_id = int(movie.ratingKey)
-                watched_movie_ids.add(movie_id)
-                movie_count += 1
+                if movie_id in watched_movie_ids and hasattr(movie, 'viewCount') and movie.viewCount:
+                    watched_movie_views[movie_id] = int(movie.viewCount)
+        except Exception:
+            pass  # Fall back to no rewatch weighting if this fails
 
-                # Get watch date from lastViewedAt if available
-                if hasattr(movie, 'lastViewedAt') and movie.lastViewedAt:
-                    viewed_at = int(movie.lastViewedAt.timestamp())
-                    if movie_id not in watched_movie_dates or viewed_at > int(watched_movie_dates.get(movie_id, 0)):
-                        watched_movie_dates[movie_id] = str(viewed_at)
-
-                # Get user rating if available
-                if hasattr(movie, 'userRating') and movie.userRating:
-                    user_rating = float(movie.userRating)
-                    if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
-                        user_ratings[movie_id] = user_rating
-
-            print(f"Fetched {movie_count} watched movies from library filter")
-
-        except Exception as e:
-            print(f"{RED}Error fetching watched movies: {e}{RESET}")
-            # Fallback: try to get list without dates/ratings
-            try:
-                watched_movies = movies_section.search(unwatched=False)
-                for movie in watched_movies:
-                    watched_movie_ids.add(int(movie.ratingKey))
-                print(f"Fetched {len(watched_movie_ids)} watched movies (without metadata)")
-            except:
-                pass
+        print(f"Found {len(watched_movie_ids)} unique watched movies from history API")
 
         # Store watched movie IDs
         self.watched_movie_ids.update(watched_movie_ids)
@@ -790,8 +841,11 @@ class PlexMovieRecommender:
                 # Calculate rating multiplier based on user's star rating
                 rating_multiplier = self._calculate_rating_multiplier(user_ratings.get(movie_id))
 
-                # Combine both multipliers
-                multiplier = recency_multiplier * rating_multiplier
+                # Calculate rewatch multiplier based on view count
+                rewatch_multiplier = self._calculate_rewatch_multiplier(watched_movie_views.get(movie_id, 1))
+
+                # Combine all multipliers
+                multiplier = recency_multiplier * rating_multiplier * rewatch_multiplier
 
                 # Process with weighted counters
                 self._process_movie_counters_from_cache(movie_info, counters, multiplier)
@@ -801,23 +855,19 @@ class PlexMovieRecommender:
             else:
                 not_found_count += 1
 
-        if False:  # DEBUG DISABLED
-            print(f"{YELLOW}{not_found_count} watched movies not found in cache{RESET}")
-            print(f"{GREEN}Collected {len(counters['tmdb_ids'])} unique TMDB IDs{RESET}")
+        logger.debug(f"Watched movies not in cache: {not_found_count}, TMDB IDs collected: {len(counters['tmdb_ids'])}")
 
         return counters
 
     def _get_managed_users_watched_data(self):
         # Return cached data if available and we're not in single user mode
         if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug("Using cached watched data (not single user mode)")
             return self.watched_data_counters
-    
+
         # Only proceed with scanning if we need to
         if hasattr(self, 'watched_data_counters') and self.watched_data_counters:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug("Using existing watched data counters")
             return self.watched_data_counters
     
         counters = {
@@ -868,12 +918,11 @@ class PlexMovieRecommender:
                             counters['tmdb_ids'].add(tmdb_id)
                     
             except Exception as e:
-                print(f"{RED}Error processing user {username}: {e}{RESET}")
+                log_error(f"Error processing user {username}: {e}")
                 continue
         
-        if False:  # DEBUG DISABLED
-            print(f"{GREEN}Collected {len(counters['tmdb_ids'])} unique TMDB IDs{RESET}")
-        
+        logger.debug(f"Collected {len(counters['tmdb_ids'])} unique TMDB IDs from managed users")
+
         return counters
 
     # ------------------------------------------------------------------------
@@ -881,9 +930,6 @@ class PlexMovieRecommender:
     # ------------------------------------------------------------------------
     def _save_watched_cache(self):
         try:
-            if False:  # DEBUG DISABLED
-                pass
-            
             # Create a copy of the watched data to modify for serialization
             watched_data_for_cache = copy.deepcopy(self.watched_data_counters)
             
@@ -902,12 +948,11 @@ class PlexMovieRecommender:
             
             with open(self.watched_cache_path, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=4, ensure_ascii=False)
-                
-            if False:  # DEBUG DISABLED
-                pass
-                
+
+            logger.debug(f"Saved watched cache: {self.cached_watched_count} movies, {len(self.watched_movie_ids)} IDs")
+
         except Exception as e:
-            print(f"{YELLOW}Error saving watched cache: {e}{RESET}")
+            log_warning(f"Error saving watched cache: {e}")
     
     def _save_trakt_sync_cache(self):
         try:
@@ -917,7 +962,7 @@ class PlexMovieRecommender:
                     'last_sync': datetime.now().isoformat()
                 }, f, indent=4)
         except Exception as e:
-            print(f"{YELLOW}Error saving Trakt sync cache: {e}{RESET}")
+            log_warning(f"Error saving Trakt sync cache: {e}")
     
     def _save_cache(self):
         self._save_watched_cache()
@@ -959,10 +1004,14 @@ class PlexMovieRecommender:
                         counters['tmdb_keywords'].update({k: multiplier for k in keywords})
     
         except Exception as e:
-            print(f"{YELLOW}Error processing counters for {movie_info.get('title')}: {e}{RESET}")
+            log_warning(f"Error processing counters for {movie_info.get('title')}: {e}")
     
     def _refresh_watched_data(self):
         """Force refresh of watched data"""
+        # Clear existing data to force actual refresh (prevents early returns in fetch functions)
+        self.watched_data_counters = None
+        self.watched_movie_ids = set()
+
         if self.users['plex_users']:
             self.watched_data = self._get_plex_watched_data()
         else:
@@ -991,12 +1040,12 @@ class PlexMovieRecommender:
             for local_path, remote_path in mappings.items():
                 if path.startswith(local_path):
                     mapped_path = path.replace(local_path, remote_path, 1)
-                    print(f"{YELLOW}Mapped path: {path} -> {mapped_path}{RESET}")
+                    log_warning(f"Mapped path: {path} -> {mapped_path}")
                     return mapped_path
             return path
             
         except Exception as e:
-            print(f"{YELLOW}Warning: Path mapping failed: {e}. Using original path.{RESET}")
+            log_warning(f"Warning: Path mapping failed: {e}. Using original path.")
             return path
 
     # ------------------------------------------------------------------------
@@ -1008,7 +1057,7 @@ class PlexMovieRecommender:
             movies = self.plex.library.section(self.library_title)
             return {int(movie.ratingKey) for movie in movies.all()}
         except Exception as e:
-            print(f"{RED}Error getting library movies: {e}{RESET}")
+            log_error(f"Error getting library movies: {e}")
             return set()
     
     def _get_library_movie_titles(self) -> Set[Tuple[str, Optional[int]]]:
@@ -1017,7 +1066,7 @@ class PlexMovieRecommender:
             movies = self.plex.library.section(self.library_title)
             return {(movie.title.lower(), getattr(movie, 'year', None)) for movie in movies.all()}
         except Exception as e:
-            print(f"{RED}Error getting library movie titles: {e}{RESET}")
+            log_error(f"Error getting library movie titles: {e}")
             return set()
     
     def _is_movie_in_library(self, title: str, year: Optional[int], tmdb_id: Optional[int] = None, imdb_id: Optional[str] = None) -> bool:
@@ -1032,35 +1081,31 @@ class PlexMovieRecommender:
                 for movie_id, movie_data in all_movies.items():
                     # Check TMDb ID match
                     if tmdb_id and movie_data.get('tmdb_id') and str(movie_data['tmdb_id']) == str(tmdb_id):
-                        if False:  # DEBUG DISABLED
-                            pass
+                        logger.debug(f"Movie in library (TMDB match): {title} [{tmdb_id}]")
                         return True
-                        
+
                     # Check IMDb ID match
                     if imdb_id and movie_data.get('imdb_id') and movie_data['imdb_id'] == imdb_id:
-                        if False:  # DEBUG DISABLED
-                            pass
+                        logger.debug(f"Movie in library (IMDB match): {title} [{imdb_id}]")
                         return True
             return False
-        
+
         # Convert title to lowercase for comparison
         title_lower = title.lower()
-        
+
         # Check IDs which are most reliable
         if tmdb_id or imdb_id:
             all_movies = self.movie_cache.cache['movies']
-            
+
             for movie_id, movie_data in all_movies.items():
                 # Check TMDb ID match
                 if tmdb_id and movie_data.get('tmdb_id') and str(movie_data['tmdb_id']) == str(tmdb_id):
-                    if False:  # DEBUG DISABLED
-                        pass
+                    logger.debug(f"Movie in library (TMDB match via cache): {title} [{tmdb_id}]")
                     return True
-                    
+
                 # Check IMDb ID match
                 if imdb_id and movie_data.get('imdb_id') and movie_data['imdb_id'] == imdb_id:
-                    if False:  # DEBUG DISABLED
-                        pass
+                    logger.debug(f"Movie in library (IMDB match via cache): {title} [{imdb_id}]")
                     return True
         
         # If no ID match, fall back to title matching
@@ -1143,7 +1188,7 @@ class PlexMovieRecommender:
                             imdb_ids.add(guid.id.replace('imdb://', ''))
                             break
         except Exception as e:
-            print(f"{YELLOW}Error retrieving IMDb IDs from library: {e}{RESET}")
+            log_warning(f"Error retrieving IMDb IDs from library: {e}")
         return imdb_ids
     
     def get_movie_details(self, movie) -> Dict:
@@ -1212,7 +1257,7 @@ class PlexMovieRecommender:
             return movie_info
                 
         except Exception as e:
-            print(f"{YELLOW}Error getting movie details for {movie.title}: {e}{RESET}")
+            log_warning(f"Error getting movie details for {movie.title}: {e}")
             return {}
     
     def _extract_genres(self, movie) -> List[str]:
@@ -1272,7 +1317,7 @@ class PlexMovieRecommender:
             resp.raise_for_status()
             return resp.json().get('movie_results', [{}])[0].get('id')
         except Exception as e:
-            print(f"{YELLOW}IMDb fallback failed: {e}{RESET}")
+            log_warning(f"IMDb fallback failed: {e}")
             return None
     
     def _get_plex_movie_tmdb_id(self, plex_movie) -> Optional[int]:
@@ -1328,7 +1373,7 @@ class PlexMovieRecommender:
                     tmdb_id = exact_match['id'] if exact_match else results[0]['id']
     
             except Exception as e:
-                print(f"{YELLOW}TMDB search failed for {movie_title}: {e}{RESET}")
+                log_warning(f"TMDB search failed for {movie_title}: {e}")
     
         # Method 3: Single Fallback Attempt via IMDb
         if not tmdb_id and not hasattr(plex_movie, '_tmdb_fallback_attempted'):
@@ -1337,8 +1382,7 @@ class PlexMovieRecommender:
     
         # Update cache even if None to prevent repeat lookups
         if tmdb_id:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug(f"Cached TMDB ID {tmdb_id} for Plex movie {plex_movie.ratingKey}")
             self.plex_tmdb_cache[str(plex_movie.ratingKey)] = tmdb_id
             self._save_watched_cache()
         return tmdb_id
@@ -1369,9 +1413,9 @@ class PlexMovieRecommender:
                 data = resp.json()
                 return data.get('imdb_id')
             else:
-                print(f"{YELLOW}Failed to fetch IMDb ID from TMDB for movie '{plex_movie.title}'. Status Code: {resp.status_code}{RESET}")
+                log_warning(f"Failed to fetch IMDb ID from TMDB for movie '{plex_movie.title}'. Status Code: {resp.status_code}")
         except Exception as e:
-            print(f"{YELLOW}Error fetching IMDb ID for TMDB ID {tmdb_id}: {e}{RESET}")
+            log_warning(f"Error fetching IMDb ID for TMDB ID {tmdb_id}: {e}")
         return None
     
     def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
@@ -1392,11 +1436,10 @@ class PlexMovieRecommender:
                 keywords = data.get('keywords', [])
                 kw_set = {k['name'].lower() for k in keywords}
         except Exception as e:
-            print(f"{YELLOW}Error fetching TMDB keywords for ID {tmdb_id}: {e}{RESET}")
+            log_warning(f"Error fetching TMDB keywords for ID {tmdb_id}: {e}")
     
         if kw_set:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug(f"Cached {len(kw_set)} keywords for TMDB ID {tmdb_id}")
             self.tmdb_keywords_cache[str(tmdb_id)] = list(kw_set)  # Convert key to string
             self._save_watched_cache()
         return kw_set
@@ -1419,7 +1462,7 @@ class PlexMovieRecommender:
             if response.status_code == 200:
                 return response.json().get('imdb_id')
         except Exception as e:
-            print(f"{YELLOW}TMDB API Error: {e}{RESET}")
+            log_warning(f"TMDB API Error: {e}")
         return None
 
     # ------------------------------------------------------------------------
@@ -1475,19 +1518,19 @@ class PlexMovieRecommender:
                         print(f"{GREEN}Successfully authenticated with Trakt!{RESET}")
                         return
                     elif token_response.status_code != 400:
-                        print(f"{RED}Error getting token: {token_response.status_code}{RESET}")
+                        log_error(f"Error getting token: {token_response.status_code}")
                         return
-                print(f"{RED}Authentication timed out{RESET}")
+                log_error(f"Authentication timed out")
             else:
-                print(f"{RED}Error getting device code: {response.status_code}{RESET}")
+                log_error(f"Error getting device code: {response.status_code}")
         except Exception as e:
-            print(f"{RED}Error during Trakt authentication: {e}{RESET}")
+            log_error(f"Error during Trakt authentication: {e}")
     
     def _refresh_trakt_token(self):
         """Refresh the Trakt access token using the refresh token"""
         try:
             if 'refresh_token' not in self.config['trakt']:
-                print(f"{YELLOW}No refresh token available. Re-authenticating...{RESET}")
+                log_warning(f"No refresh token available. Re-authenticating...")
                 self._authenticate_trakt()
                 return self._verify_trakt_token()
                 
@@ -1516,12 +1559,12 @@ class PlexMovieRecommender:
                 print(f"{GREEN}Successfully refreshed Trakt token{RESET}")
                 return True
             else:
-                print(f"{YELLOW}Failed to refresh token: {refresh_response.status_code}. Re-authenticating...{RESET}")
+                log_warning(f"Failed to refresh token: {refresh_response.status_code}. Re-authenticating...")
                 self._authenticate_trakt()
                 return self._verify_trakt_token()
                 
         except Exception as e:
-            print(f"{RED}Error refreshing Trakt token: {e}. Re-authenticating...{RESET}")
+            log_error(f"Error refreshing Trakt token: {e}. Re-authenticating...")
             self._authenticate_trakt()
             return self._verify_trakt_token()
     
@@ -1532,7 +1575,7 @@ class PlexMovieRecommender:
             # Check if token is expired based on stored expiration time
             if ('token_expiration' in self.config['trakt'] and
                 time.time() > self.config['trakt']['token_expiration']):
-                print(f"{YELLOW}Trakt token expired. Refreshing...{RESET}")
+                log_warning(f"Trakt token expired. Refreshing...")
                 return self._refresh_trakt_token()
                 
             # Verify token with API call
@@ -1542,15 +1585,15 @@ class PlexMovieRecommender:
             )
             
             if test_response.status_code == 401:
-                print(f"{YELLOW}Trakt token invalid. Refreshing...{RESET}")
+                log_warning(f"Trakt token invalid. Refreshing...")
                 return self._refresh_trakt_token()
             elif test_response.status_code == 200:
                 return True
             else:
-                print(f"{RED}Error verifying Trakt token: {test_response.status_code}{RESET}")
+                log_error(f"Error verifying Trakt token: {test_response.status_code}")
                 return False
         except Exception as e:
-            print(f"{RED}Error connecting to Trakt: {e}{RESET}")
+            log_error(f"Error connecting to Trakt: {e}")
             return False
 
     def _clear_trakt_watch_history(self):
@@ -1568,7 +1611,7 @@ class PlexMovieRecommender:
                     params={'page': page, 'limit': per_page}
                 )
                 if response.status_code != 200:
-                    print(f"{RED}Error fetching history: {response.status_code}{RESET}")
+                    log_error(f"Error fetching history: {response.status_code}")
                     break
                 
                 data = response.json()
@@ -1605,19 +1648,19 @@ class PlexMovieRecommender:
                             os.remove(self.trakt_sync_cache_path)
                             print(f"{GREEN}Cleared Trakt sync cache.{RESET}")
                         except Exception as e:
-                            print(f"{YELLOW}Error removing Trakt sync cache: {e}{RESET}")
+                            log_warning(f"Error removing Trakt sync cache: {e}")
                     else:
                         print(f"{GREEN}No Trakt sync cache to clear.{RESET}")
                 else:
-                    print(f"{RED}Failed to remove history: {remove_response.status_code}{RESET}")
+                    log_error(f"Failed to remove history: {remove_response.status_code}")
                     print(f"Response: {remove_response.text}")
             elif history_found:
-                print(f"{YELLOW}No movie IDs found in Trakt history to clear.{RESET}")
+                log_warning(f"No movie IDs found in Trakt history to clear.")
             else:
                 print(f"{GREEN}No Trakt history found to clear.{RESET}")
                 
         except Exception as e:
-            print(f"{RED}Error clearing Trakt history: {e}{RESET}")
+            log_error(f"Error clearing Trakt history: {e}")
     
     def _sync_watched_movies_to_trakt(self):
         if not self.sync_watch_history:
@@ -1635,7 +1678,7 @@ class PlexMovieRecommender:
                         previously_synced_ids = set(int(id) for id in cache_data['synced_movie_ids'] if str(id).isdigit())
                         print(f"Loaded previously synced movie IDs from cache")
             except Exception as e:
-                print(f"{YELLOW}Error loading Trakt sync cache: {e}{RESET}")
+                log_warning(f"Error loading Trakt sync cache: {e}")
         
         watched_movies = []
         
@@ -1683,10 +1726,9 @@ class PlexMovieRecommender:
                             start += len(history_items)
                             
                         except Exception as e:
-                            if False:  # DEBUG DISABLED
-                                pass
+                            logger.debug(f"Error fetching history page: {e}")
                             break
-                
+
                 print(f"Gathering movie data from {len(all_history_items)} history items...")
                 
                 # Group movies by rating_key (movie ID)
@@ -1804,7 +1846,7 @@ class PlexMovieRecommender:
                 print("")
         
             if not watched_movies:
-                print(f"{YELLOW}No movies found to sync to Trakt{RESET}")
+                log_warning(f"No movies found to sync to Trakt")
                 return
             
             # Filter out already synced movies
@@ -1856,15 +1898,15 @@ class PlexMovieRecommender:
                             newly_synced.update(movie['imdb_id'] for movie in batch)
                             print(f"{GREEN}Successfully synced {added_movies} movies{RESET}")
                         else:
-                            print(f"{YELLOW}Warning: No movies were added in this batch{RESET}")
+                            log_warning(f"Warning: No movies were added in this batch")
                     else:
-                        print(f"{RED}Error syncing batch to Trakt: {response.status_code}{RESET}")
+                        log_error(f"Error syncing batch to Trakt: {response.status_code}")
                         print(f"Error response: {response.text}")
         
                     time.sleep(2)  # Respect rate limiting
         
                 except Exception as e:
-                    print(f"{RED}Error during Trakt sync: {e}{RESET}")
+                    log_error(f"Error during Trakt sync: {e}")
                     time.sleep(2)
                     continue
         
@@ -1878,11 +1920,10 @@ class PlexMovieRecommender:
                             'last_sync': datetime.now().isoformat()
                         }, f, indent=4)
                 except Exception as e:
-                    print(f"{RED}Error saving Trakt sync cache: {e}{RESET}")
+                    log_error(f"Error saving Trakt sync cache: {e}")
         except Exception as outer_e:
-            print(f"{RED}Unexpected error during Trakt sync process: {outer_e}{RESET}")
-            if False:  # DEBUG DISABLED
-                import traceback
+            log_error(f"Unexpected error during Trakt sync process: {outer_e}")
+            logger.debug(f"Trakt sync error details:", exc_info=True)
 
     # ------------------------------------------------------------------------
     # CALCULATE SCORES
@@ -2040,7 +2081,7 @@ class PlexMovieRecommender:
             return score, score_breakdown
     
         except Exception as e:
-            print(f"{YELLOW}Error calculating similarity score for {movie_info.get('title', 'Unknown')}: {e}{RESET}")
+            log_warning(f"Error calculating similarity score for {movie_info.get('title', 'Unknown')}: {e}")
             return 0.0, score_breakdown
     
     def _print_similarity_breakdown(self, movie_info: Dict, score: float, breakdown: Dict):
@@ -2072,7 +2113,7 @@ class PlexMovieRecommender:
         try:
             # Verify token is valid before proceeding
             if not self._verify_trakt_token():
-                print(f"{RED}Failed to verify Trakt token. Skipping recommendations.{RESET}")
+                log_error(f"Failed to verify Trakt token. Skipping recommendations.")
                 return []
             
             # First check if there's any watch history
@@ -2083,7 +2124,7 @@ class PlexMovieRecommender:
             )
             
             if history_response.status_code != 200 or not history_response.json():
-                print(f"{YELLOW}No watch history found on Trakt. Skipping recommendations.{RESET}")
+                log_warning(f"No watch history found on Trakt. Skipping recommendations.")
                 return []
             
             # Fetch a larger batch of recommendations at once
@@ -2101,17 +2142,16 @@ class PlexMovieRecommender:
             )
             
             if response.status_code != 200:
-                print(f"{RED}Error getting Trakt recommendations: {response.status_code}{RESET}")
+                log_error(f"Error getting Trakt recommendations: {response.status_code}")
                 return []
             
             movies = response.json()
             if not isinstance(movies, list) or not movies:
-                print(f"{YELLOW}No recommendations found from Trakt{RESET}")
+                log_warning(f"No recommendations found from Trakt")
                 return []
             
-            if False:  # DEBUG DISABLED
-                pass
-            
+            logger.debug(f"Processing {len(movies)} movies from Trakt")
+
             # Process all movies at once
             all_processed_movies = []
             seen_trakt_ids = set()
@@ -2140,16 +2180,14 @@ class PlexMovieRecommender:
                 if (trakt_id and trakt_id in seen_trakt_ids) or \
                    (tmdb_id and tmdb_id in seen_tmdb_ids) or \
                    (imdb_id and imdb_id in seen_imdb_ids):
-                    if False:  # DEBUG DISABLED
-                        pass
+                    logger.debug(f"Skipping duplicate: {title} ({year})")
                     continue
-                    
+
                 # Skip movies already in library
                 if self._is_movie_in_library(title, year, tmdb_id, imdb_id):
-                    if False:  # DEBUG DISABLED
-                        pass
+                    logger.debug(f"Skipping (in library): {title} ({year})")
                     continue
-                    
+
                 # Track IDs to avoid duplicates
                 if trakt_id:
                     seen_trakt_ids.add(trakt_id)
@@ -2157,12 +2195,11 @@ class PlexMovieRecommender:
                     seen_tmdb_ids.add(tmdb_id)
                 if imdb_id:
                     seen_imdb_ids.add(imdb_id)
-                    
+
                 # Track by title+year to catch variations
                 title_key = f"{title.lower()}_{year}"
                 if title_key in seen_titles:
-                    if False:  # DEBUG DISABLED
-                        pass
+                    logger.debug(f"Skipping title variation: {title} ({year})")
                     continue
                     
                 seen_titles[title_key] = m
@@ -2195,9 +2232,8 @@ class PlexMovieRecommender:
             
             # If we don't have enough recommendations, try a second request with a different sort order
             if len(all_processed_movies) < self.limit_trakt_results:
-                if False:  # DEBUG DISABLED
-                    pass
-                
+                logger.debug(f"Only {len(all_processed_movies)} movies, fetching trending to supplement")
+
                 # Try trending movies as an alternative
                 trending_response = requests.get(
                     "https://api.trakt.tv/movies/trending",
@@ -2351,14 +2387,13 @@ class PlexMovieRecommender:
                 
                 print(f"{GREEN}Found {len(final_movies)} Trakt recommendations{RESET}")
             else:
-                print(f"{YELLOW}No valid Trakt recommendations found{RESET}")
+                log_warning(f"No valid Trakt recommendations found")
             
             return final_movies
             
         except Exception as e:
-            print(f"{RED}Error getting Trakt recommendations: {e}{RESET}")
-            if False:  # DEBUG DISABLED
-                import traceback
+            log_error(f"Error getting Trakt recommendations: {e}")
+            logger.debug("Trakt recommendations error:", exc_info=True)
             return []
     
     def get_recommendations(self) -> Dict[str, List[Dict]]:
@@ -2429,10 +2464,10 @@ class PlexMovieRecommender:
         if excluded_count > 0:
             print(f"Excluded {excluded_count} movies based on genre filters")
         if quality_filtered_count > 0:
-            print(f"{YELLOW}Filtered {quality_filtered_count} movies below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+){RESET}")
+            log_warning(f"Filtered {quality_filtered_count} movies below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+)")
     
         if not unwatched_movies:
-            print(f"{YELLOW}No unwatched movies found matching your criteria.{RESET}")
+            log_warning(f"No unwatched movies found matching your criteria.")
             plex_recs = []
         else:
             print(f"Calculating similarity scores for {len(unwatched_movies)} movies...")
@@ -2447,7 +2482,7 @@ class PlexMovieRecommender:
                     movie_info['score_breakdown'] = breakdown
                     scored_movies.append(movie_info)
                 except Exception as e:
-                    print(f"{YELLOW}Error processing {movie_info['title']}: {e}{RESET}")
+                    log_warning(f"Error processing {movie_info['title']}: {e}")
                     continue
             
             # Sort by similarity score
@@ -2464,8 +2499,8 @@ class PlexMovieRecommender:
                 plex_recs = scored_movies[:self.limit_plex_results]
             
             # Print detailed breakdowns for final recommendations if debug is enabled
-            if False:  # DEBUG DISABLED
-                print(f"\n{GREEN}=== Similarity Score Breakdowns for Recommendations ==={RESET}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("=== Similarity Score Breakdowns for Recommendations ===")
                 for movie in plex_recs:
                     self._print_similarity_breakdown(movie, movie['similarity_score'], movie['score_breakdown'])
     
@@ -2491,7 +2526,7 @@ class PlexMovieRecommender:
         choice = input(prompt).strip().lower()
     
         if choice in ("n", "no", "none", ""):
-            print(f"{YELLOW}Skipping {operation_label} as per user choice.{RESET}")
+            log_warning(f"Skipping {operation_label} as per user choice.")
             return []
         if choice in ("y", "yes", "all"):
             return recommended_movies
@@ -2501,16 +2536,16 @@ class PlexMovieRecommender:
         for idx_str in indices_str:
             idx_str = idx_str.strip()
             if not idx_str.isdigit():
-                print(f"{YELLOW}Skipping invalid index: {idx_str}{RESET}")
+                log_warning(f"Skipping invalid index: {idx_str}")
                 continue
             idx = int(idx_str)
             if 1 <= idx <= len(recommended_movies):
                 chosen.append(idx)
             else:
-                print(f"{YELLOW}Skipping out-of-range index: {idx}{RESET}")
+                log_warning(f"Skipping out-of-range index: {idx}")
     
         if not chosen:
-            print(f"{YELLOW}No valid indices selected, skipping {operation_label}.{RESET}")
+            log_warning(f"No valid indices selected, skipping {operation_label}.")
             return []
     
         subset = []
@@ -2522,24 +2557,23 @@ class PlexMovieRecommender:
     # PLEX LABELS
     # ------------------------------------------------------------------------
     def manage_plex_labels(self, recommended_movies: List[Dict]) -> None:
-        if not recommended_movies:
-            print(f"{YELLOW}No movies to add labels to.{RESET}")
-            return
-        
         if not self.config['plex'].get('add_label'):
             return
-        
-        if self.confirm_operations:
+
+        # Ensure recommended_movies is always a list (even if empty)
+        recommended_movies = recommended_movies or []
+
+        if self.confirm_operations and recommended_movies:
             selected_movies = self._user_select_recommendations(recommended_movies, "label in Plex")
             if not selected_movies:
-                return
+                selected_movies = []
         else:
             selected_movies = recommended_movies
-        
+
         try:
             movies_section = self.plex.library.section(self.library_title)
             label_name = self.config['plex'].get('label_name', 'Recommended')
-        
+
             # Handle username appending for labels
             if self.config['plex'].get('append_usernames', False):
                 if self.single_user:
@@ -2553,12 +2587,13 @@ class PlexMovieRecommender:
                         users = self.users['plex_users']
                     else:
                         users = self.users['managed_users']
-                    
+
                     if users:
                         sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
                         user_suffix = '_'.join(sanitized_users)
                         label_name = f"{label_name}_{user_suffix}"
-        
+
+            # Find new movies in Plex (if any were recommended)
             movies_to_update = []
             skipped_movies = []
             for rec in selected_movies:
@@ -2572,18 +2607,15 @@ class PlexMovieRecommender:
                     movies_to_update.append(plex_movie)
                 else:
                     skipped_movies.append(f"{rec['title']} ({rec.get('year', 'N/A')})")
-        
+
             if skipped_movies:
-                print(f"{YELLOW}Skipped {len(skipped_movies)} movies not found in Plex:{RESET}")
+                log_warning(f"Skipped {len(skipped_movies)} movies not found in Plex:")
                 for movie in skipped_movies[:5]:  # Show first 5
                     print(f"  - {movie}")
                 if len(skipped_movies) > 5:
                     print(f"  ... and {len(skipped_movies) - 5} more")
 
-            if not movies_to_update:
-                print(f"{YELLOW}No matching movies found in Plex to add labels to.{RESET}")
-                return
-
+            # ALWAYS run cleanup to remove watched/stale movies, even if no new recommendations
             # INCREMENTAL UPDATE: Keep unwatched (and fresh), remove watched and stale, fill gaps
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
@@ -2638,7 +2670,7 @@ class PlexMovieRecommender:
                 label_key = f"{int(movie.ratingKey)}_{label_name}"
                 if label_key in self.label_dates:
                     del self.label_dates[label_key]
-                print(f"{YELLOW}Removed (watched): {movie.title}{RESET}")
+                log_warning(f"Removed (watched): {movie.title}")
 
             # Remove labels from stale movies
             for movie in stale_labeled:
@@ -2646,7 +2678,7 @@ class PlexMovieRecommender:
                 label_key = f"{int(movie.ratingKey)}_{label_name}"
                 if label_key in self.label_dates:
                     del self.label_dates[label_key]
-                print(f"{YELLOW}Removed (stale): {movie.title}{RESET}")
+                log_warning(f"Removed (stale): {movie.title}")
 
             # Get target count from config
             target_count = self.config['general'].get('limit_plex_results', 50)
@@ -2662,15 +2694,21 @@ class PlexMovieRecommender:
 
             # Filter new recommendations to exclude already labeled movies
             new_recommendations = []
-            for movie in movies_to_update:
-                movie_id = int(movie.ratingKey)
-                if movie_id not in already_labeled_ids and movie_id not in self.watched_movie_ids:
-                    new_recommendations.append(movie)
+            if movies_to_update:
+                for movie in movies_to_update:
+                    movie_id = int(movie.ratingKey)
+                    if movie_id not in already_labeled_ids and movie_id not in self.watched_movie_ids:
+                        new_recommendations.append(movie)
+            else:
+                print(f"{YELLOW}No new recommendations available - cleanup only mode{RESET}")
 
             # Take only what we need to fill gaps
             movies_to_add = new_recommendations[:max(0, slots_available)]
 
-            print(f"{GREEN}Adding {len(movies_to_add)} new recommendations to fill gaps{RESET}")
+            if movies_to_add:
+                print(f"{GREEN}Adding {len(movies_to_add)} new recommendations to fill gaps{RESET}")
+            elif slots_available > 0:
+                print(f"{YELLOW}Need {slots_available} more movies but none available to add{RESET}")
 
             # Add labels to new recommendations
             for movie in movies_to_add:
@@ -2732,7 +2770,7 @@ class PlexMovieRecommender:
             self._labeled_movies_for_collection = final_collection_movies
 
         except Exception as e:
-            print(f"{RED}Error managing Plex labels: {e}{RESET}")
+            log_error(f"Error managing Plex labels: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -2790,11 +2828,11 @@ class PlexMovieRecommender:
             if not labeled_movies:
                 pass
                 # Fallback: search for labeled movies
-                print(f"{YELLOW}Using fallback: searching for labeled movies...{RESET}")
+                log_warning(f"Using fallback: searching for labeled movies...")
                 labeled_movies = movies_section.search(label=label_name)
 
             if not labeled_movies:
-                print(f"{YELLOW}No labeled movies found to create collection from.{RESET}")
+                log_warning(f"No labeled movies found to create collection from.")
                 return
 
             print(f"{GREEN}Found {len(labeled_movies)} labeled movies to create collection from{RESET}")
@@ -2803,7 +2841,7 @@ class PlexMovieRecommender:
             print(f"{YELLOW}Checking for existing collections: {collection_name}{RESET}")
             for collection in movies_section.collections():
                 if collection.title == collection_name:
-                    print(f"{YELLOW}Deleting old collection: {collection_name}{RESET}")
+                    log_warning(f"Deleting old collection: {collection_name}")
                     collection.delete()
 
             # Create new collection from labeled movies
@@ -2815,7 +2853,7 @@ class PlexMovieRecommender:
             print(f"{GREEN}Successfully created collection for {first_name}!{RESET}")
 
         except Exception as e:
-            print(f"{RED}Error managing Plex collections: {e}{RESET}")
+            log_error(f"Error managing Plex collections: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -2824,7 +2862,7 @@ class PlexMovieRecommender:
     # ------------------------------------------------------------------------
     def add_to_radarr(self, recommended_movies: List[Dict]) -> None:
         if not recommended_movies:
-            print(f"{YELLOW}No movies to add to Radarr.{RESET}")
+            log_warning(f"No movies to add to Radarr.")
             return
         
         if not self.radarr_config.get('add_to_radarr'):
@@ -2941,7 +2979,7 @@ class PlexMovieRecommender:
                     trakt_results = trakt_response.json()
         
                     if not trakt_results:
-                        print(f"{YELLOW}Movie not found on Trakt: {movie['title']}{RESET}")
+                        log_warning(f"Movie not found on Trakt: {movie['title']}")
                         continue
         
                     trakt_movie = next(
@@ -2953,14 +2991,14 @@ class PlexMovieRecommender:
         
                     tmdb_id = trakt_movie['movie']['ids'].get('tmdb')
                     if not tmdb_id:
-                        print(f"{YELLOW}No TMDB ID found for {movie['title']}{RESET}")
+                        log_warning(f"No TMDB ID found for {movie['title']}")
                         continue
         
                     if tmdb_id in existing_tmdb_ids:
                         existing_movie = next(m for m in existing_movies if m['tmdbId'] == tmdb_id)
                         
                         if should_monitor and not existing_movie['monitored']:
-                            print(f"{YELLOW}Movie already in Radarr (unmonitored): {movie['title']}{RESET}")
+                            log_warning(f"Movie already in Radarr (unmonitored): {movie['title']}")
                             print(f"{GREEN}Updating monitoring status...{RESET}")
                             
                             try:
@@ -3013,16 +3051,16 @@ class PlexMovieRecommender:
                                     print(f"{GREEN}Updated monitoring for: {movie['title']}{RESET}")
                                     
                             except requests.exceptions.RequestException as e:
-                                print(f"{RED}Error updating {movie['title']} in Radarr: {str(e)}{RESET}")
+                                log_error(f"Error updating {movie['title']} in Radarr: {str(e)}")
                                 if hasattr(e, 'response') and e.response is not None:
                                     try:
                                         error_details = e.response.json()
-                                        print(f"{RED}Radarr error details: {json.dumps(error_details, indent=2)}{RESET}")
+                                        log_error(f"Radarr error details: {json.dumps(error_details, indent=2)}")
                                     except:
-                                        print(f"{RED}Radarr error response: {e.response.text}{RESET}")
+                                        log_error(f"Radarr error response: {e.response.text}")
                             continue
                         else:
-                            print(f"{YELLOW}Already in Radarr: {movie['title']}{RESET}")
+                            log_warning(f"Already in Radarr: {movie['title']}")
                             continue
         
                     # Create new movie payload
@@ -3050,20 +3088,20 @@ class PlexMovieRecommender:
                     elif should_monitor:
                         print(f"{GREEN}Added (monitored): {movie['title']}{RESET}")
                     else:
-                        print(f"{YELLOW}Added (unmonitored): {movie['title']}{RESET}")
+                        log_warning(f"Added (unmonitored): {movie['title']}")
         
                 except requests.exceptions.RequestException as e:
-                    print(f"{RED}Error processing {movie['title']}: {str(e)}{RESET}")
+                    log_error(f"Error processing {movie['title']}: {str(e)}")
                     if hasattr(e, 'response') and e.response is not None:
                         try:
                             error_details = e.response.json()
-                            print(f"{RED}Radarr error details: {json.dumps(error_details, indent=2)}{RESET}")
+                            log_error(f"Radarr error details: {json.dumps(error_details, indent=2)}")
                         except:
-                            print(f"{RED}Radarr error response: {e.response.text}{RESET}")
+                            log_error(f"Radarr error response: {e.response.text}")
                     continue
         
         except Exception as e:
-            print(f"{RED}Error adding movies to Radarr: {e}{RESET}")
+            log_error(f"Error adding movies to Radarr: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -3249,7 +3287,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
             sys.stdout = TeeLogger(lf)
             cleanup_old_logs(log_dir, log_retention_days)
         except Exception as e:
-            print(f"{RED}Could not set up logging: {e}{RESET}")
+            log_error(f"Could not set up logging: {e}")
 
     try:
         # Create recommender with single user context
@@ -3280,7 +3318,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
             recommender.manage_plex_labels(plex_recs)
             recommender.manage_plex_collections()
         else:
-            print(f"{YELLOW}No recommendations found in your Plex library matching your criteria.{RESET}")
+            log_warning(f"No recommendations found in your Plex library matching your criteria.")
      
         if not recommender.plex_only:
             print(f"\n{GREEN}=== Recommended Movies to Add to Your Library ==={RESET}")
@@ -3301,7 +3339,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
                     print()
                 recommender.add_to_radarr(trakt_recs)
             else:
-                print(f"{YELLOW}No Trakt recommendations found matching your criteria.{RESET}")
+                log_warning(f"No Trakt recommendations found matching your criteria.")
         
         recommender._save_cache()
 
@@ -3316,11 +3354,17 @@ def process_recommendations(config, config_path, log_retention_days, single_user
                 sys.stdout.logfile.close()
                 sys.stdout = original_stdout
             except Exception as e:
-                print(f"{YELLOW}Error closing log file: {e}{RESET}")
+                log_warning(f"Error closing log file: {e}")
 
 def main():
     if sys.stdout.encoding.lower() != 'utf-8':
         sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Movie Recommendations for Plex')
+    parser.add_argument('username', nargs='?', help='Process recommendations for only this user')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    args = parser.parse_args()
 
     start_time = datetime.now()
     print(f"{CYAN}Movie Recommendations for Plex{RESET}")
@@ -3338,31 +3382,22 @@ def main():
         # Adapt root config to legacy format
         base_config = adapt_root_config_to_legacy(root_config)
     except Exception as e:
-        print(f"{RED}Could not load config.yml from project root: {e}{RESET}")
-        print(f"{YELLOW}Looking for config at: {config_path}{RESET}")
+        log_error(f"Could not load config.yml from project root: {e}")
+        log_warning(f"Looking for config at: {config_path}")
         sys.exit(1)
+
+    # Setup logging (--debug flag overrides config)
+    logger = setup_logging(debug=args.debug, config=root_config)
+    logger.debug("Debug logging enabled")
 
     general = base_config.get('general', {})
     log_retention_days = general.get('log_retention_days', 7)
     combine_watch_history = general.get('combine_watch_history', True)
 
-    # Process command line arguments
-    single_user = None
-    if len(sys.argv) > 1:
-        if sys.argv[1].lower() in ['-h', '--help']:
-            print("\nUsage:")
-            print("  python MRFP.py [username]")
-            print("\nOptions:")
-            print("  username    Process recommendations for only this user")
-            print("  --help      Show this help message")
-            sys.exit(0)
-        elif sys.argv[1].startswith('--'):
-            pass
-            # Ignore flags like --movies, --tv  (these are legacy/unused)
-            pass
-        else:
-            single_user = sys.argv[1]
-            print(f"{YELLOW}Single user mode: {single_user}{RESET}")
+    # Process single user mode
+    single_user = args.username
+    if single_user:
+        log_warning(f"Single user mode: {single_user}")
     
     # Get all users that need to be processed
     all_users = []
@@ -3407,9 +3442,9 @@ def main():
                 admin_username = account.username
                 if user.lower() in ['admin', 'administrator']:
                     resolved_user = admin_username
-                    print(f"{YELLOW}Resolved Admin to: {admin_username}{RESET}")
+                    log_warning(f"Resolved Admin to: {admin_username}")
             except Exception as e:
-                print(f"{YELLOW}Could not resolve admin username: {e}{RESET}")
+                log_warning(f"Could not resolve admin username: {e}")
             
             if 'managed_users' in user_config['plex']:
                 user_config['plex']['managed_users'] = resolved_user
