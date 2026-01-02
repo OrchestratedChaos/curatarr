@@ -17,41 +17,24 @@ import re
 from datetime import datetime, timedelta
 import math
 import copy
-import webbrowser
 
 # Import shared utilities
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from shared_plex_utils import (
+from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS,
+    RATING_MULTIPLIERS, ANSI_PATTERN,
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
-    log_warning, log_error, update_plex_collection, cleanup_old_collections
+    log_warning, log_error, update_plex_collection, cleanup_old_collections,
+    load_config, init_plex, get_configured_users, get_current_users,
+    get_excluded_genres_for_user, get_user_specific_connection,
+    calculate_recency_multiplier, calculate_rewatch_multiplier,
+    map_path, show_progress, TeeLogger
 )
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "3.2"
-REPO_URL = "https://github.com/netplexflix/Movie-Recommendations-for-Plex"
-API_VERSION_URL = f"https://api.github.com/repos/netplexflix/Movie-Recommendations-for-Plex/releases/latest"
-
-def check_version():
-    try:
-        response = requests.get(API_VERSION_URL)
-        if response.status_code == 200:
-            latest_release = response.json()
-            latest_version = latest_release['tag_name'].lstrip('v')
-            if latest_version > __version__:
-                print(f"{YELLOW}A new version is available: v{latest_version}")
-                print(f"You are currently running: v{__version__}")
-                print(f"Please visit {REPO_URL}/releases to download the latest version.{RESET}")
-            else:
-                print(f"{GREEN}You are running the latest version (v{__version__}){RESET}")
-        else:
-            log_warning(f"Unable to check for updates. Status code: {response.status_code}")
-    except Exception as e:
-        log_warning(f"Unable to check for updates: {str(e)}")
+__version__ = "1.0.0"
 
 class MovieCache:
     """Cache for movie metadata including TMDB data, genres, and keywords."""
@@ -344,7 +327,7 @@ class PlexMovieRecommender:
 
     Analyzes watched movies to build preference profiles based on genres, directors,
     actors, languages, and TMDB keywords. Uses similarity scoring to rank unwatched
-    movies and optionally integrates with Trakt for additional recommendations.
+    movies in the Plex library.
     """
 
     def __init__(self, config_path: str, single_user: str = None):
@@ -355,7 +338,7 @@ class PlexMovieRecommender:
             single_user: Optional username to generate recommendations for a single user
         """
         self.single_user = single_user
-        self.config = self._load_config(config_path)
+        self.config = load_config(config_path)
         self.library_title = self.config['plex'].get('movie_library_title', 'Movies')
         
         # Initialize counters and caches
@@ -370,11 +353,11 @@ class PlexMovieRecommender:
         self.plex_watched_rating_keys = set()
         self.watched_movie_ids = set()
         self.label_dates = {}
-        self.users = self._get_configured_users()
+        self.users = get_configured_users(self.config)
 
         print("Initializing recommendation system...")
         print("Connecting to Plex server...")
-        self.plex = self._init_plex()
+        self.plex = init_plex(self.config)
         print(f"Connected to Plex successfully!\n")
         general_config = self.config.get('general', {})
         self.debug = general_config.get('debug', False)
@@ -383,20 +366,18 @@ class PlexMovieRecommender:
         self.use_tmdb_keywords = tmdb_config.get('use_TMDB_keywords', True)
         self.tmdb_api_key = tmdb_config.get('api_key', None)
         
-        self.cache_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'cache')
+        self.cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
         self.movie_cache = MovieCache(self.cache_dir, recommender=self)
         self.movie_cache.update_cache(self.plex, self.library_title, self.tmdb_api_key)
     
         self.confirm_operations = general_config.get('confirm_operations', False)
         self.limit_plex_results = general_config.get('limit_plex_results', 10)
-        self.limit_trakt_results = general_config.get('limit_trakt_results', 10)
         self.combine_watch_history = general_config.get('combine_watch_history', True)
         self.randomize_recommendations = general_config.get('randomize_recommendations', True)
         self.normalize_counters = general_config.get('normalize_counters', True)
         self.show_summary = general_config.get('show_summary', False)
         self.show_genres = general_config.get('show_genres', True)
-        self.plex_only = general_config.get('plex_only', False)
         self.show_cast = general_config.get('show_cast', False)
         self.show_director = general_config.get('show_director', False)
         self.show_language = general_config.get('show_language', False)
@@ -421,19 +402,7 @@ class PlexMovieRecommender:
         total_weight = sum(self.weights.values())
         if not abs(total_weight - 1.0) < 1e-6:
             log_warning(f"Warning: Weights sum to {total_weight}, expected 1.0.")
-            
-        trakt_config = self.config.get('trakt', {})
-        self.sync_watch_history = trakt_config.get('sync_watch_history', False)
-        self.trakt_headers = {
-            'Content-Type': 'application/json',
-            'trakt-api-version': '2',
-            'trakt-api-key': trakt_config['client_id']
-        }
-        if 'access_token' in trakt_config:
-            self.trakt_headers['Authorization'] = f"Bearer {trakt_config['access_token']}"
-        else:
-            self._authenticate_trakt()
-    
+
         # Verify Plex user configuration
         if self.users['plex_users']:
             pass
@@ -444,9 +413,7 @@ class PlexMovieRecommender:
         # Verify library exists
         if not self.plex.library.section(self.library_title):
             raise ValueError(f"Movie library '{self.library_title}' not found in Plex")
-        
-        self.radarr_config = self.config.get('radarr', {})
-        
+
         # Get user context for cache files
         if single_user:
             user_ctx = f"plex_{single_user}" if not self.users['plex_users'] else f"plex_{single_user}"
@@ -460,8 +427,6 @@ class PlexMovieRecommender:
         
         # Update cache paths to be user-specific
         self.watched_cache_path = os.path.join(self.cache_dir, f"watched_cache_{safe_ctx}.json")
-        self.trakt_cache_path = os.path.join(self.cache_dir, f"trakt_sync_cache_{safe_ctx}.json")
-        self.trakt_sync_cache_path = os.path.join(self.cache_dir, "trakt_sync_cache.json")
          
         # Load watched cache 
         watched_cache = {}
@@ -507,8 +472,6 @@ class PlexMovieRecommender:
             self.plex_tmdb_cache = {}
         if self.tmdb_keywords_cache is None:
             self.tmdb_keywords_cache = {}
-        if not hasattr(self, 'synced_trakt_history'):
-            self.synced_trakt_history = {}
     
         current_watched_count = self._get_watched_count()
         cache_exists = os.path.exists(self.watched_cache_path)
@@ -538,158 +501,10 @@ class PlexMovieRecommender:
         self.library_movie_titles = self._get_library_movie_titles()
         self.library_imdb_ids = self._get_library_imdb_ids()
 
-    # ------------------------------------------------------------------------
-    # CONFIG / SETUP
-    # ------------------------------------------------------------------------
-    def _load_config(self, config_path: str) -> Dict:
-        try:
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
-                print(f"Successfully loaded configuration from {config_path}")
-                return config
-        except Exception as e:
-            log_error(f"Error loading config from {config_path}: {e}")
-            raise
-    
-    def _init_plex(self) -> plexapi.server.PlexServer:
-        try:
-            return plexapi.server.PlexServer(
-                self.config['plex']['url'],
-                self.config['plex']['token']
-            )
-        except Exception as e:
-            log_error(f"Error connecting to Plex server: {e}")
-            raise
-    
-    # ------------------------------------------------------------------------
-    # USERS
-    # ------------------------------------------------------------------------ 
-    def _get_configured_users(self):
-        # Get raw managed users list from config
-        raw_managed = self.config['plex'].get('managed_users', '')
-        managed_users = [u.strip() for u in raw_managed.split(',') if u.strip()]
-
-        # Get Plex users
-        plex_users = []
-
-        # Check if Plex users is 'none' or empty
-        plex_user_config = self.config.get('plex_users', {}).get('users')
-        if plex_user_config and str(plex_user_config).lower() != 'none':
-            if isinstance(plex_user_config, list):
-                plex_users = plex_user_config
-            elif isinstance(plex_user_config, str):
-                plex_users = [u.strip() for u in plex_user_config.split(',') if u.strip()]
-        
-        # Resolve admin account
-        account = MyPlexAccount(token=self.config['plex']['token'])
-        admin_user = account.username
-        
-        # User validation logic
-        all_users = account.users()
-        all_usernames_lower = {u.title.lower(): u.title for u in all_users}
-        
-        processed_managed = []
-        for user in managed_users:
-            user_lower = user.lower()
-            if user_lower in ['admin', 'administrator']:
-                pass
-                # Special case for admin keywords
-                processed_managed.append(admin_user)
-            elif user_lower == admin_user.lower():
-                pass
-                # Direct match with admin username (case-insensitive)
-                processed_managed.append(admin_user)
-            elif user_lower in all_usernames_lower:
-                pass
-                # Match with shared users
-                processed_managed.append(all_usernames_lower[user_lower])
-            else:
-                log_error(f"Error: Managed user '{user}' not found")
-                raise ValueError(f"User '{user}' not found in Plex account")
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        managed_users = [u for u in processed_managed if not (u in seen or seen.add(u))]
-        
-        return {
-            'managed_users': managed_users,
-            'plex_users': plex_users,
-            'admin_user': admin_user
-        }
-    
-    def _get_current_users(self) -> str:
-        if self.users['plex_users']:
-            return f"Plex users: {', '.join(self.users['plex_users'])}"
-        return f"Managed users: {', '.join(self.users['managed_users'])}"
-
-    def _get_excluded_genres_for_user(self, username=None):
-        """
-        Get excluded genres including user-specific preferences
-
-        Args:
-            username: Username to get excluded genres for (defaults to single_user)
-
-        Returns:
-            Set of excluded genre names (lowercase)
-        """
-        # Start with global excluded genres
-        excluded = set(self.exclude_genres)
-
-        # Get current username
-        current_user = username or self.single_user
-
-        # Add user-specific excluded genres if configured
-        if current_user and current_user in self.user_preferences:
-            user_prefs = self.user_preferences[current_user]
-            user_excluded = user_prefs.get('exclude_genres', [])
-            excluded.update([g.lower() for g in user_excluded])
-
-        return excluded
-
-    def _get_user_specific_connection(self):
-        if self.users['plex_users']:
-            return self.plex
-        try:
-            account = MyPlexAccount(token=self.config['plex']['token'])
-            user = account.user(self.users['managed_users'][0])
-            return self.plex.switchUser(user)
-        except Exception as e:
-            log_warning(f"Could not switch to managed user context: {e}")
-            return self.plex
-    
     def _get_watched_count(self) -> int:
         """Get count of watched movies from Plex (for cache invalidation)"""
         users_to_check = [self.single_user] if self.single_user else self.users['plex_users']
         return get_watched_movie_count(self.config, users_to_check)
-
-    def _calculate_recency_multiplier(self, viewed_at):
-        """Calculate recency decay multiplier based on when movie was watched"""
-        from datetime import datetime, timezone
-
-        # Get recency decay config (default to enabled)
-        recency_config = self.config.get('recency_decay', {})
-        if not recency_config.get('enabled', True):
-            return 1.0  # No decay if disabled
-
-        # Calculate days since watched
-        now = datetime.now(timezone.utc)
-        viewed_date = datetime.fromtimestamp(int(viewed_at), tz=timezone.utc)
-        days_ago = (now - viewed_date).days
-
-        # Apply time-based decay weights
-        if days_ago <= 30:
-            multiplier = recency_config.get('days_0_30', 1.0)
-        elif days_ago <= 90:
-            multiplier = recency_config.get('days_31_90', 0.75)
-        elif days_ago <= 180:
-            multiplier = recency_config.get('days_91_180', 0.50)
-        elif days_ago <= 365:
-            multiplier = recency_config.get('days_181_365', 0.25)
-        else:
-            multiplier = recency_config.get('days_365_plus', 0.10)
-
-
-        return multiplier
 
     def _calculate_rating_multiplier(self, user_rating):
         """Calculate rating multiplier based on user's star rating (0-10 scale in Plex)
@@ -712,24 +527,6 @@ class PlexMovieRecommender:
             return 0.5
         else:  # 1-2 stars
             return 0.25
-
-    def _calculate_rewatch_multiplier(self, view_count):
-        """Calculate rewatch multiplier using logarithmic scaling.
-
-        Rewatch scale (log2(views) + 1):
-        - 1 view: 1.0x weight
-        - 2 views: 2.0x weight
-        - 4 views: 3.0x weight
-        - 8 views: 4.0x weight
-        - 16 views: 5.0x weight
-
-        This prevents obsessive rewatches from completely dominating preferences
-        while still giving meaningful weight to rewatched content.
-        """
-        import math
-        if not view_count or view_count <= 1:
-            return 1.0
-        return math.log2(view_count) + 1
 
     def _get_plex_user_ids(self):
         """Resolve configured Plex usernames to their user IDs"""
@@ -832,20 +629,20 @@ class PlexMovieRecommender:
         print(f"")
         print(f"Processing {len(watched_movie_ids)} unique watched movies with recency decay and rating weighting:")
         for i, movie_id in enumerate(watched_movie_ids, 1):
-            self._show_progress("Processing", i, len(watched_movie_ids))
+            show_progress("Processing", i, len(watched_movie_ids))
 
             movie_info = self.movie_cache.cache['movies'].get(str(movie_id))
             if movie_info:
                 pass
                 # Calculate recency multiplier for this movie
                 viewed_at = watched_movie_dates.get(movie_id)
-                recency_multiplier = self._calculate_recency_multiplier(viewed_at) if viewed_at else 1.0
+                recency_multiplier = calculate_recency_multiplier(viewed_at, self.config.get('recency_decay', {})) if viewed_at else 1.0
 
                 # Calculate rating multiplier based on user's star rating
                 rating_multiplier = self._calculate_rating_multiplier(user_ratings.get(movie_id))
 
                 # Calculate rewatch multiplier based on view count
-                rewatch_multiplier = self._calculate_rewatch_multiplier(watched_movie_views.get(movie_id, 1))
+                rewatch_multiplier = calculate_rewatch_multiplier(watched_movie_views.get(movie_id, 1))
 
                 # Combine all multipliers
                 multiplier = recency_multiplier * rating_multiplier * rewatch_multiplier
@@ -909,7 +706,7 @@ class PlexMovieRecommender:
                 
                 print(f"\nScanning watched movies for {username}")
                 for i, movie in enumerate(watched_movies, 1):
-                    self._show_progress(f"Processing {username}'s watched", i, len(watched_movies))
+                    show_progress(f"Processing {username}'s watched", i, len(watched_movies))
                     self.watched_movie_ids.add(int(movie.ratingKey))
                     
                     movie_info = self.movie_cache.cache['movies'].get(str(movie.ratingKey))
@@ -957,17 +754,7 @@ class PlexMovieRecommender:
 
         except Exception as e:
             log_warning(f"Error saving watched cache: {e}")
-    
-    def _save_trakt_sync_cache(self):
-        try:
-            with open(self.trakt_sync_cache_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'synced_movie_ids': list(self.synced_movie_ids),
-                    'last_sync': datetime.now().isoformat()
-                }, f, indent=4)
-        except Exception as e:
-            log_warning(f"Error saving Trakt sync cache: {e}")
-    
+
     def _save_cache(self):
         self._save_watched_cache()
 
@@ -1022,35 +809,6 @@ class PlexMovieRecommender:
             self.watched_data = self._get_managed_users_watched_data()
         self.watched_data_counters = self.watched_data
         self._save_watched_cache()
-
-    # ------------------------------------------------------------------------
-    # PATH HANDLING
-    # ------------------------------------------------------------------------
-    def _map_path(self, path: str) -> str:
-        try:
-            if not self.config.get('paths'):
-                return path
-                
-            mappings = self.config['paths'].get('path_mappings')
-            if not mappings:
-                return path
-                
-            platform = self.config['paths'].get('platform', '').lower()
-            if platform == 'windows':
-                path = path.replace('/', '\\')
-            else:
-                path = path.replace('\\', '/')
-                
-            for local_path, remote_path in mappings.items():
-                if path.startswith(local_path):
-                    mapped_path = path.replace(local_path, remote_path, 1)
-                    log_warning(f"Mapped path: {path} -> {mapped_path}")
-                    return mapped_path
-            return path
-            
-        except Exception as e:
-            log_warning(f"Warning: Path mapping failed: {e}. Using original path.")
-            return path
 
     # ------------------------------------------------------------------------
     # LIBRARY UTILITIES
@@ -1284,27 +1042,9 @@ class PlexMovieRecommender:
         return genres
     
     def _get_movie_language(self, movie) -> str:
-        """Get movie's primary audio language"""
-        try:
-            if hasattr(movie, 'media') and movie.media:
-                for media in movie.media:
-                    for part in media.parts:
-                        audio_streams = part.audioStreams()
-                        
-                        if audio_streams:
-                            audio = audio_streams[0]                     
-                            lang_code = (
-                                getattr(audio, 'languageTag', None) or
-                                getattr(audio, 'language', None)
-                            )
-                            if lang_code:
-                                return get_full_language_name(lang_code)
-                        else:
-                            pass
-        except Exception as e:
-            pass  # Empty except block
-        return "N/A"
-		
+        """Get movie's primary audio language - delegates to MovieCache"""
+        return self.movie_cache._get_movie_language(movie)
+
     # ------------------------------------------------------------------------
     # TMDB HELPER METHODS
     # ------------------------------------------------------------------------
@@ -1447,16 +1187,7 @@ class PlexMovieRecommender:
             self.tmdb_keywords_cache[str(tmdb_id)] = list(kw_set)  # Convert key to string
             self._save_watched_cache()
         return kw_set
-    
-    def _show_progress(self, prefix: str, current: int, total: int):
-        """Show progress indicator for long operations"""
-        pct = int((current / total) * 100)
-        msg = f"\r{prefix}: {current}/{total} ({pct}%)"
-        sys.stdout.write(msg)
-        sys.stdout.flush()
-        if current == total:
-            sys.stdout.write("\n")
-    
+
     def _get_imdb_id_from_tmdb(self, tmdb_id: int) -> Optional[str]:
         """Get IMDb ID directly from TMDB"""
         try:
@@ -1468,466 +1199,6 @@ class PlexMovieRecommender:
         except Exception as e:
             log_warning(f"TMDB API Error: {e}")
         return None
-
-    # ------------------------------------------------------------------------
-    # TRAKT SYNC: BATCHED
-    # ------------------------------------------------------------------------
-    def _authenticate_trakt(self):
-        try:
-            response = requests.post(
-                'https://api.trakt.tv/oauth/device/code',
-                headers={'Content-Type': 'application/json'},
-                json={
-                    'client_id': self.config['trakt']['client_id'],
-                    'scope': 'write'
-                }
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                device_code = data['device_code']
-                user_code = data['user_code']
-                verification_url = data['verification_url']
-                
-                print(f"\n{GREEN}Please visit {verification_url} and enter code: {CYAN}{user_code}{RESET}")
-                print("Waiting for authentication...")
-                webbrowser.open(verification_url)
-                
-                poll_interval = data['interval']
-                expires_in = data['expires_in']
-                start_time = time.time()
-                
-                while time.time() - start_time < expires_in:
-                    time.sleep(poll_interval)
-                    token_response = requests.post(
-                        'https://api.trakt.tv/oauth/device/token',
-                        headers={'Content-Type': 'application/json'},
-                        json={
-                            'code': device_code,
-                            'client_id': self.config['trakt']['client_id'],
-                            'client_secret': self.config['trakt']['client_secret']
-                        }
-                    )
-                    
-                    if token_response.status_code == 200:
-                        token_data = token_response.json()
-                        self.config['trakt']['access_token'] = token_data['access_token']
-                        self.config['trakt']['refresh_token'] = token_data['refresh_token']
-                        self.config['trakt']['token_expiration'] = int(time.time() + token_data['expires_in'])
-                        self.trakt_headers['Authorization'] = f"Bearer {token_data['access_token']}"
-                        
-                        with open(os.path.join(os.path.dirname(__file__), 'config.yml'), 'w') as f:
-                            yaml.dump(self.config, f)
-                            
-                        print(f"{GREEN}Successfully authenticated with Trakt!{RESET}")
-                        return
-                    elif token_response.status_code != 400:
-                        log_error(f"Error getting token: {token_response.status_code}")
-                        return
-                log_error(f"Authentication timed out")
-            else:
-                log_error(f"Error getting device code: {response.status_code}")
-        except Exception as e:
-            log_error(f"Error during Trakt authentication: {e}")
-    
-    def _refresh_trakt_token(self):
-        """Refresh the Trakt access token using the refresh token"""
-        try:
-            if 'refresh_token' not in self.config['trakt']:
-                log_warning(f"No refresh token available. Re-authenticating...")
-                self._authenticate_trakt()
-                return self._verify_trakt_token()
-                
-            refresh_response = requests.post(
-                'https://api.trakt.tv/oauth/token',
-                headers={'Content-Type': 'application/json'},
-                json={
-                    'refresh_token': self.config['trakt']['refresh_token'],
-                    'client_id': self.config['trakt']['client_id'],
-                    'client_secret': self.config['trakt']['client_secret'],
-                    'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob',
-                    'grant_type': 'refresh_token'
-                }
-            )
-            
-            if refresh_response.status_code == 200:
-                token_data = refresh_response.json()
-                self.config['trakt']['access_token'] = token_data['access_token']
-                self.config['trakt']['refresh_token'] = token_data['refresh_token']
-                self.config['trakt']['token_expiration'] = int(time.time() + token_data['expires_in'])
-                self.trakt_headers['Authorization'] = f"Bearer {token_data['access_token']}"
-                
-                with open(os.path.join(os.path.dirname(__file__), 'config.yml'), 'w') as f:
-                    yaml.dump(self.config, f)
-                    
-                print(f"{GREEN}Successfully refreshed Trakt token{RESET}")
-                return True
-            else:
-                log_warning(f"Failed to refresh token: {refresh_response.status_code}. Re-authenticating...")
-                self._authenticate_trakt()
-                return self._verify_trakt_token()
-                
-        except Exception as e:
-            log_error(f"Error refreshing Trakt token: {e}. Re-authenticating...")
-            self._authenticate_trakt()
-            return self._verify_trakt_token()
-    
-    def _verify_trakt_token(self):
-        """Verify if the Trakt token is valid and refresh if needed"""
-        try:
-            pass
-            # Check if token is expired based on stored expiration time
-            if ('token_expiration' in self.config['trakt'] and
-                time.time() > self.config['trakt']['token_expiration']):
-                log_warning(f"Trakt token expired. Refreshing...")
-                return self._refresh_trakt_token()
-                
-            # Verify token with API call
-            test_response = requests.get(
-                "https://api.trakt.tv/sync/last_activities",
-                headers=self.trakt_headers
-            )
-            
-            if test_response.status_code == 401:
-                log_warning(f"Trakt token invalid. Refreshing...")
-                return self._refresh_trakt_token()
-            elif test_response.status_code == 200:
-                return True
-            else:
-                log_error(f"Error verifying Trakt token: {test_response.status_code}")
-                return False
-        except Exception as e:
-            log_error(f"Error connecting to Trakt: {e}")
-            return False
-
-    def _clear_trakt_watch_history(self):
-        print(f"\n{YELLOW}Clearing Trakt watch history...{RESET}")
-        trakt_ids = []
-        page = 1
-        per_page = 100  # Max allowed by Trakt API
-        history_found = False
-        
-        try:
-            while True:
-                response = requests.get(
-                    "https://api.trakt.tv/sync/history/movies",
-                    headers=self.trakt_headers,
-                    params={'page': page, 'limit': per_page}
-                )
-                if response.status_code != 200:
-                    log_error(f"Error fetching history: {response.status_code}")
-                    break
-                
-                data = response.json()
-                if not data:
-                    break
-                
-                history_found = True
-                for item in data:
-                    if 'movie' in item and 'ids' in item['movie']:
-                        trakt_id = item['movie']['ids'].get('trakt')
-                        if trakt_id:
-                            trakt_ids.append(trakt_id)
-                
-                page += 1
-    
-            if trakt_ids:
-                remove_payload = {
-                    "movies": [
-                        {"ids": {"trakt": tid}} for tid in trakt_ids
-                    ]
-                }
-                
-                remove_response = requests.post(
-                    "https://api.trakt.tv/sync/history/remove",
-                    headers=self.trakt_headers,
-                    json=remove_payload
-                )
-                
-                if remove_response.status_code == 200:
-                    deleted = remove_response.json().get('deleted', {}).get('movies', 0)                   
-                    # Clear the Trakt sync cache
-                    if os.path.exists(self.trakt_sync_cache_path):
-                        try:
-                            os.remove(self.trakt_sync_cache_path)
-                            print(f"{GREEN}Cleared Trakt sync cache.{RESET}")
-                        except Exception as e:
-                            log_warning(f"Error removing Trakt sync cache: {e}")
-                    else:
-                        print(f"{GREEN}No Trakt sync cache to clear.{RESET}")
-                else:
-                    log_error(f"Failed to remove history: {remove_response.status_code}")
-                    print(f"Response: {remove_response.text}")
-            elif history_found:
-                log_warning(f"No movie IDs found in Trakt history to clear.")
-            else:
-                print(f"{GREEN}No Trakt history found to clear.{RESET}")
-                
-        except Exception as e:
-            log_error(f"Error clearing Trakt history: {e}")
-    
-    def _sync_watched_movies_to_trakt(self):
-        if not self.sync_watch_history:
-            return
-    
-        print(f"\n{YELLOW}Starting Trakt watch history sync...{RESET}")
-        
-        # Load existing synced movie IDs from cache
-        previously_synced_ids = set()
-        if os.path.exists(self.trakt_sync_cache_path):
-            try:
-                with open(self.trakt_sync_cache_path, 'r') as f:
-                    cache_data = json.load(f)
-                    if 'synced_movie_ids' in cache_data:
-                        previously_synced_ids = set(int(id) for id in cache_data['synced_movie_ids'] if str(id).isdigit())
-                        print(f"Loaded previously synced movie IDs from cache")
-            except Exception as e:
-                log_warning(f"Error loading Trakt sync cache: {e}")
-        
-        watched_movies = []
-        
-        try:
-            if self.users['plex_users']:
-                pass
-                # Get Plex watch history for movies
-                user_ids = self._get_plex_user_ids()
-                
-                # First, get all watch history from Plex API
-                all_history_items = []
-                for user_id in user_ids:
-                    start = 0
-                    while True:
-                        params = {
-                            'apikey': self.config['plex_users']['api_key'],
-                            'cmd': 'get_history',
-                            'media_type': 'movie',
-                            'user_id': user_id,
-                            'length': 1000,
-                            'start': start
-                        }
-                        
-                        try:
-                            response = requests.get(
-                                f"{self.config['plex_users']['url']}/api/v2", 
-                                params=params,
-                                timeout=30
-                            )
-                            
-                            response.raise_for_status()
-                            data = response.json()['response']['data']
-                            
-                            if isinstance(data, dict):
-                                history_items = data.get('data', [])
-                            else:
-                                history_items = data
-                            
-                            all_history_items.extend(history_items)
-                            
-                            # Check if we should continue to next page
-                            if len(history_items) < 1000:
-                                break
-                                
-                            start += len(history_items)
-                            
-                        except Exception as e:
-                            logger.debug(f"Error fetching history page: {e}")
-                            break
-
-                print(f"Gathering movie data from {len(all_history_items)} history items...")
-                
-                # Group movies by rating_key (movie ID)
-                movie_groups = {}
-                for item in all_history_items:
-                    if item.get('watched_status') == 1:
-                        key = item['rating_key']
-                        if key not in movie_groups:
-                            movie_groups[key] = item
-                        
-                # Process each unique movie with progress indicator
-                total_movies = len(movie_groups)
-                for i, (key, item) in enumerate(movie_groups.items()):
-                    # Show progress every 10 movies or for the first/last one
-                    if i == 0 or i == total_movies-1 or (i+1) % 10 == 0:
-                        progress = int((i+1) / total_movies * 100)
-                        sys.stdout.write(f"\rProcessing movies: {i+1}/{total_movies} ({progress}%)")
-                        sys.stdout.flush()
-                        
-                    try:
-                        # Get the actual movie from Plex to ensure correct IMDb ID
-                        movie = self.plex.fetchItem(int(key))
-                        
-                        # Extract IMDb ID directly from the movie's GUIDs
-                        imdb_id = None
-                        if hasattr(movie, 'guids'):
-                            for guid in movie.guids:
-                                if 'imdb://' in guid.id:
-                                    imdb_id = guid.id.split('imdb://')[1].split('?')[0]
-                                    break
-                        
-                        if not imdb_id:
-                            pass
-                            # Try getting IMDb ID via TMDB
-                            tmdb_id = self._get_plex_movie_tmdb_id(movie)
-                            if tmdb_id:
-                                imdb_id = self._get_imdb_id_from_tmdb(tmdb_id)
-                        
-                        if not imdb_id:
-                            continue
-                        
-                        # Convert timestamp
-                        timestamp = int(item['date'])
-                        watched_date = datetime.fromtimestamp(timestamp)
-                        trakt_date = watched_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                        
-                        watched_movies.append({
-                            'imdb_id': imdb_id,
-                            'movie_title': item['title'],
-                            'watched_at': trakt_date
-                        })
-
-                    except Exception as e:
-                        pass  # DEBUG DISABLED
-                        continue
-                
-                # Print newline after progress indicator
-                print("")
-                
-            else:
-                # Process each movie with progress
-                print(f"Gathering movie data from {len(self.watched_movie_ids)} watched movies...")
-                total_movies = len(self.watched_movie_ids)
-                movie_count = 0
-                
-                for movie_id in self.watched_movie_ids:
-                    movie_count += 1
-                    try:
-                        movie = self.plex.fetchItem(movie_id)
-                        
-                        # Update progress
-                        progress = int(movie_count / total_movies * 100)
-                        sys.stdout.write(f"\rProcessing movies: {movie_count}/{total_movies} ({progress}%)")
-                        sys.stdout.flush()
-                        
-                        # Extract IMDb ID directly
-                        imdb_id = None
-                        if hasattr(movie, 'guids'):
-                            for guid in movie.guids:
-                                if 'imdb://' in guid.id:
-                                    imdb_id = guid.id.split('imdb://')[1].split('?')[0]
-                                    break
-                        
-                        if not imdb_id:
-                            pass
-                            # Try getting IMDb ID via TMDB
-                            tmdb_id = self._get_plex_movie_tmdb_id(movie)
-                            if tmdb_id:
-                                imdb_id = self._get_imdb_id_from_tmdb(tmdb_id)
-                        
-                        if not imdb_id:
-                            continue
-                            
-                        watched_at = None
-                        if hasattr(movie, 'lastViewedAt'):
-                            if isinstance(movie.lastViewedAt, datetime):
-                                watched_at = movie.lastViewedAt
-                            else:
-                                watched_at = datetime.fromtimestamp(int(movie.lastViewedAt))
-                        
-                        if not watched_at:
-                            continue
-                            
-                        watched_movies.append({
-                            'imdb_id': imdb_id,
-                            'movie_title': movie.title,
-                            'watched_at': watched_at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                        })
-
-                    except Exception as e:
-                        pass  # DEBUG DISABLED
-                        continue
-                
-                # Print newline after progress indicator
-                print("")
-        
-            if not watched_movies:
-                log_warning(f"No movies found to sync to Trakt")
-                return
-            
-            # Filter out already synced movies
-            new_movies = []
-            for movie in watched_movies:
-                if movie['imdb_id'] not in previously_synced_ids:
-                    new_movies.append(movie)
-            
-            if not new_movies:
-                print(f"{GREEN}All movies already synced to Trakt{RESET}")
-                return
-            
-            print(f"Found {len(new_movies)} new movies to sync (out of {len(watched_movies)} total)")
-            
-            # Sync only new movies in batches
-            batch_size = 100
-            newly_synced = set()
-            batch_count = 0
-            total_batches = math.ceil(len(new_movies) / batch_size)
-            
-            for i in range(0, len(new_movies), batch_size):
-                batch_count += 1
-                batch = new_movies[i:i+batch_size]
-                                
-                payload = {
-                    "movies": [
-                        {
-                            "ids": {
-                                "imdb": movie['imdb_id']
-                            },
-                            "watched_at": movie['watched_at']
-                        }
-                        for movie in batch
-                    ]
-                }
-        
-                try:
-                    response = requests.post(
-                        "https://api.trakt.tv/sync/history",
-                        headers=self.trakt_headers,
-                        json=payload,
-                        timeout=60
-                    )
-                                    
-                    if response.status_code == 201:
-                        response_data = response.json()
-                        added_movies = response_data.get('added', {}).get('movies', 0)
-                        if added_movies > 0:
-                            newly_synced.update(movie['imdb_id'] for movie in batch)
-                            print(f"{GREEN}Successfully synced {added_movies} movies{RESET}")
-                        else:
-                            log_warning(f"Warning: No movies were added in this batch")
-                    else:
-                        log_error(f"Error syncing batch to Trakt: {response.status_code}")
-                        print(f"Error response: {response.text}")
-        
-                    time.sleep(2)  # Respect rate limiting
-        
-                except Exception as e:
-                    log_error(f"Error during Trakt sync: {e}")
-                    time.sleep(2)
-                    continue
-        
-            # Update and save Trakt sync cache - combine previously synced with newly synced
-            if newly_synced:
-                try:
-                    all_synced = previously_synced_ids.union(newly_synced)
-                    with open(self.trakt_sync_cache_path, 'w') as f:
-                        json.dump({
-                            'synced_movie_ids': list(all_synced),
-                            'last_sync': datetime.now().isoformat()
-                        }, f, indent=4)
-                except Exception as e:
-                    log_error(f"Error saving Trakt sync cache: {e}")
-        except Exception as outer_e:
-            log_error(f"Unexpected error during Trakt sync process: {outer_e}")
-            logger.debug(f"Trakt sync error details:", exc_info=True)
 
     # ------------------------------------------------------------------------
     # CALCULATE SCORES
@@ -2112,297 +1383,8 @@ class PlexMovieRecommender:
     # ------------------------------------------------------------------------
     # GET RECOMMENDATIONS
     # ------------------------------------------------------------------------
-    def get_trakt_recommendations(self) -> List[Dict]:
-        print(f"\n{YELLOW}Checking Trakt recommendations...{RESET}")
-        try:
-            # Verify token is valid before proceeding
-            if not self._verify_trakt_token():
-                log_error(f"Failed to verify Trakt token. Skipping recommendations.")
-                return []
-            
-            # First check if there's any watch history
-            history_response = requests.get(
-                "https://api.trakt.tv/sync/history/movies",
-                headers=self.trakt_headers,
-                params={'limit': 1}
-            )
-            
-            if history_response.status_code != 200 or not history_response.json():
-                log_warning(f"No watch history found on Trakt. Skipping recommendations.")
-                return []
-            
-            # Fetch a larger batch of recommendations at once
-            # We'll request 3x the limit to ensure we have enough after filtering
-            request_limit = min(100, self.limit_trakt_results * 3)  # Trakt max is 100
-            
-            print(f"Fetching recommendations from Trakt...")
-            response = requests.get(
-                "https://api.trakt.tv/recommendations/movies",
-                headers=self.trakt_headers,
-                params={
-                    'limit': request_limit,
-                    'extended': 'full'
-                }
-            )
-            
-            if response.status_code != 200:
-                log_error(f"Error getting Trakt recommendations: {response.status_code}")
-                return []
-            
-            movies = response.json()
-            if not isinstance(movies, list) or not movies:
-                log_warning(f"No recommendations found from Trakt")
-                return []
-            
-            logger.debug(f"Processing {len(movies)} movies from Trakt")
-
-            # Process all movies at once
-            all_processed_movies = []
-            seen_trakt_ids = set()
-            seen_tmdb_ids = set()
-            seen_imdb_ids = set()
-            seen_titles = {}  # {title_year: movie_data}
-            
-            # First pass: filter by IDs and basic criteria
-            for m in movies:
-                if not isinstance(m, dict):
-                    continue
-                
-                # Get basic info
-                title = m.get('title', '').strip()
-                year = m.get('year', None)
-                if not title:
-                    continue
-                    
-                # Get IDs
-                ids = m.get('ids', {})
-                trakt_id = ids.get('trakt')
-                tmdb_id = ids.get('tmdb')
-                imdb_id = ids.get('imdb')
-                
-                # Skip duplicates by ID
-                if (trakt_id and trakt_id in seen_trakt_ids) or \
-                   (tmdb_id and tmdb_id in seen_tmdb_ids) or \
-                   (imdb_id and imdb_id in seen_imdb_ids):
-                    logger.debug(f"Skipping duplicate: {title} ({year})")
-                    continue
-
-                # Skip movies already in library
-                if self._is_movie_in_library(title, year, tmdb_id, imdb_id):
-                    logger.debug(f"Skipping (in library): {title} ({year})")
-                    continue
-
-                # Track IDs to avoid duplicates
-                if trakt_id:
-                    seen_trakt_ids.add(trakt_id)
-                if tmdb_id:
-                    seen_tmdb_ids.add(tmdb_id)
-                if imdb_id:
-                    seen_imdb_ids.add(imdb_id)
-
-                # Track by title+year to catch variations
-                title_key = f"{title.lower()}_{year}"
-                if title_key in seen_titles:
-                    logger.debug(f"Skipping title variation: {title} ({year})")
-                    continue
-                    
-                seen_titles[title_key] = m
-                
-                # Create the movie data structure
-                ratings = {
-                    'audience_rating': round(float(m.get('rating', 0)), 1),
-                    'votes': m.get('votes', 0)
-                }
-                
-                movie_data = {
-                    'title': title,
-                    'year': year,
-                    'ratings': ratings,
-                    'summary': m.get('overview', ''),
-                    'genres': [g.lower() for g in m.get('genres', [])],
-                    'cast': [],
-                    'directors': [],
-                    'language': "N/A",
-                    'imdb_id': imdb_id,
-                    '_randomized_rating': float(m.get('rating', 0)) + random.uniform(0, 0.5)
-                }
-
-                # Skip excluded genres (including user-specific exclusions)
-                excluded_genres = self._get_excluded_genres_for_user()
-                if any(g.lower() in excluded_genres for g in movie_data['genres']):
-                    continue
-
-                all_processed_movies.append((movie_data, tmdb_id))
-            
-            # If we don't have enough recommendations, try a second request with a different sort order
-            if len(all_processed_movies) < self.limit_trakt_results:
-                logger.debug(f"Only {len(all_processed_movies)} movies, fetching trending to supplement")
-
-                # Try trending movies as an alternative
-                trending_response = requests.get(
-                    "https://api.trakt.tv/movies/trending",
-                    headers=self.trakt_headers,
-                    params={
-                        'limit': request_limit,
-                        'extended': 'full'
-                    }
-                )
-                
-                if trending_response.status_code == 200:
-                    trending_movies = trending_response.json()
-                    for item in trending_movies:
-                        m = item.get('movie', {})
-                        if not isinstance(m, dict):
-                            continue
-                            
-                        title = m.get('title', '').strip()
-                        year = m.get('year', None)
-                        if not title:
-                            continue
-                            
-                        ids = m.get('ids', {})
-                        trakt_id = ids.get('trakt')
-                        tmdb_id = ids.get('tmdb')
-                        imdb_id = ids.get('imdb')
-                        
-                        # Skip if we've already seen this movie
-                        if (trakt_id and trakt_id in seen_trakt_ids) or \
-                           (tmdb_id and tmdb_id in seen_tmdb_ids) or \
-                           (imdb_id and imdb_id in seen_imdb_ids):
-                            continue
-                            
-                        # Skip movies already in library
-                        if self._is_movie_in_library(title, year, tmdb_id, imdb_id):
-                            continue
-                            
-                        # Track IDs to avoid duplicates
-                        if trakt_id:
-                            seen_trakt_ids.add(trakt_id)
-                        if tmdb_id:
-                            seen_tmdb_ids.add(tmdb_id)
-                        if imdb_id:
-                            seen_imdb_ids.add(imdb_id)
-                            
-                        # Track by title+year to catch variations
-                        title_key = f"{title.lower()}_{year}"
-                        if title_key in seen_titles:
-                            continue
-                            
-                        seen_titles[title_key] = m
-                        
-                        # Create the movie data structure
-                        ratings = {
-                            'audience_rating': round(float(m.get('rating', 0)), 1),
-                            'votes': m.get('votes', 0)
-                        }
-                        
-                        movie_data = {
-                            'title': title,
-                            'year': year,
-                            'ratings': ratings,
-                            'summary': m.get('overview', ''),
-                            'genres': [g.lower() for g in m.get('genres', [])],
-                            'cast': [],
-                            'directors': [],
-                            'language': "N/A",
-                            'imdb_id': imdb_id,
-                            '_randomized_rating': float(m.get('rating', 0)) + random.uniform(0, 0.5)
-                        }
-
-                        # Skip excluded genres (including user-specific exclusions)
-                        excluded_genres = self._get_excluded_genres_for_user()
-                        if any(g.lower() in excluded_genres for g in movie_data['genres']):
-                            continue
-
-                        all_processed_movies.append((movie_data, tmdb_id))
-            
-            # Fetch additional metadata in parallel for better performance
-            if all_processed_movies and (self.show_language or self.show_cast or self.show_director):
-                pass
-                # Process movies with TMDb IDs
-                tmdb_movies = [(movie, tmdb_id) for movie, tmdb_id in all_processed_movies if tmdb_id]
-                
-                if tmdb_movies and self.tmdb_api_key:
-                    for movie, tmdb_id in tmdb_movies:
-                        # Fetch language if needed
-                        if self.show_language:
-                            try:
-                                resp_lang = requests.get(
-                                    f"https://api.themoviedb.org/3/movie/{tmdb_id}",
-                                    params={'api_key': self.tmdb_api_key},
-                                    timeout=10
-                                )
-                                if resp_lang.status_code == 200:
-                                    d = resp_lang.json()
-                                    if 'original_language' in d:
-                                        movie['language'] = get_full_language_name(d['original_language'])
-                            except Exception:
-                                pass  # Silently continue on error
-                        
-                        # Fetch cast and director if needed
-                        if self.show_cast or self.show_director:
-                            try:
-                                resp_credits = requests.get(
-                                    f"https://api.themoviedb.org/3/movie/{tmdb_id}/credits",
-                                    params={'api_key': self.tmdb_api_key},
-                                    timeout=10
-                                )
-                                if resp_credits.status_code == 200:
-                                    c_data = resp_credits.json()
-                                    
-                                    if self.show_cast and 'cast' in c_data:
-                                        c_sorted = c_data['cast'][:3]
-                                        movie['cast'] = [c['name'] for c in c_sorted]
-                                    
-                                    if self.show_director and 'crew' in c_data:
-                                        directors = [c for c in c_data['crew'] if c['job'] == 'Director']
-                                        if directors:
-                                            movie['directors'] = [d['name'] for d in directors[:2]]
-                            except Exception:
-                                pass  # Silently continue on error
-                        
-                        # Small delay to avoid rate limiting
-                        time.sleep(0.25)
-                    
-                    # Clear progress line
-                    sys.stdout.write("\r" + " " * 50 + "\r")
-                    sys.stdout.flush()
-            
-            # Extract just the movie data (without the tmdb_id that was used for lookup)
-            final_movies = [movie for movie, _ in all_processed_movies]
-            
-            # Sort and limit results
-            if final_movies:
-                pass
-                # Sort by rating
-                final_movies.sort(key=lambda x: x.get('_randomized_rating', 0), reverse=True)
-                
-                # Remove temporary sorting field
-                for movie in final_movies:
-                    if '_randomized_rating' in movie:
-                        del movie['_randomized_rating']
-                
-                # Randomize if configured
-                if self.randomize_recommendations:
-                    random.shuffle(final_movies)
-                
-                # Limit to requested amount
-                final_movies = final_movies[:self.limit_trakt_results]
-                
-                print(f"{GREEN}Found {len(final_movies)} Trakt recommendations{RESET}")
-            else:
-                log_warning(f"No valid Trakt recommendations found")
-            
-            return final_movies
-            
-        except Exception as e:
-            log_error(f"Error getting Trakt recommendations: {e}")
-            logger.debug("Trakt recommendations error:", exc_info=True)
-            return []
-    
     def get_recommendations(self) -> Dict[str, List[Dict]]:
         if self.cached_watched_count > 0 and not self.watched_movie_ids:
-            pass
             # Force refresh of watched data
             if self.users['plex_users']:
                 self.watched_data = self._get_plex_watched_data()
@@ -2410,17 +1392,7 @@ class PlexMovieRecommender:
                 self.watched_data = self._get_managed_users_watched_data()
             self.watched_data_counters = self.watched_data
             self._save_watched_cache()
-        
-        trakt_config = self.config.get('trakt', {})        
-        
-        # Handle Trakt operations if configured AND plex_only is not enabled
-        if not self.plex_only:
-            if trakt_config.get('clear_watch_history', False):
-                self._clear_trakt_watch_history()
-            if self.sync_watch_history:
-                self._sync_watched_movies_to_trakt()
-                self._save_cache()
-    
+
         # Get all movies from cache
         all_movies = self.movie_cache.cache['movies']
         
@@ -2446,7 +1418,7 @@ class PlexMovieRecommender:
                 continue
 
             # Skip if movie has excluded genres (including user-specific exclusions)
-            excluded_genres = self._get_excluded_genres_for_user()
+            excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
             if excluded_count == 0:  # Debug: print excluded genres once
                 pass
             movie_genres = movie_info.get('genres', [])
@@ -2479,7 +1451,7 @@ class PlexMovieRecommender:
             # Calculate similarity scores
             scored_movies = []
             for i, movie_info in enumerate(unwatched_movies, 1):
-                self._show_progress("Processing", i, len(unwatched_movies))
+                show_progress("Processing", i, len(unwatched_movies))
                 try:
                     similarity_score, breakdown = self._calculate_similarity_from_cache(movie_info)
                     movie_info['similarity_score'] = similarity_score
@@ -2507,16 +1479,10 @@ class PlexMovieRecommender:
                 logger.debug("=== Similarity Score Breakdowns for Recommendations ===")
                 for movie in plex_recs:
                     self._print_similarity_breakdown(movie, movie['similarity_score'], movie['score_breakdown'])
-    
-        # Get Trakt recommendations if enabled
-        trakt_recs = []
-        if not self.plex_only:
-            trakt_recs = self.get_trakt_recommendations()
-    
+
         print(f"\nRecommendation process completed!")
         return {
-            'plex_recommendations': plex_recs,
-            'trakt_recommendations': trakt_recs
+            'plex_recommendations': plex_recs
         }
     
     def _user_select_recommendations(self, recommended_movies: List[Dict], operation_label: str) -> List[Dict]:
@@ -2637,7 +1603,7 @@ class PlexMovieRecommender:
             print(f"Found {len(currently_labeled)} currently labeled movies")
 
             # Get excluded genres for this user (for checking existing items)
-            excluded_genres = self._get_excluded_genres_for_user()
+            excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
 
             # Separate into watched, unwatched-fresh, stale, and excluded
             unwatched_labeled = []
@@ -2807,253 +1773,6 @@ class PlexMovieRecommender:
             import traceback
             print(traceback.format_exc())
 
-    # ------------------------------------------------------------------------
-    # RADARR
-    # ------------------------------------------------------------------------
-    def add_to_radarr(self, recommended_movies: List[Dict]) -> None:
-        if not recommended_movies:
-            log_warning(f"No movies to add to Radarr.")
-            return
-        
-        if not self.radarr_config.get('add_to_radarr'):
-            return
-        
-        if self.confirm_operations:
-            selected_movies = self._user_select_recommendations(recommended_movies, "add to Radarr")
-            if not selected_movies:
-                return
-        else:
-            selected_movies = recommended_movies
-        
-        try:
-            if 'radarr' not in self.config:
-                raise ValueError("Radarr configuration missing from config file")
-        
-            required_fields = ['url', 'api_key', 'root_folder', 'quality_profile']
-            missing_fields = [f for f in required_fields if f not in self.radarr_config]
-            if missing_fields:
-                raise ValueError(f"Missing required Radarr config fields: {', '.join(missing_fields)}")
-        
-            radarr_url = self.radarr_config['url'].rstrip('/')
-            if '/api/' not in radarr_url:
-                radarr_url += '/api/v3'
-            
-            headers = {
-                'X-Api-Key': self.radarr_config['api_key'],
-                'Content-Type': 'application/json'
-            }
-            trakt_headers = self.trakt_headers
-        
-            try:
-                test_response = requests.get(f"{radarr_url}/system/status", headers=headers)
-                test_response.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                raise ValueError(f"Failed to connect to Radarr: {str(e)}")
-        
-            tag_id = None
-            if self.radarr_config.get('radarr_tag'):
-                pass
-                # Get the base tag name
-                tag_name = self.radarr_config['radarr_tag']
-                
-                # Handle username appending for Radarr tags if enabled
-                if self.radarr_config.get('append_usernames', False):
-                    if self.single_user:
-                        # For single user mode, only append the current user
-                        user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
-                        tag_name = f"{tag_name}_{user_suffix}"
-                    else:
-                        # For combined mode, append all users
-                        users = []
-                        if self.users['plex_users']:
-                            users = self.users['plex_users']
-                        else:
-                            users = self.users['managed_users']
-                        
-                        if users:
-                            sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
-                            user_suffix = '_'.join(sanitized_users)
-                            tag_name = f"{tag_name}_{user_suffix}"
-                
-                # Get or create the tag in Radarr
-                tags_response = requests.get(f"{radarr_url}/tag", headers=headers)
-                tags_response.raise_for_status()
-                tags = tags_response.json()
-                tag = next((t for t in tags if t['label'].lower() == tag_name.lower()), None)
-                if tag:
-                    tag_id = tag['id']
-                else:
-                    tag_response = requests.post(
-                        f"{radarr_url}/tag",
-                        headers=headers,
-                        json={'label': tag_name}
-                    )
-                    tag_response.raise_for_status()
-                    tag_id = tag_response.json()['id']
-                    print(f"{GREEN}Created new Radarr tag: {tag_name}{RESET}")
-        
-            profiles_response = requests.get(f"{radarr_url}/qualityprofile", headers=headers)
-            profiles_response.raise_for_status()
-            quality_profiles = profiles_response.json()
-            desired_profile = next(
-                (p for p in quality_profiles
-                 if p['name'].lower() == self.radarr_config['quality_profile'].lower()),
-                None
-            )
-            if not desired_profile:
-                available = [p['name'] for p in quality_profiles]
-                raise ValueError(
-                    f"Quality profile '{self.radarr_config['quality_profile']}' not found. "
-                    f"Available: {', '.join(available)}"
-                )
-            quality_profile_id = desired_profile['id']
-        
-            existing_response = requests.get(f"{radarr_url}/movie", headers=headers)
-            existing_response.raise_for_status()
-            existing_movies = existing_response.json()
-            existing_tmdb_ids = {m['tmdbId'] for m in existing_movies}
-        
-            # Define should_monitor before the movie loop
-            should_monitor = self.radarr_config.get('monitor', True)
-            search_for_movie = self.radarr_config.get('search_for_movie', True)
-            root_folder = self._map_path(self.radarr_config['root_folder'].rstrip('/\\'))
-        
-            for movie in selected_movies:
-                try:
-                    trakt_search_url = f"https://api.trakt.tv/search/movie?query={quote(movie['title'])}"
-                    if movie.get('year'):
-                        trakt_search_url += f"&year={movie['year']}"
-        
-                    trakt_response = requests.get(trakt_search_url, headers=trakt_headers)
-                    trakt_response.raise_for_status()
-                    trakt_results = trakt_response.json()
-        
-                    if not trakt_results:
-                        log_warning(f"Movie not found on Trakt: {movie['title']}")
-                        continue
-        
-                    trakt_movie = next(
-                        (r for r in trakt_results
-                         if r['movie']['title'].lower() == movie['title'].lower()
-                         and r['movie'].get('year') == movie.get('year')),
-                        trakt_results[0]
-                    )
-        
-                    tmdb_id = trakt_movie['movie']['ids'].get('tmdb')
-                    if not tmdb_id:
-                        log_warning(f"No TMDB ID found for {movie['title']}")
-                        continue
-        
-                    if tmdb_id in existing_tmdb_ids:
-                        existing_movie = next(m for m in existing_movies if m['tmdbId'] == tmdb_id)
-                        
-                        if should_monitor and not existing_movie['monitored']:
-                            log_warning(f"Movie already in Radarr (unmonitored): {movie['title']}")
-                            print(f"{GREEN}Updating monitoring status...{RESET}")
-                            
-                            try:
-                                # Get current movie data
-                                movie_response = requests.get(
-                                    f"{radarr_url}/movie/{existing_movie['id']}", 
-                                    headers=headers
-                                )
-                                movie_response.raise_for_status()
-                                update_data = movie_response.json()
-                                
-                                # Update monitoring status
-                                update_data['monitored'] = True
-                                
-                                # Update the movie
-                                update_resp = requests.put(
-                                    f"{radarr_url}/movie/{existing_movie['id']}", 
-                                    headers=headers, 
-                                    json=update_data
-                                )
-                                update_resp.raise_for_status()
-                                
-                                # Add tag if configured
-                                needs_tag_update = tag_id is not None and tag_id not in update_data.get('tags', [])
-                                if needs_tag_update:
-                                    if 'tags' not in update_data:
-                                        update_data['tags'] = []
-                                    update_data['tags'].append(tag_id)
-                                    
-                                    # Update again with the tag
-                                    update_resp = requests.put(
-                                        f"{radarr_url}/movie/{existing_movie['id']}", 
-                                        headers=headers, 
-                                        json=update_data
-                                    )
-                                    update_resp.raise_for_status()
-                                    print(f"{GREEN}Added tag to: {movie['title']}{RESET}")
-                                
-                                # Trigger a search if requested
-                                if search_for_movie:
-                                    search_cmd = {
-                                        'name': 'MoviesSearch',
-                                        'movieIds': [existing_movie['id']]
-                                    }
-                                    sr = requests.post(f"{radarr_url}/command", headers=headers, json=search_cmd)
-                                    sr.raise_for_status()
-                                    
-                                    print(f"{GREEN}Updated monitoring and triggered search for: {movie['title']}{RESET}")
-                                else:
-                                    print(f"{GREEN}Updated monitoring for: {movie['title']}{RESET}")
-                                    
-                            except requests.exceptions.RequestException as e:
-                                log_error(f"Error updating {movie['title']} in Radarr: {str(e)}")
-                                if hasattr(e, 'response') and e.response is not None:
-                                    try:
-                                        error_details = e.response.json()
-                                        log_error(f"Radarr error details: {json.dumps(error_details, indent=2)}")
-                                    except:
-                                        log_error(f"Radarr error response: {e.response.text}")
-                            continue
-                        else:
-                            log_warning(f"Already in Radarr: {movie['title']}")
-                            continue
-        
-                    # Create new movie payload
-                    movie_data = {
-                        'tmdbId': tmdb_id,
-                        'title': movie['title'],
-                        'titleSlug': re.sub(r'[^\w\-]', '-', movie['title'].lower()),
-                        'qualityProfileId': quality_profile_id,
-                        'minimumAvailability': 'released',
-                        'rootFolderPath': root_folder,
-                        'monitored': should_monitor,
-                        'addOptions': {
-                            'searchForMovie': search_for_movie
-                        }
-                    }
-                    
-                    if tag_id is not None:
-                        movie_data['tags'] = [tag_id]
-        
-                    add_resp = requests.post(f"{radarr_url}/movie", headers=headers, json=movie_data)
-                    add_resp.raise_for_status()
-        
-                    if should_monitor and search_for_movie:
-                        print(f"{GREEN}Added and triggered download search for: {movie['title']}{RESET}")
-                    elif should_monitor:
-                        print(f"{GREEN}Added (monitored): {movie['title']}{RESET}")
-                    else:
-                        log_warning(f"Added (unmonitored): {movie['title']}")
-        
-                except requests.exceptions.RequestException as e:
-                    log_error(f"Error processing {movie['title']}: {str(e)}")
-                    if hasattr(e, 'response') and e.response is not None:
-                        try:
-                            error_details = e.response.json()
-                            log_error(f"Radarr error details: {json.dumps(error_details, indent=2)}")
-                        except:
-                            log_error(f"Radarr error response: {e.response.text}")
-                    continue
-        
-        except Exception as e:
-            log_error(f"Error adding movies to Radarr: {e}")
-            import traceback
-            print(traceback.format_exc())
 
 # ------------------------------------------------------------------------
 # OUTPUT FORMATTING
@@ -3103,51 +1822,6 @@ def format_movie_output(movie: Dict,
 
     return output
 
-# ------------------------------------------------------------------------
-# LOGGING / MAIN
-# ------------------------------------------------------------------------
-ANSI_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
-
-class TeeLogger:
-    """
-    A simple 'tee' class that writes to both console and a file,
-    stripping ANSI color codes for the file and handling Unicode characters.
-    """
-    def __init__(self, logfile):
-        self.logfile = logfile
-        # Force UTF-8 encoding for stdout
-        if hasattr(sys.stdout, 'buffer'):
-            self.stdout_buffer = sys.stdout.buffer
-        else:
-            self.stdout_buffer = sys.stdout
-    
-    def write(self, text):
-        try:
-            # Write to console
-            if hasattr(sys.stdout, 'buffer'):
-                self.stdout_buffer.write(text.encode('utf-8'))
-            else:
-                sys.__stdout__.write(text)
-            
-            # Write to file (strip ANSI codes)
-            stripped = ANSI_PATTERN.sub('', text)
-            self.logfile.write(stripped)
-        except UnicodeEncodeError:
-            # Fallback for problematic characters
-            safe_text = text.encode('ascii', 'replace').decode('ascii')
-            if hasattr(sys.stdout, 'buffer'):
-                self.stdout_buffer.write(safe_text.encode('utf-8'))
-            else:
-                sys.__stdout__.write(safe_text)
-            stripped = ANSI_PATTERN.sub('', safe_text)
-            self.logfile.write(stripped)
-    
-    def flush(self):
-        if hasattr(sys.stdout, 'buffer'):
-            self.stdout_buffer.flush()
-        else:
-            sys.__stdout__.flush()
-        self.logfile.flush()
 
 # ------------------------------------------------------------------------
 # CONFIG ADAPTER
@@ -3164,7 +1838,6 @@ def adapt_root_config_to_legacy(root_config):
             'combine_watch_history': root_config.get('general', {}).get('combine_watch_history', False),
             'log_retention_days': root_config.get('general', {}).get('log_retention_days', 7),
             'limit_plex_results': root_config.get(media_type, {}).get('limit_results', 50),
-            'limit_trakt_results': root_config.get(media_type, {}).get('limit_trakt_results', 50),
             'exclude_genre': root_config.get('general', {}).get('exclude_genre', None),
             'randomize_recommendations': root_config.get(media_type, {}).get('randomize_recommendations', False),
             'normalize_counters': root_config.get(media_type, {}).get('normalize_counters', False),
@@ -3200,25 +1873,8 @@ def adapt_root_config_to_legacy(root_config):
         'weights': root_config.get(media_type, {}).get('weights', {}),
         'quality_filters': root_config.get(media_type, {}).get('quality_filters', {}),
         'recency_decay': root_config.get('recency_decay', {}),
-        'trakt': root_config.get('trakt', {}),
         'paths': root_config.get('platform', {}),
-        'radarr': root_config.get(media_type, {}).get('radarr', {}),
     }
-
-    # Map radarr fields
-    if 'radarr' in adapted:
-        radarr_config = adapted['radarr']
-        adapted['radarr'] = {
-            'url': radarr_config.get('url', 'http://localhost:7878'),
-            'api_key': radarr_config.get('api_key', None),
-            'root_folder': radarr_config.get('root_folder', '/path/to/movies'),
-            'add_to_radarr': radarr_config.get('enabled', False),
-            'monitor': radarr_config.get('monitor', False),
-            'search_for_movie': radarr_config.get('search_for_movie', False),
-            'quality_profile': radarr_config.get('quality_profile', 'HD-1080p'),
-            'radarr_tag': radarr_config.get('tag', 'RecommendForPlex'),
-            'append_usernames': radarr_config.get('append_usernames', False),
-        }
 
     return adapted
 
@@ -3227,7 +1883,7 @@ def adapt_root_config_to_legacy(root_config):
 # ------------------------------------------------------------------------
 def process_recommendations(config, config_path, log_retention_days, single_user=None):
     original_stdout = sys.stdout
-    log_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'logs')
+    log_dir = os.path.join(os.path.dirname(__file__), 'logs')
 
     if log_retention_days > 0:
         try:
@@ -3270,28 +1926,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
             recommender.manage_plex_labels(plex_recs)
         else:
             log_warning(f"No recommendations found in your Plex library matching your criteria.")
-     
-        if not recommender.plex_only:
-            print(f"\n{GREEN}=== Recommended Movies to Add to Your Library ==={RESET}")
-            trakt_recs = recommendations.get('trakt_recommendations', [])
-            if trakt_recs:
-                for i, movie in enumerate(trakt_recs, start=1):
-                    print(format_movie_output(
-                        movie,
-                        show_summary=recommender.show_summary,
-                        index=i,
-                        show_cast=recommender.show_cast,
-                        show_director=recommender.show_director,
-                        show_language=recommender.show_language,
-                        show_rating=recommender.show_rating,
-                        show_genres=recommender.show_genres,
-                        show_imdb_link=recommender.show_imdb_link
-                    ))
-                    print()
-                recommender.add_to_radarr(trakt_recs)
-            else:
-                log_warning(f"No Trakt recommendations found matching your criteria.")
-        
+
         recommender._save_cache()
 
     except Exception as e:
@@ -3327,13 +1962,11 @@ def main():
     args = parser.parse_args()
 
     start_time = datetime.now()
-    print(f"{CYAN}Movie Recommendations for Plex{RESET}")
-    print("-" * 50)
-    check_version()
+    print(f"{CYAN}Movie Recommendations for Plex v{__version__}{RESET}")
     print("-" * 50)
 
-    # Load config from project root (two levels up from this script)
-    config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config.yml')
+    # Load config from project root
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
     config_path = os.path.normpath(config_path)  # Clean up path
 
     try:

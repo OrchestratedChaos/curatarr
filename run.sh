@@ -209,32 +209,27 @@ main() {
     echo ""
 
     echo -e "${YELLOW}Step 1/2: Movie recommendations...${NC}"
-    cd "$SCRIPT_DIR/scripts/Movie-Recommendations-for-Plex"
-    if python3 MRFP.py $DEBUG_FLAG; then
+    if python3 movie_recommender.py $DEBUG_FLAG; then
         echo -e "${GREEN}✓ Movie recommendations complete${NC}"
     else
         echo -e "${RED}❌ Movie recommendations failed${NC}"
         exit 1
     fi
-    cd "$SCRIPT_DIR"
     echo ""
 
     echo -e "${YELLOW}Step 2/2: TV recommendations...${NC}"
-    cd "$SCRIPT_DIR/scripts/TV-Show-Recommendations-for-Plex"
-    if python3 TRFP.py $DEBUG_FLAG; then
+    if python3 tv_recommender.py $DEBUG_FLAG; then
         echo -e "${GREEN}✓ TV recommendations complete${NC}"
     else
         echo -e "${RED}❌ TV recommendations failed${NC}"
         exit 1
     fi
-    cd "$SCRIPT_DIR"
     echo ""
 
     # Step 5: Generate external recommendations (watchlist)
-    # Note: Collections are now created/updated directly by MRFP.py and TRFP.py
     if grep -A 2 "external_recommendations:" config.yml | grep -q "enabled: true" 2>/dev/null; then
         echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
-        if python3 scripts/generate-external-recommendations.py; then
+        if python3 external_recommender.py; then
             echo -e "${GREEN}✓ External watchlists generated${NC}"
         else
             echo -e "${YELLOW}⚠ External watchlist generation failed (non-fatal)${NC}"
@@ -242,7 +237,7 @@ main() {
         echo ""
     fi
 
-    # Step 7: Cron setup (first run only)
+    # Step 6: Cron setup (first run only)
     if is_first_run; then
         setup_cron
     fi
