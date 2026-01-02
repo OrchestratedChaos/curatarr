@@ -406,7 +406,8 @@ def fetch_plex_watch_history_movies(config, account_ids, movies_section):
                         'X-Plex-Token': token,
                         'accountID': account_id,
                         'librarySectionID': library_key,
-                        'sort': 'viewedAt:desc'
+                        'sort': 'viewedAt:desc',
+                        'X-Plex-Container-Size': 10000  # Fetch up to 10k history items (all)
                     }
 
                     response = requests.get(history_url, params=params, verify=False)
