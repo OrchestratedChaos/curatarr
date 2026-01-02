@@ -17,14 +17,13 @@ from plexapi.myplex import MyPlexAccount
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Add scripts directory to path for shared utilities
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
-from shared_plex_utils import (
+# Import shared utilities
+from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     get_plex_account_ids,
     fetch_watch_history_with_tmdb,
     print_user_header, print_user_footer, print_status,
-    log_warning, log_error
+    log_warning, log_error, load_config
 )
 
 # TMDB Genre ID mappings
@@ -76,16 +75,6 @@ SERVICE_DISPLAY_NAMES = {
     'mubi': 'MUBI',
     'shudder': 'Shudder'
 }
-
-def load_config():
-    """Load configuration from root config.yml"""
-    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yml')
-    try:
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        log_error(f"Error: config.yml not found at {config_path}")
-        sys.exit(1)
 
 def get_library_items(plex, library_name, media_type='movie'):
     """Get all items currently in Plex library"""
@@ -290,7 +279,7 @@ def balance_genres_proportionally(recommendations, genre_distribution, limit, me
 
     return balanced_recs
 
-def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, media_type='movie', limit=50, genre_distribution=None):
+def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, media_type='movie', limit=50, genre_distribution=None, exclude_genres=None):
     """Find similar content NOT in library using TMDB API"""
     print(f"Finding similar {media_type}s not in library...")
 
@@ -326,6 +315,13 @@ def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, medi
                     if result_id in existing_library_ids:
                         continue
 
+                    # Skip if contains excluded genre
+                    if exclude_genres:
+                        genre_map = TMDB_MOVIE_GENRES if media_type == 'movie' else TMDB_TV_GENRES
+                        result_genres = [genre_map.get(gid, '').lower() for gid in result.get('genre_ids', [])]
+                        if any(eg.lower() in result_genres for eg in exclude_genres):
+                            continue
+
                     # Add or increment score
                     if result_id not in recommendation_scores:
                         recommendation_scores[result_id] = {
@@ -352,6 +348,13 @@ def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, medi
                     # Skip if already in library
                     if result_id in existing_library_ids:
                         continue
+
+                    # Skip if contains excluded genre
+                    if exclude_genres:
+                        genre_map = TMDB_MOVIE_GENRES if media_type == 'movie' else TMDB_TV_GENRES
+                        result_genres = [genre_map.get(gid, '').lower() for gid in result.get('genre_ids', [])]
+                        if any(eg.lower() in result_genres for eg in exclude_genres):
+                            continue
 
                     # Add or increment score
                     if result_id not in recommendation_scores:
@@ -391,11 +394,12 @@ def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, medi
     else:
         return recommendations[:limit]
 
-def load_cache(username, media_type):
+def load_cache(display_name, media_type):
     """Load existing recommendations cache"""
     cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f'external_recs_{username}_{media_type}.json')
+    safe_name = display_name.lower().replace(' ', '_')
+    cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
 
     if os.path.exists(cache_file):
         with open(cache_file, 'r') as f:
@@ -407,18 +411,20 @@ def load_cache(username, media_type):
             return cache
     return {}
 
-def save_cache(username, media_type, cache_data):
+def save_cache(display_name, media_type, cache_data):
     """Save recommendations cache"""
     cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f'external_recs_{username}_{media_type}.json')
+    safe_name = display_name.lower().replace(' ', '_')
+    cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
 
     with open(cache_file, 'w') as f:
         json.dump(cache_data, f, indent=2)
 
-def load_ignore_list(username):
+def load_ignore_list(display_name):
     """Load user's manual ignore list"""
-    ignore_file = os.path.join(os.path.dirname(__file__), 'recommendations', 'external', f'{username}_ignore.txt')
+    safe_name = display_name.lower().replace(' ', '_')
+    ignore_file = os.path.join(os.path.dirname(__file__), 'recommendations', 'external', f'{safe_name}_ignore.txt')
     if os.path.exists(ignore_file):
         with open(ignore_file, 'r') as f:
             return set(line.strip() for line in f if line.strip())
@@ -433,7 +439,9 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
         shows_categorized: dict with 'user_services', 'other_services', 'acquire' keys
     """
     os.makedirs(output_dir, exist_ok=True)
-    output_file = os.path.join(output_dir, f'{username}_watchlist.md')
+    # Use display_name for filename, sanitized for filesystem
+    safe_name = display_name.lower().replace(' ', '_')
+    output_file = os.path.join(output_dir, f'{safe_name}_watchlist.md')
 
     now = datetime.now()
 
@@ -513,7 +521,7 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
         f.write("---\n\n")
         f.write("## 📝 How to Use This List\n\n")
         f.write("- Items are automatically removed when added to your Plex library\n")
-        f.write(f"- To manually ignore an item, add its title to `{username}_ignore.txt`\n")
+        f.write(f"- To manually ignore an item, add its title to `{safe_name}_ignore.txt`\n")
         f.write("- List updates daily with new recommendations\n")
         f.write("- Grouped by streaming availability to help you decide what to watch or acquire\n\n")
 
@@ -536,9 +544,9 @@ def process_user(config, plex, username):
     print(f"Library has {len(library_movie_ids)} movies, {len(library_show_ids)} TV shows")
 
     # Load existing cache and ignore list
-    movie_cache = load_cache(username, 'movies')
-    show_cache = load_cache(username, 'shows')
-    ignore_list = load_ignore_list(username)
+    movie_cache = load_cache(display_name, 'movies')
+    show_cache = load_cache(display_name, 'shows')
+    ignore_list = load_ignore_list(display_name)
 
     # Remove acquired items from cache (now in library)
     removed_movies = [tmdb_id for tmdb_id in movie_cache.keys() if int(tmdb_id) in library_movie_ids]
@@ -586,13 +594,19 @@ def process_user(config, plex, username):
     movie_limit = external_config.get('movie_limit', 30)
     show_limit = external_config.get('show_limit', 20)
 
+    # Get excluded genres for this user
+    exclude_genres = user_prefs.get('exclude_genres', [])
+    if exclude_genres:
+        print(f"Excluding genres: {', '.join(exclude_genres)}")
+
     new_movies = find_similar_content(
         config['tmdb']['api_key'],
         movie_watch_history,
         library_movie_ids,
         'movie',
         limit=movie_limit,
-        genre_distribution=movie_genre_dist
+        genre_distribution=movie_genre_dist,
+        exclude_genres=exclude_genres
     )
 
     new_shows = find_similar_content(
@@ -601,7 +615,8 @@ def process_user(config, plex, username):
         library_show_ids,
         'tv',
         limit=show_limit,
-        genre_distribution=show_genre_dist
+        genre_distribution=show_genre_dist,
+        exclude_genres=exclude_genres
     )
 
     # Merge with existing cache (add new ones)
@@ -630,8 +645,8 @@ def process_user(config, plex, username):
             }
 
     # Save updated caches
-    save_cache(username, 'movies', movie_cache)
-    save_cache(username, 'shows', show_cache)
+    save_cache(display_name, 'movies', movie_cache)
+    save_cache(display_name, 'shows', show_cache)
 
     # Prepare lists for categorization
     movies_list = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
@@ -675,7 +690,8 @@ def main():
     print("-" * 50)
 
     # Load config
-    config = load_config()
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+    config = load_config(config_path)
 
     # Connect to Plex
     try:
