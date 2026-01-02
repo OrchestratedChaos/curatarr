@@ -22,7 +22,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
 from shared_plex_utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     get_plex_account_ids,
-    fetch_watch_history_with_tmdb
+    fetch_watch_history_with_tmdb,
+    print_user_header, print_user_footer, print_status,
+    log_warning, log_error
 )
 
 # TMDB Genre ID mappings
@@ -82,7 +84,7 @@ def load_config():
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
-        print(f"{RED}Error: config.yml not found at {config_path}{RESET}")
+        log_error(f"Error: config.yml not found at {config_path}")
         sys.exit(1)
 
 def get_library_items(plex, library_name, media_type='movie'):
@@ -101,7 +103,7 @@ def get_library_items(plex, library_name, media_type='movie'):
 
         return tmdb_ids
     except Exception as e:
-        print(f"{YELLOW}Warning: Could not fetch {library_name} library: {e}{RESET}")
+        log_warning(f"Warning: Could not fetch {library_name} library: {e}")
         return set()
 
 def get_watch_providers(tmdb_api_key, tmdb_id, media_type='movie'):
@@ -206,12 +208,12 @@ def get_genre_distribution(plex, config, username, media_type='movie'):
 
         return genre_distribution, total_items
     except Exception as e:
-        print(f"{YELLOW}  Warning: Could not calculate genre distribution: {e}{RESET}")
+        log_warning(f"  Warning: Could not calculate genre distribution: {e}")
         return {}, 0
 
 def get_user_watch_history(plex, config, username, media_type='movie'):
     """Get user's watch history from Plex using shared utility"""
-    print(f"  Fetching {media_type} watch history for {username}...")
+    print(f"Fetching {media_type} watch history for {username}...")
 
     try:
         # Get library
@@ -222,14 +224,14 @@ def get_user_watch_history(plex, config, username, media_type='movie'):
         account_ids = get_plex_account_ids(config, [username])
 
         if not account_ids:
-            print(f"{YELLOW}  Warning: User {username} not found{RESET}")
+            log_warning(f"  Warning: User {username} not found")
             return []
 
         # Use shared utility to fetch watch history with TMDB IDs
         return fetch_watch_history_with_tmdb(plex, config, account_ids, library, media_type)
 
     except Exception as e:
-        print(f"{YELLOW}  Warning: Could not fetch watch history: {e}{RESET}")
+        log_warning(f"  Warning: Could not fetch watch history: {e}")
         return []
 
 def balance_genres_proportionally(recommendations, genre_distribution, limit, media_type='movie'):
@@ -278,22 +280,22 @@ def balance_genres_proportionally(recommendations, genre_distribution, limit, me
     if remaining_needed > 0:
         balanced_recs.extend(remaining_recs[:remaining_needed])
 
-    print(f"    Genre balancing: {len(balanced_recs)} items selected")
+    print(f"Genre balancing: {len(balanced_recs)} items selected")
     for genre, count in sorted(genre_counts.items(), key=lambda x: x[1], reverse=True):
         if count > 0:
             target = genre_targets.get(genre, 0)
             actual_pct = (count / len(balanced_recs) * 100) if balanced_recs else 0
             target_pct = genre_distribution.get(genre, 0) * 100
-            print(f"      {genre}: {count} items ({actual_pct:.1f}% actual vs {target_pct:.1f}% target)")
+            print(f"  {genre}: {count} items ({actual_pct:.1f}% actual vs {target_pct:.1f}% target)")
 
     return balanced_recs
 
 def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, media_type='movie', limit=50, genre_distribution=None):
     """Find similar content NOT in library using TMDB API"""
-    print(f"  Finding similar {media_type}s not in library...")
+    print(f"Finding similar {media_type}s not in library...")
 
     if not watched_items:
-        print(f"    {YELLOW}No watch history found{RESET}")
+        print_status("No watch history found", "warning")
         return []
 
     # Use TMDB's recommendations and similar endpoints
@@ -380,7 +382,7 @@ def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, medi
     # Sort by score descending
     recommendations.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
 
-    print(f"    Found {len(recommendations)} recommendations")
+    print(f"Found {len(recommendations)} recommendations")
 
     # Apply genre balancing if distribution provided
     if genre_distribution:
@@ -522,7 +524,7 @@ def process_user(config, plex, username):
     user_prefs = config['users']['preferences'].get(username, {})
     display_name = user_prefs.get('display_name', username)
 
-    print(f"\n{CYAN}Processing external recommendations for: {display_name}{RESET}")
+    print_user_header(f"{display_name} (external recommendations)")
 
     # Get current library contents
     movie_library = config['plex'].get('movie_library', 'Movies')
@@ -531,7 +533,7 @@ def process_user(config, plex, username):
     library_movie_ids = get_library_items(plex, movie_library, 'movie')
     library_show_ids = get_library_items(plex, tv_library, 'show')
 
-    print(f"  Library has {len(library_movie_ids)} movies, {len(library_show_ids)} TV shows")
+    print(f"Library has {len(library_movie_ids)} movies, {len(library_show_ids)} TV shows")
 
     # Load existing cache and ignore list
     movie_cache = load_cache(username, 'movies')
@@ -548,7 +550,7 @@ def process_user(config, plex, username):
         del show_cache[tmdb_id]
 
     if removed_movies or removed_shows:
-        print(f"  {GREEN}✓ Removed {len(removed_movies)} movies and {len(removed_shows)} shows (now in library){RESET}")
+        print_status(f"Removed {len(removed_movies)} movies and {len(removed_shows)} shows (now in library)", "success")
 
     # Remove ignored items
     removed_ignored = 0
@@ -562,22 +564,22 @@ def process_user(config, plex, username):
             removed_ignored += 1
 
     if removed_ignored:
-        print(f"  {YELLOW}Removed {removed_ignored} ignored items{RESET}")
+        print_status(f"Removed {removed_ignored} ignored items", "warning")
 
     # Get user's watch history
     movie_watch_history = get_user_watch_history(plex, config, username, 'movie')
     show_watch_history = get_user_watch_history(plex, config, username, 'show')
 
-    print(f"  Watch history: {len(movie_watch_history)} movies, {len(show_watch_history)} shows")
+    print(f"Watch history: {len(movie_watch_history)} movies, {len(show_watch_history)} shows")
 
     # Get genre distribution from watch history
     movie_genre_dist, movie_count = get_genre_distribution(plex, config, username, 'movie')
     show_genre_dist, show_count = get_genre_distribution(plex, config, username, 'show')
 
     if movie_genre_dist:
-        print(f"  Movie genre distribution: {dict(sorted(movie_genre_dist.items(), key=lambda x: x[1], reverse=True)[:5])}")
+        print(f"Movie genre distribution: {dict(sorted(movie_genre_dist.items(), key=lambda x: x[1], reverse=True)[:5])}")
     if show_genre_dist:
-        print(f"  TV genre distribution: {dict(sorted(show_genre_dist.items(), key=lambda x: x[1], reverse=True)[:5])}")
+        print(f"TV genre distribution: {dict(sorted(show_genre_dist.items(), key=lambda x: x[1], reverse=True)[:5])}")
 
     # Find new recommendations
     external_config = config.get('external_recommendations', {})
@@ -639,7 +641,7 @@ def process_user(config, plex, username):
     user_services = config.get('streaming_services', [])
 
     # Categorize by streaming service availability
-    print(f"  Categorizing by streaming service availability...")
+    print("Categorizing by streaming service availability...")
     movies_categorized = categorize_by_streaming_service(
         movies_list,
         config['tmdb']['api_key'],
@@ -665,11 +667,13 @@ def process_user(config, plex, username):
                   sum(len(items) for items in shows_categorized['other_services'].values()) + \
                   len(shows_categorized['acquire'])
 
-    print(f"  {GREEN}✓ Generated watchlist: {output_file}{RESET}")
-    print(f"    {total_movies} movies, {total_shows} TV shows")
+    print_status(f"Generated watchlist: {output_file}", "success")
+    print(f"{total_movies} movies, {total_shows} TV shows")
+    print_user_footer(f"{display_name} (external recommendations)")
 
 def main():
-    print(f"{CYAN}=== External Recommendations Generator ==={RESET}\n")
+    print(f"\n{CYAN}External Recommendations Generator{RESET}")
+    print("-" * 50)
 
     # Load config
     config = load_config()
@@ -677,9 +681,9 @@ def main():
     # Connect to Plex
     try:
         plex = PlexServer(config['plex']['url'], config['plex']['token'])
-        print(f"{GREEN}✓ Connected to Plex{RESET}")
+        print_status("Connected to Plex", "success")
     except Exception as e:
-        print(f"{RED}Error connecting to Plex: {e}{RESET}")
+        print_status(f"Error connecting to Plex: {e}", "error")
         sys.exit(1)
 
     # Get users
@@ -690,12 +694,12 @@ def main():
         try:
             process_user(config, plex, username)
         except Exception as e:
-            print(f"{RED}Error processing {username}: {e}{RESET}")
+            print_status(f"Error processing {username}: {e}", "error")
             import traceback
             traceback.print_exc()
 
-    print(f"\n{GREEN}✓ All watchlists generated!{RESET}")
-    print(f"\nWatchlists saved to: {os.path.join(os.path.dirname(__file__), 'recommendations', 'external')}")
+    print_status("All watchlists generated!", "success")
+    print(f"Watchlists saved to: {os.path.join(os.path.dirname(__file__), 'recommendations', 'external')}")
 
 if __name__ == "__main__":
     main()

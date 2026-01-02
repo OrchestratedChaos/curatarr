@@ -26,8 +26,12 @@ from shared_plex_utils import (
     RATING_MULTIPLIERS,
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, get_watched_show_count,
-    fetch_plex_watch_history_shows
+    fetch_plex_watch_history_shows,
+    log_warning, log_error
 )
+
+# Module-level logger - configured by setup_logging() in main()
+logger = logging.getLogger('plex_recommender')
 
 __version__ = "2.2"
 REPO_URL = "https://github.com/netplexflix/TV-Show-Recommendations-for-Plex"
@@ -46,12 +50,20 @@ def check_version():
             else:
                 print(f"{GREEN}You are running the latest version (v{__version__}){RESET}")
         else:
-            print(f"{YELLOW}Unable to check for updates. Status code: {response.status_code}{RESET}")
+            log_warning(f"Unable to check for updates. Status code: {response.status_code}")
     except Exception as e:
-        print(f"{YELLOW}Unable to check for updates: {str(e)}{RESET}")
+        log_warning(f"Unable to check for updates: {str(e)}")
 
 class ShowCache:
+    """Cache for TV show metadata including TMDB data, genres, and keywords."""
+
     def __init__(self, cache_dir: str, recommender=None):
+        """Initialize the show cache.
+
+        Args:
+            cache_dir: Directory path where cache files are stored
+            recommender: Reference to parent PlexTVRecommender instance
+        """
         self.all_shows_cache_path = os.path.join(cache_dir, "all_shows_cache.json")
         self.cache = self._load_cache()
         self.recommender = recommender  # Store reference to recommender
@@ -62,7 +74,7 @@ class ShowCache:
                 with open(self.all_shows_cache_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
-                print(f"{YELLOW}Error loading all shows cache: {e}{RESET}")
+                log_warning(f"Error loading all shows cache: {e}")
                 return {'shows': {}, 'last_updated': None, 'library_count': 0}
         return {'shows': {}, 'last_updated': None, 'library_count': 0}
     
@@ -133,7 +145,7 @@ class ShowCache:
                                 
                                 if resp.status_code == 429:
                                     sleep_time = 2 * (attempt + 1)
-                                    print(f"{YELLOW}TMDB rate limit hit, waiting {sleep_time}s...{RESET}")
+                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
                                     time.sleep(sleep_time)
                                     continue
                                     
@@ -146,12 +158,12 @@ class ShowCache:
                             except (requests.exceptions.ConnectionError, 
                                    requests.exceptions.Timeout,
                                    requests.exceptions.ChunkedEncodingError) as e:
-                                print(f"{YELLOW}Connection error, retrying... ({attempt+1}/{max_retries}){RESET}")
+                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
                                 time.sleep(1)
                                 if attempt == max_retries - 1:
-                                    print(f"{YELLOW}Failed to get TMDB ID for {show.title} after {max_retries} tries{RESET}")
+                                    log_warning(f"Failed to get TMDB ID for {show.title} after {max_retries} tries")
                             except Exception as e:
-                                print(f"{YELLOW}Error getting TMDB ID for {show.title}: {e}{RESET}")
+                                log_warning(f"Error getting TMDB ID for {show.title}: {e}")
                                 break
     
                     tmdb_keywords = []
@@ -167,7 +179,7 @@ class ShowCache:
                                 
                                 if kw_resp.status_code == 429:
                                     sleep_time = 2 * (attempt + 1)
-                                    print(f"{YELLOW}TMDB rate limit hit, waiting {sleep_time}s...{RESET}")
+                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
                                     time.sleep(sleep_time)
                                     continue
                                     
@@ -179,12 +191,12 @@ class ShowCache:
                             except (requests.exceptions.ConnectionError,
                                    requests.exceptions.Timeout,
                                    requests.exceptions.ChunkedEncodingError) as e:
-                                print(f"{YELLOW}Connection error, retrying... ({attempt+1}/{max_retries}){RESET}")
+                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
                                 time.sleep(1)
                                 if attempt == max_retries - 1:
-                                    print(f"{YELLOW}Failed to get keywords for {show.title} after {max_retries} tries{RESET}")
+                                    log_warning(f"Failed to get keywords for {show.title} after {max_retries} tries")
                             except Exception as e:
-                                print(f"{YELLOW}Error getting TMDB keywords for {show.title}: {e}{RESET}")
+                                log_warning(f"Error getting TMDB keywords for {show.title}: {e}")
                                 break
     
                     # Store in recommender's caches if available
@@ -208,7 +220,7 @@ class ShowCache:
                     self.cache['shows'][show_id] = show_info
                     
                 except Exception as e:
-                    print(f"{YELLOW}Error processing show {show.title}: {e}{RESET}")
+                    log_warning(f"Error processing show {show.title}: {e}")
                     continue
                     
         self.cache['library_count'] = current_count
@@ -222,7 +234,7 @@ class ShowCache:
             with open(self.all_shows_cache_path, 'w', encoding='utf-8') as f:
                 json.dump(self.cache, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"{RED}Error saving all shows cache: {e}{RESET}")
+            log_error(f"Error saving all shows cache: {e}")
 
     def _get_show_language(self, show) -> str:
         """Get show's primary audio language from first episode"""
@@ -255,7 +267,20 @@ class ShowCache:
         return "N/A"
 
 class PlexTVRecommender:
+    """Generates personalized TV show recommendations based on Plex watch history.
+
+    Analyzes watched shows to build preference profiles based on genres, studios,
+    actors, languages, and TMDB keywords. Uses similarity scoring to rank unwatched
+    shows and optionally integrates with Trakt for additional recommendations.
+    """
+
     def __init__(self, config_path: str, single_user: str = None):
+        """Initialize the TV show recommender.
+
+        Args:
+            config_path: Path to the config.yml configuration file
+            single_user: Optional username to generate recommendations for a single user
+        """
         self.single_user = single_user
         self.config = self._load_config(config_path)
         self.library_title = self.config['plex'].get('TV_library_title', 'TV Shows')
@@ -316,7 +341,7 @@ class PlexTVRecommender:
 
         total_weight = sum(self.weights.values())
         if not abs(total_weight - 1.0) < 1e-6:
-            print(f"{YELLOW}Warning: Weights sum to {total_weight}, expected 1.0.{RESET}")
+            log_warning(f"Warning: Weights sum to {total_weight}, expected 1.0.")
 			
         trakt_config = self.config.get('trakt', {})
         self.sync_watch_history = trakt_config.get('sync_watch_history', False)
@@ -380,27 +405,30 @@ class PlexTVRecommender:
                     if isinstance(watched_ids, list):
                         self.watched_show_ids = {int(id_) for id_ in watched_ids if str(id_).isdigit()}
                     else:
-                        print(f"{YELLOW}Warning: Invalid watched_show_ids format in cache{RESET}")
+                        log_warning(f"Warning: Invalid watched_show_ids format in cache")
                         self.watched_show_ids = set()
                     
                     if not self.watched_show_ids and self.cached_watched_count > 0:
-                        print(f"{RED}Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded{RESET}")
+                        log_error(f"Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded")
                         # Force a refresh of watched data
                         self._refresh_watched_data()
                     
             except Exception as e:
-                print(f"{YELLOW}Error loading watched cache: {e}{RESET}")
-                self._refresh_watched_data()  
-        current_library_ids = self._get_library_shows_set()
-        
+                log_warning(f"Error loading watched cache: {e}")
+                self._refresh_watched_data()
+
+        # Get library rating keys for filtering (must be ints to match watched_show_ids)
+        shows_section = self.plex.library.section(self.library_title)
+        current_library_rating_keys = {int(show.ratingKey) for show in shows_section.all()}
+
         # Clean up both watched show tracking mechanisms
         self.plex_watched_rating_keys = {
-            rk for rk in self.plex_watched_rating_keys 
-            if int(rk) in current_library_ids
+            rk for rk in self.plex_watched_rating_keys
+            if int(rk) in current_library_rating_keys
         }
         self.watched_show_ids = {
             show_id for show_id in self.watched_show_ids
-            if show_id in current_library_ids
+            if show_id in current_library_rating_keys
         }
 						
         if self.plex_tmdb_cache is None:
@@ -415,6 +443,9 @@ class PlexTVRecommender:
         
         if (not cache_exists) or (current_watched_count != self.cached_watched_count):
             print("Watched count changed or no cache found; gathering watched data now. This may take a while...\n")
+            # Clear existing data to force actual fetch (prevents early returns in fetch functions)
+            self.watched_data_counters = None
+            self.watched_show_ids = set()
             if self.users['plex_users']:
                 self.watched_data = self._get_plex_watched_shows_data()
             else:
@@ -428,8 +459,7 @@ class PlexTVRecommender:
             # Ensure watched_show_ids are preserved
             if not self.watched_show_ids and 'watched_show_ids' in watched_cache:
                 self.watched_show_ids = {int(id_) for id_ in watched_cache['watched_show_ids'] if str(id_).isdigit()}
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug(f"Using cached data: {self.cached_watched_count} watched shows, {len(self.watched_show_ids)} IDs")
         print("Fetching library metadata (for existing Shows checks)...")
         self.library_shows = self._get_library_shows_set()
         self.library_imdb_ids = self._get_library_imdb_ids()
@@ -444,7 +474,7 @@ class PlexTVRecommender:
                 print(f"Successfully loaded configuration from {config_path}")
                 return config
         except Exception as e:
-            print(f"{RED}Error loading config from {config_path}: {e}{RESET}")
+            log_error(f"Error loading config from {config_path}: {e}")
             raise
 
     def _init_plex(self) -> plexapi.server.PlexServer:
@@ -454,7 +484,7 @@ class PlexTVRecommender:
                 self.config['plex']['token']
             )
         except Exception as e:
-            print(f"{RED}Error connecting to Plex server: {e}{RESET}")
+            log_error(f"Error connecting to Plex server: {e}")
             raise
 
     # ------------------------------------------------------------------------
@@ -500,7 +530,7 @@ class PlexTVRecommender:
                 # Match with shared users
                 processed_managed.append(all_usernames_lower[user_lower])
             else:
-                print(f"{RED}Error: Managed user '{user}' not found{RESET}")
+                log_error(f"Error: Managed user '{user}' not found")
                 raise ValueError(f"User '{user}' not found in Plex account")
         
         # Remove duplicates while preserving order
@@ -606,10 +636,10 @@ class PlexTVRecommender:
                 if user:
                     user_ids.append(str(user['user_id']))
                 else:
-                    print(f"{RED}User '{username}' not found in Plex accounts!{RESET}")
+                    log_error(f"User '{username}' not found in Plex accounts!")
     
         except Exception as e:
-            print(f"{RED}Error resolving Plex users: {e}{RESET}")
+            log_error(f"Error resolving Plex users: {e}")
         
         return user_ids
 		
@@ -630,10 +660,10 @@ class PlexTVRecommender:
         watched_show_ids = set()
         not_found_count = 0
 
-        print(f"{YELLOW}Querying Plex watch history directly...{RESET}")
+        log_warning(f"Querying Plex watch history directly...")
         account_ids = self._get_plex_account_ids()
         if not account_ids:
-            print(f"{RED}No valid users found!{RESET}")
+            log_error(f"No valid users found!")
             return counters
 
         # Use shared utility to fetch watch history
@@ -669,23 +699,19 @@ class PlexTVRecommender:
             else:
                 not_found_count += 1
 
-        if False:  # DEBUG DISABLED
-            print(f"{YELLOW}{not_found_count} watched shows not found in cache{RESET}")
-            print(f"{GREEN}Collected {len(counters['tmdb_ids'])} unique TMDB IDs{RESET}")
+        logger.debug(f"Watched shows not in cache: {not_found_count}, TMDB IDs collected: {len(counters['tmdb_ids'])}")
 
         return counters
 
     def _get_managed_users_watched_data(self):
         # Return cached data if available and we're not in single user mode
         if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug("Using cached watched data (not single user mode)")
             return self.watched_data_counters
-    
+
         # Only proceed with scanning if we need to
         if hasattr(self, 'watched_data_counters') and self.watched_data_counters:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug("Using existing watched data counters")
             return self.watched_data_counters
     
         counters = {
@@ -736,12 +762,11 @@ class PlexTVRecommender:
                             counters['tmdb_ids'].add(tmdb_id)
                     
             except Exception as e:
-                print(f"{RED}Error processing user {username}: {e}{RESET}")
+                log_error(f"Error processing user {username}: {e}")
                 continue
         
-        if False:  # DEBUG DISABLED
-            print(f"{GREEN}Collected {len(counters['tmdb_ids'])} unique TMDB IDs{RESET}")
-        
+        logger.debug(f"Collected {len(counters['tmdb_ids'])} unique TMDB IDs from managed users")
+
         return counters
 
     # ------------------------------------------------------------------------
@@ -749,9 +774,6 @@ class PlexTVRecommender:
     # ------------------------------------------------------------------------
     def _save_watched_cache(self):
         try:
-            if False:  # DEBUG DISABLED
-                pass
-            
             # Create a copy of the watched data to modify for serialization
             watched_data_for_cache = copy.deepcopy(self.watched_data_counters)
             
@@ -770,12 +792,11 @@ class PlexTVRecommender:
             
             with open(self.watched_cache_path, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=4, ensure_ascii=False)
-                
-            if False:  # DEBUG DISABLED
-                pass
-                
+
+            logger.debug(f"Saved watched cache: {self.cached_watched_count} shows, {len(self.watched_show_ids)} IDs")
+
         except Exception as e:
-            print(f"{YELLOW}Error saving watched cache: {e}{RESET}")
+            log_warning(f"Error saving watched cache: {e}")
 
     def _save_trakt_sync_cache(self):
         try:
@@ -785,7 +806,7 @@ class PlexTVRecommender:
                     'last_sync': datetime.now().isoformat()
                 }, f, indent=4)
         except Exception as e:
-            print(f"{YELLOW}Error saving Trakt sync cache: {e}{RESET}")
+            log_warning(f"Error saving Trakt sync cache: {e}")
 
     def _save_cache(self):
         self._save_watched_cache()
@@ -843,7 +864,7 @@ class PlexTVRecommender:
                         counters['tmdb_keywords'].update({k: multiplier for k in keywords})
     
         except Exception as e:
-            print(f"{YELLOW}Error processing counters for {show_info.get('title')}: {e}{RESET}")
+            log_warning(f"Error processing counters for {show_info.get('title')}: {e}")
     # ------------------------------------------------------------------------
     # PATH HANDLING
     # ------------------------------------------------------------------------
@@ -865,12 +886,12 @@ class PlexTVRecommender:
             for local_path, remote_path in mappings.items():
                 if path.startswith(local_path):
                     mapped_path = path.replace(local_path, remote_path, 1)
-                    print(f"{YELLOW}Mapped path: {path} -> {mapped_path}{RESET}")
+                    log_warning(f"Mapped path: {path} -> {mapped_path}")
                     return mapped_path
             return path
             
         except Exception as e:
-            print(f"{YELLOW}Warning: Path mapping failed: {e}. Using original path.{RESET}")
+            log_warning(f"Warning: Path mapping failed: {e}. Using original path.")
             return path
 
     # ------------------------------------------------------------------------
@@ -897,7 +918,7 @@ class PlexTVRecommender:
                 
             return library_shows
         except Exception as e:
-            print(f"{RED}Error getting library shows: {e}{RESET}")
+            log_error(f"Error getting library shows: {e}")
             return set()
 
     def _is_show_in_library(self, title: str, year: Optional[int]) -> bool:
@@ -985,7 +1006,7 @@ class PlexTVRecommender:
                                 except (ValueError, IndexError) as e:
                                     continue
         except Exception as e:
-            print(f"{YELLOW}Error getting episode TVDB IDs for {show.title}: {e}{RESET}")
+            log_warning(f"Error getting episode TVDB IDs for {show.title}: {e}")
 
     def _get_library_imdb_ids(self) -> Set[str]:
         imdb_ids = set()
@@ -998,7 +1019,7 @@ class PlexTVRecommender:
                             imdb_ids.add(guid.id.replace('imdb://', ''))
                             break
         except Exception as e:
-            print(f"{YELLOW}Error retrieving IMDb IDs from library: {e}{RESET}")
+            log_warning(f"Error retrieving IMDb IDs from library: {e}")
         return imdb_ids
 
     def get_show_details(self, show) -> Dict:
@@ -1051,7 +1072,7 @@ class PlexTVRecommender:
             return show_info
                 
         except Exception as e:
-            print(f"{YELLOW}Error getting show details for {show.title}: {e}{RESET}")
+            log_warning(f"Error getting show details for {show.title}: {e}")
             return {}
 		
     def _validate_watched_shows(self):
@@ -1060,11 +1081,15 @@ class PlexTVRecommender:
             try:
                 cleaned_ids.add(int(str(show_id)))
             except (ValueError, TypeError):
-                print(f"{YELLOW}Invalid watched show ID found: {show_id}{RESET}")
+                log_warning(f"Invalid watched show ID found: {show_id}")
         self.watched_show_ids = cleaned_ids
 
     def _refresh_watched_data(self):
         """Force refresh of watched data"""
+        # Clear existing data to force actual refresh (prevents early returns in fetch functions)
+        self.watched_data_counters = None
+        self.watched_show_ids = set()
+
         if self.users['plex_users']:
             self.watched_data = self._get_plex_watched_shows_data()
         else:
@@ -1086,7 +1111,7 @@ class PlexTVRecommender:
             resp.raise_for_status()
             return resp.json().get('tv_results', [{}])[0].get('id')
         except Exception as e:
-            print(f"{YELLOW}IMDb fallback failed: {e}{RESET}")
+            log_warning(f"IMDb fallback failed: {e}")
             return None
 
     def _get_plex_show_tmdb_id(self, plex_show) -> Optional[int]:
@@ -1141,7 +1166,7 @@ class PlexTVRecommender:
                     tmdb_id = exact_match['id'] if exact_match else results[0]['id']
     
             except Exception as e:
-                print(f"{YELLOW}TMDB search failed for {show_title}: {e}{RESET}")
+                log_warning(f"TMDB search failed for {show_title}: {e}")
     
         # Method 3: Single Fallback Attempt via IMDb
         if not tmdb_id and not hasattr(plex_show, '_tmdb_fallback_attempted'):
@@ -1150,8 +1175,7 @@ class PlexTVRecommender:
     
         # Update cache even if None to prevent repeat lookups
         if tmdb_id:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug(f"Cached TMDB ID {tmdb_id} for Plex show {plex_show.ratingKey}")
             self.plex_tmdb_cache[str(plex_show.ratingKey)] = tmdb_id
             self._save_watched_cache()
         return tmdb_id
@@ -1174,9 +1198,9 @@ class PlexTVRecommender:
                 data = resp.json()
                 return data.get('external_ids', {}).get('imdb_id')
             else:
-                print(f"{YELLOW}Failed to fetch IMDb ID from TMDB for show '{plex_show.title}'. Status Code: {resp.status_code}{RESET}")
+                log_warning(f"Failed to fetch IMDb ID from TMDB for show '{plex_show.title}'. Status Code: {resp.status_code}")
         except Exception as e:
-            print(f"{YELLOW}Error fetching IMDb ID for TMDB ID {tmdb_id}: {e}{RESET}")
+            log_warning(f"Error fetching IMDb ID for TMDB ID {tmdb_id}: {e}")
         return None
 
     def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
@@ -1196,11 +1220,10 @@ class PlexTVRecommender:
                 keywords = data.get('results', [])
                 kw_set = {k['name'].lower() for k in keywords}
         except Exception as e:
-            print(f"{YELLOW}Error fetching TMDB keywords for ID {tmdb_id}: {e}{RESET}")
+            log_warning(f"Error fetching TMDB keywords for ID {tmdb_id}: {e}")
 
         if kw_set:
-            if False:  # DEBUG DISABLED
-                pass
+            logger.debug(f"Cached {len(kw_set)} keywords for TMDB ID {tmdb_id}")
             self.tmdb_keywords_cache[str(tmdb_id)] = list(kw_set)  # Convert key to string
             self._save_watched_cache()
         return kw_set
@@ -1316,19 +1339,19 @@ class PlexTVRecommender:
                         print(f"{GREEN}Successfully authenticated with Trakt!{RESET}")
                         return
                     elif token_response.status_code != 400:
-                        print(f"{RED}Error getting token: {token_response.status_code}{RESET}")
+                        log_error(f"Error getting token: {token_response.status_code}")
                         return
-                print(f"{RED}Authentication timed out{RESET}")
+                log_error(f"Authentication timed out")
             else:
-                print(f"{RED}Error getting device code: {response.status_code}{RESET}")
+                log_error(f"Error getting device code: {response.status_code}")
         except Exception as e:
-            print(f"{RED}Error during Trakt authentication: {e}{RESET}")
+            log_error(f"Error during Trakt authentication: {e}")
     
     def _refresh_trakt_token(self):
         """Refresh the Trakt access token using the refresh token"""
         try:
             if 'refresh_token' not in self.config['trakt']:
-                print(f"{YELLOW}No refresh token available. Re-authenticating...{RESET}")
+                log_warning(f"No refresh token available. Re-authenticating...")
                 self._authenticate_trakt()
                 return self._verify_trakt_token()
                 
@@ -1357,12 +1380,12 @@ class PlexTVRecommender:
                 print(f"{GREEN}Successfully refreshed Trakt token{RESET}")
                 return True
             else:
-                print(f"{YELLOW}Failed to refresh token: {refresh_response.status_code}. Re-authenticating...{RESET}")
+                log_warning(f"Failed to refresh token: {refresh_response.status_code}. Re-authenticating...")
                 self._authenticate_trakt()
                 return self._verify_trakt_token()
                 
         except Exception as e:
-            print(f"{RED}Error refreshing Trakt token: {e}. Re-authenticating...{RESET}")
+            log_error(f"Error refreshing Trakt token: {e}. Re-authenticating...")
             self._authenticate_trakt()
             return self._verify_trakt_token()
     
@@ -1373,7 +1396,7 @@ class PlexTVRecommender:
             # Check if token is expired based on stored expiration time
             if ('token_expiration' in self.config['trakt'] and
                 time.time() > self.config['trakt']['token_expiration']):
-                print(f"{YELLOW}Trakt token expired. Refreshing...{RESET}")
+                log_warning(f"Trakt token expired. Refreshing...")
                 return self._refresh_trakt_token()
                 
             # Verify token with API call
@@ -1383,15 +1406,15 @@ class PlexTVRecommender:
             )
             
             if test_response.status_code == 401:
-                print(f"{YELLOW}Trakt token invalid. Refreshing...{RESET}")
+                log_warning(f"Trakt token invalid. Refreshing...")
                 return self._refresh_trakt_token()
             elif test_response.status_code == 200:
                 return True
             else:
-                print(f"{RED}Error verifying Trakt token: {test_response.status_code}{RESET}")
+                log_error(f"Error verifying Trakt token: {test_response.status_code}")
                 return False
         except Exception as e:
-            print(f"{RED}Error connecting to Trakt: {e}{RESET}")
+            log_error(f"Error connecting to Trakt: {e}")
             return False
 
     def _clear_trakt_watch_history(self):
@@ -1399,7 +1422,7 @@ class PlexTVRecommender:
         
         # Verify token is valid before proceeding
         if not self._verify_trakt_token():
-            print(f"{RED}Failed to verify Trakt token. Skipping clear operation.{RESET}")
+            log_error(f"Failed to verify Trakt token. Skipping clear operation.")
             return
         trakt_ids = []
         page = 1
@@ -1414,7 +1437,7 @@ class PlexTVRecommender:
                     params={'page': page, 'limit': per_page}
                 )
                 if response.status_code != 200:
-                    print(f"{RED}Error fetching history: {response.status_code}{RESET}")
+                    log_error(f"Error fetching history: {response.status_code}")
                     break
                 
                 data = response.json()
@@ -1451,19 +1474,19 @@ class PlexTVRecommender:
                             os.remove(self.trakt_sync_cache_path)
                             print(f"{GREEN}Cleared Trakt sync cache.{RESET}")
                         except Exception as e:
-                            print(f"{YELLOW}Error removing Trakt sync cache: {e}{RESET}")
+                            log_warning(f"Error removing Trakt sync cache: {e}")
                     else:
                         print(f"{GREEN}No Trakt sync cache to clear.{RESET}")
                 else:
-                    print(f"{RED}Failed to remove history: {remove_response.status_code}{RESET}")
+                    log_error(f"Failed to remove history: {remove_response.status_code}")
                     print(f"Response: {remove_response.text}")
             elif history_found:
-                print(f"{YELLOW}No show IDs found in Trakt history to clear.{RESET}")
+                log_warning(f"No show IDs found in Trakt history to clear.")
             else:
                 print(f"{GREEN}No Trakt history found to clear.{RESET}")
                 
         except Exception as e:
-            print(f"{RED}Error clearing Trakt history: {e}{RESET}")
+            log_error(f"Error clearing Trakt history: {e}")
 
     def _sync_watched_shows_to_trakt(self):
         if not self.sync_watch_history:
@@ -1473,7 +1496,7 @@ class PlexTVRecommender:
         
         # Verify token is valid before proceeding
         if not self._verify_trakt_token():
-            print(f"{RED}Failed to verify Trakt token. Skipping sync operation.{RESET}")
+            log_error(f"Failed to verify Trakt token. Skipping sync operation.")
             return
         
         # Load existing synced episode IDs from cache
@@ -1486,7 +1509,7 @@ class PlexTVRecommender:
                         previously_synced_ids = set(int(id) for id in cache_data['synced_episode_ids'] if str(id).isdigit())
                         print(f"Loaded previously synced episode IDs from cache")
             except Exception as e:
-                print(f"{YELLOW}Error loading Trakt sync cache: {e}{RESET}")
+                log_warning(f"Error loading Trakt sync cache: {e}")
         
         watched_episodes = []
         
@@ -1534,10 +1557,9 @@ class PlexTVRecommender:
                             start += len(history_items)
                             
                         except Exception as e:
-                            if False:  # DEBUG DISABLED
-                                pass
+                            logger.debug(f"Error fetching history page: {e}")
                             break
-                
+
                 print(f"Gathering episode data from {len(all_history_items)} history items...")
                 
                 # Group episodes by rating_key (episode ID)
@@ -1657,7 +1679,7 @@ class PlexTVRecommender:
                 print("")
         
             if not watched_episodes:
-                print(f"{YELLOW}No episodes found to sync to Trakt{RESET}")
+                log_warning(f"No episodes found to sync to Trakt")
                 return
             
             # Filter out already synced episodes
@@ -1709,15 +1731,15 @@ class PlexTVRecommender:
                             newly_synced.update(ep['tvdb_id'] for ep in batch)
                             print(f"{GREEN}Successfully synced {added_episodes} episodes{RESET}")
                         else:
-                            print(f"{YELLOW}Warning: No episodes were added in this batch{RESET}")
+                            log_warning(f"Warning: No episodes were added in this batch")
                     else:
-                        print(f"{RED}Error syncing batch to Trakt: {response.status_code}{RESET}")
+                        log_error(f"Error syncing batch to Trakt: {response.status_code}")
                         print(f"Error response: {response.text}")
         
                     time.sleep(2)  # Respect rate limiting
         
                 except Exception as e:
-                    print(f"{RED}Error during Trakt sync: {e}{RESET}")
+                    log_error(f"Error during Trakt sync: {e}")
                     time.sleep(2)
                     continue
         
@@ -1731,11 +1753,11 @@ class PlexTVRecommender:
                             'last_sync': datetime.now().isoformat()
                         }, f, indent=4)
                 except Exception as e:
-                    print(f"{RED}Error saving Trakt sync cache: {e}{RESET}")
+                    log_error(f"Error saving Trakt sync cache: {e}")
         except Exception as outer_e:
-            print(f"{RED}Unexpected error during Trakt sync process: {outer_e}{RESET}")
-            if False:  # DEBUG DISABLED
-                import traceback
+            log_error(f"Unexpected error during Trakt sync process: {outer_e}")
+            logger.debug("Trakt sync error details:", exc_info=True)
+
     # ------------------------------------------------------------------------
     # CALCULATE SCORES
     # ------------------------------------------------------------------------
@@ -1886,7 +1908,7 @@ class PlexTVRecommender:
             return score, score_breakdown
     
         except Exception as e:
-            print(f"{YELLOW}Error calculating similarity score for {show_info.get('title', 'Unknown')}: {e}{RESET}")
+            log_warning(f"Error calculating similarity score for {show_info.get('title', 'Unknown')}: {e}")
             return 0.0, score_breakdown
 
     def _print_similarity_breakdown(self, show_info: Dict, score: float, breakdown: Dict):
@@ -1917,7 +1939,7 @@ class PlexTVRecommender:
         try:
             # Verify token is valid before proceeding
             if not self._verify_trakt_token():
-                print(f"{RED}Failed to verify Trakt token. Skipping recommendations.{RESET}")
+                log_error(f"Failed to verify Trakt token. Skipping recommendations.")
                 return []
             # First check if there's any watch history
             history_response = requests.get(
@@ -1928,10 +1950,10 @@ class PlexTVRecommender:
             
             if history_response.status_code == 200:
                 if not history_response.json():
-                    print(f"{YELLOW}No watch history found on Trakt. Skipping recommendations.{RESET}")
+                    log_warning(f"No watch history found on Trakt. Skipping recommendations.")
                     return []
             else:
-                print(f"{RED}Error checking Trakt history: {history_response.status_code}{RESET}")
+                log_error(f"Error checking Trakt history: {history_response.status_code}")
                 return []
     
             # If we have history, proceed with getting recommendations
@@ -2018,7 +2040,7 @@ class PlexTVRecommender:
                                     if 'original_language' in d:
                                         sd['language'] = get_full_language_name(d['original_language'])
                                 except Exception as e:
-                                    print(f"{YELLOW}Error fetching language for '{title}': {e}{RESET}")
+                                    log_warning(f"Error fetching language for '{title}': {e}")
     
                             if self.show_cast or self.show_studio:
                                 try:
@@ -2034,7 +2056,7 @@ class PlexTVRecommender:
                                         sd['cast'] = [c['name'] for c in c_sorted]
     
                                 except Exception as e:
-                                    print(f"{YELLOW}Error fetching credits for '{title}': {e}{RESET}")
+                                    log_warning(f"Error fetching credits for '{title}': {e}")
     
                         collected_recs.append(sd)
     
@@ -2043,9 +2065,9 @@ class PlexTVRecommender:
     
                     page += 1
                 else:
-                    print(f"{RED}Error getting Trakt recommendations: {response.status_code}{RESET}")
+                    log_error(f"Error getting Trakt recommendations: {response.status_code}")
                     if response.status_code == 401:
-                        print(f"{YELLOW}Try re-authenticating with Trakt{RESET}")
+                        log_warning(f"Try re-authenticating with Trakt")
                         self._authenticate_trakt()
                     break
     
@@ -2056,7 +2078,7 @@ class PlexTVRecommender:
             return final_recs
     
         except Exception as e:
-            print(f"{RED}Error getting Trakt recommendations: {e}{RESET}")
+            log_error(f"Error getting Trakt recommendations: {e}")
             return []
 
     def get_recommendations(self) -> Dict[str, List[Dict]]:
@@ -2119,10 +2141,10 @@ class PlexTVRecommender:
         if excluded_count > 0:
             print(f"Excluded {excluded_count} shows based on genre filters")
         if quality_filtered_count > 0:
-            print(f"{YELLOW}Filtered {quality_filtered_count} shows below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+){RESET}")
+            log_warning(f"Filtered {quality_filtered_count} shows below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+)")
     
         if not unwatched_shows:
-            print(f"{YELLOW}No unwatched shows found matching your criteria.{RESET}")
+            log_warning(f"No unwatched shows found matching your criteria.")
             plex_recs = []
         else:
             print(f"Calculating similarity scores for {len(unwatched_shows)} shows...")
@@ -2137,7 +2159,7 @@ class PlexTVRecommender:
                     show_info['score_breakdown'] = breakdown
                     scored_shows.append(show_info)
                 except Exception as e:
-                    print(f"{YELLOW}Error processing {show_info['title']}: {e}{RESET}")
+                    log_warning(f"Error processing {show_info['title']}: {e}")
                     continue
             
             # Sort by similarity score
@@ -2154,8 +2176,8 @@ class PlexTVRecommender:
                 plex_recs = scored_shows[:self.limit_plex_results]
             
             # Print detailed breakdowns for final recommendations if debug is enabled
-            if False:  # DEBUG DISABLED
-                print(f"\n{GREEN}=== Similarity Score Breakdowns for Recommendations ==={RESET}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("=== Similarity Score Breakdowns for Recommendations ===")
                 for show in plex_recs:
                     self._print_similarity_breakdown(show, show['similarity_score'], show['score_breakdown'])
     
@@ -2181,7 +2203,7 @@ class PlexTVRecommender:
         choice = input(prompt).strip().lower()
 
         if choice in ("n", "no", "none", ""):
-            print(f"{YELLOW}Skipping {operation_label} as per user choice.{RESET}")
+            log_warning(f"Skipping {operation_label} as per user choice.")
             return []
         if choice in ("y", "yes", "all"):
             return recommended_shows
@@ -2191,16 +2213,16 @@ class PlexTVRecommender:
         for idx_str in indices_str:
             idx_str = idx_str.strip()
             if not idx_str.isdigit():
-                print(f"{YELLOW}Skipping invalid index: {idx_str}{RESET}")
+                log_warning(f"Skipping invalid index: {idx_str}")
                 continue
             idx = int(idx_str)
             if 1 <= idx <= len(recommended_shows):
                 chosen.append(idx)
             else:
-                print(f"{YELLOW}Skipping out-of-range index: {idx}{RESET}")
+                log_warning(f"Skipping out-of-range index: {idx}")
 
         if not chosen:
-            print(f"{YELLOW}No valid indices selected, skipping {operation_label}.{RESET}")
+            log_warning(f"No valid indices selected, skipping {operation_label}.")
             return []
 
         subset = []
@@ -2258,7 +2280,7 @@ class PlexTVRecommender:
 
             # If no new recommendations, we're done
             if not shows_to_update:
-                print(f"{YELLOW}No new recommendations to add labels to.{RESET}")
+                log_warning(f"No new recommendations to add labels to.")
                 return
 
             # INCREMENTAL UPDATE: Keep unwatched (and fresh), remove watched and stale, fill gaps
@@ -2315,7 +2337,7 @@ class PlexTVRecommender:
                 label_key = f"{int(show.ratingKey)}_{label_name}"
                 if label_key in self.label_dates:
                     del self.label_dates[label_key]
-                print(f"{YELLOW}Removed (watched): {show.title}{RESET}")
+                log_warning(f"Removed (watched): {show.title}")
 
             # Remove labels from stale shows
             for show in stale_labeled:
@@ -2323,7 +2345,7 @@ class PlexTVRecommender:
                 label_key = f"{int(show.ratingKey)}_{label_name}"
                 if label_key in self.label_dates:
                     del self.label_dates[label_key]
-                print(f"{YELLOW}Removed (stale): {show.title}{RESET}")
+                log_warning(f"Removed (stale): {show.title}")
 
             # Get target count from config
             target_count = self.config['general'].get('limit_plex_results', 20)
@@ -2409,7 +2431,7 @@ class PlexTVRecommender:
             self._labeled_shows_for_collection = final_collection_shows
 
         except Exception as e:
-            print(f"{RED}Error managing Plex labels: {e}{RESET}")
+            log_error(f"Error managing Plex labels: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -2467,11 +2489,11 @@ class PlexTVRecommender:
             if not labeled_shows:
                 pass
                 # Fallback: search for labeled shows
-                print(f"{YELLOW}Using fallback: searching for labeled shows...{RESET}")
+                log_warning(f"Using fallback: searching for labeled shows...")
                 labeled_shows = shows_section.search(label=label_name)
 
             if not labeled_shows:
-                print(f"{YELLOW}No labeled shows found to create collection from.{RESET}")
+                log_warning(f"No labeled shows found to create collection from.")
                 return
 
             print(f"{GREEN}Found {len(labeled_shows)} labeled shows to create collection from{RESET}")
@@ -2480,7 +2502,7 @@ class PlexTVRecommender:
             print(f"{YELLOW}Checking for existing collections: {collection_name}{RESET}")
             for collection in shows_section.collections():
                 if collection.title == collection_name:
-                    print(f"{YELLOW}Deleting old collection: {collection_name}{RESET}")
+                    log_warning(f"Deleting old collection: {collection_name}")
                     collection.delete()
 
             # Create new collection from labeled shows
@@ -2492,7 +2514,7 @@ class PlexTVRecommender:
             print(f"{GREEN}Successfully created collection for {first_name}!{RESET}")
 
         except Exception as e:
-            print(f"{RED}Error managing Plex collections: {e}{RESET}")
+            log_error(f"Error managing Plex collections: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -2501,7 +2523,7 @@ class PlexTVRecommender:
     # ------------------------------------------------------------------------
     def add_to_sonarr(self, recommended_shows: List[Dict]) -> None:
         if not recommended_shows:
-            print(f"{YELLOW}No shows to add to Sonarr.{RESET}")
+            log_warning(f"No shows to add to Sonarr.")
             return
     
         if not self.sonarr_config.get('add_to_sonarr'):
@@ -2513,7 +2535,7 @@ class PlexTVRecommender:
         season_folder = self.sonarr_config.get('seasonFolder', True)
         
         if monitor_option not in valid_options:
-            print(f"{RED}Invalid monitor_option '{monitor_option}'. Using 'all'{RESET}")
+            log_error(f"Invalid monitor_option '{monitor_option}'. Using 'all'")
             monitor_option = 'all'
     
         if self.confirm_operations:
@@ -2529,7 +2551,7 @@ class PlexTVRecommender:
                 if choice in [opt.lower() for opt in valid_options]:
                     monitor_option = next(opt for opt in valid_options if opt.lower() == choice)
                     break
-                print(f"{RED}Invalid option. Valid choices: {', '.join(valid_options)}{RESET}")
+                log_error(f"Invalid option. Valid choices: {', '.join(valid_options)}")
         else:
             selected_shows = recommended_shows
     
@@ -2632,7 +2654,7 @@ class PlexTVRecommender:
                     trakt_results = trakt_response.json()
     
                     if not trakt_results:
-                        print(f"{YELLOW}Show not found on Trakt: {show['title']}{RESET}")
+                        log_warning(f"Show not found on Trakt: {show['title']}")
                         continue
     
                     trakt_show = next(
@@ -2644,7 +2666,7 @@ class PlexTVRecommender:
     
                     tmdb_id = trakt_show['show']['ids'].get('tmdb')
                     if not tmdb_id:
-                        print(f"{YELLOW}No TMDB ID found for {show['title']}{RESET}")
+                        log_warning(f"No TMDB ID found for {show['title']}")
                         continue
     
                     try:
@@ -2656,10 +2678,10 @@ class PlexTVRecommender:
                         tvdb_id = external_ids.get('tvdb_id')
                         
                         if not tvdb_id or tvdb_id <= 0:
-                            print(f"{YELLOW}Invalid TVDB ID for {show['title']}: {tvdb_id}{RESET}")
+                            log_warning(f"Invalid TVDB ID for {show['title']}: {tvdb_id}")
                             continue
                     except Exception as e:
-                        print(f"{RED}Error fetching TVDB ID for {show['title']}: {e}{RESET}")
+                        log_error(f"Error fetching TVDB ID for {show['title']}: {e}")
                         continue
     
                     if tvdb_id in existing_tvdb_ids:
@@ -2681,7 +2703,7 @@ class PlexTVRecommender:
                             
                             # If monitoring is enabled or we need to add a tag
                             if monitor_option != 'none' or needs_tag_update:
-                                print(f"{YELLOW}Show already in Sonarr: {show['title']}{RESET}")
+                                log_warning(f"Show already in Sonarr: {show['title']}")
                                 
                                 update_data = current_series.copy()
                                 
@@ -2734,22 +2756,22 @@ class PlexTVRecommender:
                                     sr.raise_for_status()
                                     print(f"{GREEN}Triggered search for: {show['title']}{RESET}")
                             else:
-                                print(f"{YELLOW}Already in Sonarr: {show['title']}{RESET}")
+                                log_warning(f"Already in Sonarr: {show['title']}")
                             
                             # Skip to next show after handling the existing one
                             continue
                                 
                         except requests.exceptions.RequestException as e:
-                            print(f"{RED}Error updating {show['title']} in Sonarr: {str(e)}{RESET}")
+                            log_error(f"Error updating {show['title']} in Sonarr: {str(e)}")
                             if hasattr(e, 'response') and e.response is not None:
                                 try:
                                     error_details = e.response.json()
-                                    print(f"{RED}Sonarr error details: {json.dumps(error_details, indent=2)}{RESET}")
+                                    log_error(f"Sonarr error details: {json.dumps(error_details, indent=2)}")
                                 except:
-                                    print(f"{RED}Sonarr error response: {e.response.text}{RESET}")
+                                    log_error(f"Sonarr error response: {e.response.text}")
                             continue
                         else:
-                            print(f"{YELLOW}Already in Sonarr: {show['title']}{RESET}")
+                            log_warning(f"Already in Sonarr: {show['title']}")
                             continue
     
                     # Handle new show addition
@@ -2770,7 +2792,7 @@ class PlexTVRecommender:
                                     if s.get('season_number', -1) >= 0  # Exclude specials
                                 ]
                         except Exception as e:
-                            print(f"{YELLOW}Failed to get season data: {e}. Monitoring all.{RESET}")
+                            log_warning(f"Failed to get season data: {e}. Monitoring all.")
                             monitor_option = 'all'
     
                     root_folder = self._map_path(self.sonarr_config['root_folder'].rstrip('/\\'))
@@ -2792,7 +2814,7 @@ class PlexTVRecommender:
                     if seasons:
                         show_data['seasons'] = seasons
                     elif monitor_option == 'firstSeason':
-                        print(f"{YELLOW}Couldn't get season data, monitoring all{RESET}")
+                        log_warning(f"Couldn't get season data, monitoring all")
                         show_data['addOptions']['monitor'] = 'all'
     
                     if tag_id is not None:
@@ -2811,17 +2833,17 @@ class PlexTVRecommender:
                         print(f"{GREEN}Added: {show['title']}{RESET}")
     
                 except requests.exceptions.RequestException as e:
-                    print(f"{RED}Error processing {show['title']}: {str(e)}{RESET}")
+                    log_error(f"Error processing {show['title']}: {str(e)}")
                     if hasattr(e, 'response') and e.response is not None:
                         try:
                             error_details = e.response.json()
-                            print(f"{RED}Sonarr error details: {json.dumps(error_details, indent=2)}{RESET}")
+                            log_error(f"Sonarr error details: {json.dumps(error_details, indent=2)}")
                         except:
-                            print(f"{RED}Sonarr error response: {e.response.text}{RESET}")
+                            log_error(f"Sonarr error response: {e.response.text}")
                     continue
     
         except Exception as e:
-            print(f"{RED}Error adding shows to Sonarr: {e}{RESET}")
+            log_error(f"Error adding shows to Sonarr: {e}")
             import traceback
             print(traceback.format_exc())
 
@@ -3003,8 +3025,8 @@ def main():
         # Adapt root config to legacy format
         base_config = adapt_root_config_to_legacy(root_config)
     except Exception as e:
-        print(f"{RED}Could not load config.yml from project root: {e}{RESET}")
-        print(f"{YELLOW}Looking for config at: {config_path}{RESET}")
+        log_error(f"Could not load config.yml from project root: {e}")
+        log_warning(f"Looking for config at: {config_path}")
         sys.exit(1)
 
     # Setup logging (--debug flag overrides config)
@@ -3018,7 +3040,7 @@ def main():
     # Process single user mode
     single_user = args.username
     if single_user:
-        print(f"{YELLOW}Single user mode: {single_user}{RESET}")
+        log_warning(f"Single user mode: {single_user}")
 
     # Get all users that need to be processed
     all_users = []
@@ -3058,9 +3080,9 @@ def main():
                 admin_username = account.username
                 if user.lower() in ['admin', 'administrator']:
                     resolved_user = admin_username
-                    print(f"{YELLOW}Resolved Admin to: {admin_username}{RESET}")
+                    log_warning(f"Resolved Admin to: {admin_username}")
             except Exception as e:
-                print(f"{YELLOW}Could not resolve admin username: {e}{RESET}")
+                log_warning(f"Could not resolve admin username: {e}")
             
             if 'managed_users' in user_config['plex']:
                 user_config['plex']['managed_users'] = resolved_user
@@ -3093,7 +3115,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
             sys.stdout = TeeLogger(lf)
             cleanup_old_logs(log_dir, log_retention_days)
         except Exception as e:
-            print(f"{RED}Could not set up logging: {e}{RESET}")
+            log_error(f"Could not set up logging: {e}")
 
     try:
         # Create recommender with single user context
@@ -3115,7 +3137,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
                 ))
                 print()
         else:
-            print(f"{YELLOW}No recommendations found in your Plex library matching your criteria.{RESET}")
+            log_warning(f"No recommendations found in your Plex library matching your criteria.")
 
         # Always manage labels (to remove old ones even if no new recommendations)
         recommender.manage_plex_labels(plex_recs)
@@ -3138,7 +3160,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
                     print()
                 recommender.add_to_sonarr(trakt_recs)
             else:
-                print(f"{YELLOW}No Trakt recommendations found matching your criteria.{RESET}")
+                log_warning(f"No Trakt recommendations found matching your criteria.")
 
     except Exception as e:
         print(f"\n{RED}An error occurred: {e}{RESET}")
@@ -3151,7 +3173,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
                 sys.stdout.logfile.close()
                 sys.stdout = original_stdout
             except Exception as e:
-                print(f"{YELLOW}Error closing log file: {e}{RESET}")
+                log_warning(f"Error closing log file: {e}")
 	
 if __name__ == "__main__":
     main()
