@@ -26,7 +26,7 @@ from shared_plex_utils import (
     RATING_MULTIPLIERS,
     get_full_language_name, cleanup_old_logs, setup_logging,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
-    log_warning, log_error, update_plex_collection
+    log_warning, log_error, update_plex_collection, cleanup_old_collections
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -407,7 +407,7 @@ class PlexMovieRecommender:
         self.exclude_genres = [g.strip().lower() for g in exclude_genre_str.split(',') if g.strip()] if exclude_genre_str else []
 
         # Load user preferences for per-user customization
-        self.user_preferences = self.config.get('user_preferences', {})
+        self.user_preferences = self.config.get('users', {}).get('preferences', {})
 
         weights_config = self.config.get('weights', {})
         self.weights = {
@@ -2798,6 +2798,9 @@ class PlexMovieRecommender:
 
                 collection_name = f"🎬 {display_name} - Recommendation"
                 update_plex_collection(movies_section, collection_name, final_collection_movies, logger)
+
+                # Clean up old collection naming patterns for this user
+                cleanup_old_collections(movies_section, collection_name, username, "🎬", logger)
 
         except Exception as e:
             log_error(f"Error managing Plex labels: {e}")
