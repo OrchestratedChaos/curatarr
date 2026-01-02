@@ -26,3 +26,4 @@ __pycache__/
 .vscode/
 .claude/
 *.xml
+CLAUDE.md

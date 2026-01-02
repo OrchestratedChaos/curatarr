@@ -230,16 +230,8 @@ main() {
     cd "$SCRIPT_DIR"
     echo ""
 
-    # Step 5: Create/update smart collections
-    echo -e "${CYAN}=== Creating Smart Collections ===${NC}"
-    if python3 scripts/create-smart-collections.py; then
-        echo -e "${GREEN}✓ Smart collections created/updated${NC}"
-    else
-        echo -e "${YELLOW}⚠ Smart collections failed (non-fatal)${NC}"
-    fi
-    echo ""
-
-    # Step 6: Generate external recommendations (watchlist)
+    # Step 5: Generate external recommendations (watchlist)
+    # Note: Collections are now created/updated directly by MRFP.py and TRFP.py
     if grep -A 2 "external_recommendations:" config.yml | grep -q "enabled: true" 2>/dev/null; then
         echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
         if python3 scripts/generate-external-recommendations.py; then

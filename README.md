@@ -3,7 +3,7 @@
 > **⚠️ Note:** This is a personal project. Not accepting contributions or pull requests.
 > Feel free to fork for your own use. For questions or access requests, open an issue.
 
-Extended fork of [netplexflix's](https://github.com/netplexflix) excellent Movie/TV Recommendations for Plex, enhanced with multi-user support, per-user preferences, and smart collections automation.
+Extended fork of [netplexflix's](https://github.com/netplexflix) excellent Movie/TV Recommendations for Plex, enhanced with multi-user support, per-user preferences, and automated collection management.
 
 ## Features
 
@@ -31,7 +31,7 @@ Extended fork of [netplexflix's](https://github.com/netplexflix) excellent Movie
 - ✅ Unified config for movies+TV (upstream: [two separate repos](https://github.com/netplexflix/Movie-Recommendations-for-Plex), each with own config)
 - ✅ Per-user preferences - genre exclusions, display names (upstream: multi-user support but no per-user settings)
 - ✅ TMDB-based external watchlists with genre balancing (upstream: Trakt-based external recommendations)
-- ✅ Automated smart collection creation (upstream: manual label-based workflow - you create collections yourself)
+- ✅ Automated collection creation sorted by score (upstream: manual label-based workflow - you create collections yourself)
 - ✅ One-command setup with `run.sh` (upstream: multi-step - pip install, rename config, manual run)
 - ✅ Time-based recommendation rotation - removes items older than 7 days (upstream: randomization from top 10% for variety)
 - ✅ Time-based log retention - keep last N days (upstream: file-count based - keep last N files)
@@ -109,7 +109,7 @@ chmod +x run.sh
 That's it! The script will:
 - ✓ Check/install all dependencies automatically
 - ✓ Run recommendations for all users
-- ✓ Create smart collections in Plex
+- ✓ Create/update collections in Plex
 - ✓ Optionally set up daily cron job
 
 ### Configuration Example
@@ -148,7 +148,7 @@ users:
 That's it! The script handles everything:
 - Checks dependencies
 - Runs movie & TV recommendations
-- Creates/updates smart collections
+- Creates/updates collections (sorted by recommendation score)
 - First run takes 5-10 minutes to analyze watch history
 
 ### View Logs
@@ -156,10 +156,6 @@ That's it! The script handles everything:
 ```bash
 # Main log
 tail -n 50 logs/daily-run.log
-
-# Per-user detailed logs
-ls scripts/Movie-Recommendations-for-Plex/Logs/
-ls scripts/TV-Show-Recommendations-for-Plex/Logs/
 ```
 
 ---
@@ -444,15 +440,12 @@ tail -n 100 logs/daily-run.log
 
 ### Collections Not Appearing
 
-Run the smart collection script:
+Re-run recommendations (collections are created automatically):
 ```bash
-python3 create-smart-collections.py
+./run.sh
 ```
 
-Or manually create collections in Plex:
-1. Go to Movies → Collections
-2. Create Collection
-3. Set Smart Filter: `Label is Recommended_{username}`
+Collections are created and updated automatically when MRFP.py and TRFP.py run.
 
 ### Plex Token Expired
 
@@ -473,25 +466,19 @@ pip3 install -r requirements.txt --upgrade
 
 ### Adding a New User
 
-1. Edit both config files:
+1. Edit config.yml:
 ```yaml
-plex_users:
-  users: existing_users, new_username
-
-user_preferences:
-  new_username:
-    display_name: Display Name
-    exclude_genres: []  # optional
+users:
+  list: existing_users, new_username
+  preferences:
+    new_username:
+      display_name: Display Name
+      exclude_genres: []  # optional
 ```
 
-2. Run recommendations:
+2. Run recommendations (collections are created automatically):
 ```bash
-bash scripts/run-all.sh
-```
-
-3. Recreate collections:
-```bash
-python3 create-smart-collections.py
+./run.sh
 ```
 
 ### Genre Exclusions
@@ -515,23 +502,25 @@ TMDB genre list: Action, Adventure, Animation, Comedy, Crime, Documentary, Drama
 
 ```
 plex-recommender/
+├── config.yml                              # Your config (gitignored)
+├── config.example.yml                      # Template config
+├── run.sh                                  # Main entry point
+├── requirements.txt                        # Python dependencies
+├── README.md
+├── QUICKSTART.md                           # 5-minute setup guide
+├── LANDING_PAGE_GUIDE.md                   # How to pin collections
+├── logs/                                   # Created at runtime
+│   └── daily-run.log
 ├── scripts/
-│   ├── Movie-Recommendations-for-Plex/    # netplexflix (modified)
-│   │   ├── MRFP.py                        # + per-user preferences, flexible matching
-│   │   ├── config.yml
-│   │   └── Logs/
-│   ├── TV-Show-Recommendations-for-Plex/  # netplexflix (modified)
-│   │   ├── TRFP.py                        # + per-user preferences, flexible matching
-│   │   ├── config.yml
-│   │   └── Logs/
-│   ├── shared_plex_utils.py               # Custom utilities (new)
-│   ├── run-movie-recommendations.sh        # Wrapper script (new)
-│   ├── run-tv-recommendations.sh           # Wrapper script (new)
-│   └── run-all.sh                          # Orchestrator (new)
-├── logs/
-│   └── daily-run.log                       # Main log file
-├── create-smart-collections.py             # Smart collections (new)
-└── setup.sh                                # Setup script (new)
+│   ├── Movie-Recommendations-for-Plex/
+│   │   └── MRFP.py                         # Movie recommendations (netplexflix, modified)
+│   ├── TV-Show-Recommendations-for-Plex/
+│   │   └── TRFP.py                         # TV recommendations (netplexflix, modified)
+│   ├── shared_plex_utils.py                # Shared utilities
+│   └── generate-external-recommendations.py # Watchlist generator
+└── recommendations/
+    └── external/
+        └── {username}_watchlist.md         # Per-user watchlists
 ```
 
 ---
@@ -571,10 +560,10 @@ A: Script skips them (need at least 5 watched items for meaningful recommendatio
   - Original algorithms for genre/cast/director/keyword matching (MRFP.py, TRFP.py - modified)
 
 **Significant Enhancements (this fork):**
-- **New Files**: `create-smart-collections.py`, `generate-external-recommendations.py`, `run.sh`, `shared_plex_utils.py`
+- **New Files**: `generate-external-recommendations.py`, `run.sh`, `shared_plex_utils.py`
 - **Multi-user support**: Per-user recommendations, preferences, genre exclusions, streaming services, flexible username matching
 - **External watchlists**: TMDB-based shopping lists with streaming service grouping, genre balancing, auto-removal of acquired items
-- **Smart collections**: Automated Plex collection creation and updates
+- **Automated collections**: Plex collections created and updated automatically, sorted by recommendation score
 - **Config consolidation**: Single `config.yml` replacing multiple config files
 - **Setup automation**: One-command setup with dependency checking and cron scheduling
 - **7-day rotation**: Intelligent recommendation refresh to adapt to changing tastes
@@ -590,7 +579,7 @@ This project extends netplexflix's Movie/TV Recommendations for Plex scripts.
 
 **Core recommendation engine** (MRFP.py, TRFP.py): Modified from [netplexflix](https://github.com/netplexflix) - original authors retain copyright.
 
-**Enhancements and additions** (shared_plex_utils.py, create-smart-collections.py, wrapper scripts, documentation): Provided as-is under MIT License.
+**Enhancements and additions** (shared_plex_utils.py, generate-external-recommendations.py, run.sh, documentation): Provided as-is under MIT License.
 
 See individual files for detailed attribution.
 

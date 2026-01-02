@@ -2,7 +2,7 @@
 
 Get your Plex Recommendation System running in 5 minutes!
 
-**Note:** This is an enhanced fork of [netplexflix](https://github.com/netplexflix) with multi-user support and smart collections.
+**Note:** This is an enhanced fork of [netplexflix](https://github.com/netplexflix) with multi-user support and automated collections.
 
 ---
 
@@ -53,7 +53,7 @@ chmod +x run.sh
 That's it! The script will:
 - ✓ Auto-install all dependencies
 - ✓ Generate recommendations for all users
-- ✓ Create smart collections in Plex
+- ✓ Create/update collections in Plex
 - ✓ Optionally set up daily cron job
 
 **First run takes 5-10 minutes** to analyze watch history.
@@ -108,10 +108,6 @@ Or let the cron job handle it automatically (daily at 3 AM).
 
 # View recent logs
 tail -n 50 logs/daily-run.log
-
-# View per-user detailed logs
-ls scripts/Movie-Recommendations-for-Plex/Logs/
-ls scripts/TV-Show-Recommendations-for-Plex/Logs/
 
 # Check cron schedule
 crontab -l | grep plex
