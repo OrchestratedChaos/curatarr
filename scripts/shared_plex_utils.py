@@ -582,3 +582,60 @@ def fetch_watch_history_with_tmdb(plex, config, account_ids, section, media_type
             continue
 
     return watched_items
+
+
+def update_plex_collection(section, collection_name: str, items: list, logger=None):
+    """
+    Create or update a Plex collection with items in the specified order.
+
+    If collection exists: clears and refills (preserves pins/settings).
+    If collection doesn't exist: creates new collection.
+
+    Args:
+        section: PlexAPI library section (movies or shows)
+        collection_name: Name of the collection to create/update
+        items: List of Plex media items in desired order (best first)
+        logger: Optional logger instance
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not items:
+        if logger:
+            logger.warning(f"No items provided for collection: {collection_name}")
+        return False
+
+    try:
+        existing_collection = None
+        for collection in section.collections():
+            if collection.title == collection_name:
+                existing_collection = collection
+                break
+
+        if existing_collection:
+            # Clear and refill to preserve settings/pins
+            current_items = existing_collection.items()
+            if current_items:
+                existing_collection.removeItems(current_items)
+            existing_collection.addItems(items)
+            if logger:
+                logger.info(f"Updated collection: {collection_name} ({len(items)} items)")
+            else:
+                print(f"Updated collection: {collection_name} ({len(items)} items)")
+        else:
+            # Create new collection
+            section.createCollection(title=collection_name, items=items)
+            if logger:
+                logger.info(f"Created collection: {collection_name} ({len(items)} items)")
+            else:
+                print(f"Created collection: {collection_name} ({len(items)} items)")
+
+        return True
+
+    except Exception as e:
+        error_msg = f"Error updating collection {collection_name}: {e}"
+        if logger:
+            logger.error(error_msg)
+        else:
+            print(f"ERROR: {error_msg}")
+        return False
