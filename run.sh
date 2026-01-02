@@ -222,7 +222,7 @@ main() {
 
     # Step 5: Create/update smart collections
     echo -e "${CYAN}=== Creating Smart Collections ===${NC}"
-    if python3 create-smart-collections.py; then
+    if python3 scripts/create-smart-collections.py; then
         echo -e "${GREEN}✓ Smart collections created/updated${NC}"
     else
         echo -e "${YELLOW}⚠ Smart collections failed (non-fatal)${NC}"
@@ -232,7 +232,7 @@ main() {
     # Step 6: Generate external recommendations (watchlist)
     if grep -A 2 "external_recommendations:" config.yml | grep -q "enabled: true" 2>/dev/null; then
         echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
-        if python3 generate-external-recommendations.py; then
+        if python3 scripts/generate-external-recommendations.py; then
             echo -e "${GREEN}✓ External watchlists generated${NC}"
         else
             echo -e "${YELLOW}⚠ External watchlist generation failed (non-fatal)${NC}"

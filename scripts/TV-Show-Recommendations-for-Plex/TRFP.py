@@ -87,7 +87,6 @@ class ShowCache:
         new_shows = [show for show in all_shows if str(show.ratingKey) not in existing_ids]
         
         if new_shows:
-            print(f"Found {len(new_shows)} new shows to analyze")
             
             for i, show in enumerate(new_shows, 1):
                 msg = f"\r{CYAN}Processing show {i}/{len(new_shows)} ({int((i/len(new_shows))*100)}%){RESET}"
@@ -248,9 +247,9 @@ class ShowCache:
                         )
                         if lang_code:
                             return get_full_language_name(lang_code)
-                            
+
         except Exception as e:
-            print(f"DEBUG: Language detection failed: {str(e)}")
+            pass  # DEBUG removed
         return "N/A"
 
 class PlexTVRecommender:
@@ -331,6 +330,7 @@ class PlexTVRecommender:
 
         # Verify Plex user configuration
         if self.users['plex_users']:
+            pass
             # Plex-only mode: No external validation needed
             users_to_process = [self.single_user] if self.single_user else self.users['plex_users']
             print(f"{GREEN}Processing recommendations for Plex users: {users_to_process}{RESET}")
@@ -358,7 +358,7 @@ class PlexTVRecommender:
         safe_ctx = re.sub(r'\W+', '', user_ctx)
         
         # Update cache paths to be user-specific
-        self.watched_cache_path = os.path.join(self.cache_dir, f"watched_cache_{safe_ctx}.json")
+        self.watched_cache_path = os.path.join(self.cache_dir, f"tv_watched_cache_{safe_ctx}.json")
         self.trakt_cache_path = os.path.join(self.cache_dir, f"trakt_sync_cache_{safe_ctx}.json")
         self.trakt_sync_cache_path = os.path.join(self.cache_dir, "trakt_sync_cache.json")
          
@@ -414,10 +414,8 @@ class PlexTVRecommender:
         if (not cache_exists) or (current_watched_count != self.cached_watched_count):
             print("Watched count changed or no cache found; gathering watched data now. This may take a while...\n")
             if self.users['plex_users']:
-                print("Using Plex direct API for watch history ")
                 self.watched_data = self._get_plex_watched_shows_data()
             else:
-                print("Using managed users for watch history")
                 self.watched_data = self._get_managed_users_watched_data()
             self.watched_data_counters = self.watched_data
             self.cached_watched_count = current_watched_count
@@ -428,9 +426,8 @@ class PlexTVRecommender:
             # Ensure watched_show_ids are preserved
             if not self.watched_show_ids and 'watched_show_ids' in watched_cache:
                 self.watched_show_ids = {int(id_) for id_ in watched_cache['watched_show_ids'] if str(id_).isdigit()}
-            if True:  # DEBUG FORCED
-                print(f"DEBUG: Loaded {len(self.watched_show_ids)} watched show IDs from cache")
-            
+            if False:  # DEBUG DISABLED
+                pass
         print("Fetching library metadata (for existing Shows checks)...")
         self.library_shows = self._get_library_shows_set()
         self.library_imdb_ids = self._get_library_imdb_ids()
@@ -489,12 +486,15 @@ class PlexTVRecommender:
         for user in managed_users:
             user_lower = user.lower()
             if user_lower in ['admin', 'administrator']:
+                pass
                 # Special case for admin keywords
                 processed_managed.append(admin_user)
             elif user_lower == admin_user.lower():
+                pass
                 # Direct match with admin username (case-insensitive)
                 processed_managed.append(admin_user)
             elif user_lower in all_usernames_lower:
+                pass
                 # Match with shared users
                 processed_managed.append(all_usernames_lower[user_lower])
             else:
@@ -655,7 +655,7 @@ class PlexTVRecommender:
             else:
                 not_found_count += 1
 
-        if True:  # DEBUG FORCED
+        if False:  # DEBUG DISABLED
             print(f"{YELLOW}{not_found_count} watched shows not found in cache{RESET}")
             print(f"{GREEN}Collected {len(counters['tmdb_ids'])} unique TMDB IDs{RESET}")
 
@@ -664,14 +664,14 @@ class PlexTVRecommender:
     def _get_managed_users_watched_data(self):
         # Return cached data if available and we're not in single user mode
         if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
-            if True:  # DEBUG FORCED
-                print("DEBUG: Using cached watched data")
+            if False:  # DEBUG DISABLED
+                pass
             return self.watched_data_counters
     
         # Only proceed with scanning if we need to
         if hasattr(self, 'watched_data_counters') and self.watched_data_counters:
-            if True:  # DEBUG FORCED
-                print("DEBUG: Using existing watched data")
+            if False:  # DEBUG DISABLED
+                pass
             return self.watched_data_counters
     
         counters = {
@@ -688,6 +688,7 @@ class PlexTVRecommender:
         
         # Determine which users to process
         if self.single_user:
+            pass
             # Check if the single user is the admin
             if self.single_user.lower() in ['admin', 'administrator']:
                 users_to_process = [admin_user]
@@ -724,7 +725,7 @@ class PlexTVRecommender:
                 print(f"{RED}Error processing user {username}: {e}{RESET}")
                 continue
         
-        if True:  # DEBUG FORCED
+        if False:  # DEBUG DISABLED
             print(f"{GREEN}Collected {len(counters['tmdb_ids'])} unique TMDB IDs{RESET}")
         
         return counters
@@ -734,8 +735,8 @@ class PlexTVRecommender:
     # ------------------------------------------------------------------------
     def _save_watched_cache(self):
         try:
-            if True:  # DEBUG FORCED
-                print(f"DEBUG: Saving cache with {len(self.plex_tmdb_cache)} TMDB IDs and {len(self.tmdb_keywords_cache)} keyword sets")
+            if False:  # DEBUG DISABLED
+                pass
             
             # Create a copy of the watched data to modify for serialization
             watched_data_for_cache = copy.deepcopy(self.watched_data_counters)
@@ -756,8 +757,8 @@ class PlexTVRecommender:
             with open(self.watched_cache_path, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=4, ensure_ascii=False)
                 
-            if True:  # DEBUG FORCED
-                print(f"DEBUG: Cache saved successfully")
+            if False:  # DEBUG DISABLED
+                pass
                 
         except Exception as e:
             print(f"{YELLOW}Error saving watched cache: {e}{RESET}")
@@ -930,6 +931,7 @@ class PlexTVRecommender:
                     
                     # Get watched date and TVDB ID
                     if hasattr(episode, 'lastViewedAt') and hasattr(episode, 'guids'):
+                        pass
                         # Handle lastViewedAt whether it's a timestamp or datetime
                         if isinstance(episode.lastViewedAt, datetime):
                             watched_at = episode.lastViewedAt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -948,7 +950,6 @@ class PlexTVRecommender:
                                     counters['watch_dates'][episode_tvdb_id] = watched_at
                                     break
                                 except (ValueError, IndexError) as e:
-                                    print(f"DEBUG: Error parsing TVDB ID for episode of {show.title}: {e}")
                                     continue
         except Exception as e:
             print(f"{YELLOW}Error getting episode TVDB IDs for {show.title}: {e}{RESET}")
@@ -1116,8 +1117,8 @@ class PlexTVRecommender:
     
         # Update cache even if None to prevent repeat lookups
         if tmdb_id:
-            if True:  # DEBUG FORCED
-                print(f"DEBUG: Adding TMDB ID {tmdb_id} to cache for {plex_show.title}")
+            if False:  # DEBUG DISABLED
+                pass
             self.plex_tmdb_cache[str(plex_show.ratingKey)] = tmdb_id
             self._save_watched_cache()
         return tmdb_id
@@ -1165,8 +1166,8 @@ class PlexTVRecommender:
             print(f"{YELLOW}Error fetching TMDB keywords for ID {tmdb_id}: {e}{RESET}")
 
         if kw_set:
-            if True:  # DEBUG FORCED
-                print(f"DEBUG: Adding {len(kw_set)} keywords to cache for TMDB ID {tmdb_id}")
+            if False:  # DEBUG DISABLED
+                pass
             self.tmdb_keywords_cache[str(tmdb_id)] = list(kw_set)  # Convert key to string
             self._save_watched_cache()
         return kw_set
@@ -1176,7 +1177,6 @@ class PlexTVRecommender:
         try:
             episodes = show.episodes()
             if not episodes:
-                print(f"DEBUG: No episodes found")
                 return "N/A"
     
             # Get and reload first episode
@@ -1199,10 +1199,9 @@ class PlexTVRecommender:
                         if lang_code:
                             return get_full_language_name(lang_code)
                     else:
-                        print(f"DEBUG: No audio streams found in part")
-                        
+                        pass
         except Exception as e:
-            print(f"DEBUG: Language detection failed for {show.title}: {str(e)}")
+            pass
         return "N/A"
 
     def _extract_genres(self, show) -> List[str]:
@@ -1218,10 +1217,9 @@ class PlexTVRecommender:
                 elif isinstance(genre, str):
                     genres.append(genre.lower())
                 else:
-                    print(f"DEBUG: Unknown genre type for {show.title}: {type(genre)}")
-                    
+                    pass
         except Exception as e:
-            print(f"DEBUG: Error extracting genres for {show.title}: {str(e)}")
+            pass
         return genres
 
     def _show_progress(self, prefix: str, current: int, total: int):
@@ -1338,6 +1336,7 @@ class PlexTVRecommender:
     def _verify_trakt_token(self):
         """Verify if the Trakt token is valid and refresh if needed"""
         try:
+            pass
             # Check if token is expired based on stored expiration time
             if ('token_expiration' in self.config['trakt'] and
                 time.time() > self.config['trakt']['token_expiration']):
@@ -1460,6 +1459,7 @@ class PlexTVRecommender:
         
         try:
             if self.users['plex_users']:
+                pass
                 # Get Plex watch history for episodes
                 user_ids = self._get_plex_user_ids()
                 
@@ -1501,8 +1501,8 @@ class PlexTVRecommender:
                             start += len(history_items)
                             
                         except Exception as e:
-                            if True:  # DEBUG FORCED
-                                print(f"DEBUG: Error fetching Plex history: {e}")
+                            if False:  # DEBUG DISABLED
+                                pass
                             break
                 
                 print(f"Gathering episode data from {len(all_history_items)} history items...")
@@ -1555,10 +1555,9 @@ class PlexTVRecommender:
                             'episode': item['media_index'],
                             'watched_at': trakt_date
                         })
-                            
+
                     except Exception as e:
-                        if True:  # DEBUG FORCED
-                            print(f"\nDEBUG: Error processing episode {item.get('full_title', 'Unknown')}: {e}")
+                        pass  # DEBUG DISABLED
                         continue
                 
                 # Print newline after progress indicator
@@ -1584,6 +1583,7 @@ class PlexTVRecommender:
                         
                         for episode in show_episodes:
                             if hasattr(episode, 'guids'):
+                                pass
                                 # Extract TVDB ID directly from the episode's GUIDs
                                 tvdb_id = None
                                 for guid in episode.guids:
@@ -1615,10 +1615,9 @@ class PlexTVRecommender:
                                     'watched_at': watched_at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
                                 })
                                 episode_count += 1
-                                
+
                     except Exception as e:
-                        if True:  # DEBUG FORCED
-                            print(f"\nDEBUG: Error processing show {show_id}: {e}")
+                        pass  # DEBUG DISABLED
                         continue
                 
                 # Print newline after progress indicator
@@ -1702,9 +1701,8 @@ class PlexTVRecommender:
                     print(f"{RED}Error saving Trakt sync cache: {e}{RESET}")
         except Exception as outer_e:
             print(f"{RED}Unexpected error during Trakt sync process: {outer_e}{RESET}")
-            if True:  # DEBUG FORCED
+            if False:  # DEBUG DISABLED
                 import traceback
-                print(f"DEBUG: {traceback.format_exc()}")
     # ------------------------------------------------------------------------
     # CALCULATE SCORES
     # ------------------------------------------------------------------------
@@ -2030,6 +2028,7 @@ class PlexTVRecommender:
 
     def get_recommendations(self) -> Dict[str, List[Dict]]:
         if self.cached_watched_count > 0 and not self.watched_show_ids:
+            pass
             # Force refresh of watched data
             if self.users['plex_users']:
                 self.watched_data = self._get_plex_watched_shows_data()
@@ -2112,6 +2111,7 @@ class PlexTVRecommender:
             scored_shows.sort(key=lambda x: x['similarity_score'], reverse=True)
             
             if self.randomize_recommendations:
+                pass
                 # Take top 10% of shows by similarity score and randomize
                 top_count = max(int(len(scored_shows) * 0.1), self.limit_plex_results)
                 top_pool = scored_shows[:top_count]
@@ -2121,7 +2121,7 @@ class PlexTVRecommender:
                 plex_recs = scored_shows[:self.limit_plex_results]
             
             # Print detailed breakdowns for final recommendations if debug is enabled
-            if True:  # DEBUG FORCED
+            if False:  # DEBUG DISABLED
                 print(f"\n{GREEN}=== Similarity Score Breakdowns for Recommendations ==={RESET}")
                 for show in plex_recs:
                     self._print_similarity_breakdown(show, show['similarity_score'], show['score_breakdown'])
@@ -2348,6 +2348,7 @@ class PlexTVRecommender:
             for show in unwatched_labeled:
                 show_id = int(show.ratingKey)
                 if show_id not in similarity_scores:
+                    pass
                     # Get show from cache
                     show_info = self.show_cache.cache['shows'].get(str(show_id))
                     if show_info:
@@ -2431,6 +2432,7 @@ class PlexTVRecommender:
             labeled_shows = getattr(self, '_labeled_shows_for_collection', None)
 
             if not labeled_shows:
+                pass
                 # Fallback: search for labeled shows
                 print(f"{YELLOW}Using fallback: searching for labeled shows...{RESET}")
                 labeled_shows = shows_section.search(label=label_name)
@@ -2525,6 +2527,7 @@ class PlexTVRecommender:
     
             tag_id = None
             if self.sonarr_config.get('sonarr_tag'):
+                pass
                 # Get the base tag name
                 tag_name = self.sonarr_config['sonarr_tag']
                 
@@ -2627,6 +2630,7 @@ class PlexTVRecommender:
                         continue
     
                     if tvdb_id in existing_tvdb_ids:
+                        pass
                         # Find the existing show
                         existing_show = next(s for s in existing_shows if s['tvdbId'] == tvdb_id)
                         
@@ -2975,6 +2979,7 @@ def main():
     
     # Check if Plex users are configured and not 'none'
     if plex_users and str(plex_users).lower() != 'none':
+        pass
         # Process Plex users
         if isinstance(plex_users, str):
             all_users = [u.strip() for u in plex_users.split(',') if u.strip()]
@@ -2986,6 +2991,7 @@ def main():
         all_users = [u.strip() for u in managed_users.split(',') if u.strip()]
 
     if combine_watch_history or not all_users:
+        pass
         # Original behavior - single run
         process_recommendations(base_config, config_path, log_retention_days)
     else:
