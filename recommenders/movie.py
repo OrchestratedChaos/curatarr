@@ -45,7 +45,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -773,7 +773,7 @@ class PlexMovieRecommender:
     
     def _get_movie_language(self, movie) -> str:
         """Get movie's primary audio language - delegates to MovieCache"""
-        return self.movie_cache._get_movie_language(movie)
+        return self.movie_cache._get_language(movie)
 
     # ------------------------------------------------------------------------
     # TMDB HELPER METHODS
