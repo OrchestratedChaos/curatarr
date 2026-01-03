@@ -45,7 +45,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.4"
+__version__ = "1.2.6"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -113,7 +113,8 @@ class MovieCache(BaseCache):
             'vote_count': tmdb_data['vote_count'],
             'ratings': {'audience_rating': audience_rating} if audience_rating > 0 else {}
         }
-			
+
+
 class PlexMovieRecommender:
     """Generates personalized movie recommendations based on Plex watch history.
 
@@ -593,112 +594,6 @@ class PlexMovieRecommender:
             log_error(f"Error getting library movie titles: {e}")
             return set()
     
-    def _is_movie_in_library(self, title: str, year: Optional[int], tmdb_id: Optional[int] = None, imdb_id: Optional[str] = None) -> bool:
-        """Check if a movie is already in the library by ID first, then by title/year"""
-        # If no title provided, we can only check by ID
-        if not title:
-            # Check IDs if available
-            if tmdb_id or imdb_id:
-                all_movies = self.movie_cache.cache['movies']
-                
-                for movie_id, movie_data in all_movies.items():
-                    # Check TMDb ID match
-                    if tmdb_id and movie_data.get('tmdb_id') and str(movie_data['tmdb_id']) == str(tmdb_id):
-                        logger.debug(f"Movie in library (TMDB match): {title} [{tmdb_id}]")
-                        return True
-
-                    # Check IMDb ID match
-                    if imdb_id and movie_data.get('imdb_id') and movie_data['imdb_id'] == imdb_id:
-                        logger.debug(f"Movie in library (IMDB match): {title} [{imdb_id}]")
-                        return True
-            return False
-
-        # Convert title to lowercase for comparison
-        title_lower = title.lower()
-
-        # Check IDs which are most reliable
-        if tmdb_id or imdb_id:
-            all_movies = self.movie_cache.cache['movies']
-
-            for movie_id, movie_data in all_movies.items():
-                # Check TMDb ID match
-                if tmdb_id and movie_data.get('tmdb_id') and str(movie_data['tmdb_id']) == str(tmdb_id):
-                    logger.debug(f"Movie in library (TMDB match via cache): {title} [{tmdb_id}]")
-                    return True
-
-                # Check IMDb ID match
-                if imdb_id and movie_data.get('imdb_id') and movie_data['imdb_id'] == imdb_id:
-                    logger.debug(f"Movie in library (IMDB match via cache): {title} [{imdb_id}]")
-                    return True
-        
-        # If no ID match, fall back to title matching
-        
-        # Initialize library_movie_titles if not already done
-        if not hasattr(self, 'library_movie_titles'):
-            self.library_movie_titles = self._get_library_movie_titles()
-        
-        # Check for year in title and strip it if found
-        year_match = re.search(r'\s*\((\d{4})\)$', title_lower)
-        if year_match:
-            clean_title = title_lower.replace(year_match.group(0), '').strip()
-            embedded_year = int(year_match.group(1))
-            if (clean_title, embedded_year) in self.library_movie_titles:
-                return True
-        
-        # Check both with and without year
-        if (title_lower, year) in self.library_movie_titles:
-            return True
-            
-        # Check title-only matches
-        return any(lib_title == title_lower or 
-                  lib_title == f"{title_lower} ({year})" or
-                  lib_title.replace(f" ({year})", "") == title_lower 
-                  for lib_title, _ in self.library_movie_titles)
-    
-    def _process_movie_counters(self, movie, counters):
-        """Extract and count attributes from a movie"""
-        movie_details = self.get_movie_details(movie)
-        
-        try:
-            rating = float(getattr(movie, 'userRating', 0))
-        except (TypeError, ValueError):
-            try:
-                rating = float(getattr(movie, 'audienceRating', DEFAULT_RATING))
-            except (TypeError, ValueError):
-                rating = DEFAULT_RATING
-    
-        rating = max(0, min(10, int(round(rating))))
-        multiplier = RATING_MULTIPLIERS.get(rating, 1.0)
-    
-        # Process all the existing counters...
-        for genre in movie_details.get('genres', []):
-            counters['genres'][genre] += multiplier
-        
-        for director in movie_details.get('directors', []):
-            counters['directors'][director] += multiplier
-            
-        for actor in movie_details.get('cast', [])[:TOP_CAST_COUNT]:
-            counters['actors'][actor] += multiplier
-            
-        if language := movie_details.get('language'):
-            counters['languages'][language.lower()] += multiplier
-            
-        for keyword in movie_details.get('tmdb_keywords', []):
-            counters['tmdb_keywords'][keyword] += multiplier
-    
-        # Get TMDB ID if available
-        if 'tmdb_id' in movie_details and movie_details['tmdb_id']:
-            if 'tmdb_ids' not in counters:
-                counters['tmdb_ids'] = set()
-            counters['tmdb_ids'].add(movie_details['tmdb_id'])
-            
-            # Store in cache for future use
-            self.plex_tmdb_cache[str(movie.ratingKey)] = movie_details['tmdb_id']
-            
-            # Store keywords in cache if available
-            if 'tmdb_keywords' in movie_details and movie_details['tmdb_keywords']:
-                self.tmdb_keywords_cache[str(movie_details['tmdb_id'])] = movie_details['tmdb_keywords']
-       
     def _get_library_imdb_ids(self) -> Set[str]:
         """Get set of all IMDb IDs in the library"""
         return get_library_imdb_ids(self.plex.library.section(self.library_title))
