@@ -45,193 +45,74 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
-class MovieCache:
+# Import base class
+from recommenders.base import BaseCache
+
+
+class MovieCache(BaseCache):
     """Cache for movie metadata including TMDB data, genres, and keywords."""
 
-    def __init__(self, cache_dir: str, recommender=None):
-        """Initialize the movie cache.
+    media_type = 'movie'
+    media_key = 'movies'
+    cache_filename = 'all_movies_cache.json'
+
+    def _process_item(self, movie, tmdb_api_key: Optional[str]) -> Optional[Dict]:
+        """Process a single movie and return its info dict.
 
         Args:
-            cache_dir: Directory path where cache files are stored
-            recommender: Reference to parent PlexMovieRecommender instance
-        """
-        self.all_movies_cache_path = os.path.join(cache_dir, "all_movies_cache.json")
-        self.cache = self._load_cache()
-        self.recommender = recommender  # Store reference to recommender
-        
-    def _load_cache(self) -> Dict:
-        """Load movie cache from file"""
-        return load_media_cache(self.all_movies_cache_path, 'movies')
-    
-    def update_cache(self, plex, library_title: str, tmdb_api_key: Optional[str] = None):
-        """Update movie cache with current library contents and TMDB metadata.
-
-        Args:
-            plex: PlexServer instance
-            library_title: Name of the movies library section
-            tmdb_api_key: Optional TMDB API key for fetching additional metadata
+            movie: Plex movie item
+            tmdb_api_key: Optional TMDB API key
 
         Returns:
-            bool: True if cache was updated, False if already up to date
+            Dict with movie metadata or None on error
         """
-        movies_section = plex.library.section(library_title)
-        all_movies = movies_section.all()
-        current_count = len(all_movies)
-        
-        if current_count == self.cache['library_count']:
-            print(f"{GREEN}Movie cache is up to date{RESET}")
-            return False
-            
-        print(f"\n{YELLOW}Analyzing library movies...{RESET}")
-        
-        current_movies = set(str(movie.ratingKey) for movie in all_movies)
-        removed = set(self.cache['movies'].keys()) - current_movies
-        
-        if removed:
-            print(f"{YELLOW}Removing {len(removed)} movies from cache that are no longer in library{RESET}")
-            for movie_id in removed:
-                del self.cache['movies'][movie_id]
-        
-        existing_ids = set(self.cache['movies'].keys())
-        new_movies = [movie for movie in all_movies if str(movie.ratingKey) not in existing_ids]
-        
-        if new_movies:
-            print(f"Found {len(new_movies)} new movies to analyze")
-            
-            for i, movie in enumerate(new_movies, 1):
-                msg = f"\r{CYAN}Processing movie {i}/{len(new_movies)} ({int((i/len(new_movies))*100)}%){RESET}"
-                sys.stdout.write(msg)
-                sys.stdout.flush()
-                
-                movie_id = str(movie.ratingKey)
-                try:
-                    movie.reload()
-                    
-                    # Add delay between movies
-                    if i > 1 and tmdb_api_key:
-                        time.sleep(TMDB_RATE_LIMIT_DELAY)
-                    
-                    # Extract IDs from GUIDs using utility
-                    ids = extract_ids_from_guids(movie)
-                    imdb_id = ids['imdb_id']
-                    tmdb_id = ids['tmdb_id']
+        # Get TMDB data using base class method
+        tmdb_data = self._get_tmdb_data(movie, tmdb_api_key) if tmdb_api_key else {
+            'tmdb_id': None, 'imdb_id': None, 'keywords': [], 'rating': None, 'vote_count': None
+        }
 
-                    # Get TMDB ID if not found in GUIDs (with fallback methods)
-                    if not tmdb_id and tmdb_api_key:
-                        tmdb_id = get_tmdb_id_for_item(movie, tmdb_api_key, 'movie')
-    
-                    # Fetch TMDB metadata (rating, votes, keywords)
-                    tmdb_keywords = []
-                    tmdb_rating = None
-                    tmdb_vote_count = None
+        # Get directors (movie-specific)
+        directors = []
+        if hasattr(movie, 'directors'):
+            directors = [d.tag for d in movie.directors]
 
-                    if tmdb_id and tmdb_api_key:
-                        # Get movie details (includes rating and vote_count)
-                        detail_data = fetch_tmdb_with_retry(
-                            f"https://api.themoviedb.org/3/movie/{tmdb_id}",
-                            {'api_key': tmdb_api_key}
-                        )
-                        if detail_data:
-                            tmdb_rating = detail_data.get('vote_average')
-                            tmdb_vote_count = detail_data.get('vote_count')
-
-                        # Get keywords using utility
-                        tmdb_keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, 'movie')
-    
-                    # Store in recommender's caches if available
-                    if self.recommender and tmdb_id:
-                        self.recommender.plex_tmdb_cache[str(movie.ratingKey)] = tmdb_id
-                        if tmdb_keywords:
-                            self.recommender.tmdb_keywords_cache[str(tmdb_id)] = tmdb_keywords
-                    
-                    # Get directors
-                    directors = []
-                    if hasattr(movie, 'directors'):
-                        directors = [d.tag for d in movie.directors]
-                    
-                    # Extract ratings
-                    audience_rating = 0
-                    try:
-                        # Try to get userRating first (personal rating)
-                        if hasattr(movie, 'userRating') and movie.userRating:
-                            audience_rating = float(movie.userRating)
-                        # Then try audienceRating (community rating)
-                        elif hasattr(movie, 'audienceRating') and movie.audienceRating:
-                            audience_rating = float(movie.audienceRating)
-                        # Finally check ratings collection
-                        elif hasattr(movie, 'ratings'):
-                            for rating in movie.ratings:
-                                if hasattr(rating, 'value') and rating.value:
-                                    if (getattr(rating, 'image', '') == 'imdb://image.rating' or
-                                        getattr(rating, 'type', '') == 'audience'):
-                                        try:
-                                            audience_rating = float(rating.value)
-                                            break
-                                        except (ValueError, AttributeError):
-                                            pass
-                    except Exception as e:
-                        logger.debug(f"Error fetching ratings for movie: {e}")
-
-                    # Add the rating to the movie_info
-                    movie_info = {
-                        'title': movie.title,
-                        'year': getattr(movie, 'year', None),
-                        'genres': [g.tag.lower() for g in movie.genres] if hasattr(movie, 'genres') else [],
-                        'directors': directors,
-                        'cast': [r.tag for r in movie.roles[:TOP_CAST_COUNT]] if hasattr(movie, 'roles') else [],
-                        'summary': getattr(movie, 'summary', ''),
-                        'language': self._get_movie_language(movie),
-                        'tmdb_keywords': tmdb_keywords,
-                        'tmdb_id': tmdb_id,
-                        'imdb_id': imdb_id,
-                        'rating': tmdb_rating,  # TMDB rating (0-10 scale)
-                        'vote_count': tmdb_vote_count,  # TMDB vote count
-                        'ratings': {
-                            'audience_rating': audience_rating
-                        } if audience_rating > 0 else {}
-                    }
-                    
-                    self.cache['movies'][movie_id] = movie_info
-                    
-                except Exception as e:
-                    log_warning(f"Error processing movie {movie.title}: {e}")
-                    continue
-                    
-        self.cache['library_count'] = current_count
-        self.cache['last_updated'] = datetime.now().isoformat()
-        self._save_cache()
-        print(f"\n{GREEN}Movie cache updated{RESET}")
-        return True
-        
-    def _save_cache(self):
-        """Save movie cache to file"""
-        self.cache['cache_version'] = CACHE_VERSION
-        save_media_cache(self.all_movies_cache_path, self.cache, 'movies')
-
-    def _get_movie_language(self, movie) -> str:
-        """Get movie's primary audio language"""
+        # Extract ratings
+        audience_rating = 0
         try:
-            if not movie.media:
-                return "N/A"
-                
-            for media in movie.media:
-                for part in media.parts:
-                    audio_streams = part.audioStreams()
-                    
-                    if audio_streams:
-                        audio = audio_streams[0]                     
-                        lang_code = (
-                            getattr(audio, 'languageTag', None) or
-                            getattr(audio, 'language', None)
-                        )
-                        if lang_code:
-                            return get_full_language_name(lang_code)
-
+            if hasattr(movie, 'userRating') and movie.userRating:
+                audience_rating = float(movie.userRating)
+            elif hasattr(movie, 'audienceRating') and movie.audienceRating:
+                audience_rating = float(movie.audienceRating)
+            elif hasattr(movie, 'ratings'):
+                for rating in movie.ratings:
+                    if hasattr(rating, 'value') and rating.value:
+                        if (getattr(rating, 'image', '') == 'imdb://image.rating' or
+                            getattr(rating, 'type', '') == 'audience'):
+                            try:
+                                audience_rating = float(rating.value)
+                                break
+                            except (ValueError, AttributeError):
+                                pass
         except Exception as e:
-            pass
-        return "N/A"
+            logger.debug(f"Error fetching ratings for movie: {e}")
+
+        return {
+            'title': movie.title,
+            'year': getattr(movie, 'year', None),
+            'genres': [g.tag.lower() for g in movie.genres] if hasattr(movie, 'genres') else [],
+            'directors': directors,
+            'cast': [r.tag for r in movie.roles[:TOP_CAST_COUNT]] if hasattr(movie, 'roles') else [],
+            'summary': getattr(movie, 'summary', ''),
+            'language': self._get_language(movie),
+            'tmdb_keywords': tmdb_data['keywords'],
+            'tmdb_id': tmdb_data['tmdb_id'],
+            'imdb_id': tmdb_data['imdb_id'],
+            'rating': tmdb_data['rating'],
+            'vote_count': tmdb_data['vote_count'],
+            'ratings': {'audience_rating': audience_rating} if audience_rating > 0 else {}
+        }
 			
 class PlexMovieRecommender:
     """Generates personalized movie recommendations based on Plex watch history.

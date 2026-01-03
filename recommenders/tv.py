@@ -46,141 +46,46 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
-class ShowCache:
+# Import base class
+from recommenders.base import BaseCache
+
+
+class ShowCache(BaseCache):
     """Cache for TV show metadata including TMDB data, genres, and keywords."""
 
-    def __init__(self, cache_dir: str, recommender=None):
-        """Initialize the show cache.
+    media_type = 'tv'
+    media_key = 'shows'
+    cache_filename = 'all_shows_cache.json'
+
+    def _process_item(self, show, tmdb_api_key: Optional[str]) -> Optional[Dict]:
+        """Process a single TV show and return its info dict.
 
         Args:
-            cache_dir: Directory path where cache files are stored
-            recommender: Reference to parent PlexTVRecommender instance
+            show: Plex TV show item
+            tmdb_api_key: Optional TMDB API key
+
+        Returns:
+            Dict with show metadata or None on error
         """
-        self.all_shows_cache_path = os.path.join(cache_dir, "all_shows_cache.json")
-        self.cache = self._load_cache()
-        self.recommender = recommender  # Store reference to recommender
-        
-    def _load_cache(self) -> Dict:
-        """Load show cache from file"""
-        return load_media_cache(self.all_shows_cache_path, 'shows')
-    
-    def update_cache(self, plex, library_title: str, tmdb_api_key: Optional[str] = None):
-        shows_section = plex.library.section(library_title)
-        all_shows = shows_section.all()
-        current_count = len(all_shows)
-        
-        if current_count == self.cache['library_count']:
-            print(f"{GREEN}Show cache is up to date{RESET}")
-            return False
-            
-        print(f"\n{YELLOW}Analyzing library shows...{RESET}")
-        
-        current_shows = set(str(show.ratingKey) for show in all_shows)
-        removed = set(self.cache['shows'].keys()) - current_shows
-        
-        if removed:
-            print(f"{YELLOW}Removing {len(removed)} shows from cache that are no longer in library{RESET}")
-            for show_id in removed:
-                del self.cache['shows'][show_id]
-        
-        existing_ids = set(self.cache['shows'].keys())
-        new_shows = [show for show in all_shows if str(show.ratingKey) not in existing_ids]
-        
-        if new_shows:
-            
-            for i, show in enumerate(new_shows, 1):
-                msg = f"\r{CYAN}Processing show {i}/{len(new_shows)} ({int((i/len(new_shows))*100)}%){RESET}"
-                sys.stdout.write(msg)
-                sys.stdout.flush()
-                
-                show_id = str(show.ratingKey)
-                try:
-                    show.reload()
-                    
-                    # Add delay between shows
-                    if i > 1 and tmdb_api_key:
-                        time.sleep(TMDB_RATE_LIMIT_DELAY)
-                    
-                    # Extract IDs from GUIDs using utility
-                    ids = extract_ids_from_guids(show)
-                    imdb_id = ids['imdb_id']
-                    tmdb_id = ids['tmdb_id']
+        # Get TMDB data using base class method
+        tmdb_data = self._get_tmdb_data(show, tmdb_api_key) if tmdb_api_key else {
+            'tmdb_id': None, 'imdb_id': None, 'keywords': []
+        }
 
-                    # Get TMDB ID if not found in GUIDs (with fallback methods)
-                    if not tmdb_id and tmdb_api_key:
-                        tmdb_id = get_tmdb_id_for_item(show, tmdb_api_key, 'tv')
-
-                    # Get keywords using utility
-                    tmdb_keywords = []
-                    if tmdb_id and tmdb_api_key:
-                        tmdb_keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, 'tv')
-    
-                    # Store in recommender's caches if available
-                    if self.recommender and tmdb_id:
-                        self.recommender.plex_tmdb_cache[str(show.ratingKey)] = tmdb_id
-                        if tmdb_keywords:
-                            self.recommender.tmdb_keywords_cache[str(tmdb_id)] = tmdb_keywords
-                    
-                    show_info = {
-                        'title': show.title,
-                        'year': getattr(show, 'year', None),
-                        'genres': [g.tag.lower() for g in show.genres] if hasattr(show, 'genres') else [],
-                        'studio': getattr(show, 'studio', 'N/A'),
-                        'cast': [r.tag for r in show.roles[:TOP_CAST_COUNT]] if hasattr(show, 'roles') else [],
-                        'summary': getattr(show, 'summary', ''),
-                        'language': self._get_show_language(show),
-                        'tmdb_keywords': tmdb_keywords,
-                        'tmdb_id': tmdb_id,
-                        'imdb_id': imdb_id
-                    }
-                    self.cache['shows'][show_id] = show_info
-                    
-                except Exception as e:
-                    log_warning(f"Error processing show {show.title}: {e}")
-                    continue
-                    
-        self.cache['library_count'] = current_count
-        self.cache['last_updated'] = datetime.now().isoformat()
-        self._save_cache()
-        print(f"\n{GREEN}Show cache updated{RESET}")
-        return True
-        
-    def _save_cache(self):
-        """Save show cache to file"""
-        self.cache['cache_version'] = CACHE_VERSION
-        save_media_cache(self.all_shows_cache_path, self.cache, 'shows')
-
-    def _get_show_language(self, show) -> str:
-        """Get show's primary audio language from first episode"""
-        try:
-            episodes = show.episodes()
-            if not episodes:
-                return "N/A"
-    
-            episode = episodes[0]
-            episode.reload()
-            
-            if not episode.media:
-                return "N/A"
-                
-            for media in episode.media:
-                for part in media.parts:
-                    audio_streams = part.audioStreams()
-                    
-                    if audio_streams:
-                        audio = audio_streams[0]                     
-                        lang_code = (
-                            getattr(audio, 'languageTag', None) or
-                            getattr(audio, 'language', None)
-                        )
-                        if lang_code:
-                            return get_full_language_name(lang_code)
-
-        except Exception as e:
-            pass  # DEBUG removed
-        return "N/A"
+        return {
+            'title': show.title,
+            'year': getattr(show, 'year', None),
+            'genres': [g.tag.lower() for g in show.genres] if hasattr(show, 'genres') else [],
+            'studio': getattr(show, 'studio', 'N/A'),
+            'cast': [r.tag for r in show.roles[:TOP_CAST_COUNT]] if hasattr(show, 'roles') else [],
+            'summary': getattr(show, 'summary', ''),
+            'language': self._get_language(show),
+            'tmdb_keywords': tmdb_data['keywords'],
+            'tmdb_id': tmdb_data['tmdb_id'],
+            'imdb_id': tmdb_data['imdb_id']
+        }
 
 class PlexTVRecommender:
     """Generates personalized TV show recommendations based on Plex watch history.
