@@ -3,7 +3,10 @@ Tests for utils/helpers.py - Miscellaneous helper functions.
 """
 
 import pytest
-from utils.helpers import normalize_title, map_path, TITLE_SUFFIXES_TO_STRIP
+import os
+import tempfile
+from datetime import datetime, timedelta
+from utils.helpers import normalize_title, map_path, cleanup_old_logs, TITLE_SUFFIXES_TO_STRIP
 
 
 class TestNormalizeTitle:
@@ -159,3 +162,102 @@ class TestTitleSuffixesConstant:
         """Test that all suffixes have leading space (for word boundary)."""
         for suffix in TITLE_SUFFIXES_TO_STRIP:
             assert suffix.startswith(' '), f"Suffix '{suffix}' should start with space"
+
+
+class TestCleanupOldLogs:
+    """Tests for cleanup_old_logs() function."""
+
+    def test_zero_retention_keeps_all(self):
+        """Test that retention_days=0 keeps all files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a log file
+            log_path = os.path.join(tmpdir, "test.log")
+            with open(log_path, 'w') as f:
+                f.write("log content")
+
+            cleanup_old_logs(tmpdir, retention_days=0)
+
+            # File should still exist
+            assert os.path.exists(log_path)
+
+    def test_negative_retention_keeps_all(self):
+        """Test that negative retention_days keeps all files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "test.log")
+            with open(log_path, 'w') as f:
+                f.write("log content")
+
+            cleanup_old_logs(tmpdir, retention_days=-1)
+
+            assert os.path.exists(log_path)
+
+    def test_removes_old_logs(self):
+        """Test that old logs are removed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "old.log")
+            with open(log_path, 'w') as f:
+                f.write("old log")
+
+            # Set file modification time to 10 days ago
+            old_time = (datetime.now() - timedelta(days=10)).timestamp()
+            os.utime(log_path, (old_time, old_time))
+
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            # Old file should be removed
+            assert not os.path.exists(log_path)
+
+    def test_keeps_recent_logs(self):
+        """Test that recent logs are kept."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "recent.log")
+            with open(log_path, 'w') as f:
+                f.write("recent log")
+
+            # File was just created, so it's recent
+
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            # Recent file should still exist
+            assert os.path.exists(log_path)
+
+    def test_ignores_non_log_files(self):
+        """Test that non-.log files are ignored."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            txt_path = os.path.join(tmpdir, "file.txt")
+            with open(txt_path, 'w') as f:
+                f.write("text content")
+
+            # Set to old time
+            old_time = (datetime.now() - timedelta(days=100)).timestamp()
+            os.utime(txt_path, (old_time, old_time))
+
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            # .txt file should still exist (not a .log file)
+            assert os.path.exists(txt_path)
+
+    def test_handles_nonexistent_directory(self):
+        """Test handling of nonexistent directory."""
+        # Should not raise an exception
+        cleanup_old_logs("/nonexistent/directory/path", retention_days=7)
+
+    def test_handles_mixed_old_and_new(self):
+        """Test cleanup with mix of old and new logs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_log = os.path.join(tmpdir, "old.log")
+            new_log = os.path.join(tmpdir, "new.log")
+
+            with open(old_log, 'w') as f:
+                f.write("old")
+            with open(new_log, 'w') as f:
+                f.write("new")
+
+            # Set old_log to 10 days ago
+            old_time = (datetime.now() - timedelta(days=10)).timestamp()
+            os.utime(old_log, (old_time, old_time))
+
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            assert not os.path.exists(old_log)
+            assert os.path.exists(new_log)
