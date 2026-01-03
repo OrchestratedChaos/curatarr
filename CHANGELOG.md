@@ -5,6 +5,18 @@ All notable changes to Plex Recommender will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Utils package refactoring** — Split 2500+ line `utils.py` into focused modules:
+  - `utils/config.py` - Configuration utilities
+  - `utils/display.py` - Output formatting, logging, colors
+  - `utils/tmdb.py` - TMDB API functions
+  - `utils/cache.py` - Cache I/O operations
+  - `utils/labels.py` - Label management
+  - `utils/scoring.py` - Similarity scoring functions
+  - `utils/counters.py` - Counter utilities
+  - `utils/helpers.py` - Miscellaneous helpers
+  - `utils/plex.py` - Plex-specific utilities
+  - `utils/__init__.py` - Re-exports 72 items for backwards compatibility
+
 - **Scoring formula overhaul** — Changed from averaging to sum with diminishing returns
   - Multiple weak keyword matches now add up instead of averaging down
   - A movie with 15 matching keywords scores well even if each is partial
