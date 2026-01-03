@@ -93,6 +93,7 @@ TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
 MIN_RATING = 6.0
 MIN_VOTE_COUNT = 100
 MAX_CANDIDATES = 500
+SCORE_CHANGE_THRESHOLD = 0.01  # Minimum score change to log during updates
 
 # Default weights (specificity-first approach - same as internal recommenders)
 # Director/language reduced - most people don't care about director, language data unreliable
@@ -168,7 +169,7 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
                         'rating': item.get('vote_average', 0)
                     }
 
-        except Exception:
+        except (requests.RequestException, KeyError):
             pass
 
     print(f"    Found {len(candidates)} candidates from genre search")
@@ -219,7 +220,7 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
                                 'rating': item.get('vote_average', 0)
                             }
 
-        except Exception:
+        except (requests.RequestException, KeyError):
             pass
 
     print(f"    Total candidates after keyword search: {len(candidates)}")
@@ -405,7 +406,7 @@ def get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type='movie'):
             # Movies use 'keywords', TV uses 'results'
             keywords_list = data.get('keywords', data.get('results', []))
             return [kw['name'] for kw in keywords_list[:10]]  # Top 10 keywords
-    except Exception:
+    except (requests.RequestException, KeyError):
         pass
     return []
 
@@ -1071,7 +1072,7 @@ def process_user(config, plex, username):
             old_score = movie_cache[tmdb_id].get('score', 0)
             movie_cache[tmdb_id]['score'] = movie['score']
             movie_cache[tmdb_id]['rating'] = movie['rating']
-            if abs(movie['score'] - old_score) > 0.01:
+            if abs(movie['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {movie['title']} {old_score:.1%} -> {movie['score']:.1%}")
         else:
             # Add new item
@@ -1091,7 +1092,7 @@ def process_user(config, plex, username):
             old_score = show_cache[tmdb_id].get('score', 0)
             show_cache[tmdb_id]['score'] = show['score']
             show_cache[tmdb_id]['rating'] = show['rating']
-            if abs(show['score'] - old_score) > 0.01:
+            if abs(show['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {show['title']} {old_score:.1%} -> {show['score']:.1%}")
         else:
             # Add new item
