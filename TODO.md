@@ -95,18 +95,19 @@ After consolidation, some imports may no longer be needed:
 
 ## Testing
 
-### 6. Unit Tests for Utilities
-**Priority:** High
-**Effort:** Medium
-**Files:** New `tests/` directory
+### 6. ~~Unit Tests for Utilities~~ ✅ COMPLETED
+**Status:** Completed 2026-01-02
+**Files:** `tests/` directory with 101 tests
 
-- [ ] Test `extract_genres()`
-- [ ] Test `extract_ids_from_guids()`
-- [ ] Test `fetch_tmdb_with_retry()` with mocked responses
-- [ ] Test `create_empty_counters()`
-- [ ] Test `build_label_name()`
-- [ ] Test `categorize_labeled_items()`
-- [ ] Test `save_watched_cache()` / `load_media_cache()`
+Test files created:
+- [x] `tests/test_plex.py` - `extract_genres()`, `extract_ids_from_guids()`, `extract_rating()`
+- [x] `tests/test_counters.py` - `create_empty_counters()`
+- [x] `tests/test_labels.py` - `build_label_name()`
+- [x] `tests/test_cache.py` - `save_json_cache()`, `load_json_cache()`, `load_media_cache()`, `save_media_cache()`
+- [x] `tests/test_helpers.py` - `normalize_title()`, `map_path()`
+- [x] `tests/test_scoring.py` - `normalize_genre()`, `fuzzy_keyword_match()`, `calculate_rewatch_multiplier()`, `calculate_similarity_score()`
+
+Run with: `python3 -m pytest tests/ -v`
 
 ---
 
