@@ -70,6 +70,21 @@ cd plex-recommender
 .\run.ps1
 ```
 
+### Docker
+```bash
+# 1. Clone and enter directory
+git clone <your-repo-url>
+cd plex-recommender
+
+# 2. Edit config.yml with your details (see links below)
+
+# 3. Run with Docker Compose
+docker compose up --build
+
+# Or run once and remove container
+docker compose run --rm plex-recommender
+```
+
 **Required config:**
 - `plex.url` — Your Plex server URL (e.g., `http://192.168.1.100:32400`)
 - `plex.token` — [How to find your Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)
@@ -240,6 +255,8 @@ plex-recommender/
 ├── config.yml               # Your configuration
 ├── run.sh                   # Main entry point (macOS/Linux)
 ├── run.ps1                  # Main entry point (Windows)
+├── Dockerfile               # Docker image definition
+├── docker-compose.yml       # Docker Compose config
 ├── cache/                   # TMDB metadata cache
 ├── logs/                    # Execution logs
 └── recommendations/
@@ -266,6 +283,12 @@ The PowerShell script offers to create a scheduled task automatically. Or manual
 4. Action: Start a program
    - Program: `powershell.exe`
    - Arguments: `-ExecutionPolicy Bypass -File "C:\path\to\plex-recommender\run.ps1"`
+
+### Docker (cron on host)
+```bash
+# Daily at 3 AM
+0 3 * * * cd /path/to/plex-recommender && docker compose run --rm plex-recommender >> logs/daily-run.log 2>&1
+```
 
 ---
 
@@ -320,6 +343,22 @@ python -c "import yaml; print(yaml.safe_load(open('config.yml')))"
 - No recommendations → User needs more watch history
 - "Cache outdated" message → Normal after updates, rebuilds automatically
 - Want to disable auto-update → Set `general.auto_update: false` in config.yml
+
+### Docker
+```bash
+# View logs
+docker compose logs
+
+# Rebuild after code changes
+docker compose build --no-cache
+
+# Check container status
+docker compose ps
+```
+
+**Docker-specific issues:**
+- Connection refused to Plex → Use host IP (not `localhost`), try `host.docker.internal` on Docker Desktop
+- Permission denied on cache/logs → Run `chmod -R 777 cache logs recommendations` on host
 
 **Manual update (if auto-update disabled):**
 ```bash
