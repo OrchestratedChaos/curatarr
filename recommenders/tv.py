@@ -51,7 +51,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.3"
+__version__ = "1.6.4"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -366,17 +366,27 @@ class PlexTVRecommender:
                         data = show_completion_data[show_id]
                         logger.debug(f"Dropped: {data.get('title')} ({data['watched_episodes']}/{data['total_episodes']} eps, {data['completion_percent']:.0f}%)")
 
-        # Build view count map for rewatch weighting
-        show_view_counts = {}
+        # Build rewatch data for shows (normalize by episode count)
+        # Each show gets base weight of 1.0 regardless of episode count
+        # Only apply rewatch bonus if user actually rewatched episodes
+        show_rewatch_counts = {}
         try:
             for show in shows_section.all():
                 show_id = int(show.ratingKey)
                 if show_id in watched_show_ids and hasattr(show, 'viewCount') and show.viewCount:
-                    show_view_counts[show_id] = int(show.viewCount)
+                    view_count = int(show.viewCount)
+                    # Get watched episode count from completion data
+                    watched_eps = 1
+                    if show_id in show_completion_data:
+                        watched_eps = max(1, show_completion_data[show_id].get('watched_episodes', 1))
+                    # Calculate actual show rewatches (viewCount / watched_episodes)
+                    # If > 1, user rewatched some episodes
+                    show_rewatch_counts[show_id] = max(1, view_count // watched_eps)
         except Exception:
             pass  # Fall back to no rewatch weighting if this fails
 
         # Process show metadata from cache - exclude dropped shows from positive signals
+        # Each show weighted equally (1.0 base) regardless of episode count
         normal_watched = watched_show_ids - dropped_show_ids
         print(f"")
         print(f"Processing {len(normal_watched)} watched shows (excluding {len(dropped_show_ids)} dropped):")
@@ -386,8 +396,8 @@ class PlexTVRecommender:
 
             show_info = self.show_cache.cache['shows'].get(str(show_id))
             if show_info:
-                # Calculate rewatch multiplier based on view count
-                rewatch_multiplier = calculate_rewatch_multiplier(show_view_counts.get(show_id, 1))
+                # Base weight 1.0 per show, with rewatch bonus only if actually rewatched
+                rewatch_multiplier = calculate_rewatch_multiplier(show_rewatch_counts.get(show_id, 1))
                 process_counters_from_cache(show_info, counters, media_type='tv', weight=rewatch_multiplier)
 
                 if tmdb_id := show_info.get('tmdb_id'):
