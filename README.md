@@ -46,6 +46,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ## Quick Start
 
+### macOS / Linux
 ```bash
 # 1. Clone and enter directory
 git clone <your-repo-url>
@@ -55,6 +56,18 @@ cd plex-recommender
 
 # 3. Run it
 ./run.sh
+```
+
+### Windows (PowerShell)
+```powershell
+# 1. Clone and enter directory
+git clone <your-repo-url>
+cd plex-recommender
+
+# 2. Edit config.yml with your details (see links below)
+
+# 3. Run it
+.\run.ps1
 ```
 
 **Required config:**
@@ -225,7 +238,8 @@ plex-recommender/
 ├── utils/                   # Shared utilities (10 modules)
 ├── tests/                   # Unit tests
 ├── config.yml               # Your configuration
-├── run.sh                   # Main entry point
+├── run.sh                   # Main entry point (macOS/Linux)
+├── run.ps1                  # Main entry point (Windows)
 ├── cache/                   # TMDB metadata cache
 ├── logs/                    # Execution logs
 └── recommendations/
@@ -236,12 +250,22 @@ plex-recommender/
 
 ## Scheduling
 
-First run prompts for cron setup. Or add manually:
+First run prompts for automatic scheduling. Or add manually:
 
+### macOS / Linux (cron)
 ```bash
 # Daily at 3 AM
 0 3 * * * cd /path/to/plex-recommender && ./run.sh >> logs/daily-run.log 2>&1
 ```
+
+### Windows (Task Scheduler)
+The PowerShell script offers to create a scheduled task automatically. Or manually:
+1. Open Task Scheduler
+2. Create Basic Task → "PlexRecommender"
+3. Trigger: Daily at 3:00 AM
+4. Action: Start a program
+   - Program: `powershell.exe`
+   - Arguments: `-ExecutionPolicy Bypass -File "C:\path\to\plex-recommender\run.ps1"`
 
 ---
 
@@ -266,6 +290,7 @@ They're skipped until they have enough watch history.
 
 ## Troubleshooting
 
+### macOS / Linux
 ```bash
 # Check logs
 tail -100 logs/daily-run.log
@@ -275,6 +300,18 @@ tail -100 logs/daily-run.log
 
 # Verify config
 python3 -c "import yaml; print(yaml.safe_load(open('config.yml')))"
+```
+
+### Windows (PowerShell)
+```powershell
+# Check logs
+Get-Content logs/daily-run.log -Tail 100
+
+# Run with debug output
+.\run.ps1 -Debug
+
+# Verify config
+python -c "import yaml; print(yaml.safe_load(open('config.yml')))"
 ```
 
 **Common issues:**

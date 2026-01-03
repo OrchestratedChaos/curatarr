@@ -45,7 +45,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.6"
+__version__ = "1.2.7"
 
 # Import base class
 from recommenders.base import BaseCache
