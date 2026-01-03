@@ -2,6 +2,14 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.4] - 2026-01-03
+
+### Fixed
+- **Show-level episode aggregation** — TV shows now weighted by show, not episode count
+  - Previously a show with 20 episodes had 20x the weight of a show with 1 episode
+  - Now each show counts as 1 unit regardless of episode count
+  - Rewatch bonus only applied when user actually rewatched episodes
+
 ## [1.6.3] - 2026-01-03
 
 ### Added
