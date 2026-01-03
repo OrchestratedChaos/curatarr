@@ -60,6 +60,9 @@ def categorize_labeled_items(
     """
     stale_threshold = datetime.now() - timedelta(days=stale_days)
 
+    # Convert to list to allow multiple iterations (MediaContainer is single-use)
+    labeled_items = list(labeled_items)
+
     result = {
         'fresh': [],
         'watched': [],
@@ -78,8 +81,9 @@ def categorize_labeled_items(
             result['excluded'].append(item)
             continue
 
-        # Check if watched
-        if item_id in watched_ids:
+        # Check if watched (by ID cache OR by Plex isPlayed flag)
+        is_played = hasattr(item, 'isPlayed') and item.isPlayed
+        if item_id in watched_ids or is_played:
             result['watched'].append(item)
             continue
 

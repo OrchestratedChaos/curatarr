@@ -579,23 +579,45 @@ class TestGetPlexUserIds:
 class TestInitPlex:
     """Tests for init_plex() function."""
 
+    @patch('utils.plex.requests.Session')
     @patch('utils.plex.plexapi.server.PlexServer')
-    def test_successful_connection(self, mock_plex_server):
+    def test_successful_connection(self, mock_plex_server, mock_session_class):
         """Test successful Plex server connection."""
         from utils.plex import init_plex
 
         mock_server = Mock()
         mock_plex_server.return_value = mock_server
+        mock_session = Mock()
+        mock_session_class.return_value = mock_session
 
         config = {'plex': {'url': 'http://localhost:32400', 'token': 'test_token'}}
         result = init_plex(config)
 
         assert result == mock_server
-        mock_plex_server.assert_called_once_with('http://localhost:32400', 'test_token')
+        mock_plex_server.assert_called_once_with('http://localhost:32400', 'test_token', session=mock_session)
+        assert mock_session.verify is False  # Default when not specified
 
+    @patch('utils.plex.requests.Session')
+    @patch('utils.plex.plexapi.server.PlexServer')
+    def test_connection_with_verify_ssl_true(self, mock_plex_server, mock_session_class):
+        """Test Plex server connection with SSL verification enabled."""
+        from utils.plex import init_plex
+
+        mock_server = Mock()
+        mock_plex_server.return_value = mock_server
+        mock_session = Mock()
+        mock_session_class.return_value = mock_session
+
+        config = {'plex': {'url': 'http://localhost:32400', 'token': 'test_token', 'verify_ssl': True}}
+        result = init_plex(config)
+
+        assert result == mock_server
+        assert mock_session.verify is True
+
+    @patch('utils.plex.requests.Session')
     @patch('utils.plex.plexapi.server.PlexServer')
     @patch('utils.plex.log_error')
-    def test_connection_failure(self, mock_log, mock_plex_server):
+    def test_connection_failure(self, mock_log, mock_plex_server, mock_session_class):
         """Test handling connection failure."""
         from utils.plex import init_plex
 
