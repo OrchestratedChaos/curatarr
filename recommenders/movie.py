@@ -1,21 +1,20 @@
 import os
+import sys
+
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import argparse
 import logging
-import plexapi.server
-from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
 import yaml
-import sys
 import requests
 from typing import Dict, List, Set, Optional, Tuple
-from collections import Counter
 import time
 import random
 import json
-from urllib.parse import quote
 import re
-from datetime import datetime, timedelta
-import math
+from datetime import datetime
 import copy
 
 # Import shared utilities
@@ -45,7 +44,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 class MovieCache:
     """Cache for movie metadata including TMDB data, genres, and keywords."""
@@ -277,7 +276,7 @@ class PlexMovieRecommender:
         self.use_tmdb_keywords = tmdb_config['use_keywords']
         self.tmdb_api_key = tmdb_config['api_key']
         
-        self.cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+        self.cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
         self.movie_cache = MovieCache(self.cache_dir, recommender=self)
         self.movie_cache.update_cache(self.plex, self.library_title, self.tmdb_api_key)
@@ -1321,7 +1320,7 @@ def adapt_root_config_to_legacy(root_config):
 # ------------------------------------------------------------------------
 def process_recommendations(config, config_path, log_retention_days, single_user=None):
     original_stdout = sys.stdout
-    log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
 
     if log_retention_days > 0:
         try:
@@ -1403,9 +1402,9 @@ def main():
     print(f"{CYAN}Movie Recommendations for Plex v{__version__}{RESET}")
     print("-" * 50)
 
-    # Load config from project root
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
-    config_path = os.path.normpath(config_path)  # Clean up path
+    # Load config from project root (one level up from recommenders/)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(project_root, 'config.yml')
 
     try:
         with open(config_path, 'r') as f:
