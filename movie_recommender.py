@@ -21,14 +21,25 @@ import copy
 # Import shared utilities
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS, ANSI_PATTERN,
-    get_full_language_name, cleanup_old_logs, setup_logging,
+    RATING_MULTIPLIERS, ANSI_PATTERN, CACHE_VERSION, check_cache_version,
+    get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
     log_warning, log_error, update_plex_collection, cleanup_old_collections,
     load_config, init_plex, get_configured_users, get_current_users,
     get_excluded_genres_for_user, get_user_specific_connection,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
-    map_path, show_progress, TeeLogger
+    calculate_similarity_score, find_plex_movie,
+    map_path, show_progress, TeeLogger,
+    # Consolidated utilities
+    extract_genres, extract_ids_from_guids, fetch_tmdb_with_retry,
+    get_tmdb_id_for_item, get_tmdb_keywords, adapt_config_for_media_type,
+    save_json_cache, load_json_cache,
+    # Additional consolidated utilities
+    user_select_recommendations, extract_rating, format_media_output,
+    build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
+    get_library_imdb_ids, print_similarity_breakdown, process_counters_from_cache,
+    load_media_cache, save_media_cache, create_empty_counters,
+    get_plex_user_ids as get_plex_user_ids_util, save_watched_cache
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -51,14 +62,8 @@ class MovieCache:
         self.recommender = recommender  # Store reference to recommender
         
     def _load_cache(self) -> Dict:
-        if os.path.exists(self.all_movies_cache_path):
-            try:
-                with open(self.all_movies_cache_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                log_warning(f"Error loading all movies cache: {e}")
-                return {'movies': {}, 'last_updated': None, 'library_count': 0}
-        return {'movies': {}, 'last_updated': None, 'library_count': 0}
+        """Load movie cache from file"""
+        return load_media_cache(self.all_movies_cache_path, 'movies')
     
     def update_cache(self, plex, library_title: str, tmdb_api_key: Optional[str] = None):
         """Update movie cache with current library contents and TMDB metadata.
@@ -108,56 +113,14 @@ class MovieCache:
                     if i > 1 and tmdb_api_key:
                         time.sleep(0.5)  # Basic rate limiting
                     
-                    imdb_id = None
-                    tmdb_id = None
-                    if hasattr(movie, 'guids'):
-                        for guid in movie.guids:
-                            if 'imdb://' in guid.id:
-                                imdb_id = guid.id.replace('imdb://', '')
-                            elif 'themoviedb://' in guid.id:
-                                try:
-                                    tmdb_id = int(guid.id.split('themoviedb://')[1].split('?')[0])
-                                except (ValueError, IndexError):
-                                    pass
-                    
-                    # TMDB ID search with retries
+                    # Extract IDs from GUIDs using utility
+                    ids = extract_ids_from_guids(movie)
+                    imdb_id = ids['imdb_id']
+                    tmdb_id = ids['tmdb_id']
+
+                    # Get TMDB ID if not found in GUIDs (with fallback methods)
                     if not tmdb_id and tmdb_api_key:
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                params = {
-                                    'api_key': tmdb_api_key,
-                                    'query': movie.title,
-                                    'year': getattr(movie, 'year', None)
-                                }
-                                resp = requests.get(
-                                    "https://api.themoviedb.org/3/search/movie",
-                                    params=params,
-                                    timeout=15
-                                )
-                                
-                                if resp.status_code == 429:
-                                    sleep_time = 2 * (attempt + 1)
-                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
-                                    time.sleep(sleep_time)
-                                    continue
-                                    
-                                if resp.status_code == 200:
-                                    results = resp.json().get('results', [])
-                                    if results:
-                                        tmdb_id = results[0]['id']
-                                    break
-                                    
-                            except (requests.exceptions.ConnectionError, 
-                                   requests.exceptions.Timeout,
-                                   requests.exceptions.ChunkedEncodingError) as e:
-                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
-                                time.sleep(1)
-                                if attempt == max_retries - 1:
-                                    log_warning(f"Failed to get TMDB ID for {movie.title} after {max_retries} tries")
-                            except Exception as e:
-                                log_warning(f"Error getting TMDB ID for {movie.title}: {e}")
-                                break
+                        tmdb_id = get_tmdb_id_for_item(movie, tmdb_api_key, 'movie')
     
                     # Fetch TMDB metadata (rating, votes, keywords)
                     tmdb_keywords = []
@@ -165,67 +128,17 @@ class MovieCache:
                     tmdb_vote_count = None
 
                     if tmdb_id and tmdb_api_key:
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                # Get movie details (includes rating and vote_count)
-                                detail_resp = requests.get(
-                                    f"https://api.themoviedb.org/3/movie/{tmdb_id}",
-                                    params={'api_key': tmdb_api_key},
-                                    timeout=15
-                                )
+                        # Get movie details (includes rating and vote_count)
+                        detail_data = fetch_tmdb_with_retry(
+                            f"https://api.themoviedb.org/3/movie/{tmdb_id}",
+                            {'api_key': tmdb_api_key}
+                        )
+                        if detail_data:
+                            tmdb_rating = detail_data.get('vote_average')
+                            tmdb_vote_count = detail_data.get('vote_count')
 
-                                if detail_resp.status_code == 429:
-                                    sleep_time = 2 * (attempt + 1)
-                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
-                                    time.sleep(sleep_time)
-                                    continue
-
-                                if detail_resp.status_code == 200:
-                                    detail_data = detail_resp.json()
-                                    tmdb_rating = detail_data.get('vote_average')
-                                    tmdb_vote_count = detail_data.get('vote_count')
-                                    break
-
-                            except (requests.exceptions.ConnectionError,
-                                   requests.exceptions.Timeout,
-                                   requests.exceptions.ChunkedEncodingError) as e:
-                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
-                                time.sleep(1)
-                            except Exception as e:
-                                log_warning(f"Error getting TMDB details for {movie.title}: {e}")
-                                break
-
-                        # Get keywords
-                        for attempt in range(max_retries):
-                            try:
-                                kw_resp = requests.get(
-                                    f"https://api.themoviedb.org/3/movie/{tmdb_id}/keywords",
-                                    params={'api_key': tmdb_api_key},
-                                    timeout=15
-                                )
-
-                                if kw_resp.status_code == 429:
-                                    sleep_time = 2 * (attempt + 1)
-                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
-                                    time.sleep(sleep_time)
-                                    continue
-
-                                if kw_resp.status_code == 200:
-                                    keywords = kw_resp.json().get('keywords', [])
-                                    tmdb_keywords = [k['name'].lower() for k in keywords]
-                                    break
-
-                            except (requests.exceptions.ConnectionError,
-                                   requests.exceptions.Timeout,
-                                   requests.exceptions.ChunkedEncodingError) as e:
-                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
-                                time.sleep(1)
-                                if attempt == max_retries - 1:
-                                    log_warning(f"Failed to get keywords for {movie.title} after {max_retries} tries")
-                            except Exception as e:
-                                log_warning(f"Error getting TMDB keywords for {movie.title}: {e}")
-                                break
+                        # Get keywords using utility
+                        tmdb_keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, 'movie')
     
                     # Store in recommender's caches if available
                     if self.recommender and tmdb_id:
@@ -293,11 +206,9 @@ class MovieCache:
         return True
         
     def _save_cache(self):
-        try:
-            with open(self.all_movies_cache_path, 'w', encoding='utf-8') as f:
-                json.dump(self.cache, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            log_error(f"Error saving all movies cache: {e}")
+        """Save movie cache to file"""
+        self.cache['cache_version'] = CACHE_VERSION
+        save_media_cache(self.all_movies_cache_path, self.cache, 'movies')
 
     def _get_movie_language(self, movie) -> str:
         """Get movie's primary audio language"""
@@ -361,10 +272,10 @@ class PlexMovieRecommender:
         print(f"Connected to Plex successfully!\n")
         general_config = self.config.get('general', {})
         self.debug = general_config.get('debug', False)
-        print(f"{YELLOW}Checking Cache...{RESET}")	
-        tmdb_config = self.config.get('TMDB', {})
-        self.use_tmdb_keywords = tmdb_config.get('use_TMDB_keywords', True)
-        self.tmdb_api_key = tmdb_config.get('api_key', None)
+        print(f"{YELLOW}Checking Cache...{RESET}")
+        tmdb_config = get_tmdb_config(self.config)
+        self.use_tmdb_keywords = tmdb_config['use_keywords']
+        self.tmdb_api_key = tmdb_config['api_key']
         
         self.cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -392,11 +303,11 @@ class PlexMovieRecommender:
 
         weights_config = self.config.get('weights', {})
         self.weights = {
-            'genre_weight': float(weights_config.get('genre_weight', 0.25)),
-            'director_weight': float(weights_config.get('director_weight', 0.20)),
-            'actor_weight': float(weights_config.get('actor_weight', 0.20)),
-            'language_weight': float(weights_config.get('language_weight', 0.10)),
-            'keyword_weight': float(weights_config.get('keyword_weight', 0.25))
+            'genre': float(weights_config.get('genre', 0.20)),
+            'director': float(weights_config.get('director', 0.15)),
+            'actor': float(weights_config.get('actor', 0.15)),
+            'language': float(weights_config.get('language', 0.05)),
+            'keyword': float(weights_config.get('keyword', 0.45))
         }
     
         total_weight = sum(self.weights.values())
@@ -428,9 +339,10 @@ class PlexMovieRecommender:
         # Update cache paths to be user-specific
         self.watched_cache_path = os.path.join(self.cache_dir, f"watched_cache_{safe_ctx}.json")
          
-        # Load watched cache 
+        # Load watched cache (check version first)
         watched_cache = {}
-        if os.path.exists(self.watched_cache_path):
+        cache_valid = check_cache_version(self.watched_cache_path, "Watched cache")
+        if cache_valid and os.path.exists(self.watched_cache_path):
             try:
                 with open(self.watched_cache_path, 'r', encoding='utf-8') as f:
                     watched_cache = json.load(f)
@@ -569,14 +481,7 @@ class PlexMovieRecommender:
             return self.watched_data_counters
 
         movies_section = self.plex.library.section(self.library_title)
-        counters = {
-            'genres': Counter(),
-            'directors': Counter(),
-            'actors': Counter(),
-            'languages': Counter(),
-            'tmdb_keywords': Counter(),
-            'tmdb_ids': set()
-        }
+        counters = create_empty_counters('movie')
         watched_movie_ids = set()
         watched_movie_dates = {}  # Store watch timestamps for recency decay
         user_ratings = {}  # Store user ratings for each movie
@@ -670,15 +575,8 @@ class PlexMovieRecommender:
             logger.debug("Using existing watched data counters")
             return self.watched_data_counters
     
-        counters = {
-            'genres': Counter(),
-            'directors': Counter(),
-            'actors': Counter(),
-            'languages': Counter(),
-            'tmdb_keywords': Counter(),
-            'tmdb_ids': set()  # Initialize as a set for unique IDs
-        }
-        
+        counters = create_empty_counters('movie')
+
         account = MyPlexAccount(token=self.config['plex']['token'])
         admin_user = self.users['admin_user']
         
@@ -729,31 +627,17 @@ class PlexMovieRecommender:
     # CACHING LOGIC
     # ------------------------------------------------------------------------
     def _save_watched_cache(self):
-        try:
-            # Create a copy of the watched data to modify for serialization
-            watched_data_for_cache = copy.deepcopy(self.watched_data_counters)
-            
-            # Convert any set objects to lists for JSON serialization
-            if 'tmdb_ids' in watched_data_for_cache and isinstance(watched_data_for_cache['tmdb_ids'], set):
-                watched_data_for_cache['tmdb_ids'] = list(watched_data_for_cache['tmdb_ids'])
-            
-            cache_data = {
-                'watched_count': len(self.watched_movie_ids),  # Save actual count of watched movies
-                'watched_data_counters': watched_data_for_cache,
-                'plex_tmdb_cache': {str(k): v for k, v in self.plex_tmdb_cache.items()},
-                'tmdb_keywords_cache': {str(k): v for k, v in self.tmdb_keywords_cache.items()},
-                'watched_movie_ids': list(self.watched_movie_ids),
-                'label_dates': self.label_dates if hasattr(self, 'label_dates') else {},
-                'last_updated': datetime.now().isoformat()
-            }
-            
-            with open(self.watched_cache_path, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, indent=4, ensure_ascii=False)
-
-            logger.debug(f"Saved watched cache: {self.cached_watched_count} movies, {len(self.watched_movie_ids)} IDs")
-
-        except Exception as e:
-            log_warning(f"Error saving watched cache: {e}")
+        """Save watched movie cache using utility"""
+        save_watched_cache(
+            cache_path=self.watched_cache_path,
+            watched_data_counters=self.watched_data_counters,
+            plex_tmdb_cache=self.plex_tmdb_cache,
+            tmdb_keywords_cache=self.tmdb_keywords_cache,
+            watched_ids=self.watched_movie_ids,
+            label_dates=getattr(self, 'label_dates', {}),
+            watched_count=len(self.watched_movie_ids),
+            media_type='movie'
+        )
 
     def _save_cache(self):
         self._save_watched_cache()
@@ -940,34 +824,19 @@ class PlexMovieRecommender:
        
     def _get_library_imdb_ids(self) -> Set[str]:
         """Get set of all IMDb IDs in the library"""
-        imdb_ids = set()
-        try:
-            movies = self.plex.library.section(self.library_title).all()
-            for movie in movies:
-                if hasattr(movie, 'guids'):
-                    for guid in movie.guids:
-                        if guid.id.startswith('imdb://'):
-                            imdb_ids.add(guid.id.replace('imdb://', ''))
-                            break
-        except Exception as e:
-            log_warning(f"Error retrieving IMDb IDs from library: {e}")
-        return imdb_ids
+        return get_library_imdb_ids(self.plex.library.section(self.library_title))
     
     def get_movie_details(self, movie) -> Dict:
         """Extract comprehensive details from a movie object"""
         try:
             movie.reload()
-            
-            imdb_id = None
+
+            # Extract IDs using utility
+            ids = extract_ids_from_guids(movie)
+            imdb_id = ids['imdb_id']
             audience_rating = 0
             tmdb_keywords = []
             directors = []
-            
-            if hasattr(movie, 'guids'):
-                for guid in movie.guids:
-                    if 'imdb://' in guid.id:
-                        imdb_id = guid.id.replace('imdb://', '')
-                        break
             
             # Improved rating extraction logic
             if self.show_rating:
@@ -1024,22 +893,7 @@ class PlexMovieRecommender:
     
     def _extract_genres(self, movie) -> List[str]:
         """Extract genres from a movie"""
-        genres = []
-        try:
-            if not hasattr(movie, 'genres') or not movie.genres:
-                return genres
-                
-            for genre in movie.genres:
-                if isinstance(genre, plexapi.media.Genre):
-                    if hasattr(genre, 'tag'):
-                        genres.append(genre.tag.lower())
-                elif isinstance(genre, str):
-                    genres.append(genre.lower())
-                else:
-                    pass
-        except Exception as e:
-            pass  # Empty except block
-        return genres
+        return extract_genres(movie)
     
     def _get_movie_language(self, movie) -> str:
         """Get movie's primary audio language - delegates to MovieCache"""
@@ -1053,332 +907,105 @@ class PlexMovieRecommender:
         imdb_id = self._get_plex_movie_imdb_id(plex_movie)
         if not imdb_id or not self.tmdb_api_key:
             return None
-    
-        try:
-            url = f"https://api.themoviedb.org/3/find/{imdb_id}"
-            params = {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
-            resp = requests.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json().get('movie_results', [{}])[0].get('id')
-        except Exception as e:
-            log_warning(f"IMDb fallback failed: {e}")
-            return None
+
+        data = fetch_tmdb_with_retry(
+            f"https://api.themoviedb.org/3/find/{imdb_id}",
+            {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
+        )
+        if data:
+            results = data.get('movie_results', [])
+            if results:
+                return results[0].get('id')
+        return None
     
     def _get_plex_movie_tmdb_id(self, plex_movie) -> Optional[int]:
         """Get TMDB ID for a Plex movie with multiple fallback methods"""
-        # Recursion guard and cache check
-        if hasattr(plex_movie, '_tmdb_fallback_attempted'):
-            return self.plex_tmdb_cache.get(plex_movie.ratingKey)
-        
-        if plex_movie.ratingKey in self.plex_tmdb_cache:
-            return self.plex_tmdb_cache[plex_movie.ratingKey]
-    
-        tmdb_id = None
-        movie_title = plex_movie.title
-        movie_year = getattr(plex_movie, 'year', None)
-    
-        # Method 1: Check Plex GUIDs
-        if hasattr(plex_movie, 'guids'):
-            for guid in plex_movie.guids:
-                if 'themoviedb' in guid.id:
-                    try:
-                        tmdb_id = int(guid.id.split('themoviedb://')[1].split('?')[0])
-                        break
-                    except (ValueError, IndexError) as e:
-                        continue
-    
-        # Method 2: TMDB API Search
-        if not tmdb_id and self.tmdb_api_key:
-            try:
-                params = {
-                    'api_key': self.tmdb_api_key,
-                    'query': movie_title,
-                    'include_adult': False
-                }
-                if movie_year:
-                    params['year'] = movie_year
-    
-                resp = requests.get(
-                    "https://api.themoviedb.org/3/search/movie",
-                    params=params,
-                    timeout=10
-                )
-                resp.raise_for_status()
-                
-                results = resp.json().get('results', [])
-                if results:
-                    exact_match = next(
-                        (r for r in results 
-                         if r.get('title', '').lower() == movie_title.lower()
-                         and str(r.get('release_date', '')[:4]) == str(movie_year)),
-                        None
-                    )
-                    
-                    tmdb_id = exact_match['id'] if exact_match else results[0]['id']
-    
-            except Exception as e:
-                log_warning(f"TMDB search failed for {movie_title}: {e}")
-    
-        # Method 3: Single Fallback Attempt via IMDb
-        if not tmdb_id and not hasattr(plex_movie, '_tmdb_fallback_attempted'):
-            plex_movie._tmdb_fallback_attempted = True
-            tmdb_id = self._get_tmdb_id_via_imdb(plex_movie)
-    
-        # Update cache even if None to prevent repeat lookups
+        # Check cache first
+        cache_key = str(plex_movie.ratingKey)
+        if cache_key in self.plex_tmdb_cache:
+            return self.plex_tmdb_cache[cache_key]
+
+        # Use consolidated utility for TMDB ID lookup
+        tmdb_id = get_tmdb_id_for_item(plex_movie, self.tmdb_api_key, 'movie', self.plex_tmdb_cache)
+
+        # Update cache if found
         if tmdb_id:
-            logger.debug(f"Cached TMDB ID {tmdb_id} for Plex movie {plex_movie.ratingKey}")
-            self.plex_tmdb_cache[str(plex_movie.ratingKey)] = tmdb_id
+            self.plex_tmdb_cache[cache_key] = tmdb_id
             self._save_watched_cache()
         return tmdb_id
     
     def _get_plex_movie_imdb_id(self, plex_movie) -> Optional[str]:
         """Get IMDb ID for a Plex movie with fallback to TMDB"""
-        if not plex_movie.guid:
-            return None
-        guid = plex_movie.guid
-        if guid.startswith('imdb://'):
-            return guid.split('imdb://')[1]
-        
-        # Check in guids attribute
-        if hasattr(plex_movie, 'guids'):
-            for guid in plex_movie.guids:
-                if guid.id.startswith('imdb://'):
-                    return guid.id.replace('imdb://', '')
-        
-        # Fallback to TMDB
+        # Try extracting from GUIDs first using utility
+        ids = extract_ids_from_guids(plex_movie)
+        if ids['imdb_id']:
+            return ids['imdb_id']
+
+        # Fallback: Check legacy guid attribute
+        if hasattr(plex_movie, 'guid') and plex_movie.guid and plex_movie.guid.startswith('imdb://'):
+            return plex_movie.guid.split('imdb://')[1]
+
+        # Fallback to TMDB to get IMDb ID
         tmdb_id = self._get_plex_movie_tmdb_id(plex_movie)
-        if not tmdb_id:
-            return None
-        try:
-            url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-            params = {'api_key': self.tmdb_api_key}
-            resp = requests.get(url, params=params)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get('imdb_id')
-            else:
-                log_warning(f"Failed to fetch IMDb ID from TMDB for movie '{plex_movie.title}'. Status Code: {resp.status_code}")
-        except Exception as e:
-            log_warning(f"Error fetching IMDb ID for TMDB ID {tmdb_id}: {e}")
+        if tmdb_id:
+            return self._get_imdb_id_from_tmdb(tmdb_id)
         return None
     
     def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
         """Get keywords for a movie from TMDB"""
         if not tmdb_id or not self.use_tmdb_keywords or not self.tmdb_api_key:
             return set()
-    
-        if tmdb_id in self.tmdb_keywords_cache:
-            return set(self.tmdb_keywords_cache[tmdb_id])
-    
-        kw_set = set()
-        try:
-            url = f"https://api.themoviedb.org/3/movie/{tmdb_id}/keywords"
-            params = {'api_key': self.tmdb_api_key}
-            resp = requests.get(url, params=params)
-            if resp.status_code == 200:
-                data = resp.json()
-                keywords = data.get('keywords', [])
-                kw_set = {k['name'].lower() for k in keywords}
-        except Exception as e:
-            log_warning(f"Error fetching TMDB keywords for ID {tmdb_id}: {e}")
-    
-        if kw_set:
-            logger.debug(f"Cached {len(kw_set)} keywords for TMDB ID {tmdb_id}")
-            self.tmdb_keywords_cache[str(tmdb_id)] = list(kw_set)  # Convert key to string
+
+        # Use consolidated utility with local cache
+        keywords = get_tmdb_keywords(self.tmdb_api_key, tmdb_id, 'movie', self.tmdb_keywords_cache)
+        if keywords:
             self._save_watched_cache()
-        return kw_set
+        return set(keywords)
 
     def _get_imdb_id_from_tmdb(self, tmdb_id: int) -> Optional[str]:
         """Get IMDb ID directly from TMDB"""
-        try:
-            url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-            params = {'api_key': self.tmdb_api_key}
-            response = requests.get(url, params=params)
-            if response.status_code == 200:
-                return response.json().get('imdb_id')
-        except Exception as e:
-            log_warning(f"TMDB API Error: {e}")
-        return None
+        data = fetch_tmdb_with_retry(
+            f"https://api.themoviedb.org/3/movie/{tmdb_id}",
+            {'api_key': self.tmdb_api_key}
+        )
+        return data.get('imdb_id') if data else None
 
     # ------------------------------------------------------------------------
     # CALCULATE SCORES
     # ------------------------------------------------------------------------
     def _calculate_similarity_from_cache(self, movie_info: Dict) -> Tuple[float, Dict]:
         """Calculate similarity score using cached movie data and return score with breakdown"""
-        try:
-            score = 0.0
-            score_breakdown = {
-                'genre_score': 0.0,
-                'director_score': 0.0,
-                'actor_score': 0.0,
-                'language_score': 0.0,
-                'keyword_score': 0.0,
-                'details': {
-                    'genres': [],
-                    'directors': [],
-                    'actors': [],
-                    'language': None,
-                    'keywords': []
-                }
-            }
-            
-            weights = self.weights
-            user_prefs = {
-                'genres': Counter(self.watched_data.get('genres', {})),
-                'directors': Counter(self.watched_data.get('directors', {})),
-                'actors': Counter(self.watched_data.get('actors', {})),
-                'languages': Counter(self.watched_data.get('languages', {})),
-                'keywords': Counter(self.watched_data.get('tmdb_keywords', {}))
-            }
-            
-            max_counts = {
-                'genres': max(user_prefs['genres'].values()) if user_prefs['genres'] else 1,
-                'directors': max(user_prefs['directors'].values()) if user_prefs['directors'] else 1,
-                'actors': max(user_prefs['actors'].values()) if user_prefs['actors'] else 1,
-                'languages': max(user_prefs['languages'].values()) if user_prefs['languages'] else 1,
-                'keywords': max(user_prefs['keywords'].values()) if user_prefs['keywords'] else 1
-            }
-    
-            # Genre Score
-            movie_genres = set(movie_info.get('genres', []))
-            if movie_genres:
-                genre_scores = []
-                for genre in movie_genres:
-                    genre_count = user_prefs['genres'].get(genre, 0)
-                    if genre_count > 0:
-                        if self.normalize_counters:
-                            # Enhanced normalization with square root to strengthen effect
-                            normalized_score = math.sqrt(genre_count / max_counts['genres'])
-                            genre_scores.append(normalized_score)
-                            score_breakdown['details']['genres'].append(
-                                f"{genre} (count: {genre_count}, norm: {round(normalized_score, 2)})"
-                            )
-                        else:
-                            # When not normalizing, use raw relative proportion
-                            normalized_score = min(genre_count / max_counts['genres'], 1.0)
-                            genre_scores.append(normalized_score)
-                            score_breakdown['details']['genres'].append(
-                                f"{genre} (count: {genre_count}, norm: {round(normalized_score, 2)})"
-                            )
-                if genre_scores:
-                    genre_final = (sum(genre_scores) / len(genre_scores)) * weights.get('genre_weight', 0.25)
-                    score += genre_final
-                    score_breakdown['genre_score'] = round(genre_final, 3)
-    
-            # Director Score
-            movie_directors = movie_info.get('directors', [])
-            if movie_directors:
-                director_scores = []
-                for director in movie_directors:
-                    director_count = user_prefs['directors'].get(director, 0)
-                    if director_count > 0:
-                        if self.normalize_counters:
-                            normalized_score = math.sqrt(director_count / max_counts['directors'])
-                        else:
-                            normalized_score = min(director_count / max_counts['directors'], 1.0)
-                        
-                        director_scores.append(normalized_score)
-                        score_breakdown['details']['directors'].append(
-                            f"{director} (count: {director_count}, norm: {round(normalized_score, 2)})"
-                        )
-                if director_scores:
-                    director_final = (sum(director_scores) / len(director_scores)) * weights.get('director_weight', 0.20)
-                    score += director_final
-                    score_breakdown['director_score'] = round(director_final, 3)
-    
-            # Actor Score
-            movie_cast = movie_info.get('cast', [])
-            if movie_cast:
-                actor_scores = []
-                matched_actors = 0
-                for actor in movie_cast:
-                    actor_count = user_prefs['actors'].get(actor, 0)
-                    if actor_count > 0:
-                        matched_actors += 1
-                        if self.normalize_counters:
-                            normalized_score = math.sqrt(actor_count / max_counts['actors'])
-                        else:
-                            normalized_score = min(actor_count / max_counts['actors'], 1.0)
-                            
-                        actor_scores.append(normalized_score)
-                        score_breakdown['details']['actors'].append(
-                            f"{actor} (count: {actor_count}, norm: {round(normalized_score, 2)})"
-                        )
-                if matched_actors > 0:
-                    actor_score = sum(actor_scores) / matched_actors
-                    if matched_actors > 3:
-                        actor_score *= (3 / matched_actors)  # Normalize if many matches
-                    actor_final = actor_score * weights.get('actor_weight', 0.20)
-                    score += actor_final
-                    score_breakdown['actor_score'] = round(actor_final, 3)
-    
-            # Language Score
-            movie_language = movie_info.get('language', 'N/A')
-            if movie_language != 'N/A':
-                movie_lang_lower = movie_language.lower()
-                            
-                lang_count = user_prefs['languages'].get(movie_lang_lower, 0)
-                
-                if lang_count > 0:
-                    if self.normalize_counters:
-                        normalized_score = math.sqrt(lang_count / max_counts['languages'])
-                    else:
-                        normalized_score = min(lang_count / max_counts['languages'], 1.0)
-                    
-                    lang_final = normalized_score * weights.get('language_weight', 0.10)
-                    score += lang_final
-                    score_breakdown['language_score'] = round(lang_final, 3)
-                    score_breakdown['details']['language'] = f"{movie_language} (count: {lang_count}, norm: {round(normalized_score, 2)})"
-    
-            # TMDB Keywords Score
-            if self.use_tmdb_keywords and movie_info.get('tmdb_keywords'):
-                keyword_scores = []
-                for kw in movie_info['tmdb_keywords']:
-                    count = user_prefs['keywords'].get(kw, 0)
-                    if count > 0:
-                        if self.normalize_counters:
-                            normalized_score = math.sqrt(count / max_counts['keywords'])
-                        else:
-                            normalized_score = min(count / max_counts['keywords'], 1.0)
-                            
-                        keyword_scores.append(normalized_score)
-                        score_breakdown['details']['keywords'].append(
-                            f"{kw} (count: {count}, norm: {round(normalized_score, 2)})"
-                        )
-                if keyword_scores:
-                    keyword_final = (sum(keyword_scores) / len(keyword_scores)) * weights.get('keyword_weight', 0.25)
-                    score += keyword_final
-                    score_breakdown['keyword_score'] = round(keyword_final, 3)
-    
-            # Ensure final score doesn't exceed 1.0 (100%)
-            score = min(score, 1.0)
-    
-            return score, score_breakdown
-    
-        except Exception as e:
-            log_warning(f"Error calculating similarity score for {movie_info.get('title', 'Unknown')}: {e}")
-            return 0.0, score_breakdown
+        # Build user profile from watched data
+        user_profile = {
+            'genres': self.watched_data.get('genres', {}),
+            'directors': self.watched_data.get('directors', {}),
+            'actors': self.watched_data.get('actors', {}),
+            'languages': self.watched_data.get('languages', {}),
+            'keywords': self.watched_data.get('tmdb_keywords', {})
+        }
+
+        # Build content info dict
+        content_info = {
+            'genres': movie_info.get('genres', []),
+            'directors': movie_info.get('directors', []),
+            'cast': movie_info.get('cast', []),
+            'language': movie_info.get('language', 'N/A'),
+            'keywords': movie_info.get('tmdb_keywords', [])
+        }
+
+        # Use shared scoring function
+        return calculate_similarity_score(
+            content_info=content_info,
+            user_profile=user_profile,
+            media_type='movie',
+            weights=self.weights,
+            normalize_counters=self.normalize_counters,
+            use_fuzzy_keywords=self.use_tmdb_keywords
+        )
     
     def _print_similarity_breakdown(self, movie_info: Dict, score: float, breakdown: Dict):
         """Print detailed breakdown of similarity score calculation"""
-        print(f"\n{CYAN}Similarity Score Breakdown for '{movie_info['title']}'{RESET}")
-        print(f"Total Score: {round(score * 100, 1)}%")
-        print(f"├─ Genre Score: {round(breakdown['genre_score'] * 100, 1)}%")
-        if breakdown['details']['genres']:
-            print(f"│  └─ Matching genres: {', '.join(breakdown['details']['genres'])}")
-        print(f"├─ Director Score: {round(breakdown['director_score'] * 100, 1)}%")
-        if breakdown['details']['directors']:
-            print(f"│  └─ Director match: {', '.join(breakdown['details']['directors'])}")
-        print(f"├─ Actor Score: {round(breakdown['actor_score'] * 100, 1)}%")
-        if breakdown['details']['actors']:
-            print(f"│  └─ Matching actors: {', '.join(breakdown['details']['actors'])}")
-        print(f"├─ Language Score: {round(breakdown['language_score'] * 100, 1)}%")
-        if breakdown['details']['language']:
-            print(f"│  └─ Language match: {breakdown['details']['language']}")
-        print(f"└─ Keyword Score: {round(breakdown['keyword_score'] * 100, 1)}%")
-        if breakdown['details']['keywords']:
-            print(f"   └─ Matching keywords: {', '.join(breakdown['details']['keywords'])}")
-        print("")
+        print_similarity_breakdown(movie_info, score, breakdown, 'movie')
 
     # ------------------------------------------------------------------------
     # GET RECOMMENDATIONS
@@ -1486,42 +1113,8 @@ class PlexMovieRecommender:
         }
     
     def _user_select_recommendations(self, recommended_movies: List[Dict], operation_label: str) -> List[Dict]:
-        prompt = (
-            f"\nWhich recommendations would you like to {operation_label}?\n"
-            "Enter 'all' or 'y' to select ALL,\n"
-            "Enter 'none' or 'n' to skip them,\n"
-            "Or enter a comma-separated list of numbers (e.g. 1,3,5). "
-            "\nYour choice: "
-        )
-        choice = input(prompt).strip().lower()
-    
-        if choice in ("n", "no", "none", ""):
-            log_warning(f"Skipping {operation_label} as per user choice.")
-            return []
-        if choice in ("y", "yes", "all"):
-            return recommended_movies
-    
-        indices_str = re.split(r'[,\s]+', choice)
-        chosen = []
-        for idx_str in indices_str:
-            idx_str = idx_str.strip()
-            if not idx_str.isdigit():
-                log_warning(f"Skipping invalid index: {idx_str}")
-                continue
-            idx = int(idx_str)
-            if 1 <= idx <= len(recommended_movies):
-                chosen.append(idx)
-            else:
-                log_warning(f"Skipping out-of-range index: {idx}")
-    
-        if not chosen:
-            log_warning(f"No valid indices selected, skipping {operation_label}.")
-            return []
-    
-        subset = []
-        for c in chosen:
-            subset.append(recommended_movies[c - 1])
-        return subset
+        """Prompt user to select recommendations - delegates to utility"""
+        return user_select_recommendations(recommended_movies, operation_label)
 
     # ------------------------------------------------------------------------
     # PLEX LABELS
@@ -1542,36 +1135,17 @@ class PlexMovieRecommender:
 
         try:
             movies_section = self.plex.library.section(self.library_title)
-            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
-
-            # Handle username appending for labels
-            if self.config.get('collections', {}).get('append_usernames', False):
-                if self.single_user:
-                    # For single user mode, only append the current user
-                    user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
-                    label_name = f"{label_name}_{user_suffix}"
-                else:
-                    # For combined mode, append all users
-                    users = []
-                    if self.users['plex_users']:
-                        users = self.users['plex_users']
-                    else:
-                        users = self.users['managed_users']
-
-                    if users:
-                        sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
-                        user_suffix = '_'.join(sanitized_users)
-                        label_name = f"{label_name}_{user_suffix}"
+            base_label = self.config.get('collections', {}).get('label_name', 'Recommended')
+            append_usernames = self.config.get('collections', {}).get('append_usernames', False)
+            users = self.users['plex_users'] or self.users['managed_users']
+            label_name = build_label_name(base_label, users, self.single_user, append_usernames)
 
             # Find new movies in Plex (if any were recommended)
             movies_to_update = []
             skipped_movies = []
             for rec in selected_movies:
-                plex_movie = next(
-                    (m for m in movies_section.search(title=rec['title'])
-                     if m.year == rec.get('year')),
-                    None
-                )
+                # Use fuzzy matching to handle titles like "Jason Bourne 4K"
+                plex_movie = find_plex_movie(movies_section, rec['title'], rec.get('year'))
                 if plex_movie:
                     plex_movie.reload()
                     movies_to_update.append(plex_movie)
@@ -1595,160 +1169,94 @@ class PlexMovieRecommender:
 
             # Get staleness threshold from config
             stale_days = self.config.get('collections', {}).get('stale_removal_days', 7)
-            from datetime import datetime, timedelta
-            stale_threshold = datetime.now() - timedelta(days=stale_days)
 
             # Get currently labeled movies
             currently_labeled = movies_section.search(label=label_name)
             print(f"Found {len(currently_labeled)} currently labeled movies")
 
-            # Get excluded genres for this user (for checking existing items)
+            # Get excluded genres for this user
             excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
 
-            # Separate into watched, unwatched-fresh, stale, and excluded
-            unwatched_labeled = []
-            watched_labeled = []
-            stale_labeled = []
-            excluded_labeled = []
-
-            for movie in currently_labeled:
-                movie.reload()  # Ensure fresh data
-                movie_id = int(movie.ratingKey)
-                label_key = f"{movie_id}_{label_name}"
-
-                # Check if this movie has excluded genres
-                movie_genres = [g.tag.lower() for g in movie.genres]
-                if any(g in excluded_genres for g in movie_genres):
-                    excluded_labeled.append(movie)
-                    continue
-
-                # Check if this movie has been watched by any of the users
-                if movie_id in self.watched_movie_ids:
-                    watched_labeled.append(movie)
-                else:
-                    # Check if stale (unwatched for > stale_days)
-                    label_date_str = self.label_dates.get(label_key)
-                    if label_date_str:
-                        label_date = datetime.fromisoformat(label_date_str)
-                        if label_date < stale_threshold:
-                            stale_labeled.append(movie)
-                        else:
-                            unwatched_labeled.append(movie)
-                    else:
-                        # No date tracked - assume it's new (keep it)
-                        unwatched_labeled.append(movie)
-                        # Track it now for future runs
-                        self.label_dates[label_key] = datetime.now().isoformat()
+            # Categorize labeled items using utility
+            categories = categorize_labeled_items(
+                currently_labeled, self.watched_movie_ids, excluded_genres,
+                label_name, self.label_dates, stale_days
+            )
+            unwatched_labeled = categories['fresh']
+            watched_labeled = categories['watched']
+            stale_labeled = categories['stale']
+            excluded_labeled = categories['excluded']
 
             print(f"{GREEN}Keeping {len(unwatched_labeled)} fresh unwatched recommendations{RESET}")
             print(f"{YELLOW}Removing {len(watched_labeled)} watched movies from recommendations{RESET}")
             print(f"{YELLOW}Removing {len(stale_labeled)} stale recommendations (unwatched > {stale_days} days){RESET}")
             print(f"{YELLOW}Removing {len(excluded_labeled)} movies with excluded genres{RESET}")
 
-            # Remove labels from watched movies
-            for movie in watched_labeled:
-                movie.removeLabel(label_name)
-                label_key = f"{int(movie.ratingKey)}_{label_name}"
-                if label_key in self.label_dates:
-                    del self.label_dates[label_key]
-                log_warning(f"Removed (watched): {movie.title}")
-
-            # Remove labels from stale movies
-            for movie in stale_labeled:
-                movie.removeLabel(label_name)
-                label_key = f"{int(movie.ratingKey)}_{label_name}"
-                if label_key in self.label_dates:
-                    del self.label_dates[label_key]
-                log_warning(f"Removed (stale): {movie.title}")
-
-            # Remove labels from excluded genre movies
-            for movie in excluded_labeled:
-                movie.removeLabel(label_name)
-                label_key = f"{int(movie.ratingKey)}_{label_name}"
-                if label_key in self.label_dates:
-                    del self.label_dates[label_key]
-                log_warning(f"Removed (excluded genre): {movie.title}")
+            # Remove labels using utilities
+            remove_labels_from_items(watched_labeled, label_name, self.label_dates, "watched")
+            remove_labels_from_items(stale_labeled, label_name, self.label_dates, "stale")
+            remove_labels_from_items(excluded_labeled, label_name, self.label_dates, "excluded genre")
 
             # Get target count from config
             target_count = self.config['general'].get('limit_plex_results', 50)
 
-            # Calculate how many new recommendations we need
-            current_unwatched_count = len(unwatched_labeled)
-            slots_available = target_count - current_unwatched_count
+            print(f"{GREEN}Building optimal collection of top {target_count} recommendations...{RESET}")
 
-            print(f"{GREEN}Collection capacity: {current_unwatched_count}/{target_count} (need {max(0, slots_available)} more){RESET}")
+            # Score ALL candidates: existing unwatched + new recommendations
+            all_candidates = {}  # movie_id -> (plex_movie, score)
 
-            # Get IDs of movies already in collection
-            already_labeled_ids = {int(m.ratingKey) for m in unwatched_labeled}
+            # Score existing unwatched items
+            for movie in unwatched_labeled:
+                movie_id = int(movie.ratingKey)
+                movie_info = self.movie_cache.cache['movies'].get(str(movie_id))
+                if movie_info:
+                    try:
+                        score, _ = self._calculate_similarity_from_cache(movie_info)
+                        all_candidates[movie_id] = (movie, score)
+                    except Exception:
+                        all_candidates[movie_id] = (movie, 0.0)
 
-            # Filter new recommendations to exclude already labeled movies
-            new_recommendations = []
-            if movies_to_update:
-                for movie in movies_to_update:
-                    movie_id = int(movie.ratingKey)
-                    if movie_id not in already_labeled_ids and movie_id not in self.watched_movie_ids:
-                        new_recommendations.append(movie)
-            else:
-                print(f"{YELLOW}No new recommendations available - cleanup only mode{RESET}")
-
-            # Take only what we need to fill gaps
-            movies_to_add = new_recommendations[:max(0, slots_available)]
-
-            if movies_to_add:
-                print(f"{GREEN}Adding {len(movies_to_add)} new recommendations to fill gaps{RESET}")
-            elif slots_available > 0:
-                print(f"{YELLOW}Need {slots_available} more movies but none available to add{RESET}")
-
-            # Add labels to new recommendations
-            for movie in movies_to_add:
-                current_labels = [label.tag for label in movie.labels]
-                if label_name not in current_labels:
-                    movie.addLabel(label_name)
-                    # Track label date
-                    label_key = f"{int(movie.ratingKey)}_{label_name}"
-                    self.label_dates[label_key] = datetime.now().isoformat()
-                    print(f"{GREEN}Added: {movie.title}{RESET}")
-
-            # Note: label_dates will be saved in _save_watched_cache()
-
-            # RE-SORT: Calculate similarity for all movies and sort by score
-            print(f"{GREEN}Re-calculating similarity scores for entire collection...{RESET}")
-
-            # Create a mapping of movie_id -> similarity_score from selected_movies (new recommendations)
-            similarity_scores = {}
+            # Score new recommendations
             for rec in selected_movies:
-                # Find the Plex object that matches this recommendation
-                matching_plex = next(
+                plex_movie = next(
                     (m for m in movies_to_update if m.title == rec['title'] and m.year == rec.get('year')),
                     None
                 )
-                if matching_plex:
-                    similarity_scores[int(matching_plex.ratingKey)] = rec.get('similarity_score', 0.0)
+                if plex_movie:
+                    movie_id = int(plex_movie.ratingKey)
+                    if movie_id not in self.watched_movie_ids:
+                        score = rec.get('similarity_score', 0.0)
+                        # Keep higher score if already exists
+                        if movie_id not in all_candidates or score > all_candidates[movie_id][1]:
+                            all_candidates[movie_id] = (plex_movie, score)
 
-            # Calculate similarity for unwatched movies from previous runs
-            for movie in unwatched_labeled:
-                movie_id = int(movie.ratingKey)
-                if movie_id not in similarity_scores:
-                    pass
-                    # Get movie from cache
-                    movie_info = self.movie_cache.cache['movies'].get(str(movie_id))
-                    if movie_info:
-                        try:
-                            similarity_score, _ = self._calculate_similarity_from_cache(movie_info)
-                            similarity_scores[movie_id] = similarity_score
-                        except Exception:
-                            similarity_scores[movie_id] = 0.0
-                    else:
-                        similarity_scores[movie_id] = 0.0
+            # Sort by score and take top N
+            sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
+            top_candidates = sorted_candidates[:target_count]
+            top_ids = {movie_id for movie_id, _ in top_candidates}
 
-            # Combine all labeled movies (unwatched + newly added)
-            final_collection_movies = unwatched_labeled + movies_to_add
+            # Determine what to add and remove
+            current_ids = {int(m.ratingKey) for m in unwatched_labeled}
+            ids_to_add = top_ids - current_ids
+            ids_to_remove = current_ids - top_ids
 
-            # Sort by similarity score (highest first)
-            final_collection_movies.sort(
-                key=lambda m: similarity_scores.get(int(m.ratingKey), 0.0),
-                reverse=True
-            )
+            # Remove items that didn't make the cut
+            if ids_to_remove:
+                movies_to_remove = [m for m in unwatched_labeled if int(m.ratingKey) in ids_to_remove]
+                print(f"{YELLOW}Removing {len(movies_to_remove)} lower-scoring items to make room for better ones{RESET}")
+                remove_labels_from_items(movies_to_remove, label_name, self.label_dates, "replaced by higher score")
+
+            # Add new high-scoring items
+            movies_to_add = [all_candidates[mid][0] for mid in ids_to_add if mid in all_candidates]
+            if movies_to_add:
+                print(f"{GREEN}Adding {len(movies_to_add)} new high-scoring recommendations{RESET}")
+                add_labels_to_items(movies_to_add, label_name, self.label_dates)
+
+            print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
+
+            # Build final collection from top candidates (already sorted by score)
+            similarity_scores = {movie_id: score for movie_id, (_, score) in top_candidates}
+            final_collection_movies = [plex_movie for movie_id, (plex_movie, score) in top_candidates]
 
             print(f"{GREEN}Final collection size: {len(final_collection_movies)} movies (sorted by similarity){RESET}")
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
@@ -1786,41 +1294,19 @@ def format_movie_output(movie: Dict,
                       show_rating: bool = False,
                       show_genres: bool = True,
                       show_imdb_link: bool = False) -> str:
-    bullet = f"{index}. " if index is not None else "- "
-    output = f"{bullet}{CYAN}{movie['title']}{RESET} ({movie.get('year', 'N/A')})"
-
-    if 'similarity_score' in movie:
-        score_percentage = round(movie['similarity_score'] * 100, 1)
-        output += f" - Similarity: {YELLOW}{score_percentage}%{RESET}"
-        
-    # Only add genres once and only if show_genres is True
-    if show_genres and movie.get('genres'):
-        output += f"\n  {YELLOW}Genres:{RESET} {', '.join(movie['genres'])}"
-
-    if show_summary and movie.get('summary'):
-        output += f"\n  {YELLOW}Summary:{RESET} {movie['summary']}"
-
-    if show_cast and movie.get('cast'):
-        output += f"\n  {YELLOW}Cast:{RESET} {', '.join(movie['cast'])}"
-
-    if show_director and movie.get('directors'):
-        if isinstance(movie['directors'], list):
-            output += f"\n  {YELLOW}Director:{RESET} {', '.join(movie['directors'])}"
-        else:
-            output += f"\n  {YELLOW}Director:{RESET} {movie['directors']}"
-
-    if show_language and movie.get('language') != "N/A":
-        output += f"\n  {YELLOW}Language:{RESET} {movie['language']}"
-
-    if show_rating and movie.get('ratings', {}).get('audience_rating', 0) > 0:
-        rating = movie['ratings']['audience_rating']
-        output += f"\n  {YELLOW}Rating:{RESET} {rating}/10"
-
-    if show_imdb_link and movie.get('imdb_id'):
-        imdb_link = f"https://www.imdb.com/title/{movie['imdb_id']}/"
-        output += f"\n  {YELLOW}IMDb Link:{RESET} {imdb_link}"
-
-    return output
+    """Format movie for display - delegates to shared utility"""
+    return format_media_output(
+        media=movie,
+        media_type='movie',
+        show_summary=show_summary,
+        index=index,
+        show_cast=show_cast,
+        show_director=show_director,
+        show_language=show_language,
+        show_rating=show_rating,
+        show_genres=show_genres,
+        show_imdb_link=show_imdb_link
+    )
 
 
 # ------------------------------------------------------------------------
@@ -1828,55 +1314,7 @@ def format_movie_output(movie: Dict,
 # ------------------------------------------------------------------------
 def adapt_root_config_to_legacy(root_config):
     """Convert root config.yml format to legacy MRFP format"""
-    media_type = 'movies'
-
-    # Build legacy config structure
-    adapted = {
-        'general': {
-            'confirm_operations': root_config.get('general', {}).get('confirm_operations', False),
-            'plex_only': root_config.get('general', {}).get('plex_only', True),
-            'combine_watch_history': root_config.get('general', {}).get('combine_watch_history', False),
-            'log_retention_days': root_config.get('general', {}).get('log_retention_days', 7),
-            'limit_plex_results': root_config.get(media_type, {}).get('limit_results', 50),
-            'exclude_genre': root_config.get('general', {}).get('exclude_genre', None),
-            'randomize_recommendations': root_config.get(media_type, {}).get('randomize_recommendations', False),
-            'normalize_counters': root_config.get(media_type, {}).get('normalize_counters', False),
-            'show_summary': root_config.get(media_type, {}).get('show_summary', True),
-            'show_cast': root_config.get(media_type, {}).get('show_cast', True),
-            'show_director': root_config.get(media_type, {}).get('show_director', True),
-            'show_genres': root_config.get(media_type, {}).get('show_genres', True),
-            'show_language': root_config.get(media_type, {}).get('show_language', True),
-            'show_rating': root_config.get(media_type, {}).get('show_rating', True),
-            'show_imdb_link': root_config.get(media_type, {}).get('show_imdb_link', True),
-        },
-        'plex': {
-            'url': root_config.get('plex', {}).get('url', ''),
-            'token': root_config.get('plex', {}).get('token', ''),
-            'movie_library_title': root_config.get('plex', {}).get('movie_library', 'Movies'),
-            'managed_users': root_config.get('plex', {}).get('managed_users', 'Admin'),
-        },
-        'collections': {
-            'add_label': root_config.get('collections', {}).get('add_label', True),
-            'label_name': root_config.get('collections', {}).get('label_name', 'Recommended'),
-            'append_usernames': root_config.get('collections', {}).get('append_usernames', True),
-            'remove_previous_recommendations': root_config.get('collections', {}).get('remove_previous_recommendations', False),
-            'stale_removal_days': root_config.get('collections', {}).get('stale_removal_days', 7),
-        },
-        'TMDB': {
-            'api_key': root_config.get('tmdb', {}).get('api_key', ''),
-            'use_TMDB_keywords': root_config.get('tmdb', {}).get('use_TMDB_keywords', True),
-        },
-        'plex_users': {
-            'users': root_config.get('users', {}).get('list', ''),
-        },
-        'user_preferences': root_config.get('users', {}).get('preferences', {}),
-        'weights': root_config.get(media_type, {}).get('weights', {}),
-        'quality_filters': root_config.get(media_type, {}).get('quality_filters', {}),
-        'recency_decay': root_config.get('recency_decay', {}),
-        'paths': root_config.get('platform', {}),
-    }
-
-    return adapted
+    return adapt_config_for_media_type(root_config, 'movies')
 
 # ------------------------------------------------------------------------
 # MAIN
