@@ -4,8 +4,13 @@ Handles Plex server connections, watch history, collections, and user management
 """
 
 import requests
+import urllib3
 import xml.etree.ElementTree as ET
 import plexapi.server
+
+# Suppress InsecureRequestWarning when verify_ssl=False (common for local Plex servers)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -320,6 +325,145 @@ def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_sect
     return watched_show_ids
 
 
+def fetch_show_completion_data(
+    config: Dict,
+    account_ids: List[str],
+    tv_section: Any
+) -> Dict[int, Dict]:
+    """
+    Fetch detailed watch completion data for TV shows.
+
+    Used to detect dropped shows - shows that were started but abandoned.
+
+    Args:
+        config: Configuration dict with plex URL and token
+        account_ids: List of account ID strings
+        tv_section: PlexAPI TV library section
+
+    Returns:
+        Dict mapping show_id to completion data:
+        {
+            'total_episodes': int,
+            'watched_episodes': int,
+            'completion_percent': float,
+            'last_watched': int (timestamp),
+        }
+    """
+    show_data = {}
+    show_episodes = {}  # show_id -> set of episode rating keys
+    show_last_watched = {}  # show_id -> most recent viewedAt
+
+    # Fetch watched episode data from history
+    for account_id in account_ids:
+        url = f"{config['plex']['url']}/status/sessions/history/all"
+        params = {
+            'X-Plex-Token': config['plex']['token'],
+            'accountID': account_id,
+            'librarySectionID': tv_section.key,
+            'sort': 'viewedAt:desc',
+            'X-Plex-Container-Size': 10000
+        }
+
+        try:
+            response = requests.get(
+                url, params=params,
+                verify=config['plex'].get('verify_ssl', False),
+                timeout=60
+            )
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+
+            for video in root.findall('.//Video'):
+                if video.get('type') == 'episode':
+                    grandparent_key_path = video.get('grandparentKey')
+                    if grandparent_key_path:
+                        show_id = int(grandparent_key_path.split('/')[-1])
+                        episode_key = video.get('ratingKey')
+                        viewed_at = int(video.get('viewedAt', 0))
+
+                        if show_id not in show_episodes:
+                            show_episodes[show_id] = set()
+                            show_last_watched[show_id] = 0
+
+                        show_episodes[show_id].add(episode_key)
+                        show_last_watched[show_id] = max(show_last_watched[show_id], viewed_at)
+
+        except Exception as e:
+            log_warning(f"Error fetching show completion data for account {account_id}: {e}")
+            continue
+
+    # Get total episode counts from library
+    for show in tv_section.all():
+        show_id = int(show.ratingKey)
+        if show_id in show_episodes:
+            try:
+                total_episodes = len(show.episodes())
+                watched_count = len(show_episodes[show_id])
+                completion = (watched_count / total_episodes * 100) if total_episodes > 0 else 0
+
+                show_data[show_id] = {
+                    'total_episodes': total_episodes,
+                    'watched_episodes': watched_count,
+                    'completion_percent': completion,
+                    'last_watched': show_last_watched[show_id],
+                    'title': show.title
+                }
+            except Exception:
+                continue
+
+    return show_data
+
+
+def identify_dropped_shows(
+    show_data: Dict[int, Dict],
+    config: Dict
+) -> Set[int]:
+    """
+    Identify shows that were started but dropped.
+
+    A show is considered "dropped" if:
+    - User watched at least min_episodes_watched episodes (gave it a chance)
+    - Completion is below max_completion_percent
+    - Show has more episodes than min threshold
+
+    Args:
+        show_data: Output from fetch_show_completion_data()
+        config: Configuration with negative_signals.dropped_shows settings
+
+    Returns:
+        Set of show IDs that are considered "dropped"
+    """
+    ns_config = config.get('negative_signals', {})
+    dropped_config = ns_config.get('dropped_shows', {})
+
+    if not ns_config.get('enabled', True) or not dropped_config.get('enabled', True):
+        return set()
+
+    min_episodes = dropped_config.get('min_episodes_watched', 2)
+    max_completion = dropped_config.get('max_completion_percent', 25)
+
+    dropped = set()
+
+    for show_id, data in show_data.items():
+        watched = data['watched_episodes']
+        completion = data['completion_percent']
+        total = data['total_episodes']
+
+        # Must have watched enough to "give it a chance"
+        if watched < min_episodes:
+            continue
+
+        # Only consider shows with enough episodes to meaningfully drop
+        if total <= min_episodes:
+            continue
+
+        # Consider dropped if low completion
+        if completion < max_completion:
+            dropped.add(show_id)
+
+    return dropped
+
+
 def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str], section: Any, media_type: str = 'movie') -> List[Dict]:
     """
     Fetch watch history with TMDB IDs for external recommendations.
@@ -419,21 +563,36 @@ def update_plex_collection(section: Any, collection_name: str, items: List[Any],
                 existing_collection = collection
                 break
 
+        target_collection = None
         if existing_collection:
             current_items = existing_collection.items()
             if current_items:
                 existing_collection.removeItems(current_items)
             existing_collection.addItems(items)
+            target_collection = existing_collection
             if logger:
                 logger.info(f"Updated collection: {collection_name} ({len(items)} items)")
             else:
                 print(f"Updated collection: {collection_name} ({len(items)} items)")
         else:
-            section.createCollection(title=collection_name, items=items)
+            target_collection = section.createCollection(title=collection_name, items=items)
             if logger:
                 logger.info(f"Created collection: {collection_name} ({len(items)} items)")
             else:
                 print(f"Created collection: {collection_name} ({len(items)} items)")
+
+        # Set custom sort order and reorder items to match our ranking
+        if target_collection and len(items) > 1:
+            try:
+                target_collection.sortUpdate(sort="custom")
+                # Move items in REVERSE order, each to the beginning
+                # This results in first item ending up at position 1
+                for item in reversed(items):
+                    target_collection.moveItem(item, after=None)
+            except Exception as e:
+                # Log but don't fail if reordering doesn't work
+                if logger:
+                    logger.warning(f"Could not set custom order: {e}")
 
         return True
 

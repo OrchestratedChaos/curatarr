@@ -23,12 +23,15 @@ from utils import (
     RATING_MULTIPLIERS, CACHE_VERSION, check_cache_version,
     TOP_CAST_COUNT, TMDB_RATE_LIMIT_DELAY, DEFAULT_RATING,
     WEIGHT_SUM_TOLERANCE, DEFAULT_LIMIT_PLEX_RESULTS, TOP_POOL_PERCENTAGE,
+    DEFAULT_NEGATIVE_MULTIPLIERS, DEFAULT_NEGATIVE_THRESHOLD,
     get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
+    fetch_show_completion_data, identify_dropped_shows,
     log_warning, log_error, update_plex_collection, cleanup_old_collections,
     load_config, init_plex, get_configured_users,
     get_excluded_genres_for_user,
+    get_negative_signals_config, get_negative_multiplier,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score,
     show_progress, TeeLogger,
@@ -40,13 +43,13 @@ from utils import (
     build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
     get_library_imdb_ids, print_similarity_breakdown,
     load_media_cache, save_media_cache, create_empty_counters,
-    save_watched_cache
+    save_watched_cache, process_counters_from_cache
 )
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -137,7 +140,6 @@ class PlexTVRecommender:
 
         self.confirm_operations = general_config.get('confirm_operations', False)
         self.limit_plex_results = general_config.get('limit_plex_results', DEFAULT_LIMIT_PLEX_RESULTS)
-        self.combine_watch_history = general_config.get('combine_watch_history', True)
         self.randomize_recommendations = general_config.get('randomize_recommendations', True)
         self.normalize_counters = general_config.get('normalize_counters', True)
         self.show_summary = general_config.get('show_summary', False)
@@ -178,7 +180,7 @@ class PlexTVRecommender:
 
         # Get user context for cache files
         if single_user:
-            user_ctx = f"plex_{single_user}" if not self.users['plex_users'] else f"plex_{single_user}"
+            user_ctx = f"plex_{single_user}"
         else:
             if self.users['plex_users']:
                 user_ctx = 'plex_' + '_'.join(self.users['plex_users'])
@@ -342,10 +344,25 @@ class PlexTVRecommender:
             return counters
 
         # Use shared utility to fetch watch history
-        watched_show_ids = fetch_plex_watch_history_shows(self.config, account_ids)
+        watched_show_ids = fetch_plex_watch_history_shows(self.config, account_ids, shows_section)
 
         # Store watched show IDs
         self.watched_show_ids.update(watched_show_ids)
+
+        # Detect dropped shows (started but abandoned)
+        dropped_show_ids = set()
+        ns_config = self.config.get('negative_signals', {})
+        dropped_config = ns_config.get('dropped_shows', {})
+        if ns_config.get('enabled', True) and dropped_config.get('enabled', True):
+            print(f"{YELLOW}Analyzing show completion for dropped show detection...{RESET}")
+            show_completion_data = fetch_show_completion_data(self.config, account_ids, shows_section)
+            dropped_show_ids = identify_dropped_shows(show_completion_data, self.config)
+            if dropped_show_ids:
+                logger.info(f"Identified {len(dropped_show_ids)} dropped shows as negative signals")
+                for show_id in dropped_show_ids:
+                    if show_id in show_completion_data:
+                        data = show_completion_data[show_id]
+                        logger.debug(f"Dropped: {data.get('title')} ({data['watched_episodes']}/{data['total_episodes']} eps, {data['completion_percent']:.0f}%)")
 
         # Build view count map for rewatch weighting
         show_view_counts = {}
@@ -357,22 +374,41 @@ class PlexTVRecommender:
         except Exception:
             pass  # Fall back to no rewatch weighting if this fails
 
-        # Process show metadata from cache
+        # Process show metadata from cache - exclude dropped shows from positive signals
+        normal_watched = watched_show_ids - dropped_show_ids
         print(f"")
-        print(f"Processing {len(watched_show_ids)} unique watched shows from Plex history:")
-        for i, show_id in enumerate(watched_show_ids, 1):
-            show_progress("Processing", i, len(watched_show_ids))
+        print(f"Processing {len(normal_watched)} watched shows (excluding {len(dropped_show_ids)} dropped):")
+
+        for i, show_id in enumerate(normal_watched, 1):
+            show_progress("Processing", i, len(normal_watched))
 
             show_info = self.show_cache.cache['shows'].get(str(show_id))
             if show_info:
                 # Calculate rewatch multiplier based on view count
                 rewatch_multiplier = calculate_rewatch_multiplier(show_view_counts.get(show_id, 1))
-                self._process_show_counters_from_cache(show_info, counters, rewatch_multiplier)
+                process_counters_from_cache(show_info, counters, media_type='tv', weight=rewatch_multiplier)
 
                 if tmdb_id := show_info.get('tmdb_id'):
                     counters['tmdb_ids'].add(tmdb_id)
             else:
                 not_found_count += 1
+
+        # Process dropped shows as negative signals
+        if dropped_show_ids:
+            penalty_mult = dropped_config.get('penalty_multiplier', -0.4)
+            print(f"")
+            print(f"{YELLOW}Processing {len(dropped_show_ids)} dropped shows as negative signals...{RESET}")
+
+            for show_id in dropped_show_ids:
+                show_info = self.show_cache.cache['shows'].get(str(show_id))
+                if show_info:
+                    # Process with negative weight
+                    cap_penalty = dropped_config.get('cap_penalty', 0.5)
+                    process_counters_from_cache(show_info, counters, media_type='tv', weight=penalty_mult, cap_penalty=cap_penalty)
+
+                    # Still track TMDB ID so we don't recommend the same show
+                    if tmdb_id := show_info.get('tmdb_id'):
+                        counters['tmdb_ids'].add(tmdb_id)
 
         logger.debug(f"Watched shows not in cache: {not_found_count}, TMDB IDs collected: {len(counters['tmdb_ids'])}")
 
@@ -422,8 +458,8 @@ class PlexTVRecommender:
                     
                     show_info = self.show_cache.cache['shows'].get(str(show.ratingKey))
                     if show_info:
-                        self._process_show_counters_from_cache(show_info, counters)
-                        
+                        process_counters_from_cache(show_info, counters, media_type='tv')
+
                         # Explicitly add TMDB ID to the set if available
                         if tmdb_id := show_info.get('tmdb_id'):
                             counters['tmdb_ids'].add(tmdb_id)
@@ -454,42 +490,6 @@ class PlexTVRecommender:
 
     def _save_cache(self):
         self._save_watched_cache()
-
-    def _process_show_counters_from_cache(self, show_info: Dict, counters: Dict, rewatch_multiplier: float = 1.0) -> None:
-        try:
-            rating = float(show_info.get('user_rating', 0))
-            if not rating:
-                rating = float(show_info.get('audience_rating', DEFAULT_RATING))
-            rating = max(0, min(10, int(round(rating))))
-            multiplier = RATING_MULTIPLIERS.get(rating, 1.0) * rewatch_multiplier
-    
-            # Process all counters using cached data
-            for genre in show_info.get('genres', []):
-                counters['genres'][genre] += multiplier
-            
-            if studio := show_info.get('studio'):
-                counters['studio'][studio.lower()] += multiplier
-                
-            for actor in show_info.get('cast', [])[:TOP_CAST_COUNT]:
-                counters['actors'][actor] += multiplier
-
-            if language := show_info.get('language'):
-                counters['languages'][language.lower()] += multiplier
-                
-            # Store TMDB data in caches if available
-            if tmdb_id := show_info.get('tmdb_id'):
-                # Using the show_id from the cache key instead of ratingKey
-                show_id = next((k for k, v in self.show_cache.cache['shows'].items() 
-                              if v.get('title') == show_info['title'] and 
-                              v.get('year') == show_info.get('year')), None)
-                if show_id:
-                    self.plex_tmdb_cache[str(show_id)] = tmdb_id
-                    if keywords := show_info.get('tmdb_keywords', []):
-                        self.tmdb_keywords_cache[str(tmdb_id)] = keywords
-                        counters['tmdb_keywords'].update({k: multiplier for k in keywords})
-    
-        except Exception as e:
-            log_warning(f"Error processing counters for {show_info.get('title')}: {e}")
 
     # ------------------------------------------------------------------------
     # LIBRARY UTILITIES
@@ -1019,7 +1019,6 @@ def main():
 
     general = base_config.get('general', {})
     log_retention_days = general.get('log_retention_days', 7)
-    combine_watch_history = general.get('combine_watch_history', True)
 
     # Process single user mode
     single_user = args.username
@@ -1028,57 +1027,69 @@ def main():
 
     # Get all users that need to be processed
     all_users = []
-    plex_config = base_config.get('plex_users', {})
-    plex_users = plex_config.get('users')
-    
-    # Check if Plex users are configured and not 'none'
-    if plex_users and str(plex_users).lower() != 'none':
-        # Process Plex users
-        if isinstance(plex_users, str):
-            all_users = [u.strip() for u in plex_users.split(',') if u.strip()]
-        elif isinstance(plex_users, list):
-            all_users = plex_users
-    else:
-        # Fall back to managed users if Plex users not configured or is 'none'
-        managed_users = base_config['plex'].get('managed_users', '')
-        all_users = [u.strip() for u in managed_users.split(',') if u.strip()]
 
-    # If single user specified, only process that user
+    # Check users.list first (new config format)
+    users_config = base_config.get('users', {})
+    user_list = users_config.get('list', '')
+    if user_list:
+        if isinstance(user_list, str):
+            all_users = [u.strip() for u in user_list.split(',') if u.strip()]
+        elif isinstance(user_list, list):
+            all_users = user_list
+
+    # Fall back to plex_users.users (legacy format)
+    if not all_users:
+        plex_config = base_config.get('plex_users', {})
+        plex_users = plex_config.get('users')
+        if plex_users and str(plex_users).lower() != 'none':
+            if isinstance(plex_users, str):
+                all_users = [u.strip() for u in plex_users.split(',') if u.strip()]
+            elif isinstance(plex_users, list):
+                all_users = plex_users
+
+    # Fall back to plex.managed_users (oldest format)
+    if not all_users:
+        managed_users = base_config.get('plex', {}).get('managed_users', '')
+        if managed_users:
+            all_users = [u.strip() for u in managed_users.split(',') if u.strip()]
+
+    # If single user specified via command line, override the user list
     if single_user:
         all_users = [single_user]
 
-    if combine_watch_history or not all_users:
-        # Original behavior - single run
-        process_recommendations(base_config, config_path, log_retention_days, single_user=single_user)
-    else:
-        # Individual runs for each user
-        for user in all_users:
-            print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
-            print("-" * 50)
-            
-            # Create modified config for this user
-            user_config = copy.deepcopy(base_config)
-            
-            # Resolve Admin to actual username if needed
-            resolved_user = user
-            try:
-                account = MyPlexAccount(token=base_config['plex']['token'])
-                admin_username = account.username
-                if user.lower() in ['admin', 'administrator']:
-                    resolved_user = admin_username
-                    log_warning(f"Resolved Admin to: {admin_username}")
-            except Exception as e:
-                log_warning(f"Could not resolve admin username: {e}")
-            
-            if 'managed_users' in user_config['plex']:
-                user_config['plex']['managed_users'] = resolved_user
-            elif 'users' in user_config.get('plex_users', {}):
-                user_config['plex_users']['users'] = [resolved_user]
-            
-            # Process recommendations for this user
-            process_recommendations(user_config, config_path, log_retention_days, single_user=resolved_user)
-            print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
-            print("-" * 50)
+    if not all_users:
+        # No users configured - shouldn't happen but handle gracefully
+        log_error("No users configured. Please configure plex_users or managed_users in config.yml")
+        sys.exit(1)
+
+    # Process each user individually
+    for user in all_users:
+        print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
+        print("-" * 50)
+
+        # Create modified config for this user
+        user_config = copy.deepcopy(base_config)
+
+        # Resolve Admin to actual username if needed
+        resolved_user = user
+        try:
+            account = MyPlexAccount(token=base_config['plex']['token'])
+            admin_username = account.username
+            if user.lower() in ['admin', 'administrator']:
+                resolved_user = admin_username
+                log_warning(f"Resolved Admin to: {admin_username}")
+        except Exception as e:
+            log_warning(f"Could not resolve admin username: {e}")
+
+        if 'managed_users' in user_config['plex']:
+            user_config['plex']['managed_users'] = resolved_user
+        elif 'users' in user_config.get('plex_users', {}):
+            user_config['plex_users']['users'] = [resolved_user]
+
+        # Process recommendations for this user
+        process_recommendations(user_config, config_path, log_retention_days, single_user=resolved_user)
+        print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
+        print("-" * 50)
 
     runtime = datetime.now() - start_time
     hours = runtime.seconds // 3600
