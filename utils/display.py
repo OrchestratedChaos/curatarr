@@ -153,6 +153,12 @@ def print_status(message: str, level: str = "info") -> None:
         logger.info(message)
 
 
+def log_info(message: str) -> None:
+    """Log info message."""
+    logger = logging.getLogger('plex_recommender')
+    logger.info(message)
+
+
 def log_warning(message: str) -> None:
     """Log warning with yellow color (via ColoredFormatter)."""
     logger = logging.getLogger('plex_recommender')

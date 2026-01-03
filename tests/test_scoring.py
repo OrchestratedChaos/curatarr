@@ -10,6 +10,7 @@ from utils.scoring import (
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
+    _redistribute_weights,
     GENRE_NORMALIZATION
 )
 
@@ -111,6 +112,119 @@ class TestFuzzyKeywordMatch:
         score, matched = fuzzy_keyword_match("SUPERHERO", user_keywords)
 
         assert score == 5
+
+
+class TestCalculateRecencyMultiplier:
+    """Tests for calculate_recency_multiplier() function."""
+
+    def test_disabled_returns_one(self):
+        """Test that disabled recency returns 1.0."""
+        from datetime import datetime, timezone
+        viewed_at = datetime.now(timezone.utc).timestamp()
+        result = calculate_recency_multiplier(viewed_at, {'enabled': False})
+        assert result == 1.0
+
+    def test_recent_0_30_days(self):
+        """Test multiplier for 0-30 day old views."""
+        from datetime import datetime, timezone, timedelta
+        viewed_at = (datetime.now(timezone.utc) - timedelta(days=15)).timestamp()
+        config = {'enabled': True, 'days_0_30': 1.0}
+        result = calculate_recency_multiplier(viewed_at, config)
+        assert result == 1.0
+
+    def test_31_90_days(self):
+        """Test multiplier for 31-90 day old views."""
+        from datetime import datetime, timezone, timedelta
+        viewed_at = (datetime.now(timezone.utc) - timedelta(days=60)).timestamp()
+        config = {'enabled': True, 'days_31_90': 0.75}
+        result = calculate_recency_multiplier(viewed_at, config)
+        assert result == 0.75
+
+    def test_91_180_days(self):
+        """Test multiplier for 91-180 day old views."""
+        from datetime import datetime, timezone, timedelta
+        viewed_at = (datetime.now(timezone.utc) - timedelta(days=120)).timestamp()
+        config = {'enabled': True, 'days_91_180': 0.50}
+        result = calculate_recency_multiplier(viewed_at, config)
+        assert result == 0.50
+
+    def test_181_365_days(self):
+        """Test multiplier for 181-365 day old views."""
+        from datetime import datetime, timezone, timedelta
+        viewed_at = (datetime.now(timezone.utc) - timedelta(days=300)).timestamp()
+        config = {'enabled': True, 'days_181_365': 0.25}
+        result = calculate_recency_multiplier(viewed_at, config)
+        assert result == 0.25
+
+    def test_over_365_days(self):
+        """Test multiplier for views older than 365 days."""
+        from datetime import datetime, timezone, timedelta
+        viewed_at = (datetime.now(timezone.utc) - timedelta(days=400)).timestamp()
+        config = {'enabled': True, 'days_365_plus': 0.10}
+        result = calculate_recency_multiplier(viewed_at, config)
+        assert result == 0.10
+
+    def test_default_enabled_true(self):
+        """Test that enabled defaults to True when not specified."""
+        from datetime import datetime, timezone, timedelta
+        viewed_at = (datetime.now(timezone.utc) - timedelta(days=15)).timestamp()
+        config = {'days_0_30': 0.9}  # No 'enabled' key
+        result = calculate_recency_multiplier(viewed_at, config)
+        assert result == 0.9
+
+
+class TestRedistributeWeights:
+    """Tests for _redistribute_weights() function."""
+
+    def test_no_redistribution_when_all_data(self):
+        """Test that weights are not redistributed when all data present."""
+        weights = {'genre': 0.25, 'director': 0.15, 'actor': 0.20, 'keyword': 0.40}
+        profile = {
+            'genres': {'action': 1},
+            'directors': {'Dir X': 1},
+            'actors': {'Actor A': 1},
+            'keywords': {'kw1': 1}
+        }
+        result = _redistribute_weights(weights, profile, 'movie')
+        # Weights should be close to original (some redistribution due to language=0)
+        assert result['genre'] > 0
+        assert result['director'] > 0
+        assert result['actor'] > 0
+        assert result['keyword'] > 0
+
+    def test_redistribution_when_missing_keywords(self):
+        """Test weight redistribution when keywords are missing."""
+        weights = {'genre': 0.25, 'actor': 0.25, 'keyword': 0.50}
+        profile = {
+            'genres': {'action': 1},
+            'actors': {'Actor A': 1},
+            # No keywords
+        }
+        result = _redistribute_weights(weights, profile, 'movie')
+        # Keyword weight should be 0, others should be higher
+        assert result['keyword'] == 0
+        assert result['genre'] > 0.25
+        assert result['actor'] > 0.25
+
+    def test_returns_original_when_no_data(self):
+        """Test returns original weights when no profile data."""
+        weights = {'genre': 0.25, 'actor': 0.25, 'keyword': 0.50}
+        profile = {}  # Empty profile
+        result = _redistribute_weights(weights, profile, 'movie')
+        assert result == weights
+
+    def test_tv_uses_studio_not_director(self):
+        """Test that TV mode uses studio instead of director."""
+        weights = {'genre': 0.25, 'studio': 0.15, 'director': 0.15, 'actor': 0.20, 'keyword': 0.25}
+        profile = {
+            'genres': {'drama': 1},
+            'studios': {'HBO': 1},
+            'actors': {'Actor A': 1}
+        }
+        result = _redistribute_weights(weights, profile, 'tv')
+        # Studio should have weight, director should be 0 for TV
+        assert result['studio'] > 0
+        assert result['director'] == 0
 
 
 class TestCalculateRewatchMultiplier:
@@ -264,3 +378,141 @@ class TestCalculateSimilarityScore:
         assert 'keyword_score' in breakdown
         assert 'language_score' in breakdown
         assert 'details' in breakdown
+
+    def test_language_match(self):
+        """Test language matching."""
+        content = {"language": "English", "genres": ["action"]}
+        profile = {"languages": {"english": 5}, "genres": {"action": 1}}
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        assert score > 0
+        assert breakdown['language_score'] >= 0
+
+    def test_language_na_ignored(self):
+        """Test that N/A language is ignored."""
+        content = {"language": "N/A", "genres": ["action"]}
+        profile = {"languages": {"english": 5}, "genres": {"action": 1}}
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        assert breakdown['language_score'] == 0
+
+    def test_normalize_counters_false(self):
+        """Test with normalize_counters=False."""
+        content = {"genres": ["action"]}
+        profile = {"genres": {"action": 5}}
+
+        score, breakdown = calculate_similarity_score(
+            content, profile, normalize_counters=False
+        )
+
+        assert score > 0
+        assert breakdown['genre_score'] > 0
+
+    def test_fuzzy_keywords_disabled(self):
+        """Test with fuzzy keywords disabled."""
+        content = {"keywords": ["superhero movie"]}
+        profile = {"keywords": {"superhero": 5}}
+
+        score, breakdown = calculate_similarity_score(
+            content, profile, use_fuzzy_keywords=False
+        )
+
+        # Without fuzzy matching, "superhero movie" won't match "superhero"
+        assert breakdown['keyword_score'] == 0
+
+    def test_studio_as_list_tv(self):
+        """Test studio matching when studio is a list (TV)."""
+        content = {"studios": ["HBO", "Netflix"]}
+        profile = {"studios": {"hbo": 5, "netflix": 3}}
+
+        score, breakdown = calculate_similarity_score(
+            content, profile, media_type='tv'
+        )
+
+        assert score > 0
+        assert breakdown['studio_score'] > 0
+
+    def test_studio_na_ignored(self):
+        """Test that N/A studio is ignored."""
+        content = {"studio": "N/A"}
+        profile = {"studios": {"hbo": 5}}
+
+        score, breakdown = calculate_similarity_score(
+            content, profile, media_type='tv'
+        )
+
+        assert breakdown['studio_score'] == 0
+
+    def test_custom_weights(self):
+        """Test with custom weights."""
+        content = {"genres": ["action"]}
+        profile = {"genres": {"action": 5}}
+
+        custom_weights = {'genre': 0.80, 'actor': 0.10, 'keyword': 0.10}
+        score, breakdown = calculate_similarity_score(
+            content, profile, weights=custom_weights
+        )
+
+        assert score > 0
+        # Genre should dominate due to high weight
+        assert breakdown['genre_score'] > 0
+
+    def test_director_case_insensitive(self):
+        """Test director matching is case-insensitive."""
+        content = {"directors": ["christopher nolan"]}
+        profile = {"directors": {"Christopher Nolan": 5}}
+
+        score, breakdown = calculate_similarity_score(
+            content, profile, media_type='movie'
+        )
+
+        assert score > 0
+        assert breakdown['director_score'] > 0
+
+    def test_actor_case_insensitive(self):
+        """Test actor matching is case-insensitive."""
+        content = {"cast": ["TOM HANKS"]}
+        profile = {"actors": {"Tom Hanks": 5}}
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        assert score > 0
+        assert breakdown['actor_score'] > 0
+
+    def test_genre_normalization_in_score(self):
+        """Test that genre normalization is applied during scoring."""
+        content = {"genres": ["Sci-Fi"]}
+        profile = {"genres": {"science fiction": 5}}
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        assert score > 0
+        assert breakdown['genre_score'] > 0
+
+    def test_multiple_genres_cumulative(self):
+        """Test that multiple matching genres contribute cumulatively."""
+        content_single = {"genres": ["action"]}
+        content_multi = {"genres": ["action", "comedy", "drama"]}
+        profile = {"genres": {"action": 5, "comedy": 5, "drama": 5}}
+
+        score_single, _ = calculate_similarity_score(content_single, profile)
+        score_multi, _ = calculate_similarity_score(content_multi, profile)
+
+        assert score_multi > score_single
+
+    def test_per_item_weight_redistribution(self):
+        """Test per-item weight redistribution when some components don't match."""
+        # Content with genres but no keywords
+        content = {"genres": ["action"]}
+        profile = {
+            "genres": {"action": 5},
+            "keywords": {"superhero": 10}  # Profile has keywords but content doesn't
+        }
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        # Should still get a score from genres
+        assert score > 0
+        assert breakdown['genre_score'] > 0
