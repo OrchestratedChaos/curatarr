@@ -51,7 +51,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.5"
+__version__ = "1.6.6"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -691,7 +691,8 @@ class PlexTVRecommender:
             'studio': show_info.get('studio', 'N/A'),
             'cast': show_info.get('cast', []),
             'language': show_info.get('language', 'N/A'),
-            'keywords': show_info.get('tmdb_keywords', [])
+            'keywords': show_info.get('tmdb_keywords', []),
+            'vote_count': show_info.get('vote_count', 0)
         }
 
         # Use shared scoring function
