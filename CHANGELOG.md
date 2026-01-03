@@ -2,6 +2,34 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.0] - 2026-01-03
+
+### Added
+- **Negative signals** — Low-rated content and dropped shows now penalize similar recommendations
+  - Ratings 0-3 apply negative multipliers (-1.0 to -0.3) instead of weak positive
+  - Dropped TV shows (started but abandoned) generate negative signals
+  - Configurable via `negative_signals` section in config
+  - Capped penalties prevent one bad movie from destroying a genre preference
+- **Tests** — Added comprehensive tests for recommenders and utilities
+  - 25 new tests for `recommenders/base.py` (22% → 95% coverage)
+  - 20 new tests for `recommenders/movie.py`
+  - 11 new tests for `utils/plex.py` (85% → 97% coverage)
+  - 5 new tests for pre-calculated weight parameter
+  - Total: 488 tests passing, utils/ at 96%+ coverage
+
+### Changed
+- **Counter processing consolidation** — Removed duplicate methods from recommenders
+  - Movie and TV recommenders now use shared `process_counters_from_cache()`
+  - Added `weight` and `cap_penalty` parameters for pre-calculated weights
+  - Removed ~55 lines of duplicate code from each recommender
+
+### Fixed
+- **Collection sort order** — Collections now sort correctly using reverse `moveItem()` approach
+- **Redundant ternary expressions** — Simplified `x if x else None` patterns in recommenders
+
+### Removed
+- **combine_watch_history** — Removed unused feature and dead code assignments
+
 ## [1.5.0] - 2026-01-03
 
 ### Fixed

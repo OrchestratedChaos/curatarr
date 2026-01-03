@@ -516,3 +516,125 @@ class TestCalculateSimilarityScore:
         # Should still get a score from genres
         assert score > 0
         assert breakdown['genre_score'] > 0
+
+
+class TestNegativeSignalsScoring:
+    """Tests for negative signal handling in calculate_similarity_score()."""
+
+    def test_negative_genre_reduces_score(self):
+        """Test that negative genre preference reduces score."""
+        content = {"genres": ["action", "comedy"]}
+        profile_positive = {"genres": {"action": 5, "comedy": 5}}
+        profile_with_negative = {"genres": {"action": 5, "comedy": -3}}
+
+        score_positive, _ = calculate_similarity_score(content, profile_positive)
+        score_negative, breakdown = calculate_similarity_score(content, profile_with_negative)
+
+        assert score_negative < score_positive
+        # Check breakdown shows negative
+        assert any("NEGATIVE" in str(d) for d in breakdown['details']['genres'])
+
+    def test_negative_actor_reduces_score(self):
+        """Test that negative actor preference reduces score."""
+        content = {"cast": ["Actor A", "Actor B"]}
+        profile_positive = {"actors": {"Actor A": 5, "Actor B": 3}}
+        profile_with_negative = {"actors": {"Actor A": 5, "Actor B": -2}}
+
+        score_positive, _ = calculate_similarity_score(content, profile_positive)
+        score_negative, _ = calculate_similarity_score(content, profile_with_negative)
+
+        assert score_negative < score_positive
+
+    def test_negative_keyword_reduces_score(self):
+        """Test that negative keyword preference reduces score."""
+        content = {"keywords": ["superhero", "origin story"]}
+        profile_positive = {"tmdb_keywords": {"superhero": 10, "origin story": 5}}
+        profile_with_negative = {"tmdb_keywords": {"superhero": 10, "origin story": -3}}
+
+        score_positive, _ = calculate_similarity_score(content, profile_positive)
+        score_negative, _ = calculate_similarity_score(content, profile_with_negative)
+
+        assert score_negative < score_positive
+
+    def test_negative_director_reduces_score(self):
+        """Test that negative director preference reduces score."""
+        content = {"directors": ["Director X", "Director Y"]}
+        profile_positive = {"directors": {"Director X": 5, "Director Y": 3}}
+        profile_with_negative = {"directors": {"Director X": 5, "Director Y": -2}}
+
+        score_positive, _ = calculate_similarity_score(content, profile_positive, media_type='movie')
+        score_negative, _ = calculate_similarity_score(content, profile_with_negative, media_type='movie')
+
+        assert score_negative < score_positive
+
+    def test_negative_studio_reduces_score(self):
+        """Test that negative studio preference reduces score."""
+        content = {"studio": "hbo"}
+        profile_positive = {"studios": {"hbo": 5}}
+        profile_with_negative = {"studios": {"hbo": -3}}
+
+        score_positive, _ = calculate_similarity_score(content, profile_positive, media_type='tv')
+        score_negative, breakdown = calculate_similarity_score(content, profile_with_negative, media_type='tv')
+
+        assert score_negative < score_positive
+        assert "NEGATIVE" in str(breakdown['details']['studio'])
+
+    def test_score_not_negative(self):
+        """Test that score doesn't go below 0 even with all negative signals."""
+        content = {"genres": ["action", "comedy"], "cast": ["Actor A"]}
+        profile = {
+            "genres": {"action": -5, "comedy": -5},
+            "actors": {"Actor A": -10}
+        }
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        # Score should be non-negative
+        assert score >= 0
+        assert breakdown['genre_score'] >= 0
+        assert breakdown['actor_score'] >= 0
+
+    def test_max_positive_ignores_negatives(self):
+        """Test that max_positive calculation ignores negative values."""
+        content = {"genres": ["action"]}
+        # Profile with one highly positive and one highly negative
+        profile = {"genres": {"action": 10, "horror": -100}}
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        # Should score based on action:10, not affected by horror:-100
+        assert score > 0
+        assert breakdown['genre_score'] > 0
+
+    def test_mixed_positive_negative_genres(self):
+        """Test content with mix of positive and negative genre matches."""
+        content = {"genres": ["action", "horror", "comedy"]}
+        profile = {
+            "genres": {
+                "action": 10,   # User loves action
+                "horror": -5,   # User dislikes horror
+                "comedy": 3     # User likes comedy
+            }
+        }
+
+        score_with_horror, breakdown = calculate_similarity_score(content, profile)
+
+        # Compare to content without horror
+        content_no_horror = {"genres": ["action", "comedy"]}
+        score_no_horror, _ = calculate_similarity_score(content_no_horror, profile)
+
+        # Having horror (which user dislikes) should reduce score
+        assert score_with_horror < score_no_horror
+
+    def test_negative_penalty_in_breakdown_details(self):
+        """Test that negative penalty is shown in breakdown details."""
+        content = {"genres": ["horror"]}
+        profile = {"genres": {"horror": -5}}
+
+        score, breakdown = calculate_similarity_score(content, profile)
+
+        # Check that breakdown details show the negative signal
+        genre_details = breakdown['details']['genres']
+        assert len(genre_details) > 0
+        assert "NEGATIVE" in genre_details[0]
+        assert "penalty" in genre_details[0]
