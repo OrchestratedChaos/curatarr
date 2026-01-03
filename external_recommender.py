@@ -8,22 +8,27 @@ import os
 import sys
 import yaml
 import json
+import math
 import requests
 import urllib3
 from datetime import datetime
+from collections import Counter
 from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Import shared utilities
+# Import shared utilities - same as internal recommenders
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    get_plex_account_ids,
+    RATING_MULTIPLIERS, GENRE_NORMALIZATION,
+    get_plex_account_ids, get_tmdb_config,
     fetch_watch_history_with_tmdb,
     print_user_header, print_user_footer, print_status,
-    log_warning, log_error, load_config
+    log_warning, log_error, load_config,
+    calculate_rewatch_multiplier, calculate_recency_multiplier,
+    calculate_similarity_score, normalize_genre, fuzzy_keyword_match
 )
 
 # TMDB Genre ID mappings
@@ -76,24 +81,422 @@ SERVICE_DISPLAY_NAMES = {
     'shudder': 'Shudder'
 }
 
+# Reverse TMDB genre mappings (name to ID) for Discover API
+TMDB_MOVIE_GENRE_IDS = {v.lower(): k for k, v in TMDB_MOVIE_GENRES.items()}
+TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
+
+# Quality thresholds for candidate filtering
+MIN_RATING = 6.0
+MIN_VOTE_COUNT = 100
+MAX_CANDIDATES = 500
+
+# Default weights (specificity-first approach - same as internal recommenders)
+# Director/language reduced - most people don't care about director, language data unreliable
+DEFAULT_WEIGHTS = {
+    'genre': 0.25,
+    'director': 0.05,  # movies - low weight
+    'studio': 0.10,    # TV shows
+    'actor': 0.20,
+    'keyword': 0.50,   # Primary driver - most specific signal
+    'language': 0.0    # Disabled - data unreliable
+}
+
+
+def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, media_type='movie', max_candidates=500):
+    """
+    Discover candidates using TMDB Discover API based on user profile.
+    Searches by top genres and keywords for higher quality matches.
+    """
+    print(f"  Discovering candidates via TMDB Discover API...")
+
+    candidates = {}  # tmdb_id -> basic info
+    media = 'movie' if media_type == 'movie' else 'tv'
+
+    # Get top genres from profile
+    top_genres = list(user_profile['genres'].most_common(5))
+    genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == 'movie' else TMDB_TV_GENRE_IDS
+
+    # Get top keywords from profile
+    top_keywords = list(user_profile['keywords'].most_common(10))
+
+    # Search by top genres
+    for genre_name, _ in top_genres:
+        if len(candidates) >= max_candidates:
+            break
+
+        # Normalize and find genre ID
+        normalized = normalize_genre(genre_name).lower()
+        genre_id = genre_id_map.get(normalized)
+
+        if not genre_id:
+            continue
+
+        try:
+            # Use Discover API with quality filters
+            url = f"https://api.themoviedb.org/3/discover/{media}"
+            params = {
+                'api_key': tmdb_api_key,
+                'with_genres': genre_id,
+                'vote_average.gte': MIN_RATING,
+                'vote_count.gte': MIN_VOTE_COUNT,
+                'sort_by': 'vote_average.desc',
+                'page': 1
+            }
+            response = requests.get(url, params=params, timeout=10)
+
+            if response.status_code == 200:
+                results = response.json().get('results', [])
+                for item in results[:20]:  # Top 20 per genre
+                    tmdb_id = item['id']
+                    title = item.get('title') or item.get('name')
+                    year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
+
+                    # Skip if in library or already discovered
+                    if tmdb_id in candidates:
+                        continue
+                    if is_in_library(tmdb_id, title, year, library_data):
+                        continue
+
+                    candidates[tmdb_id] = {
+                        'tmdb_id': tmdb_id,
+                        'title': title,
+                        'year': year,
+                        'rating': item.get('vote_average', 0)
+                    }
+
+        except Exception:
+            pass
+
+    print(f"    Found {len(candidates)} candidates from genre search")
+
+    # Also search by top keywords using search API
+    for keyword, _ in top_keywords[:5]:  # Top 5 keywords
+        if len(candidates) >= max_candidates:
+            break
+
+        try:
+            # Search for keyword ID first
+            url = "https://api.themoviedb.org/3/search/keyword"
+            response = requests.get(url, params={'api_key': tmdb_api_key, 'query': keyword}, timeout=10)
+
+            if response.status_code == 200:
+                kw_results = response.json().get('results', [])
+                if kw_results:
+                    kw_id = kw_results[0]['id']
+
+                    # Discover by keyword
+                    url = f"https://api.themoviedb.org/3/discover/{media}"
+                    params = {
+                        'api_key': tmdb_api_key,
+                        'with_keywords': kw_id,
+                        'vote_average.gte': MIN_RATING,
+                        'vote_count.gte': MIN_VOTE_COUNT,
+                        'sort_by': 'vote_average.desc',
+                        'page': 1
+                    }
+                    response = requests.get(url, params=params, timeout=10)
+
+                    if response.status_code == 200:
+                        results = response.json().get('results', [])
+                        for item in results[:15]:  # Top 15 per keyword
+                            tmdb_id = item['id']
+                            title = item.get('title') or item.get('name')
+                            year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
+
+                            if tmdb_id in candidates:
+                                continue
+                            if is_in_library(tmdb_id, title, year, library_data):
+                                continue
+
+                            candidates[tmdb_id] = {
+                                'tmdb_id': tmdb_id,
+                                'title': title,
+                                'year': year,
+                                'rating': item.get('vote_average', 0)
+                            }
+
+        except Exception:
+            pass
+
+    print(f"    Total candidates after keyword search: {len(candidates)}")
+    return candidates
+
+
+def load_user_profile_from_cache(config, username, media_type='movie'):
+    """
+    Load user profile from the watched cache (pre-computed by internal recommenders).
+    This is MUCH faster than rebuilding from API calls.
+
+    Returns:
+        dict: Weighted counters for genres, actors, directors/studios, keywords, languages
+        None: If cache not found or invalid
+    """
+    cache_dir = config.get('cache_dir', 'cache')
+
+    # Cache file naming matches internal recommenders
+    if media_type == 'movie':
+        cache_file = os.path.join(cache_dir, f"watched_cache_plex_{username}.json")
+    else:
+        cache_file = os.path.join(cache_dir, f"tv_watched_cache_plex_{username}.json")
+
+    if not os.path.exists(cache_file):
+        print(f"  No watched cache found for {username} ({media_type}), will build from scratch")
+        return None
+
+    try:
+        with open(cache_file, 'r') as f:
+            cache_data = json.load(f)
+
+        wdc = cache_data.get('watched_data_counters', {})
+        if not wdc:
+            print(f"  Empty watched_data_counters in cache for {username}")
+            return None
+
+        # Convert to Counter format expected by scoring
+        # Note: cache uses 'tmdb_keywords' and 'studio' (singular for TV)
+        profile = {
+            'genres': Counter(wdc.get('genres', {})),
+            'directors': Counter(wdc.get('directors', {})),
+            'studios': Counter(wdc.get('studios', wdc.get('studio', {}))),  # Handle both singular and plural
+            'actors': Counter(wdc.get('actors', {})),
+            'keywords': Counter(wdc.get('tmdb_keywords', {})),
+            'languages': Counter(wdc.get('languages', {})),
+            'tmdb_ids': set(wdc.get('tmdb_ids', []))
+        }
+
+        watched_count = cache_data.get('watched_count', len(profile['genres']))
+        print(f"  Loaded {media_type} profile from cache: {watched_count} watched, {len(profile['keywords'])} keywords")
+
+        return profile
+
+    except Exception as e:
+        print(f"  Error loading cache for {username}: {e}")
+        return None
+
+
+def build_user_profile(plex, config, username, media_type='movie'):
+    """
+    Build weighted user profile from ALL watch history.
+    Uses same weighting as internal recommenders: ratings + rewatches + recency.
+
+    NOTE: This is slow! Use load_user_profile_from_cache() first when possible.
+
+    Returns:
+        dict: Weighted counters for genres, actors, directors/studios, keywords, languages
+    """
+    library_name = config['plex'].get('movie_library' if media_type == 'movie' else 'tv_library')
+    library = plex.library.section(library_name)
+    all_items = library.all()
+    total_items = len(all_items)
+    print(f"Building {media_type} profile for {username} ({total_items} items to scan)...")
+
+    # Get recency config
+    recency_config = config.get('recency_decay', {})
+    recency_enabled = recency_config.get('enabled', True)
+
+    counters = {
+        'genres': Counter(),
+        'directors': Counter(),  # movies
+        'studios': Counter(),    # TV shows
+        'actors': Counter(),
+        'keywords': Counter(),
+        'languages': Counter(),
+        'tmdb_ids': set()
+    }
+
+    # Get account for user checking
+    account = MyPlexAccount(token=config['plex']['token'])
+    tmdb_api_key = get_tmdb_config(config)['api_key']
+
+    watched_count = 0
+
+    for i, item in enumerate(all_items, 1):
+        # Show progress every 50 items or at the end
+        if i % 50 == 0 or i == total_items:
+            print(f"\r  Scanning library: {i}/{total_items} ({int(i/total_items*100)}%)", end="", flush=True)
+
+        if not item.isWatched:
+            continue
+
+        watched_count += 1
+
+        # Get view count for rewatch multiplier
+        view_count = getattr(item, 'viewCount', 1) or 1
+        rewatch_mult = calculate_rewatch_multiplier(view_count)
+
+        # Get last viewed date for recency multiplier
+        recency_mult = 1.0
+        if recency_enabled and hasattr(item, 'lastViewedAt') and item.lastViewedAt:
+            # Plex returns datetime object, convert to timestamp for calculate_recency_multiplier
+            last_viewed = item.lastViewedAt
+            if hasattr(last_viewed, 'timestamp'):
+                last_viewed = int(last_viewed.timestamp())
+            recency_mult = calculate_recency_multiplier(last_viewed, recency_config)
+
+        # Get user rating (convert 1-10 to multiplier)
+        user_rating = getattr(item, 'userRating', None)
+        if user_rating:
+            rating_int = max(0, min(10, int(round(user_rating))))
+            rating_mult = RATING_MULTIPLIERS.get(rating_int, 1.0)
+        else:
+            # Use audience rating as fallback, but with less weight
+            audience_rating = getattr(item, 'audienceRating', 5.0) or 5.0
+            rating_int = max(0, min(10, int(round(audience_rating))))
+            rating_mult = RATING_MULTIPLIERS.get(rating_int, 1.0) * 0.5  # Half weight for audience rating
+
+        # Combined multiplier
+        multiplier = rewatch_mult * recency_mult * rating_mult
+
+        # Extract attributes from Plex item
+        for genre in item.genres:
+            counters['genres'][genre.tag] += multiplier
+
+        if media_type == 'movie':
+            for director in getattr(item, 'directors', []):
+                counters['directors'][director.tag] += multiplier
+        else:
+            if hasattr(item, 'studio') and item.studio:
+                counters['studios'][item.studio.lower()] += multiplier
+
+        # Top 3 actors
+        for actor in list(getattr(item, 'roles', []))[:3]:
+            counters['actors'][actor.tag] += multiplier
+
+        # Get TMDB keywords (need to fetch from TMDB)
+        tmdb_id = None
+        for guid in item.guids:
+            if 'tmdb://' in guid.id:
+                try:
+                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    counters['tmdb_ids'].add(tmdb_id)
+                    break
+                except:
+                    pass
+
+        if tmdb_id:
+            keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type)
+            for keyword in keywords:
+                counters['keywords'][keyword] += multiplier
+
+        # Language
+        if hasattr(item, 'originallyAvailableAt'):
+            # Try to get language from TMDB
+            pass  # We'll get it from TMDB metadata if needed
+
+    print()  # Newline after progress indicator
+    print(f"  Found {watched_count} watched {media_type}s")
+    print(f"  Top genres: {dict(counters['genres'].most_common(5))}")
+
+    return counters
+
+
+def get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type='movie'):
+    """Fetch keywords from TMDB for a given item."""
+    try:
+        media = 'movie' if media_type == 'movie' else 'tv'
+        url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}/keywords"
+        response = requests.get(url, params={'api_key': tmdb_api_key}, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            # Movies use 'keywords', TV uses 'results'
+            keywords_list = data.get('keywords', data.get('results', []))
+            return [kw['name'] for kw in keywords_list[:10]]  # Top 10 keywords
+    except:
+        pass
+    return []
+
+
+def get_tmdb_details(tmdb_api_key, tmdb_id, media_type='movie'):
+    """Fetch full details from TMDB for scoring."""
+    try:
+        media = 'movie' if media_type == 'movie' else 'tv'
+        url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}"
+        params = {'api_key': tmdb_api_key, 'append_to_response': 'keywords,credits'}
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            # Extract genres
+            genres = [g['name'] for g in data.get('genres', [])]
+
+            # Extract keywords
+            kw_data = data.get('keywords', {})
+            keywords_list = kw_data.get('keywords', kw_data.get('results', []))
+            keywords = [kw['name'] for kw in keywords_list[:10]]
+
+            # Extract cast (top 5)
+            credits = data.get('credits', {})
+            cast = [c['name'] for c in credits.get('cast', [])[:5]]
+
+            # Extract directors (movies) or created_by (TV)
+            directors = []
+            if media_type == 'movie':
+                crew = credits.get('crew', [])
+                directors = [c['name'] for c in crew if c.get('job') == 'Director']
+
+            # Studio/Network
+            studios = []
+            if media_type == 'movie':
+                studios = [c['name'] for c in data.get('production_companies', [])[:2]]
+            else:
+                studios = [n['name'] for n in data.get('networks', [])[:2]]
+
+            # Language
+            language = data.get('original_language', '')
+
+            return {
+                'genres': genres,
+                'keywords': keywords,
+                'cast': cast,
+                'directors': directors,
+                'studios': studios,
+                'language': language,
+                'title': data.get('title') or data.get('name'),
+                'year': (data.get('release_date') or data.get('first_air_date', ''))[:4],
+                'rating': data.get('vote_average', 0),
+                'overview': data.get('overview', '')
+            }
+    except Exception as e:
+        pass
+    return None
+
+
 def get_library_items(plex, library_name, media_type='movie'):
-    """Get all items currently in Plex library"""
+    """Get all items currently in Plex library - returns dict with tmdb_ids, tvdb_ids, and titles"""
     try:
         library = plex.library.section(library_name)
         items = library.all()
 
-        # Extract TMDB IDs for comparison
+        # Extract multiple identifiers for comparison
         tmdb_ids = set()
+        tvdb_ids = set()
+        titles = set()  # (title_lower, year) tuples for fallback matching
+
         for item in items:
+            # Add title for fallback matching
+            title_lower = item.title.lower().strip()
+            year = getattr(item, 'year', None)
+            titles.add((title_lower, year))
+
             for guid in item.guids:
                 if 'tmdb://' in guid.id:
-                    tmdb_id = guid.id.split('tmdb://')[1]
-                    tmdb_ids.add(int(tmdb_id))
+                    try:
+                        tmdb_id = guid.id.split('tmdb://')[1]
+                        tmdb_ids.add(int(tmdb_id))
+                    except (ValueError, IndexError):
+                        pass
+                elif 'tvdb://' in guid.id:
+                    try:
+                        tvdb_id = guid.id.split('tvdb://')[1]
+                        tvdb_ids.add(int(tvdb_id))
+                    except (ValueError, IndexError):
+                        pass
 
-        return tmdb_ids
+        return {'tmdb_ids': tmdb_ids, 'tvdb_ids': tvdb_ids, 'titles': titles}
     except Exception as e:
         log_warning(f"Warning: Could not fetch {library_name} library: {e}")
-        return set()
+        return {'tmdb_ids': set(), 'tvdb_ids': set(), 'titles': set()}
 
 def get_watch_providers(tmdb_api_key, tmdb_id, media_type='movie'):
     """
@@ -279,120 +682,150 @@ def balance_genres_proportionally(recommendations, genre_distribution, limit, me
 
     return balanced_recs
 
-def find_similar_content(tmdb_api_key, watched_items, existing_library_ids, media_type='movie', limit=50, genre_distribution=None, exclude_genres=None):
-    """Find similar content NOT in library using TMDB API"""
-    print(f"Finding similar {media_type}s not in library...")
+def is_in_library(tmdb_id, title, year, library_data):
+    """Check if item is in library by TMDB ID or title+year"""
+    # Check TMDB ID first
+    if tmdb_id and tmdb_id in library_data.get('tmdb_ids', set()):
+        return True
 
-    if not watched_items:
-        print_status("No watch history found", "warning")
+    # Fallback: check by title+year
+    if title:
+        title_lower = title.lower().strip()
+        year_int = int(year) if year and str(year).isdigit() else None
+        # Check exact match
+        if (title_lower, year_int) in library_data.get('titles', set()):
+            return True
+        # Check without year (some shows don't have year in Plex)
+        for lib_title, lib_year in library_data.get('titles', set()):
+            if lib_title == title_lower:
+                return True
+
+    return False
+
+def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, media_type='movie', limit=50, exclude_genres=None, min_relevance_score=0.25, config=None):
+    """
+    Find similar content NOT in library using profile-based scoring.
+    Uses TMDB Discover API for quality candidates + profile-based scoring.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        user_profile: Weighted user profile from build_user_profile()
+        library_data: Dict with tmdb_ids, titles for library filtering
+        media_type: 'movie' or 'tv'
+        limit: Max recommendations to return
+        exclude_genres: List of genres to exclude
+        min_relevance_score: Minimum score threshold (0-1)
+        config: Config dict for weights
+
+    Returns:
+        List of scored recommendations
+    """
+    print(f"Finding external {media_type}s using profile-based scoring...")
+
+    if not user_profile or not user_profile.get('genres'):
+        print_status("No user profile data found", "warning")
         return []
 
-    # Use TMDB's recommendations and similar endpoints
-    # Score each recommendation by how many watched items recommend it
-    recommendation_scores = {}
+    # Get weights from config or use defaults
+    weights = DEFAULT_WEIGHTS
+    if config:
+        config_weights = config.get('movies' if media_type == 'movie' else 'tv', {}).get('weights', {})
+        if config_weights:
+            weights = {
+                'genre': config_weights.get('genre', 0.20),
+                'director': config_weights.get('director', 0.15),
+                'studio': config_weights.get('studio', 0.15),
+                'actor': config_weights.get('actor', 0.15),
+                'keyword': config_weights.get('keyword', 0.45),
+                'language': config_weights.get('language', 0.05)
+            }
 
-    media_type_param = 'movie' if media_type == 'movie' else 'tv'
+    # Use TMDB Discover API to find quality candidates based on profile
+    # This replaces the old approach of crawling recommendations from watched items
+    candidates = discover_candidates_by_profile(
+        tmdb_api_key,
+        user_profile,
+        library_data,
+        media_type,
+        max_candidates=MAX_CANDIDATES
+    )
 
-    # Sample from watched items (use most recent 20 to avoid API spam)
-    sample_size = min(20, len(watched_items))
-    sampled_items = watched_items[:sample_size]
+    if not candidates:
+        print_status("No candidates found", "warning")
+        return []
 
-    for watched_item in sampled_items:
-        tmdb_id = watched_item['tmdb_id']
+    print(f"  Found {len(candidates)} quality candidates (rating >= {MIN_RATING}, votes >= {MIN_VOTE_COUNT})")
 
-        try:
-            # Get recommendations from TMDB
-            url = f"https://api.themoviedb.org/3/{media_type_param}/{tmdb_id}/recommendations"
-            params = {'api_key': tmdb_api_key, 'page': 1}
-            response = requests.get(url, params=params, timeout=10)
+    # Now score each candidate using profile-based similarity
+    scored_recommendations = []
+    candidate_list = list(candidates.keys())
 
-            if response.status_code == 200:
-                data = response.json()
-                for result in data.get('results', [])[:10]:  # Top 10 from each
-                    result_id = result['id']
+    print(f"  Scoring candidates against user profile...")
+    for i, candidate_id in enumerate(candidate_list):
+        if i % 100 == 0 and i > 0:
+            print(f"    Scored {i}/{len(candidate_list)} candidates...")
 
-                    # Skip if already in library
-                    if result_id in existing_library_ids:
-                        continue
+        # Fetch full details from TMDB
+        details = get_tmdb_details(tmdb_api_key, candidate_id, media_type)
+        if not details:
+            continue
 
-                    # Skip if contains excluded genre
-                    if exclude_genres:
-                        genre_map = TMDB_MOVIE_GENRES if media_type == 'movie' else TMDB_TV_GENRES
-                        result_genres = [genre_map.get(gid, '').lower() for gid in result.get('genre_ids', [])]
-                        if any(eg.lower() in result_genres for eg in exclude_genres):
-                            continue
+        # Check excluded genres
+        if exclude_genres:
+            content_genres = [g.lower() for g in details.get('genres', [])]
+            if any(eg.lower() in content_genres for eg in exclude_genres):
+                continue
 
-                    # Add or increment score
-                    if result_id not in recommendation_scores:
-                        recommendation_scores[result_id] = {
-                            'tmdb_id': result_id,
-                            'title': result.get('title') or result.get('name'),
-                            'year': (result.get('release_date') or result.get('first_air_date', ''))[:4],
-                            'rating': result.get('vote_average', 0),
-                            'score': 0,
-                            'overview': result.get('overview', ''),
-                            'genre_ids': result.get('genre_ids', [])
-                        }
-                    recommendation_scores[result_id]['score'] += 1
+        # Calculate similarity score using shared function
+        # Build content_info in the format expected by calculate_similarity_score
+        content_info = {
+            'genres': details.get('genres', []),
+            'directors': details.get('directors', []),
+            'studios': details.get('studios', []),
+            'cast': details.get('cast', []),
+            'language': details.get('language', ''),
+            'keywords': details.get('keywords', [])
+        }
+        score, _ = calculate_similarity_score(content_info, user_profile, media_type, weights)
 
-            # Also get "similar" content
-            url = f"https://api.themoviedb.org/3/{media_type_param}/{tmdb_id}/similar"
-            params = {'api_key': tmdb_api_key, 'page': 1}
-            response = requests.get(url, params=params, timeout=10)
+        scored_recommendations.append({
+            'tmdb_id': candidate_id,
+            'title': details['title'],
+            'year': details['year'],
+            'rating': details['rating'],
+            'score': score,
+            'overview': details.get('overview', ''),
+            'genres': details.get('genres', []),
+            'genre_ids': []  # For compatibility with genre balancing
+        })
 
-            if response.status_code == 200:
-                data = response.json()
-                for result in data.get('results', [])[:5]:  # Top 5 similar
-                    result_id = result['id']
+    # Sort by score (highest first), then by rating as tiebreaker
+    scored_recommendations.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
 
-                    # Skip if already in library
-                    if result_id in existing_library_ids:
-                        continue
+    # Apply threshold filtering
+    high_score = [r for r in scored_recommendations if r['score'] >= min_relevance_score]
+    low_score = [r for r in scored_recommendations if r['score'] < min_relevance_score]
 
-                    # Skip if contains excluded genre
-                    if exclude_genres:
-                        genre_map = TMDB_MOVIE_GENRES if media_type == 'movie' else TMDB_TV_GENRES
-                        result_genres = [genre_map.get(gid, '').lower() for gid in result.get('genre_ids', [])]
-                        if any(eg.lower() in result_genres for eg in exclude_genres):
-                            continue
+    print(f"  {len(high_score)} items above {int(min_relevance_score*100)}% threshold, {len(low_score)} below")
 
-                    # Add or increment score
-                    if result_id not in recommendation_scores:
-                        recommendation_scores[result_id] = {
-                            'tmdb_id': result_id,
-                            'title': result.get('title') or result.get('name'),
-                            'year': (result.get('release_date') or result.get('first_air_date', ''))[:4],
-                            'rating': result.get('vote_average', 0),
-                            'score': 0,
-                            'overview': result.get('overview', ''),
-                            'genre_ids': result.get('genre_ids', [])
-                        }
-                    recommendation_scores[result_id]['score'] += 0.5  # Similar gets half weight
+    # Take high-score items first, backfill if needed
+    final_recs = high_score[:limit]
+    if len(final_recs) < limit:
+        final_recs.extend(low_score[:limit - len(final_recs)])
 
-        except Exception as e:
-            # Silently skip errors (rate limiting, timeouts, etc.)
-            pass
+    if final_recs:
+        print(f"  Top recommendation: {final_recs[0]['title']} ({final_recs[0]['score']:.1%})")
 
-    # Convert scores to list and normalize
-    recommendations = list(recommendation_scores.values())
+    return final_recs
 
-    # Normalize scores to 0-1 range
-    if recommendations:
-        max_score = max(r['score'] for r in recommendations)
-        for rec in recommendations:
-            rec['score'] = rec['score'] / max_score if max_score > 0 else 0
 
-    # Sort by score descending
-    recommendations.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
-
-    print(f"Found {len(recommendations)} recommendations")
-
-    # Apply genre balancing if distribution provided
-    if genre_distribution:
-        balanced = balance_genres_proportionally(recommendations, genre_distribution, limit, media_type)
-        return balanced
-    else:
-        return recommendations[:limit]
+# Keep old function name for compatibility but redirect to new one
+def find_similar_content(tmdb_api_key, watched_items, library_data, media_type='movie', limit=50, genre_distribution=None, exclude_genres=None, min_relevance_score=0.25):
+    """Legacy wrapper - redirects to profile-based scoring in process_user()"""
+    # This function is kept for compatibility but the actual work
+    # is now done in process_user() using find_similar_content_with_profile()
+    print_status("Warning: Using legacy find_similar_content", "warning")
+    return []
 
 def load_cache(display_name, media_type):
     """Load existing recommendations cache"""
@@ -538,24 +971,30 @@ def process_user(config, plex, username):
     movie_library = config['plex'].get('movie_library', 'Movies')
     tv_library = config['plex'].get('tv_library', 'TV Shows')
 
-    library_movie_ids = get_library_items(plex, movie_library, 'movie')
-    library_show_ids = get_library_items(plex, tv_library, 'show')
+    library_movies = get_library_items(plex, movie_library, 'movie')
+    library_shows = get_library_items(plex, tv_library, 'show')
 
-    print(f"Library has {len(library_movie_ids)} movies, {len(library_show_ids)} TV shows")
+    print(f"Library has {len(library_movies['titles'])} movies, {len(library_shows['titles'])} TV shows")
 
     # Load existing cache and ignore list
     movie_cache = load_cache(display_name, 'movies')
     show_cache = load_cache(display_name, 'shows')
     ignore_list = load_ignore_list(display_name)
 
-    # Remove acquired items from cache (now in library)
-    removed_movies = [tmdb_id for tmdb_id in movie_cache.keys() if int(tmdb_id) in library_movie_ids]
-    removed_shows = [tmdb_id for tmdb_id in show_cache.keys() if int(tmdb_id) in library_show_ids]
+    # Remove acquired items from cache (now in library) - check TMDB IDs AND titles
+    removed_movies = []
+    for tmdb_id, item in list(movie_cache.items()):
+        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_movies):
+            removed_movies.append(tmdb_id)
+            del movie_cache[tmdb_id]
+            print(f"  Removed movie from cache: {item.get('title')} (in library)")
 
-    for tmdb_id in removed_movies:
-        del movie_cache[tmdb_id]
-    for tmdb_id in removed_shows:
-        del show_cache[tmdb_id]
+    removed_shows = []
+    for tmdb_id, item in list(show_cache.items()):
+        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_shows):
+            removed_shows.append(tmdb_id)
+            del show_cache[tmdb_id]
+            print(f"  Removed show from cache: {item.get('title')} (in library)")
 
     if removed_movies or removed_shows:
         print_status(f"Removed {len(removed_movies)} movies and {len(removed_shows)} shows (now in library)", "success")
@@ -574,57 +1013,65 @@ def process_user(config, plex, username):
     if removed_ignored:
         print_status(f"Removed {removed_ignored} ignored items", "warning")
 
-    # Get user's watch history
-    movie_watch_history = get_user_watch_history(plex, config, username, 'movie')
-    show_watch_history = get_user_watch_history(plex, config, username, 'show')
+    # Load user profiles from cache (FAST) or build from scratch (SLOW)
+    # Cache is pre-computed by internal recommenders with proper weighting
+    movie_profile = load_user_profile_from_cache(config, username, 'movie')
+    if not movie_profile:
+        movie_profile = build_user_profile(plex, config, username, 'movie')
 
-    print(f"Watch history: {len(movie_watch_history)} movies, {len(show_watch_history)} shows")
+    show_profile = load_user_profile_from_cache(config, username, 'tv')
+    if not show_profile:
+        show_profile = build_user_profile(plex, config, username, 'show')
 
-    # Get genre distribution from watch history
-    movie_genre_dist, movie_count = get_genre_distribution(plex, config, username, 'movie')
-    show_genre_dist, show_count = get_genre_distribution(plex, config, username, 'show')
-
-    if movie_genre_dist:
-        print(f"Movie genre distribution: {dict(sorted(movie_genre_dist.items(), key=lambda x: x[1], reverse=True)[:5])}")
-    if show_genre_dist:
-        print(f"TV genre distribution: {dict(sorted(show_genre_dist.items(), key=lambda x: x[1], reverse=True)[:5])}")
-
-    # Find new recommendations
+    # Find new recommendations using profile-based scoring
     external_config = config.get('external_recommendations', {})
     movie_limit = external_config.get('movie_limit', 30)
     show_limit = external_config.get('show_limit', 20)
+    min_relevance = external_config.get('min_relevance_score', 0.25)
 
     # Get excluded genres for this user
     exclude_genres = user_prefs.get('exclude_genres', [])
     if exclude_genres:
         print(f"Excluding genres: {', '.join(exclude_genres)}")
 
-    new_movies = find_similar_content(
-        config['tmdb']['api_key'],
-        movie_watch_history,
-        library_movie_ids,
+    tmdb_api_key = get_tmdb_config(config)['api_key']
+
+    new_movies = find_similar_content_with_profile(
+        tmdb_api_key,
+        movie_profile,
+        library_movies,
         'movie',
         limit=movie_limit,
-        genre_distribution=movie_genre_dist,
-        exclude_genres=exclude_genres
+        exclude_genres=exclude_genres,
+        min_relevance_score=min_relevance,
+        config=config
     )
 
-    new_shows = find_similar_content(
-        config['tmdb']['api_key'],
-        show_watch_history,
-        library_show_ids,
+    new_shows = find_similar_content_with_profile(
+        tmdb_api_key,
+        show_profile,
+        library_shows,
         'tv',
         limit=show_limit,
-        genre_distribution=show_genre_dist,
-        exclude_genres=exclude_genres
+        exclude_genres=exclude_genres,
+        min_relevance_score=min_relevance,
+        config=config
     )
 
-    # Merge with existing cache (add new ones)
+    # Merge with existing cache - UPDATE scores for existing items, ADD new ones
     for movie in new_movies:
         tmdb_id = str(movie['tmdb_id'])
-        if tmdb_id not in movie_cache:
+        if tmdb_id in movie_cache:
+            # Update score for existing item (profile may have changed)
+            old_score = movie_cache[tmdb_id].get('score', 0)
+            movie_cache[tmdb_id]['score'] = movie['score']
+            movie_cache[tmdb_id]['rating'] = movie['rating']
+            if abs(movie['score'] - old_score) > 0.01:
+                print(f"    Updated score: {movie['title']} {old_score:.1%} -> {movie['score']:.1%}")
+        else:
+            # Add new item
             movie_cache[tmdb_id] = {
-                'tmdb_id': movie['tmdb_id'],  # Add tmdb_id for categorization
+                'tmdb_id': movie['tmdb_id'],
                 'title': movie['title'],
                 'year': movie['year'],
                 'rating': movie['rating'],
@@ -634,9 +1081,17 @@ def process_user(config, plex, username):
 
     for show in new_shows:
         tmdb_id = str(show['tmdb_id'])
-        if tmdb_id not in show_cache:
+        if tmdb_id in show_cache:
+            # Update score for existing item (profile may have changed)
+            old_score = show_cache[tmdb_id].get('score', 0)
+            show_cache[tmdb_id]['score'] = show['score']
+            show_cache[tmdb_id]['rating'] = show['rating']
+            if abs(show['score'] - old_score) > 0.01:
+                print(f"    Updated score: {show['title']} {old_score:.1%} -> {show['score']:.1%}")
+        else:
+            # Add new item
             show_cache[tmdb_id] = {
-                'tmdb_id': show['tmdb_id'],  # Add tmdb_id for categorization
+                'tmdb_id': show['tmdb_id'],
                 'title': show['title'],
                 'year': show['year'],
                 'rating': show['rating'],
@@ -648,9 +1103,27 @@ def process_user(config, plex, username):
     save_cache(display_name, 'movies', movie_cache)
     save_cache(display_name, 'shows', show_cache)
 
-    # Prepare lists for categorization
-    movies_list = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
-    shows_list = sorted(show_cache.values(), key=lambda x: x['score'], reverse=True)
+    # Prepare lists for categorization - apply threshold and limits
+    all_movies = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
+    all_shows = sorted(show_cache.values(), key=lambda x: x['score'], reverse=True)
+
+    # Filter by relevance threshold - prioritize high-score items
+    high_movies = [m for m in all_movies if m['score'] >= min_relevance]
+    low_movies = [m for m in all_movies if m['score'] < min_relevance]
+    high_shows = [s for s in all_shows if s['score'] >= min_relevance]
+    low_shows = [s for s in all_shows if s['score'] < min_relevance]
+
+    # Take high-score items first, backfill with low-score only if needed
+    movies_list = high_movies[:movie_limit]
+    if len(movies_list) < movie_limit:
+        movies_list.extend(low_movies[:movie_limit - len(movies_list)])
+
+    shows_list = high_shows[:show_limit]
+    if len(shows_list) < show_limit:
+        shows_list.extend(low_shows[:show_limit - len(shows_list)])
+
+    print(f"Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance*100)}% threshold)")
+    print(f"Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance*100)}% threshold)")
 
     # Get household streaming services from top-level config
     user_services = config.get('streaming_services', [])
@@ -659,13 +1132,13 @@ def process_user(config, plex, username):
     print("Categorizing by streaming service availability...")
     movies_categorized = categorize_by_streaming_service(
         movies_list,
-        config['tmdb']['api_key'],
+        tmdb_api_key,
         user_services,
         'movie'
     )
     shows_categorized = categorize_by_streaming_service(
         shows_list,
-        config['tmdb']['api_key'],
+        tmdb_api_key,
         user_services,
         'tv'
     )
