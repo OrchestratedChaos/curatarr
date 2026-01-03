@@ -102,6 +102,7 @@ from .helpers import (
     normalize_title,
     map_path,
     cleanup_old_logs,
+    compute_profile_hash,
 )
 
 # Plex utilities
@@ -202,6 +203,7 @@ __all__ = [
     'normalize_title',
     'map_path',
     'cleanup_old_logs',
+    'compute_profile_hash',
     # Plex
     'init_plex',
     'get_plex_account_ids',
