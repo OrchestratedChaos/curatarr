@@ -75,6 +75,60 @@ check_and_install_dependencies() {
 }
 
 # ------------------------------------------------------------------------
+# AUTO-UPDATE FROM GITHUB
+# ------------------------------------------------------------------------
+check_for_updates() {
+    # Check if auto_update is enabled in config
+    if [ -f "config.yml" ]; then
+        AUTO_UPDATE=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yml')); print(c.get('general', {}).get('auto_update', False))" 2>/dev/null)
+
+        if [ "$AUTO_UPDATE" = "True" ]; then
+            echo -e "${CYAN}Checking for updates...${NC}"
+
+            # Check if we're in a git repo
+            if [ -d ".git" ]; then
+                # Fetch latest from remote
+                git fetch origin main --quiet 2>/dev/null || {
+                    echo -e "${YELLOW}Could not check for updates (network error)${NC}"
+                    return
+                }
+
+                # Compare local and remote
+                LOCAL=$(git rev-parse HEAD 2>/dev/null)
+                REMOTE=$(git rev-parse origin/main 2>/dev/null)
+
+                if [ "$LOCAL" != "$REMOTE" ]; then
+                    echo -e "${YELLOW}Update available! Pulling latest changes...${NC}"
+
+                    # Stash any local changes
+                    git stash --quiet 2>/dev/null || true
+
+                    # Pull updates
+                    if git pull origin main --quiet 2>/dev/null; then
+                        echo -e "${GREEN}✓ Updated successfully!${NC}"
+
+                        # Re-apply stashed changes if any
+                        git stash pop --quiet 2>/dev/null || true
+
+                        echo -e "${YELLOW}Restarting with updated code...${NC}"
+                        echo ""
+                        exec "$0" "$@"  # Restart script with same arguments
+                    else
+                        echo -e "${RED}Update failed, continuing with current version${NC}"
+                        git stash pop --quiet 2>/dev/null || true
+                    fi
+                else
+                    echo -e "${GREEN}✓ Already up to date${NC}"
+                fi
+            else
+                echo -e "${YELLOW}Not a git repository, skipping update check${NC}"
+            fi
+            echo ""
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------
 # FIRST RUN DETECTION
 # ------------------------------------------------------------------------
 is_first_run() {
@@ -179,7 +233,10 @@ main() {
     # Step 1: Check/install dependencies
     check_and_install_dependencies
 
-    # Step 2: First run setup
+    # Step 2: Check for updates (if enabled)
+    check_for_updates
+
+    # Step 3: First run setup
     if is_first_run; then
         echo -e "${CYAN}=== First Run Setup ===${NC}"
         echo ""
@@ -201,10 +258,10 @@ main() {
         echo ""
     fi
 
-    # Step 3: Create logs directory
+    # Step 4: Create logs directory
     mkdir -p logs
 
-    # Step 4: Run recommendations
+    # Step 5: Run recommendations
     echo -e "${CYAN}=== Running Recommendations ===${NC}"
     echo ""
 
@@ -226,7 +283,7 @@ main() {
     fi
     echo ""
 
-    # Step 5: Generate external recommendations (watchlist)
+    # Step 6: Generate external recommendations (watchlist)
     if grep -A 2 "external_recommendations:" config.yml | grep -q "enabled: true" 2>/dev/null; then
         echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
         if python3 external_recommender.py; then
@@ -237,7 +294,7 @@ main() {
         echo ""
     fi
 
-    # Step 6: Cron setup (first run only)
+    # Step 7: Cron setup (first run only)
     if is_first_run; then
         setup_cron
     fi

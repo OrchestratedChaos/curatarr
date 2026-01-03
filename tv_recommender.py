@@ -20,15 +20,25 @@ import copy
 # Import shared utilities
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS, ANSI_PATTERN,
-    get_full_language_name, cleanup_old_logs, setup_logging,
+    RATING_MULTIPLIERS, ANSI_PATTERN, CACHE_VERSION, check_cache_version,
+    get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
     log_warning, log_error, update_plex_collection, cleanup_old_collections,
     load_config, init_plex, get_configured_users, get_current_users,
     get_excluded_genres_for_user, get_user_specific_connection,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
-    map_path, show_progress, TeeLogger
+    calculate_similarity_score,
+    map_path, show_progress, TeeLogger,
+    # Consolidated utilities
+    extract_genres, extract_ids_from_guids, fetch_tmdb_with_retry,
+    get_tmdb_id_for_item, get_tmdb_keywords, adapt_config_for_media_type,
+    # Additional consolidated utilities
+    user_select_recommendations, extract_rating, format_media_output,
+    build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
+    get_library_imdb_ids, print_similarity_breakdown, process_counters_from_cache,
+    load_media_cache, save_media_cache, create_empty_counters,
+    get_plex_user_ids as get_plex_user_ids_util, save_watched_cache
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -51,14 +61,8 @@ class ShowCache:
         self.recommender = recommender  # Store reference to recommender
         
     def _load_cache(self) -> Dict:
-        if os.path.exists(self.all_shows_cache_path):
-            try:
-                with open(self.all_shows_cache_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                log_warning(f"Error loading all shows cache: {e}")
-                return {'shows': {}, 'last_updated': None, 'library_count': 0}
-        return {'shows': {}, 'last_updated': None, 'library_count': 0}
+        """Load show cache from file"""
+        return load_media_cache(self.all_shows_cache_path, 'shows')
     
     def update_cache(self, plex, library_title: str, tmdb_api_key: Optional[str] = None):
         shows_section = plex.library.section(library_title)
@@ -97,89 +101,19 @@ class ShowCache:
                     if i > 1 and tmdb_api_key:
                         time.sleep(0.5)  # Basic rate limiting
                     
-                    imdb_id = None
-                    tmdb_id = None
-                    if hasattr(show, 'guids'):
-                        for guid in show.guids:
-                            if 'imdb://' in guid.id:
-                                imdb_id = guid.id.replace('imdb://', '')
-                            elif 'themoviedb://' in guid.id:
-                                try:
-                                    tmdb_id = int(guid.id.split('themoviedb://')[1].split('?')[0])
-                                except (ValueError, IndexError):
-                                    pass
-                    
-                    # TMDB ID search with retries
+                    # Extract IDs from GUIDs using utility
+                    ids = extract_ids_from_guids(show)
+                    imdb_id = ids['imdb_id']
+                    tmdb_id = ids['tmdb_id']
+
+                    # Get TMDB ID if not found in GUIDs (with fallback methods)
                     if not tmdb_id and tmdb_api_key:
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                params = {
-                                    'api_key': tmdb_api_key,
-                                    'query': show.title,
-                                    'first_air_date_year': getattr(show, 'year', None)
-                                }
-                                resp = requests.get(
-                                    "https://api.themoviedb.org/3/search/tv",
-                                    params=params,
-                                    timeout=15
-                                )
-                                
-                                if resp.status_code == 429:
-                                    sleep_time = 2 * (attempt + 1)
-                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
-                                    time.sleep(sleep_time)
-                                    continue
-                                    
-                                if resp.status_code == 200:
-                                    results = resp.json().get('results', [])
-                                    if results:
-                                        tmdb_id = results[0]['id']
-                                    break
-                                    
-                            except (requests.exceptions.ConnectionError, 
-                                   requests.exceptions.Timeout,
-                                   requests.exceptions.ChunkedEncodingError) as e:
-                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
-                                time.sleep(1)
-                                if attempt == max_retries - 1:
-                                    log_warning(f"Failed to get TMDB ID for {show.title} after {max_retries} tries")
-                            except Exception as e:
-                                log_warning(f"Error getting TMDB ID for {show.title}: {e}")
-                                break
-    
+                        tmdb_id = get_tmdb_id_for_item(show, tmdb_api_key, 'tv')
+
+                    # Get keywords using utility
                     tmdb_keywords = []
                     if tmdb_id and tmdb_api_key:
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                kw_resp = requests.get(
-                                    f"https://api.themoviedb.org/3/tv/{tmdb_id}/keywords",
-                                    params={'api_key': tmdb_api_key},
-                                    timeout=15
-                                )
-                                
-                                if kw_resp.status_code == 429:
-                                    sleep_time = 2 * (attempt + 1)
-                                    log_warning(f"TMDB rate limit hit, waiting {sleep_time}s...")
-                                    time.sleep(sleep_time)
-                                    continue
-                                    
-                                if kw_resp.status_code == 200:
-                                    keywords = kw_resp.json().get('results', [])
-                                    tmdb_keywords = [k['name'].lower() for k in keywords]
-                                    break
-                                    
-                            except (requests.exceptions.ConnectionError,
-                                   requests.exceptions.Timeout,
-                                   requests.exceptions.ChunkedEncodingError) as e:
-                                log_warning(f"Connection error, retrying... ({attempt+1}/{max_retries})")
-                                time.sleep(1)
-                                if attempt == max_retries - 1:
-                                    log_warning(f"Failed to get keywords for {show.title} after {max_retries} tries")
-                            except Exception as e:
-                                log_warning(f"Error getting TMDB keywords for {show.title}: {e}")
-                                break
+                        tmdb_keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, 'tv')
     
                     # Store in recommender's caches if available
                     if self.recommender and tmdb_id:
@@ -212,11 +146,9 @@ class ShowCache:
         return True
         
     def _save_cache(self):
-        try:
-            with open(self.all_shows_cache_path, 'w', encoding='utf-8') as f:
-                json.dump(self.cache, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            log_error(f"Error saving all shows cache: {e}")
+        """Save show cache to file"""
+        self.cache['cache_version'] = CACHE_VERSION
+        save_media_cache(self.all_shows_cache_path, self.cache, 'shows')
 
     def _get_show_language(self, show) -> str:
         """Get show's primary audio language from first episode"""
@@ -286,10 +218,10 @@ class PlexTVRecommender:
         print(f"Connected to Plex successfully!\n")
         general_config = self.config.get('general', {})
         self.debug = general_config.get('debug', False)
-        print(f"{YELLOW}Checking Cache...{RESET}")	
-        tmdb_config = self.config.get('TMDB', {})
-        self.use_tmdb_keywords = tmdb_config.get('use_TMDB_keywords', True)
-        self.tmdb_api_key = tmdb_config.get('api_key', None)
+        print(f"{YELLOW}Checking Cache...{RESET}")
+        tmdb_config = get_tmdb_config(self.config)
+        self.use_tmdb_keywords = tmdb_config['use_keywords']
+        self.tmdb_api_key = tmdb_config['api_key']
 		
         self.cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -313,11 +245,11 @@ class PlexTVRecommender:
 
         weights_config = self.config.get('weights', {})
         self.weights = {
-            'genre_weight': float(weights_config.get('genre_weight', 0.25)),
-            'studio_weight': float(weights_config.get('studio_weight', 0.20)),
-            'actor_weight': float(weights_config.get('actor_weight', 0.20)),
-            'language_weight': float(weights_config.get('language_weight', 0.10)),
-            'keyword_weight': float(weights_config.get('keyword_weight', 0.25))
+            'genre': float(weights_config.get('genre', 0.20)),
+            'studio': float(weights_config.get('studio', 0.15)),
+            'actor': float(weights_config.get('actor', 0.15)),
+            'language': float(weights_config.get('language', 0.05)),
+            'keyword': float(weights_config.get('keyword', 0.45))
         }
 
         total_weight = sum(self.weights.values())
@@ -356,7 +288,9 @@ class PlexTVRecommender:
         self.label_dates = {}
         watched_cache = {}
 
-        if os.path.exists(self.watched_cache_path):
+        # Check cache version first
+        cache_valid = check_cache_version(self.watched_cache_path, "TV watched cache")
+        if cache_valid and os.path.exists(self.watched_cache_path):
             try:
                 with open(self.watched_cache_path, 'r', encoding='utf-8') as f:
                     watched_cache = json.load(f)
@@ -490,14 +424,7 @@ class PlexTVRecommender:
             return self.watched_data_counters
 
         shows_section = self.plex.library.section(self.library_title)
-        counters = {
-            'genres': Counter(),
-            'studio': Counter(),
-            'actors': Counter(),
-            'languages': Counter(),
-            'tmdb_keywords': Counter(),
-            'tmdb_ids': set()
-        }
+        counters = create_empty_counters('tv')
         watched_show_ids = set()
         not_found_count = 0
 
@@ -555,15 +482,8 @@ class PlexTVRecommender:
             logger.debug("Using existing watched data counters")
             return self.watched_data_counters
     
-        counters = {
-            'genres': Counter(),
-            'studio': Counter(),
-            'actors': Counter(),
-            'languages': Counter(),
-            'tmdb_keywords': Counter(),
-            'tmdb_ids': set()  # Initialize as a set for unique IDs
-        }
-        
+        counters = create_empty_counters('tv')
+
         account = MyPlexAccount(token=self.config['plex']['token'])
         admin_user = self.users['admin_user']
         
@@ -614,31 +534,17 @@ class PlexTVRecommender:
     # CACHING LOGIC
     # ------------------------------------------------------------------------
     def _save_watched_cache(self):
-        try:
-            # Create a copy of the watched data to modify for serialization
-            watched_data_for_cache = copy.deepcopy(self.watched_data_counters)
-            
-            # Convert any set objects to lists for JSON serialization
-            if 'tmdb_ids' in watched_data_for_cache and isinstance(watched_data_for_cache['tmdb_ids'], set):
-                watched_data_for_cache['tmdb_ids'] = list(watched_data_for_cache['tmdb_ids'])
-            
-            cache_data = {
-                'watched_count': self.cached_watched_count,
-                'watched_data_counters': watched_data_for_cache,
-                'plex_tmdb_cache': {str(k): v for k, v in self.plex_tmdb_cache.items()},
-                'tmdb_keywords_cache': {str(k): v for k, v in self.tmdb_keywords_cache.items()},
-                'watched_show_ids': list(self.watched_show_ids),
-                'label_dates': getattr(self, 'label_dates', {}),
-                'last_updated': datetime.now().isoformat()
-            }
-            
-            with open(self.watched_cache_path, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, indent=4, ensure_ascii=False)
-
-            logger.debug(f"Saved watched cache: {self.cached_watched_count} shows, {len(self.watched_show_ids)} IDs")
-
-        except Exception as e:
-            log_warning(f"Error saving watched cache: {e}")
+        """Save watched show cache using utility"""
+        save_watched_cache(
+            cache_path=self.watched_cache_path,
+            watched_data_counters=self.watched_data_counters,
+            plex_tmdb_cache=self.plex_tmdb_cache,
+            tmdb_keywords_cache=self.tmdb_keywords_cache,
+            watched_ids=self.watched_show_ids,
+            label_dates=getattr(self, 'label_dates', {}),
+            watched_count=self.cached_watched_count,
+            media_type='tv'
+        )
 
     def _save_cache(self):
         self._save_watched_cache()
@@ -794,32 +700,18 @@ class PlexTVRecommender:
             log_warning(f"Error getting episode TVDB IDs for {show.title}: {e}")
 
     def _get_library_imdb_ids(self) -> Set[str]:
-        imdb_ids = set()
-        try:
-            shows = self.plex.library.section(self.library_title).all()
-            for show in shows:
-                if hasattr(show, 'guids'):
-                    for guid in show.guids:
-                        if guid.id.startswith('imdb://'):
-                            imdb_ids.add(guid.id.replace('imdb://', ''))
-                            break
-        except Exception as e:
-            log_warning(f"Error retrieving IMDb IDs from library: {e}")
-        return imdb_ids
+        """Get set of all IMDb IDs in the library"""
+        return get_library_imdb_ids(self.plex.library.section(self.library_title))
 
     def get_show_details(self, show) -> Dict:
         try:
             show.reload()
-            
-            imdb_id = None
+
+            # Extract IDs using utility
+            ids = extract_ids_from_guids(show)
+            imdb_id = ids['imdb_id']
             audience_rating = 0
             tmdb_keywords = []
-            
-            if hasattr(show, 'guids'):
-                for guid in show.guids:
-                    if 'imdb://' in guid.id:
-                        imdb_id = guid.id.replace('imdb://', '')
-                        break
             
             if self.show_rating and hasattr(show, 'ratings'):
                 for rating in show.ratings:
@@ -888,326 +780,111 @@ class PlexTVRecommender:
         imdb_id = self._get_plex_show_imdb_id(plex_show)
         if not imdb_id or not self.tmdb_api_key:
             return None
-    
-        try:
-            url = f"https://api.themoviedb.org/3/find/{imdb_id}"
-            params = {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
-            resp = requests.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json().get('tv_results', [{}])[0].get('id')
-        except Exception as e:
-            log_warning(f"IMDb fallback failed: {e}")
-            return None
+
+        data = fetch_tmdb_with_retry(
+            f"https://api.themoviedb.org/3/find/{imdb_id}",
+            {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
+        )
+        if data:
+            results = data.get('tv_results', [])
+            if results:
+                return results[0].get('id')
+        return None
 
     def _get_plex_show_tmdb_id(self, plex_show) -> Optional[int]:
-        # Recursion guard and cache check
-        if hasattr(plex_show, '_tmdb_fallback_attempted'):
-            return self.plex_tmdb_cache.get(plex_show.ratingKey)
-        
-        if plex_show.ratingKey in self.plex_tmdb_cache:
-            return self.plex_tmdb_cache[plex_show.ratingKey]
-    
-        tmdb_id = None
-        show_title = plex_show.title
-        show_year = getattr(plex_show, 'year', None)
-    
-        # Method 1: Check Plex GUIDs
-        if hasattr(plex_show, 'guids'):
-            for guid in plex_show.guids:
-                if 'themoviedb' in guid.id:
-                    try:
-                        tmdb_id = int(guid.id.split('themoviedb://')[1].split('?')[0])
-                        break
-                    except (ValueError, IndexError) as e:
-                        continue
-    
-        # Method 2: TMDB API Search
-        if not tmdb_id and self.tmdb_api_key:
-            try:
-                params = {
-                    'api_key': self.tmdb_api_key,
-                    'query': show_title,
-                    'include_adult': False
-                }
-                if show_year:
-                    params['first_air_date_year'] = show_year
-    
-                resp = requests.get(
-                    "https://api.themoviedb.org/3/search/tv",
-                    params=params,
-                    timeout=10
-                )
-                resp.raise_for_status()
-                
-                results = resp.json().get('results', [])
-                if results:
-                    exact_match = next(
-                        (r for r in results 
-                         if r.get('name', '').lower() == show_title.lower()
-                         and str(r.get('first_air_date', '')[:4]) == str(show_year)),
-                        None
-                    )
-                    
-                    tmdb_id = exact_match['id'] if exact_match else results[0]['id']
-    
-            except Exception as e:
-                log_warning(f"TMDB search failed for {show_title}: {e}")
-    
-        # Method 3: Single Fallback Attempt via IMDb
-        if not tmdb_id and not hasattr(plex_show, '_tmdb_fallback_attempted'):
-            plex_show._tmdb_fallback_attempted = True
-            tmdb_id = self._get_tmdb_id_via_imdb(plex_show)
-    
-        # Update cache even if None to prevent repeat lookups
+        """Get TMDB ID for a Plex show with multiple fallback methods"""
+        # Check cache first
+        cache_key = str(plex_show.ratingKey)
+        if cache_key in self.plex_tmdb_cache:
+            return self.plex_tmdb_cache[cache_key]
+
+        # Use consolidated utility for TMDB ID lookup
+        tmdb_id = get_tmdb_id_for_item(plex_show, self.tmdb_api_key, 'tv', self.plex_tmdb_cache)
+
+        # Update cache if found
         if tmdb_id:
-            logger.debug(f"Cached TMDB ID {tmdb_id} for Plex show {plex_show.ratingKey}")
-            self.plex_tmdb_cache[str(plex_show.ratingKey)] = tmdb_id
+            self.plex_tmdb_cache[cache_key] = tmdb_id
             self._save_watched_cache()
         return tmdb_id
 
     def _get_plex_show_imdb_id(self, plex_show) -> Optional[str]:
-        if not plex_show.guid:
-            return None
-        guid = plex_show.guid
-        if guid.startswith('imdb://'):
-            return guid.split('imdb://')[1]
-        
+        """Get IMDb ID for a Plex show with fallback to TMDB"""
+        # Try extracting from GUIDs first using utility
+        ids = extract_ids_from_guids(plex_show)
+        if ids['imdb_id']:
+            return ids['imdb_id']
+
+        # Fallback: Check legacy guid attribute
+        if hasattr(plex_show, 'guid') and plex_show.guid and plex_show.guid.startswith('imdb://'):
+            return plex_show.guid.split('imdb://')[1]
+
+        # Fallback to TMDB to get IMDb ID
         tmdb_id = self._get_plex_show_tmdb_id(plex_show)
-        if not tmdb_id:
-            return None
-        try:
-            url = f"https://api.themoviedb.org/3/tv/{tmdb_id}"
-            params = {'api_key': self.tmdb_api_key}
-            resp = requests.get(url, params=params)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get('external_ids', {}).get('imdb_id')
-            else:
-                log_warning(f"Failed to fetch IMDb ID from TMDB for show '{plex_show.title}'. Status Code: {resp.status_code}")
-        except Exception as e:
-            log_warning(f"Error fetching IMDb ID for TMDB ID {tmdb_id}: {e}")
+        if tmdb_id:
+            # For TV shows, need to get external_ids endpoint
+            data = fetch_tmdb_with_retry(
+                f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids",
+                {'api_key': self.tmdb_api_key}
+            )
+            if data:
+                return data.get('imdb_id')
         return None
 
     def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
+        """Get keywords for a TV show from TMDB"""
         if not tmdb_id or not self.use_tmdb_keywords or not self.tmdb_api_key:
             return set()
 
-        if tmdb_id in self.tmdb_keywords_cache:
-            return set(self.tmdb_keywords_cache[tmdb_id])
-
-        kw_set = set()
-        try:
-            url = f"https://api.themoviedb.org/3/tv/{tmdb_id}/keywords"
-            params = {'api_key': self.tmdb_api_key}
-            resp = requests.get(url, params=params)
-            if resp.status_code == 200:
-                data = resp.json()
-                keywords = data.get('results', [])
-                kw_set = {k['name'].lower() for k in keywords}
-        except Exception as e:
-            log_warning(f"Error fetching TMDB keywords for ID {tmdb_id}: {e}")
-
-        if kw_set:
-            logger.debug(f"Cached {len(kw_set)} keywords for TMDB ID {tmdb_id}")
-            self.tmdb_keywords_cache[str(tmdb_id)] = list(kw_set)  # Convert key to string
+        # Use consolidated utility with local cache
+        keywords = get_tmdb_keywords(self.tmdb_api_key, tmdb_id, 'tv', self.tmdb_keywords_cache)
+        if keywords:
             self._save_watched_cache()
-        return kw_set
+        return set(keywords)
 
     def _get_show_language(self, show) -> str:
         """Get show's primary audio language - delegates to ShowCache"""
         return self.show_cache._get_show_language(show)
 
     def _extract_genres(self, show) -> List[str]:
-        genres = []
-        try:
-            if not hasattr(show, 'genres') or not show.genres:
-                return genres
-                
-            for genre in show.genres:
-                if isinstance(genre, plexapi.media.Genre):
-                    if hasattr(genre, 'tag'):
-                        genres.append(genre.tag.lower())
-                elif isinstance(genre, str):
-                    genres.append(genre.lower())
-                else:
-                    pass
-        except Exception as e:
-            pass
-        return genres
+        """Extract genres from a TV show"""
+        return extract_genres(show)
 
     # ------------------------------------------------------------------------
     # CALCULATE SCORES
     # ------------------------------------------------------------------------
     def _calculate_similarity_from_cache(self, show_info: Dict) -> Tuple[float, Dict]:
         """Calculate similarity score using cached show data and return score with breakdown"""
-        try:
-            score = 0.0
-            score_breakdown = {
-                'genre_score': 0.0,
-                'studio_score': 0.0,
-                'actor_score': 0.0,
-                'language_score': 0.0,
-                'keyword_score': 0.0,
-                'details': {
-                    'genres': [],
-                    'studio': None,
-                    'actors': [],
-                    'language': None,
-                    'keywords': []
-                }
-            }
-            
-            weights = self.weights
-            user_prefs = {
-                'genres': Counter(self.watched_data.get('genres', {})),
-                'studio': Counter(self.watched_data.get('studio', {})),
-                'actors': Counter(self.watched_data.get('actors', {})),
-                'languages': Counter(self.watched_data.get('languages', {})),
-                'keywords': Counter(self.watched_data.get('tmdb_keywords', {}))
-            }
-            
-            max_counts = {
-                'genres': max(user_prefs['genres'].values()) if user_prefs['genres'] else 1,
-                'studio': max(user_prefs['studio'].values()) if user_prefs['studio'] else 1,
-                'actors': max(user_prefs['actors'].values()) if user_prefs['actors'] else 1,
-                'languages': max(user_prefs['languages'].values()) if user_prefs['languages'] else 1,
-                'keywords': max(user_prefs['keywords'].values()) if user_prefs['keywords'] else 1
-            }
-    
-            # Genre Score
-            show_genres = set(show_info.get('genres', []))
-            if show_genres:
-                genre_scores = []
-                for genre in show_genres:
-                    genre_count = user_prefs['genres'].get(genre, 0)
-                    if genre_count > 0:
-                        if self.normalize_counters:
-                            # Enhanced normalization with square root to strengthen effect
-                            # This will boost lower values more significantly
-                            normalized_score = math.sqrt(genre_count / max_counts['genres'])
-                            genre_scores.append(normalized_score)
-                            score_breakdown['details']['genres'].append(
-                                f"{genre} (count: {genre_count}, norm: {round(normalized_score, 2)})"
-                            )
-                        else:
-                            # When not normalizing, use raw relative proportion
-                            normalized_score = min(genre_count / max_counts['genres'], 1.0)
-                            genre_scores.append(normalized_score)
-                            score_breakdown['details']['genres'].append(
-                                f"{genre} (count: {genre_count}, norm: {round(normalized_score, 2)})"
-                            )
-                if genre_scores:
-                    genre_final = (sum(genre_scores) / len(genre_scores)) * weights.get('genre_weight', 0.25)
-                    score += genre_final
-                    score_breakdown['genre_score'] = round(genre_final, 3)
-    
-            # Studio Score
-            if show_info.get('studio') and show_info['studio'] != 'N/A':
-                studio_count = user_prefs['studio'].get(show_info['studio'].lower(), 0)
-                if studio_count > 0:
-                    if self.normalize_counters:
-                        normalized_score = math.sqrt(studio_count / max_counts['studio'])
-                    else:
-                        normalized_score = min(studio_count / max_counts['studio'], 1.0)
-                    
-                    studio_final = normalized_score * weights.get('studio_weight', 0.20)
-                    score += studio_final
-                    score_breakdown['studio_score'] = round(studio_final, 3)
-                    score_breakdown['details']['studio'] = f"{show_info['studio']} (count: {studio_count}, norm: {round(normalized_score, 2)})"
-    
-            # Actor Score
-            show_cast = show_info.get('cast', [])
-            if show_cast:
-                actor_scores = []
-                matched_actors = 0
-                for actor in show_cast:
-                    actor_count = user_prefs['actors'].get(actor, 0)
-                    if actor_count > 0:
-                        matched_actors += 1
-                        if self.normalize_counters:
-                            normalized_score = math.sqrt(actor_count / max_counts['actors'])
-                        else:
-                            normalized_score = min(actor_count / max_counts['actors'], 1.0)
-                            
-                        actor_scores.append(normalized_score)
-                        score_breakdown['details']['actors'].append(
-                            f"{actor} (count: {actor_count}, norm: {round(normalized_score, 2)})"
-                        )
-                if matched_actors > 0:
-                    actor_score = sum(actor_scores) / matched_actors
-                    if matched_actors > 3:
-                        actor_score *= (3 / matched_actors)  # Normalize if many matches
-                    actor_final = actor_score * weights.get('actor_weight', 0.20)
-                    score += actor_final
-                    score_breakdown['actor_score'] = round(actor_final, 3)
-    
-            # Language Score
-            show_language = show_info.get('language', 'N/A')
-            if show_language != 'N/A':
-                show_lang_lower = show_language.lower()
-                            
-                lang_count = user_prefs['languages'].get(show_lang_lower, 0)
-                
-                if lang_count > 0:
-                    if self.normalize_counters:
-                        normalized_score = math.sqrt(lang_count / max_counts['languages'])
-                    else:
-                        normalized_score = min(lang_count / max_counts['languages'], 1.0)
-                    
-                    lang_final = normalized_score * weights.get('language_weight', 0.10)
-                    score += lang_final
-                    score_breakdown['language_score'] = round(lang_final, 3)
-                    score_breakdown['details']['language'] = f"{show_language} (count: {lang_count}, norm: {round(normalized_score, 2)})"
-    
-            # TMDB Keywords Score
-            if self.use_tmdb_keywords and show_info.get('tmdb_keywords'):
-                keyword_scores = []
-                for kw in show_info['tmdb_keywords']:
-                    count = user_prefs['keywords'].get(kw, 0)
-                    if count > 0:
-                        if self.normalize_counters:
-                            normalized_score = math.sqrt(count / max_counts['keywords'])
-                        else:
-                            normalized_score = min(count / max_counts['keywords'], 1.0)
-                            
-                        keyword_scores.append(normalized_score)
-                        score_breakdown['details']['keywords'].append(
-                            f"{kw} (count: {count}, norm: {round(normalized_score, 2)})"
-                        )
-                if keyword_scores:
-                    keyword_final = (sum(keyword_scores) / len(keyword_scores)) * weights.get('keyword_weight', 0.25)
-                    score += keyword_final
-                    score_breakdown['keyword_score'] = round(keyword_final, 3)
-    
-            # Ensure final score doesn't exceed 1.0 (100%)
-            score = min(score, 1.0)
-    
-            return score, score_breakdown
-    
-        except Exception as e:
-            log_warning(f"Error calculating similarity score for {show_info.get('title', 'Unknown')}: {e}")
-            return 0.0, score_breakdown
+        # Build user profile from watched data
+        user_profile = {
+            'genres': self.watched_data.get('genres', {}),
+            'studios': self.watched_data.get('studio', {}),
+            'actors': self.watched_data.get('actors', {}),
+            'languages': self.watched_data.get('languages', {}),
+            'keywords': self.watched_data.get('tmdb_keywords', {})
+        }
+
+        # Build content info dict
+        content_info = {
+            'genres': show_info.get('genres', []),
+            'studio': show_info.get('studio', 'N/A'),
+            'cast': show_info.get('cast', []),
+            'language': show_info.get('language', 'N/A'),
+            'keywords': show_info.get('tmdb_keywords', [])
+        }
+
+        # Use shared scoring function
+        return calculate_similarity_score(
+            content_info=content_info,
+            user_profile=user_profile,
+            media_type='tv',
+            weights=self.weights,
+            normalize_counters=self.normalize_counters,
+            use_fuzzy_keywords=self.use_tmdb_keywords
+        )
 
     def _print_similarity_breakdown(self, show_info: Dict, score: float, breakdown: Dict):
         """Print detailed breakdown of similarity score calculation"""
-        print(f"\n{CYAN}Similarity Score Breakdown for '{show_info['title']}'{RESET}")
-        print(f"Total Score: {round(score * 100, 1)}%")
-        print(f"├─ Genre Score: {round(breakdown['genre_score'] * 100, 1)}%")
-        if breakdown['details']['genres']:
-            print(f"│  └─ Matching genres: {', '.join(breakdown['details']['genres'])}")
-        print(f"├─ Studio Score: {round(breakdown['studio_score'] * 100, 1)}%")
-        if breakdown['details']['studio']:
-            print(f"│  └─ Studio match: {breakdown['details']['studio']}")
-        print(f"├─ Actor Score: {round(breakdown['actor_score'] * 100, 1)}%")
-        if breakdown['details']['actors']:
-            print(f"│  └─ Matching actors: {', '.join(breakdown['details']['actors'])}")
-        print(f"├─ Language Score: {round(breakdown['language_score'] * 100, 1)}%")
-        if breakdown['details']['language']:
-            print(f"│  └─ Language match: {breakdown['details']['language']}")
-        print(f"└─ Keyword Score: {round(breakdown['keyword_score'] * 100, 1)}%")
-        if breakdown['details']['keywords']:
-            print(f"   └─ Matching keywords: {', '.join(breakdown['details']['keywords'])}")
-        print("")
+        print_similarity_breakdown(show_info, score, breakdown, 'tv')
     # ------------------------------------------------------------------------
     # GET RECOMMENDATIONS
     # ------------------------------------------------------------------------
@@ -1307,42 +984,8 @@ class PlexTVRecommender:
         return plex_recs
     
     def _user_select_recommendations(self, recommended_shows: List[Dict], operation_label: str) -> List[Dict]:
-        prompt = (
-            f"\nWhich recommendations would you like to {operation_label}?\n"
-            "Enter 'all' or 'y' to select ALL,\n"
-            "Enter 'none' or 'n' to skip them,\n"
-            "Or enter a comma-separated list of numbers (e.g. 1,3,5). "
-            "\nYour choice: "
-        )
-        choice = input(prompt).strip().lower()
-
-        if choice in ("n", "no", "none", ""):
-            log_warning(f"Skipping {operation_label} as per user choice.")
-            return []
-        if choice in ("y", "yes", "all"):
-            return recommended_shows
-
-        indices_str = re.split(r'[,\s]+', choice)
-        chosen = []
-        for idx_str in indices_str:
-            idx_str = idx_str.strip()
-            if not idx_str.isdigit():
-                log_warning(f"Skipping invalid index: {idx_str}")
-                continue
-            idx = int(idx_str)
-            if 1 <= idx <= len(recommended_shows):
-                chosen.append(idx)
-            else:
-                log_warning(f"Skipping out-of-range index: {idx}")
-
-        if not chosen:
-            log_warning(f"No valid indices selected, skipping {operation_label}.")
-            return []
-
-        subset = []
-        for c in chosen:
-            subset.append(recommended_shows[c - 1])
-        return subset
+        """Prompt user to select recommendations - delegates to utility"""
+        return user_select_recommendations(recommended_shows, operation_label)
 
     def manage_plex_labels(self, recommended_shows: List[Dict]) -> None:
         # Check if label management is enabled
@@ -1360,27 +1003,11 @@ class PlexTVRecommender:
 
         try:
             shows_section = self.plex.library.section(self.library_title)
-            label_name = self.config.get('collections', {}).get('label_name', 'Recommended')
+            base_label = self.config.get('collections', {}).get('label_name', 'Recommended')
+            append_usernames = self.config.get('collections', {}).get('append_usernames', False)
+            users = self.users['plex_users'] or self.users['managed_users']
+            label_name = build_label_name(base_label, users, self.single_user, append_usernames)
 
-            # Handle username appending for labels
-            if self.config.get('collections', {}).get('append_usernames', False):
-                if self.single_user:
-                    # For single user mode, only append the current user
-                    user_suffix = re.sub(r'\W+', '_', self.single_user.strip())
-                    label_name = f"{label_name}_{user_suffix}"
-                else:
-                    # For combined mode, append all users
-                    users = []
-                    if self.users['plex_users']:
-                        users = self.users['plex_users']
-                    else:
-                        users = self.users['managed_users']
-                    
-                    if users:
-                        sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
-                        user_suffix = '_'.join(sanitized_users)
-                        label_name = f"{label_name}_{user_suffix}"
-    
             shows_to_update = []
             for rec in selected_shows:
                 plex_show = next(
@@ -1406,155 +1033,97 @@ class PlexTVRecommender:
 
             # Get staleness threshold from config
             stale_days = self.config.get('plex', {}).get('stale_removal_days', 7)
-            from datetime import datetime, timedelta
-            stale_threshold = datetime.now() - timedelta(days=stale_days)
 
             # Get currently labeled shows
             currently_labeled = shows_section.search(label=label_name)
             print(f"Found {len(currently_labeled)} currently labeled shows")
 
-            # Get excluded genres for this user (for checking existing items)
+            # Get excluded genres for this user
             excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
 
-            # Separate into watched, unwatched-fresh, stale, and excluded
-            unwatched_labeled = []
-            watched_labeled = []
-            stale_labeled = []
-            excluded_labeled = []
-
-            for show in currently_labeled:
-                show.reload()  # Ensure fresh data
-                show_id = int(show.ratingKey)
-                label_key = f"{show_id}_{label_name}"
-
-                # Check if this show has excluded genres
-                show_genres = [g.tag.lower() for g in show.genres]
-                if any(g in excluded_genres for g in show_genres):
-                    excluded_labeled.append(show)
-                    continue
-
-                # Check if this show has been watched by any of the users
-                if show_id in self.watched_show_ids:
-                    watched_labeled.append(show)
-                else:
-                    # Check if stale (unwatched for > stale_days)
-                    label_date_str = self.label_dates.get(label_key)
-                    if label_date_str:
-                        label_date = datetime.fromisoformat(label_date_str)
-                        if label_date < stale_threshold:
-                            stale_labeled.append(show)
-                        else:
-                            unwatched_labeled.append(show)
-                    else:
-                        # No date tracked - assume it's new (keep it)
-                        unwatched_labeled.append(show)
-                        # Track it now for future runs
-                        self.label_dates[label_key] = datetime.now().isoformat()
+            # Categorize labeled items using utility
+            categories = categorize_labeled_items(
+                currently_labeled, self.watched_show_ids, excluded_genres,
+                label_name, self.label_dates, stale_days
+            )
+            unwatched_labeled = categories['fresh']
+            watched_labeled = categories['watched']
+            stale_labeled = categories['stale']
+            excluded_labeled = categories['excluded']
 
             print(f"{GREEN}Keeping {len(unwatched_labeled)} fresh unwatched recommendations{RESET}")
             print(f"{YELLOW}Removing {len(watched_labeled)} watched shows from recommendations{RESET}")
             print(f"{YELLOW}Removing {len(stale_labeled)} stale recommendations (unwatched > {stale_days} days){RESET}")
             print(f"{YELLOW}Removing {len(excluded_labeled)} shows with excluded genres{RESET}")
 
-            # Remove labels from watched shows
-            for show in watched_labeled:
-                show.removeLabel(label_name)
-                label_key = f"{int(show.ratingKey)}_{label_name}"
-                if label_key in self.label_dates:
-                    del self.label_dates[label_key]
-                log_warning(f"Removed (watched): {show.title}")
-
-            # Remove labels from stale shows
-            for show in stale_labeled:
-                show.removeLabel(label_name)
-                label_key = f"{int(show.ratingKey)}_{label_name}"
-                if label_key in self.label_dates:
-                    del self.label_dates[label_key]
-                log_warning(f"Removed (stale): {show.title}")
-
-            # Remove labels from excluded genre shows
-            for show in excluded_labeled:
-                show.removeLabel(label_name)
-                label_key = f"{int(show.ratingKey)}_{label_name}"
-                if label_key in self.label_dates:
-                    del self.label_dates[label_key]
-                log_warning(f"Removed (excluded genre): {show.title}")
+            # Remove labels using utilities
+            remove_labels_from_items(watched_labeled, label_name, self.label_dates, "watched")
+            remove_labels_from_items(stale_labeled, label_name, self.label_dates, "stale")
+            remove_labels_from_items(excluded_labeled, label_name, self.label_dates, "excluded genre")
 
             # Get target count from config
             target_count = self.config['general'].get('limit_plex_results', 20)
 
-            # Calculate how many new recommendations we need
-            current_unwatched_count = len(unwatched_labeled)
-            slots_available = target_count - current_unwatched_count
+            print(f"{GREEN}Building optimal collection of top {target_count} recommendations...{RESET}")
 
-            print(f"{GREEN}Collection capacity: {current_unwatched_count}/{target_count} (need {max(0, slots_available)} more){RESET}")
+            # Score ALL candidates: existing unwatched + new recommendations
+            all_candidates = {}  # show_id -> (plex_show, score)
 
-            # Get IDs of shows already in collection
-            already_labeled_ids = {int(s.ratingKey) for s in unwatched_labeled}
-
-            # Filter new recommendations to exclude already labeled shows
-            new_recommendations = []
-            for show in shows_to_update:
+            # Score existing unwatched items
+            for show in unwatched_labeled:
                 show_id = int(show.ratingKey)
-                if show_id not in already_labeled_ids and show_id not in self.watched_show_ids:
-                    new_recommendations.append(show)
+                show_info = self.show_cache.cache['shows'].get(str(show_id))
+                if show_info:
+                    try:
+                        score, _ = self._calculate_similarity_from_cache(show_info)
+                        all_candidates[show_id] = (show, score)
+                    except Exception:
+                        all_candidates[show_id] = (show, 0.0)
 
-            # Take only what we need to fill gaps
-            shows_to_add = new_recommendations[:max(0, slots_available)]
+            # Score new recommendations
+            for rec in selected_shows:
+                plex_show = next(
+                    (s for s in shows_to_update if s.title == rec['title'] and s.year == rec.get('year')),
+                    None
+                )
+                if plex_show:
+                    show_id = int(plex_show.ratingKey)
+                    if show_id not in self.watched_show_ids:
+                        score = rec.get('similarity_score', 0.0)
+                        # Keep higher score if already exists
+                        if show_id not in all_candidates or score > all_candidates[show_id][1]:
+                            all_candidates[show_id] = (plex_show, score)
 
-            print(f"{GREEN}Adding {len(shows_to_add)} new recommendations to fill gaps{RESET}")
+            # Sort by score and take top N
+            sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
+            top_candidates = sorted_candidates[:target_count]
+            top_ids = {show_id for show_id, _ in top_candidates}
 
-            # Add labels to new recommendations
-            for show in shows_to_add:
-                current_labels = [label.tag for label in show.labels]
-                if label_name not in current_labels:
-                    show.addLabel(label_name)
-                    # Track label date
-                    label_key = f"{int(show.ratingKey)}_{label_name}"
-                    self.label_dates[label_key] = datetime.now().isoformat()
-                    print(f"{GREEN}Added: {show.title}{RESET}")
+            # Determine what to add and remove
+            current_ids = {int(s.ratingKey) for s in unwatched_labeled}
+            ids_to_add = top_ids - current_ids
+            ids_to_remove = current_ids - top_ids
+
+            # Remove items that didn't make the cut
+            if ids_to_remove:
+                shows_to_remove = [s for s in unwatched_labeled if int(s.ratingKey) in ids_to_remove]
+                print(f"{YELLOW}Removing {len(shows_to_remove)} lower-scoring items to make room for better ones{RESET}")
+                remove_labels_from_items(shows_to_remove, label_name, self.label_dates, "replaced by higher score")
+
+            # Add new high-scoring items
+            shows_to_add = [all_candidates[sid][0] for sid in ids_to_add if sid in all_candidates]
+            if shows_to_add:
+                print(f"{GREEN}Adding {len(shows_to_add)} new high-scoring recommendations{RESET}")
+                add_labels_to_items(shows_to_add, label_name, self.label_dates)
 
             # Save label dates to cache for persistence
             self._save_watched_cache()
 
-            # RE-SORT: Calculate similarity for all shows and sort by score
-            print(f"{GREEN}Re-calculating similarity scores for entire collection...{RESET}")
+            print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
 
-            # Create a mapping of show_id -> similarity_score from selected_shows (new recommendations)
-            similarity_scores = {}
-            for rec in selected_shows:
-                # Find the Plex object that matches this recommendation
-                matching_plex = next(
-                    (s for s in shows_to_update if s.title == rec['title'] and s.year == rec.get('year')),
-                    None
-                )
-                if matching_plex:
-                    similarity_scores[int(matching_plex.ratingKey)] = rec.get('similarity_score', 0.0)
-
-            # Calculate similarity for unwatched shows from previous runs
-            for show in unwatched_labeled:
-                show_id = int(show.ratingKey)
-                if show_id not in similarity_scores:
-                    pass
-                    # Get show from cache
-                    show_info = self.show_cache.cache['shows'].get(str(show_id))
-                    if show_info:
-                        try:
-                            similarity_score, _ = self._calculate_similarity_from_cache(show_info)
-                            similarity_scores[show_id] = similarity_score
-                        except Exception:
-                            similarity_scores[show_id] = 0.0
-                    else:
-                        similarity_scores[show_id] = 0.0
-
-            # Combine all labeled shows (unwatched + newly added)
-            final_collection_shows = unwatched_labeled + shows_to_add
-
-            # Sort by similarity score (highest first)
-            final_collection_shows.sort(
-                key=lambda s: similarity_scores.get(int(s.ratingKey), 0.0),
-                reverse=True
-            )
+            # Build final collection from top candidates (already sorted by score)
+            similarity_scores = {show_id: score for show_id, (_, score) in top_candidates}
+            final_collection_shows = [plex_show for show_id, (plex_show, score) in top_candidates]
 
             print(f"{GREEN}Final collection size: {len(final_collection_shows)} shows (sorted by similarity){RESET}")
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
@@ -1590,86 +1159,24 @@ def format_show_output(show: Dict,
                       show_language: bool = False,
                       show_rating: bool = False,
                       show_imdb_link: bool = False) -> str:
-    bullet = f"{index}. " if index is not None else "- "
-    output = f"{bullet}{CYAN}{show['title']}{RESET} ({show.get('year', 'N/A')})"
-
-    if 'similarity_score' in show:
-        score_percentage = round(show['similarity_score'] * 100, 1)
-        output += f" - Similarity: {YELLOW}{score_percentage}%{RESET}"
-		
-    if show.get('genres'):
-        output += f"\n  {YELLOW}Genres:{RESET} {', '.join(show['genres'])}"
-
-    if show_summary and show.get('summary'):
-        output += f"\n  {YELLOW}Summary:{RESET} {show['summary']}"
-
-    if show_cast and show.get('cast'):
-        output += f"\n  {YELLOW}Cast:{RESET} {', '.join(show['cast'])}"
-
-    if show_language and show.get('language') != "N/A":
-        output += f"\n  {YELLOW}Language:{RESET} {show['language']}"
-
-    if show_rating and show.get('ratings', {}).get('audience_rating', 0) > 0:
-        rating = show['ratings']['audience_rating']
-        output += f"\n  {YELLOW}Rating:{RESET} {rating}/10"
-
-    if show_imdb_link and show.get('imdb_id'):
-        imdb_link = f"https://www.imdb.com/title/{show['imdb_id']}/"
-        output += f"\n  {YELLOW}IMDb Link:{RESET} {imdb_link}"
-
-    return output
+    """Format TV show for display - delegates to shared utility"""
+    return format_media_output(
+        media=show,
+        media_type='tv',
+        show_summary=show_summary,
+        index=index,
+        show_cast=show_cast,
+        show_language=show_language,
+        show_rating=show_rating,
+        show_imdb_link=show_imdb_link
+    )
 
 # ------------------------------------------------------------------------
 # CONFIG ADAPTER
 # ------------------------------------------------------------------------
 def adapt_root_config_to_legacy(root_config):
     """Convert root config.yml format to legacy TRFP format"""
-    media_type = 'tv'
-
-    # Build legacy config structure
-    adapted = {
-        'general': {
-            'confirm_operations': root_config.get('general', {}).get('confirm_operations', False),
-            'plex_only': root_config.get('general', {}).get('plex_only', True),
-            'combine_watch_history': root_config.get('general', {}).get('combine_watch_history', False),
-            'log_retention_days': root_config.get('general', {}).get('log_retention_days', 7),
-            'limit_plex_results': root_config.get(media_type, {}).get('limit_results', 20),
-            'exclude_genre': root_config.get('general', {}).get('exclude_genre', 'none'),
-            'randomize_recommendations': root_config.get(media_type, {}).get('randomize_recommendations', False),
-            'normalize_counters': root_config.get(media_type, {}).get('normalize_counters', True),
-            'show_summary': root_config.get(media_type, {}).get('show_summary', True),
-            'show_cast': root_config.get(media_type, {}).get('show_cast', True),
-            'show_language': root_config.get(media_type, {}).get('show_language', True),
-            'show_rating': root_config.get(media_type, {}).get('show_rating', True),
-            'show_imdb_link': root_config.get(media_type, {}).get('show_imdb_link', True),
-        },
-        'plex': {
-            'url': root_config.get('plex', {}).get('url', ''),
-            'token': root_config.get('plex', {}).get('token', ''),
-            'TV_library_title': root_config.get('plex', {}).get('tv_library', 'TV Shows'),
-            'managed_users': root_config.get('plex', {}).get('managed_users', 'Admin'),
-        },
-        'collections': {
-            'add_label': root_config.get('collections', {}).get('add_label', True),
-            'label_name': root_config.get('collections', {}).get('label_name', 'Recommended'),
-            'append_usernames': root_config.get('collections', {}).get('append_usernames', True),
-            'remove_previous_recommendations': root_config.get('collections', {}).get('remove_previous_recommendations', False),
-            'stale_removal_days': root_config.get('collections', {}).get('stale_removal_days', 7),
-        },
-        'TMDB': {
-            'api_key': root_config.get('tmdb', {}).get('api_key', ''),
-        },
-        'plex_users': {
-            'users': root_config.get('users', {}).get('list', ''),
-        },
-        'user_preferences': root_config.get('users', {}).get('preferences', {}),
-        'weights': root_config.get(media_type, {}).get('weights', {}),
-        'quality_filters': root_config.get(media_type, {}).get('quality_filters', {}),
-        'recency_decay': root_config.get('recency_decay', {}),
-        'paths': root_config.get('platform', {}),
-    }
-
-    return adapted
+    return adapt_config_for_media_type(root_config, 'tv')
 
 def main():
     # Parse command line arguments
@@ -1727,10 +1234,14 @@ def main():
         managed_users = base_config['plex'].get('managed_users', '')
         all_users = [u.strip() for u in managed_users.split(',') if u.strip()]
 
+    # If single user specified, only process that user
+    if single_user:
+        all_users = [single_user]
+
     if combine_watch_history or not all_users:
         pass
         # Original behavior - single run
-        process_recommendations(base_config, config_path, log_retention_days)
+        process_recommendations(base_config, config_path, log_retention_days, single_user=single_user)
     else:
         # Individual runs for each user
         for user in all_users:
