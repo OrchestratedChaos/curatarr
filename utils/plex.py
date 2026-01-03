@@ -379,7 +379,7 @@ def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str
                                 })
                                 seen_tmdb_ids.add(str(rating_key))
                                 seen_tmdb_ids.add(tmdb_id)
-                        except:
+                        except (ValueError, KeyError, AttributeError):
                             pass
 
         except Exception as e:
