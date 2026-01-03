@@ -12,7 +12,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 **Plex Recommender solves this by:**
 - Analyzing each user's watch history
-- Scoring unwatched content by similarity (genres, cast, keywords, language)
+- Scoring unwatched content by similarity (keywords, genres, cast, directors)
 - Creating personalized collections that update automatically
 - Generating external watchlists so you know what to acquire next
 
@@ -22,7 +22,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ### For Your Library (What to Watch)
 - **Per-user recommendations** — Each user gets their own curated collection
-- **Smart scoring** — Weights genres, directors, cast, keywords, and language
+- **Smart scoring** — Weights keywords, genres, cast, and directors
 - **Recency bias** — Recent watches influence recommendations more
 - **Rewatch detection** — Content you love gets weighted higher
 - **Genre exclusions** — Skip horror for the kids, documentaries for movie night
@@ -37,6 +37,8 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 ### For You (Simple & Robust)
 - **One command** — `./run.sh` handles everything
 - **Single config file** — All settings in one place
+- **Auto-updates** — Pulls latest code from GitHub on each run (optional)
+- **Smart caching** — Auto-clears incompatible caches after updates
 - **Auto-scheduling** — Optional daily cron job
 - **Clean logs** — Know exactly what happened
 
@@ -137,6 +139,13 @@ users:
       exclude_genres: [horror, thriller, war]
 ```
 
+### General Settings
+```yaml
+general:
+  auto_update: true           # Pull latest code from GitHub on run
+  log_retention_days: 7       # Keep logs for 7 days
+```
+
 ### Tuning (Optional)
 ```yaml
 movies:
@@ -153,7 +162,29 @@ recency_decay:
 
 collections:
   stale_removal_days: 7       # Rotate unwatched recommendations
+
+external_recommendations:
+  min_relevance_score: 0.25   # See note below
 ```
+
+### External Recommendations: Relevance Score
+
+The `min_relevance_score` setting (0.0-1.0) controls how strictly personal the external watchlist recommendations are:
+
+- **Score** = How many of your watched items recommend this title (normalized 0-100%)
+- **Rating** = TMDB audience rating (used only as tiebreaker)
+
+**How it works:**
+1. Items above the threshold are prioritized (sorted by personal relevance)
+2. Lower-scored items only appear if not enough high-relevance items exist
+3. This ensures you get personally relevant content, not just popular movies
+
+**Tuning:**
+- `0.25` (default) — Balanced. Most users should start here.
+- `0.50` — Stricter. Only highly relevant recommendations.
+- `0.10` — Looser. More variety, but less personalized.
+
+If you're seeing too many "random" recommendations, increase this value.
 
 ---
 
@@ -168,14 +199,17 @@ collections:
 
 ### Similarity Scoring
 ```
-Score = (genre_match × 0.20) +
-        (keyword_match × 0.30) +
-        (director_match × 0.25) +
-        (actor_match × 0.15) +
-        (language_match × 0.10)
+Score = (keyword_match × 0.50) +    # Most specific signal - themes, topics
+        (genre_match × 0.25) +       # Baseline preference
+        (actor_match × 0.20) +       # Cast preferences
+        (director_match × 0.05)      # Style indicator (most don't pick by director)
 ```
 
-Weighted by recency (recent watches count more) and rewatch count (loved content counts more).
+**Scoring uses sum with diminishing returns** — Multiple weak matches add up rather than averaging down. A movie with 15 matching keywords scores well even if each individual match is partial.
+
+Weighted by recency (recent watches count more), user ratings (5-star content counts more), and rewatch count (loved content counts more).
+
+**Weight redistribution:** If a movie's component has no matches (e.g., unknown director), that weight redistributes proportionally to components that did match—so you still get meaningful scores.
 
 ---
 
@@ -244,6 +278,13 @@ python3 -c "import yaml; print(yaml.safe_load(open('config.yml')))"
 - TMDB API key invalid → Get free key from themoviedb.org
 - Plex connection failed → Check URL and token
 - No recommendations → User needs more watch history
+- "Cache outdated" message → Normal after updates, rebuilds automatically
+- Want to disable auto-update → Set `general.auto_update: false` in config.yml
+
+**Manual update (if auto-update disabled):**
+```bash
+git pull origin main
+```
 
 ---
 
