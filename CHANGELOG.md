@@ -2,6 +2,14 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.6] - 2026-01-03
+
+### Added
+- **Popularity dampening** — Slight penalty for very popular content (50k+ votes)
+  - Prevents blockbusters from dominating due to more complete metadata
+  - ~3% penalty per order of magnitude above threshold (capped at 10%)
+  - Configurable via `use_popularity_dampening` and `popularity_threshold` parameters
+
 ## [1.6.5] - 2026-01-03
 
 ### Added
