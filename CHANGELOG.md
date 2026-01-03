@@ -2,6 +2,28 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.2.9] - 2026-01-03
+
+### Added
+- **Comprehensive unit tests** — 367 tests achieving 95% coverage
+  - test_display.py: 63 tests (93% coverage)
+  - test_plex.py: 92 tests (98% coverage)
+  - test_scoring.py: 55 tests (95% coverage)
+  - test_tmdb.py: 32 tests (99% coverage)
+  - test_labels.py: 23 tests (97% coverage)
+  - test_counters.py: 22 tests (96% coverage)
+  - test_helpers.py: 32 tests (95% coverage)
+  - test_cache.py: 19 tests (93% coverage)
+
+### Fixed
+- **Log level** — Label removal messages now log as INFO instead of WARNING
+
+## [1.2.8] - 2026-01-03
+
+### Added
+- **Interactive setup wizard** — First-run configuration for new users
+- **Unit tests** — Initial test suite for config and tmdb modules
+
 ## [1.2.7] - 2026-01-03
 
 ### Added
