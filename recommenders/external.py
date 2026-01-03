@@ -833,7 +833,7 @@ def find_similar_content(tmdb_api_key, watched_items, library_data, media_type='
 
 def load_cache(display_name, media_type):
     """Load existing recommendations cache"""
-    cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+    cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
     cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
@@ -850,7 +850,7 @@ def load_cache(display_name, media_type):
 
 def save_cache(display_name, media_type, cache_data):
     """Save recommendations cache"""
-    cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+    cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
     cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
@@ -861,7 +861,8 @@ def save_cache(display_name, media_type, cache_data):
 def load_ignore_list(display_name):
     """Load user's manual ignore list"""
     safe_name = display_name.lower().replace(' ', '_')
-    ignore_file = os.path.join(os.path.dirname(__file__), 'recommendations', 'external', f'{safe_name}_ignore.txt')
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ignore_file = os.path.join(project_root, 'recommendations', 'external', f'{safe_name}_ignore.txt')
     if os.path.exists(ignore_file):
         with open(ignore_file, 'r') as f:
             return set(line.strip() for line in f if line.strip())
@@ -1148,7 +1149,8 @@ def process_user(config, plex, username):
     )
 
     # Generate markdown
-    output_dir = os.path.join(os.path.dirname(__file__), 'recommendations', 'external')
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_dir = os.path.join(project_root, 'recommendations', 'external')
     output_file = generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir)
 
     # Count totals
@@ -1166,8 +1168,9 @@ def main():
     print(f"\n{CYAN}External Recommendations Generator{RESET}")
     print("-" * 50)
 
-    # Load config
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+    # Load config from project root (one level up from recommenders/)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(project_root, 'config.yml')
     config = load_config(config_path)
 
     # Connect to Plex
@@ -1191,7 +1194,8 @@ def main():
             traceback.print_exc()
 
     print_status("All watchlists generated!", "success")
-    print(f"Watchlists saved to: {os.path.join(os.path.dirname(__file__), 'recommendations', 'external')}")
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    print(f"Watchlists saved to: {os.path.join(project_root, 'recommendations', 'external')}")
 
 if __name__ == "__main__":
     main()
