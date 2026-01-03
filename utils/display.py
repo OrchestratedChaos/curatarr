@@ -126,20 +126,20 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
     return logger
 
 
-def print_user_header(username: str):
-    """Print header when starting to process a user"""
+def print_user_header(username: str) -> None:
+    """Print header when starting to process a user."""
     print(f"\n{GREEN}Processing recommendations for user: {username}{RESET}")
     print("-" * 50)
 
 
-def print_user_footer(username: str):
-    """Print footer when done processing a user"""
+def print_user_footer(username: str) -> None:
+    """Print footer when done processing a user."""
     print(f"\n{GREEN}Completed processing for user: {username}{RESET}")
     print("-" * 50)
 
 
-def print_status(message: str, level: str = "info"):
-    """Print a status message with appropriate color and log to file"""
+def print_status(message: str, level: str = "info") -> None:
+    """Print a status message with appropriate color and log to file."""
     logger = logging.getLogger('plex_recommender')
     if level == "success":
         print(f"{GREEN}✓ {message}{RESET}")
@@ -153,19 +153,19 @@ def print_status(message: str, level: str = "info"):
         logger.info(message)
 
 
-def log_warning(message: str):
-    """Log warning with yellow color (via ColoredFormatter)"""
+def log_warning(message: str) -> None:
+    """Log warning with yellow color (via ColoredFormatter)."""
     logger = logging.getLogger('plex_recommender')
     logger.warning(message)
 
 
-def log_error(message: str):
-    """Log error with red color (via ColoredFormatter)"""
+def log_error(message: str) -> None:
+    """Log error with red color (via ColoredFormatter)."""
     logger = logging.getLogger('plex_recommender')
     logger.error(message)
 
 
-def show_progress(prefix: str, current: int, total: int):
+def show_progress(prefix: str, current: int, total: int) -> None:
     """
     Display progress indicator on same line.
 
