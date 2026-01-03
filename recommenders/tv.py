@@ -45,13 +45,14 @@ from utils import (
     build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
     get_library_imdb_ids, print_similarity_breakdown,
     load_media_cache, save_media_cache, create_empty_counters,
-    save_watched_cache, process_counters_from_cache
+    save_watched_cache, process_counters_from_cache,
+    compute_profile_hash
 )
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.6"
+__version__ = "1.6.7"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -268,6 +269,10 @@ class PlexTVRecommender:
             if not self.watched_show_ids and 'watched_show_ids' in watched_cache:
                 self.watched_show_ids = {int(id_) for id_ in watched_cache['watched_show_ids'] if str(id_).isdigit()}
             logger.debug(f"Using cached data: {self.cached_watched_count} watched shows, {len(self.watched_show_ids)} IDs")
+
+        # Compute profile hash for score caching
+        self.profile_hash = compute_profile_hash(self.watched_data_counters)
+
         print("Fetching library metadata (for existing Shows checks)...")
         self.library_shows = self._get_library_shows_set()
         self.library_imdb_ids = self._get_library_imdb_ids()
@@ -770,19 +775,43 @@ class PlexTVRecommender:
             plex_recs = []
         else:
             print(f"Calculating similarity scores for {len(unwatched_shows)} shows...")
-            
-            # Calculate similarity scores
+
+            # Calculate similarity scores (with caching)
             scored_shows = []
+            cache_hits = 0
+            scores_updated = False
             for i, show_info in enumerate(unwatched_shows, 1):
                 show_progress("Processing", i, len(unwatched_shows))
                 try:
-                    similarity_score, breakdown = self._calculate_similarity_from_cache(show_info)
+                    # Check for cached score with matching profile hash
+                    cached_hash = show_info.get('profile_hash')
+                    cached_score = show_info.get('cached_score')
+
+                    if cached_hash == self.profile_hash and cached_score is not None:
+                        # Use cached score
+                        similarity_score = cached_score
+                        breakdown = show_info.get('score_breakdown', {})
+                        cache_hits += 1
+                    else:
+                        # Calculate new score and cache it
+                        similarity_score, breakdown = self._calculate_similarity_from_cache(show_info)
+                        show_info['cached_score'] = similarity_score
+                        show_info['profile_hash'] = self.profile_hash
+                        show_info['score_breakdown'] = breakdown
+                        scores_updated = True
+
                     show_info['similarity_score'] = similarity_score
-                    show_info['score_breakdown'] = breakdown
                     scored_shows.append(show_info)
                 except Exception as e:
                     log_warning(f"Error processing {show_info['title']}: {e}")
                     continue
+
+            # Save cache if scores were updated
+            if scores_updated:
+                self.show_cache._save_cache()
+                logger.debug(f"Saved {len(unwatched_shows) - cache_hits} new scores to cache")
+            if cache_hits > 0:
+                logger.debug(f"Used {cache_hits} cached scores")
             
             # Sort by similarity score
             scored_shows.sort(key=lambda x: x['similarity_score'], reverse=True)

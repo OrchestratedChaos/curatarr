@@ -2,11 +2,33 @@
 Miscellaneous helper utilities for Plex Recommender.
 """
 
+import hashlib
+import json
 import os
 from datetime import datetime, timedelta
 from typing import Dict
 
 from .display import log_warning
+
+
+def compute_profile_hash(profile_data: Dict) -> str:
+    """
+    Compute a hash of user profile data for cache invalidation.
+
+    Used to detect when the user's watch history has changed,
+    which would require recalculating similarity scores.
+
+    Args:
+        profile_data: Dict containing user preferences (genres, actors, etc.)
+
+    Returns:
+        SHA256 hash string (first 16 chars for compactness)
+    """
+    if not profile_data:
+        return ""
+    # Sort keys for consistent hashing
+    serialized = json.dumps(profile_data, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 # Title suffixes to strip for fuzzy matching
 TITLE_SUFFIXES_TO_STRIP = [
