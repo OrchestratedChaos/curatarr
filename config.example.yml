@@ -7,6 +7,7 @@ plex:
   token: YOUR_PLEX_TOKEN  # Get from: https://support.plex.tv/articles/204059436
   movie_library: Movies
   tv_library: TV Shows
+  verify_ssl: false  # Set to true if you want SSL certificate verification
 
 # TMDB API
 tmdb:
