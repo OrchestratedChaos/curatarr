@@ -20,31 +20,31 @@ import copy
 # Import shared utilities
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS, ANSI_PATTERN, CACHE_VERSION, check_cache_version,
+    RATING_MULTIPLIERS, CACHE_VERSION, check_cache_version,
     get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
     log_warning, log_error, update_plex_collection, cleanup_old_collections,
-    load_config, init_plex, get_configured_users, get_current_users,
-    get_excluded_genres_for_user, get_user_specific_connection,
+    load_config, init_plex, get_configured_users,
+    get_excluded_genres_for_user,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score,
-    map_path, show_progress, TeeLogger,
+    show_progress, TeeLogger,
     # Consolidated utilities
     extract_genres, extract_ids_from_guids, fetch_tmdb_with_retry,
     get_tmdb_id_for_item, get_tmdb_keywords, adapt_config_for_media_type,
     # Additional consolidated utilities
-    user_select_recommendations, extract_rating, format_media_output,
+    user_select_recommendations, format_media_output,
     build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
-    get_library_imdb_ids, print_similarity_breakdown, process_counters_from_cache,
+    get_library_imdb_ids, print_similarity_breakdown,
     load_media_cache, save_media_cache, create_empty_counters,
-    get_plex_user_ids as get_plex_user_ids_util, save_watched_cache
+    save_watched_cache
 )
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 class ShowCache:
     """Cache for TV show metadata including TMDB data, genres, and keywords."""
@@ -258,7 +258,6 @@ class PlexTVRecommender:
 
         # Verify Plex user configuration
         if self.users['plex_users']:
-            pass
             # Plex-only mode: No external validation needed
             users_to_process = [self.single_user] if self.single_user else self.users['plex_users']
             print(f"{GREEN}Processing recommendations for Plex users: {users_to_process}{RESET}")
@@ -489,7 +488,6 @@ class PlexTVRecommender:
         
         # Determine which users to process
         if self.single_user:
-            pass
             # Check if the single user is the admin
             if self.single_user.lower() in ['admin', 'administrator']:
                 users_to_process = [admin_user]
@@ -634,7 +632,7 @@ class PlexTVRecommender:
         return any(lib_title == title_lower or 
                   lib_title == f"{title_lower} ({year})" or
                   lib_title.replace(f" ({year})", "") == title_lower 
-                  for lib_title, lib_year in self.library_shows)
+                  for lib_title, _ in self.library_shows)
 
     def _process_show_counters(self, show, counters):
         show_details = self.get_show_details(show)
@@ -676,7 +674,6 @@ class PlexTVRecommender:
                     
                     # Get watched date and TVDB ID
                     if hasattr(episode, 'lastViewedAt') and hasattr(episode, 'guids'):
-                        pass
                         # Handle lastViewedAt whether it's a timestamp or datetime
                         if isinstance(episode.lastViewedAt, datetime):
                             watched_at = episode.lastViewedAt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -965,7 +962,6 @@ class PlexTVRecommender:
             scored_shows.sort(key=lambda x: x['similarity_score'], reverse=True)
             
             if self.randomize_recommendations:
-                pass
                 # Take top 10% of shows by similarity score and randomize
                 top_count = max(int(len(scored_shows) * 0.1), self.limit_plex_results)
                 top_pool = scored_shows[:top_count]
@@ -1122,7 +1118,6 @@ class PlexTVRecommender:
             print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
 
             # Build final collection from top candidates (already sorted by score)
-            similarity_scores = {show_id: score for show_id, (_, score) in top_candidates}
             final_collection_shows = [plex_show for show_id, (plex_show, score) in top_candidates]
 
             print(f"{GREEN}Final collection size: {len(final_collection_shows)} shows (sorted by similarity){RESET}")
@@ -1223,7 +1218,6 @@ def main():
     
     # Check if Plex users are configured and not 'none'
     if plex_users and str(plex_users).lower() != 'none':
-        pass
         # Process Plex users
         if isinstance(plex_users, str):
             all_users = [u.strip() for u in plex_users.split(',') if u.strip()]
@@ -1239,7 +1233,6 @@ def main():
         all_users = [single_user]
 
     if combine_watch_history or not all_users:
-        pass
         # Original behavior - single run
         process_recommendations(base_config, config_path, log_retention_days, single_user=single_user)
     else:
