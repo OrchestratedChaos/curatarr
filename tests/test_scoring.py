@@ -702,3 +702,58 @@ class TestSelectTieredRecommendations:
         items = [{'score': 0.9 - i*0.01, 'title': f'Item{i}'} for i in range(50)]
         result = select_tiered_recommendations(items, 10)
         assert len(result) == 10
+
+
+class TestPopularityDampening:
+    """Tests for popularity dampening in calculate_similarity_score."""
+
+    def test_no_dampening_below_threshold(self):
+        """Test that content below threshold gets no dampening."""
+        content = {'genres': ['action'], 'vote_count': 10000}
+        profile = {'genres': {'action': 10}}
+        score, breakdown = calculate_similarity_score(
+            content, profile, use_popularity_dampening=True, popularity_threshold=50000
+        )
+        assert 'popularity_dampening' not in breakdown
+
+    def test_dampening_above_threshold(self):
+        """Test that very popular content gets dampened."""
+        content = {'genres': ['action'], 'vote_count': 500000}
+        profile = {'genres': {'action': 10}}
+        score, breakdown = calculate_similarity_score(
+            content, profile, use_popularity_dampening=True, popularity_threshold=50000
+        )
+        assert 'popularity_dampening' in breakdown
+        assert breakdown['popularity_dampening'] < 1.0
+
+    def test_dampening_reduces_score(self):
+        """Test that dampening reduces final score."""
+        content_popular = {'genres': ['action'], 'vote_count': 500000}
+        content_normal = {'genres': ['action'], 'vote_count': 10000}
+        profile = {'genres': {'action': 10}}
+
+        score_popular, _ = calculate_similarity_score(
+            content_popular, profile, use_popularity_dampening=True, popularity_threshold=50000
+        )
+        score_normal, _ = calculate_similarity_score(
+            content_normal, profile, use_popularity_dampening=True, popularity_threshold=50000
+        )
+        assert score_popular < score_normal
+
+    def test_dampening_disabled(self):
+        """Test that dampening can be disabled."""
+        content = {'genres': ['action'], 'vote_count': 5000000}
+        profile = {'genres': {'action': 10}}
+        score, breakdown = calculate_similarity_score(
+            content, profile, use_popularity_dampening=False
+        )
+        assert 'popularity_dampening' not in breakdown
+
+    def test_dampening_capped_at_90_percent(self):
+        """Test that dampening doesn't exceed 10% penalty."""
+        content = {'genres': ['action'], 'vote_count': 50000000}  # Very high
+        profile = {'genres': {'action': 10}}
+        score, breakdown = calculate_similarity_score(
+            content, profile, use_popularity_dampening=True, popularity_threshold=50000
+        )
+        assert breakdown.get('popularity_dampening', 1.0) >= 0.90

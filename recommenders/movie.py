@@ -49,7 +49,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.5"
+__version__ = "1.6.6"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -754,7 +754,8 @@ class PlexMovieRecommender:
             'directors': movie_info.get('directors', []),
             'cast': movie_info.get('cast', []),
             'language': movie_info.get('language', 'N/A'),
-            'keywords': movie_info.get('tmdb_keywords', [])
+            'keywords': movie_info.get('tmdb_keywords', []),
+            'vote_count': movie_info.get('vote_count', 0)
         }
 
         # Use shared scoring function
