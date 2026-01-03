@@ -2,6 +2,57 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.2.7] - 2026-01-03
+
+### Added
+- **Windows support** — Full feature parity with macOS/Linux
+  - `run.ps1` PowerShell script with same functionality as `run.sh`
+  - Dependency checking, auto-update, first-run wizard
+  - Task Scheduler integration (Windows equivalent of cron)
+  - Updated README with Windows instructions throughout
+
+## [1.2.6] - 2026-01-03
+
+### Fixed
+- **Method name bugs** — Fixed `_get_show_language` and `_get_movie_language` to call correct base class method
+- **Exception handling** — Replaced bare except blocks with specific exception types
+- **Config key** — Fixed `stale_removal_days` lookup (was checking wrong config section)
+- **Language normalization** — Added missing `.lower()` for consistent matching
+- **Return type consistency** — Aligned `tv.py` return type with `movie.py`
+
+### Removed
+- **Dead code cleanup** — Removed 5 unused methods (~200 lines):
+  - `_is_show_in_library`, `_process_show_counters`, `_validate_watched_shows`
+  - `_is_movie_in_library`, `_process_movie_counters`
+- **Whitespace fixes** — Fixed mixed tabs/spaces throughout
+
+## [1.2.3] - 2026-01-02
+
+### Changed
+- **Cache class refactoring** — `MovieCache` and `ShowCache` now inherit from `BaseCache`
+  - Reduced ~215 lines of duplicated code
+  - Each cache only implements `_process_item()` for media-specific logic
+  - Shared: cache loading/saving, library updates, TMDB data fetching, language detection
+
+## [1.2.2] - 2026-01-02
+
+### Changed
+- **Named constants** — Extracted magic numbers to `utils/config.py`:
+  - `TOP_CAST_COUNT = 3`
+  - `TMDB_RATE_LIMIT_DELAY = 0.5`
+  - `DEFAULT_RATING = 5.0`
+  - `WEIGHT_SUM_TOLERANCE = 1e-6`
+  - `DEFAULT_LIMIT_PLEX_RESULTS = 10`
+  - `TOP_POOL_PERCENTAGE = 0.1`
+
+## [1.2.1] - 2026-01-02
+
+### Fixed
+- **Exception handling** — Replaced bare `except:` with specific exception types
+- **Unused imports** — Removed dead imports across all files
+- **Unused variables** — Cleaned up unused variable assignments
+- **Pass statements** — Removed meaningless `pass` statements
+
 ## [1.2.0] - 2026-01-02
 
 ### Changed
