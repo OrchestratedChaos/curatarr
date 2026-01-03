@@ -46,7 +46,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.4"
+__version__ = "1.2.6"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -129,7 +129,7 @@ class PlexTVRecommender:
         tmdb_config = get_tmdb_config(self.config)
         self.use_tmdb_keywords = tmdb_config['use_keywords']
         self.tmdb_api_key = tmdb_config['api_key']
-		
+
         self.cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
         self.show_cache = ShowCache(self.cache_dir, recommender=self)
@@ -236,7 +236,7 @@ class PlexTVRecommender:
             show_id for show_id in self.watched_show_ids
             if show_id in current_library_rating_keys
         }
-						
+
         if self.plex_tmdb_cache is None:
             self.plex_tmdb_cache = {}
         if self.tmdb_keywords_cache is None:
@@ -267,7 +267,7 @@ class PlexTVRecommender:
         print("Fetching library metadata (for existing Shows checks)...")
         self.library_shows = self._get_library_shows_set()
         self.library_imdb_ids = self._get_library_imdb_ids()
- 
+
     def _get_watched_count(self) -> int:
         """Get count of watched TV shows from Plex (for cache invalidation)"""
         # Determine which users to process
@@ -323,7 +323,7 @@ class PlexTVRecommender:
             log_error(f"Error resolving Plex users: {e}")
         
         return user_ids
-		
+
     def _get_plex_watched_shows_data(self) -> Dict:
         """Get watched show data from Plex's native history (using Plex API)"""
         if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
@@ -517,92 +517,6 @@ class PlexTVRecommender:
             log_error(f"Error getting library shows: {e}")
             return set()
 
-    def _is_show_in_library(self, title: str, year: Optional[int]) -> bool:
-        if not title:
-            return False
-            
-        title_lower = title.lower()
-        
-        # Check for year in title and strip it if found
-        year_match = re.search(r'\s*\((\d{4})\)$', title_lower)
-        if year_match:
-            clean_title = title_lower.replace(year_match.group(0), '').strip()
-            embedded_year = int(year_match.group(1))
-            if (clean_title, embedded_year) in self.library_shows:
-                return True
-        
-        # Check both with and without year
-        if (title_lower, year) in self.library_shows:
-            return True
-            
-        # Check title-only matches
-        return any(lib_title == title_lower or 
-                  lib_title == f"{title_lower} ({year})" or
-                  lib_title.replace(f" ({year})", "") == title_lower 
-                  for lib_title, _ in self.library_shows)
-
-    def _process_show_counters(self, show, counters):
-        show_details = self.get_show_details(show)
-        
-        try:
-            rating = float(getattr(show, 'userRating', 0))
-        except (TypeError, ValueError):
-            try:
-                rating = float(getattr(show, 'audienceRating', DEFAULT_RATING))
-            except (TypeError, ValueError):
-                rating = DEFAULT_RATING
-    
-        rating = max(0, min(10, int(round(rating))))
-        multiplier = RATING_MULTIPLIERS.get(rating, 1.0)
-    
-        # Process all the existing counters...
-        for genre in show_details.get('genres', []):
-            counters['genres'][genre] += multiplier
-        
-        if hasattr(show, 'studio') and show.studio:
-            counters['studio'][show.studio.lower()] += multiplier
-            
-        for actor in show_details.get('cast', [])[:TOP_CAST_COUNT]:
-            counters['actors'][actor] += multiplier
-
-        if language := show_details.get('language'):
-            counters['languages'][language] += multiplier
-            
-        for keyword in show_details.get('tmdb_keywords', []):
-            counters['tmdb_keywords'][keyword] += multiplier
-    
-        # Get TVDB IDs and watch dates for all watched episodes
-        try:
-            watched_episodes = [ep for ep in show.episodes() if ep.isWatched]
-            if watched_episodes:
-                
-                for episode in watched_episodes:
-                    episode.reload()
-                    
-                    # Get watched date and TVDB ID
-                    if hasattr(episode, 'lastViewedAt') and hasattr(episode, 'guids'):
-                        # Handle lastViewedAt whether it's a timestamp or datetime
-                        if isinstance(episode.lastViewedAt, datetime):
-                            watched_at = episode.lastViewedAt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                        else:
-                            watched_at = datetime.fromtimestamp(int(episode.lastViewedAt)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                        
-                        for guid in episode.guids:
-                            if 'tvdb://' in guid.id:
-                                try:
-                                    episode_tvdb_id = int(guid.id.split('tvdb://')[1].split('?')[0])
-                                    if 'tvdb_ids' not in counters:
-                                        counters['tvdb_ids'] = set()
-                                    if 'watch_dates' not in counters:
-                                        counters['watch_dates'] = {}
-                                    counters['tvdb_ids'].add(episode_tvdb_id)
-                                    counters['watch_dates'][episode_tvdb_id] = watched_at
-                                    break
-                                except (ValueError, IndexError) as e:
-                                    continue
-        except Exception as e:
-            log_warning(f"Error getting episode TVDB IDs for {show.title}: {e}")
-
     def _get_library_imdb_ids(self) -> Set[str]:
         """Get set of all IMDb IDs in the library"""
         return get_library_imdb_ids(self.plex.library.section(self.library_title))
@@ -655,15 +569,6 @@ class PlexTVRecommender:
         except Exception as e:
             log_warning(f"Error getting show details for {show.title}: {e}")
             return {}
-		
-    def _validate_watched_shows(self):
-        cleaned_ids = set()
-        for show_id in self.watched_show_ids:
-            try:
-                cleaned_ids.add(int(str(show_id)))
-            except (ValueError, TypeError):
-                log_warning(f"Invalid watched show ID found: {show_id}")
-        self.watched_show_ids = cleaned_ids
 
     def _refresh_watched_data(self):
         """Force refresh of watched data"""
@@ -747,7 +652,7 @@ class PlexTVRecommender:
 
     def _get_show_language(self, show) -> str:
         """Get show's primary audio language - delegates to ShowCache"""
-        return self.show_cache._get_show_language(show)
+        return self.show_cache._get_language(show)
 
     def _extract_genres(self, show) -> List[str]:
         """Extract genres from a TV show"""
@@ -792,7 +697,7 @@ class PlexTVRecommender:
     # ------------------------------------------------------------------------
     # GET RECOMMENDATIONS
     # ------------------------------------------------------------------------
-    def get_recommendations(self) -> List[Dict]:
+    def get_recommendations(self) -> Dict[str, List[Dict]]:
         if self.cached_watched_count > 0 and not self.watched_show_ids:
             # Force refresh of watched data
             if self.users['plex_users']:
@@ -884,7 +789,9 @@ class PlexTVRecommender:
                     self._print_similarity_breakdown(show, show['similarity_score'], show['score_breakdown'])
 
         print(f"\nRecommendation process completed!")
-        return plex_recs
+        return {
+            'plex_recommendations': plex_recs
+        }
     
     def _user_select_recommendations(self, recommended_shows: List[Dict], operation_label: str) -> List[Dict]:
         """Prompt user to select recommendations - delegates to utility"""
@@ -935,7 +842,7 @@ class PlexTVRecommender:
                 self.label_dates = {}
 
             # Get staleness threshold from config
-            stale_days = self.config.get('plex', {}).get('stale_removal_days', 7)
+            stale_days = self.config.get('collections', {}).get('stale_removal_days', 7)
 
             # Get currently labeled shows
             currently_labeled = shows_section.search(label=label_name)
@@ -1201,8 +1108,9 @@ def process_recommendations(config, config_path, log_retention_days, single_user
         recommendations = recommender.get_recommendations()
 
         print(f"\n{GREEN}=== Recommended Unwatched Shows in Your Library ==={RESET}")
-        if recommendations:
-            for i, show in enumerate(recommendations, start=1):
+        plex_recs = recommendations.get('plex_recommendations', [])
+        if plex_recs:
+            for i, show in enumerate(plex_recs, start=1):
                 print(format_show_output(
                     show,
                     show_summary=recommender.show_summary,
@@ -1217,7 +1125,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
             log_warning(f"No recommendations found in your Plex library matching your criteria.")
 
         # Always manage labels (to remove old ones even if no new recommendations)
-        recommender.manage_plex_labels(recommendations)
+        recommender.manage_plex_labels(plex_recs)
 
     except Exception as e:
         print(f"\n{RED}An error occurred: {e}{RESET}")
@@ -1231,6 +1139,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
                 sys.stdout = original_stdout
             except Exception as e:
                 log_warning(f"Error closing log file: {e}")
-	
+
+
 if __name__ == "__main__":
     main()
