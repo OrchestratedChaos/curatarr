@@ -119,11 +119,12 @@ class TestBuildLabelName:
 class TestCategorizeLabeledItems:
     """Tests for categorize_labeled_items() function."""
 
-    def _create_mock_item(self, rating_key, genres=None):
+    def _create_mock_item(self, rating_key, genres=None, is_played=False):
         """Helper to create mock Plex item."""
         item = Mock()
         item.ratingKey = rating_key
         item.reload = Mock()
+        item.isPlayed = is_played
         if genres:
             item.genres = [Mock(tag=g) for g in genres]
         else:
@@ -134,6 +135,19 @@ class TestCategorizeLabeledItems:
         """Test that watched items are correctly categorized."""
         item = self._create_mock_item(123)
         watched_ids = {123}
+        label_dates = {}
+
+        result = categorize_labeled_items(
+            [item], watched_ids, [], 'Recommended', label_dates
+        )
+
+        assert item in result['watched']
+        assert item not in result['fresh']
+
+    def test_categorizes_watched_via_isPlayed(self):
+        """Test that items with isPlayed=True are categorized as watched even if not in watched_ids."""
+        item = self._create_mock_item(999, is_played=True)
+        watched_ids = set()  # Empty - item not in cache
         label_dates = {}
 
         result = categorize_labeled_items(

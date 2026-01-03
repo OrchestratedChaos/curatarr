@@ -331,7 +331,8 @@ class PlexMovieRecommender:
                 params={
                     'apikey': self.config['plex_users']['api_key'],
                     'cmd': 'get_users'
-                }
+                },
+                timeout=30
             )
             users_response.raise_for_status()
             plex_users = users_response.json()['response']['data']
@@ -989,7 +990,9 @@ class PlexMovieRecommender:
                 )
                 if plex_movie:
                     movie_id = int(plex_movie.ratingKey)
-                    if movie_id not in self.watched_movie_ids:
+                    # Skip if watched (check both cache and Plex isPlayed flag)
+                    is_watched = movie_id in self.watched_movie_ids or getattr(plex_movie, 'isPlayed', False)
+                    if not is_watched:
                         score = rec.get('similarity_score', 0.0)
                         # Keep higher score if already exists
                         if movie_id not in all_candidates or score > all_candidates[movie_id][1]:

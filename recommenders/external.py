@@ -1707,6 +1707,8 @@ def main():
         print_status("No user data to generate watchlist", "warning")
 
     print(f"Watchlists saved to: {output_dir}")
+    if html_file:
+        print(f"\nView watchlist: file://{html_file}")
 
     # Auto-open HTML if enabled
     external_config = config.get('external_recommendations', {})
