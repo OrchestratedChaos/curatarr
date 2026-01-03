@@ -18,6 +18,9 @@ from typing import Dict, List, Optional, Set
 
 from utils import (
     CACHE_VERSION,
+    TMDB_RATE_LIMIT_DELAY,
+    DEFAULT_LIMIT_PLEX_RESULTS,
+    WEIGHT_SUM_TOLERANCE,
     GREEN, YELLOW, CYAN, RESET,
     load_config,
     init_plex,
@@ -121,7 +124,7 @@ class BaseCache(ABC):
 
                     # Rate limiting for TMDB
                     if i > 1 and tmdb_api_key:
-                        time.sleep(0.5)
+                        time.sleep(TMDB_RATE_LIMIT_DELAY)
 
                     # Process the item (media-specific logic)
                     item_info = self._process_item(item, tmdb_api_key)
@@ -300,7 +303,7 @@ class BaseRecommender(ABC):
 
         # Load display options
         self.confirm_operations = general_config.get('confirm_operations', False)
-        self.limit_plex_results = general_config.get('limit_plex_results', 10)
+        self.limit_plex_results = general_config.get('limit_plex_results', DEFAULT_LIMIT_PLEX_RESULTS)
         self.combine_watch_history = general_config.get('combine_watch_history', True)
         self.randomize_recommendations = general_config.get('randomize_recommendations', True)
         self.normalize_counters = general_config.get('normalize_counters', True)
@@ -326,7 +329,7 @@ class BaseRecommender(ABC):
 
         # Validate weights sum
         total_weight = sum(self.weights.values())
-        if not abs(total_weight - 1.0) < 1e-6:
+        if not abs(total_weight - 1.0) < WEIGHT_SUM_TOLERANCE:
             log_warning(f"Warning: Weights sum to {total_weight}, expected 1.0.")
 
     @abstractmethod
