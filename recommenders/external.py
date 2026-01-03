@@ -6,6 +6,10 @@ Creates per-user markdown watchlists that update daily and auto-remove acquired 
 
 import os
 import sys
+
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import yaml
 import json
 import math

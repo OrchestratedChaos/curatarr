@@ -1,20 +1,20 @@
 import os
+import sys
+
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import argparse
 import logging
-import plexapi.server
-from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
 import yaml
-import sys
 import requests
 from typing import Dict, List, Set, Optional, Tuple
-from collections import Counter
 import time
 import random
 import json
 import re
-from datetime import datetime, timedelta
-import math
+from datetime import datetime
 import copy
 
 # Import shared utilities

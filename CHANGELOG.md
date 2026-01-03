@@ -57,8 +57,22 @@ All notable changes to Plex Recommender will be documented in this file.
   - Tests for plex extraction, counters, labels, cache, helpers, scoring
   - Run with: `python3 -m pytest tests/ -v`
 
+- **Base classes** — Created `base.py` with abstract base classes for future refactoring:
+  - `BaseCache` - Common cache functionality for movies and TV shows
+  - `BaseRecommender` - Common recommender functionality
+
+- **Type hints** — Added consistent type hints across utility modules:
+  - `utils/helpers.py`, `utils/display.py`, `utils/plex.py`
+  - Added `Any`, `Dict`, `List`, `Set`, `Tuple`, `Optional` type annotations
+
 - Per-item weight redistribution — If a specific movie's director isn't in your
   profile, that 5% weight goes to keywords/genres/actors instead
+
+### Removed
+- **Unused imports** — Cleaned up unused imports from main modules:
+  - `movie_recommender.py` - Removed `plexapi.server`, `PlexServer`, `Counter`, `quote`, `timedelta`, `math`
+  - `tv_recommender.py` - Removed `plexapi.server`, `PlexServer`, `Counter`, `timedelta`, `math`
+  - `base.py` - Removed `json`, `Counter`, unused utility imports
 
 ## [1.0.0] - 2026-01-02
 

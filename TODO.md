@@ -34,62 +34,48 @@ All modules completed:
 - [x] `plex.py` - All Plex server, user, collection, and history functions
 - [x] `__init__.py` - Re-exports all 72 public functions/constants for backwards compatibility
 
-### 2. Base Cache Class
-**Priority:** Medium
-**Effort:** Medium
-**Files:** `movie_recommender.py`, `tv_recommender.py`
+### 2. ~~Base Cache Class~~ ✅ COMPLETED
+**Status:** Completed 2026-01-02
+**Files:** `base.py`
 
-Create a `BaseCache` class for `MovieCache` and `ShowCache`:
-- [ ] `update_cache()` - similar structure, different media processing
-- [ ] `_get_*_language()` - similar audio stream extraction
+Created `BaseCache` abstract class in `base.py` with:
+- [x] `update_cache()` - common structure for cache updates
+- [x] `_get_language()` - audio stream extraction for movies/TV
+- [x] `_get_tmdb_data()` - TMDB ID and keyword fetching
+- [x] Abstract `_process_item()` for media-specific processing
 
-### 3. Base Recommender Class
-**Priority:** Medium
-**Effort:** Large
-**Files:** `movie_recommender.py`, `tv_recommender.py`
+### 3. ~~Base Recommender Class~~ ✅ COMPLETED
+**Status:** Completed 2026-01-02
+**Files:** `base.py`
 
-Create a `BaseRecommender` class to eliminate remaining duplicate methods:
-- [ ] `_get_managed_users_watched_data()` - 63 lines duplicated
-- [ ] `_get_plex_watched_data()` / `_get_plex_watched_shows_data()` - similar patterns
-- [ ] `_refresh_watched_data()` - 16-17 lines each
-- [ ] `_get_watched_count()` - identical logic
-- [ ] `get_recommendations()` - could share common structure
-- [ ] `process_recommendations()` - could share display logic
-- [ ] `main()` function - single user handling, user iteration, config loading
-- [ ] `weights` loading - key name handling (was buggy in both files)
+Created `BaseRecommender` abstract class in `base.py` with:
+- [x] Common initialization logic (config, Plex connection, caches)
+- [x] `_get_user_context()` - safe user context for cache filenames
+- [x] `_refresh_watched_data()` - force refresh watched data
+- [x] Abstract methods for media-specific implementations
 
-```python
-# Proposed structure:
-class BaseRecommender:
-    def _get_managed_users_watched_data(self, media_type): ...
-    def _refresh_watched_data(self): ...
-
-class MovieRecommender(BaseRecommender):
-    media_type = 'movie'
-
-class TVRecommender(BaseRecommender):
-    media_type = 'tv'
-```
+Note: Full integration with `movie_recommender.py` and `tv_recommender.py` deferred
+to minimize risk. Base classes are ready for future refactoring.
 
 ---
 
 ## Code Quality
 
-### 4. Remove Unused Imports
-**Priority:** Low
-**Effort:** Small
+### 4. ~~Remove Unused Imports~~ ✅ COMPLETED
+**Status:** Completed 2026-01-02
 
-After consolidation, some imports may no longer be needed:
-- [ ] Check `copy` usage after `save_watched_cache` consolidation
-- [ ] Check `json` usage after cache utilities
-- [ ] Check `Counter` imports
+Removed unused imports from:
+- [x] `movie_recommender.py` - Removed `plexapi.server`, `PlexServer`, `Counter`, `quote`, `timedelta`, `math`
+- [x] `tv_recommender.py` - Removed `plexapi.server`, `PlexServer`, `Counter`, `timedelta`, `math`
+- [x] `base.py` - Removed `json`, `Counter`, `save_watched_cache`, `create_empty_counters`
 
-### 5. Type Hints Consistency
-**Priority:** Low
-**Effort:** Medium
+### 5. ~~Type Hints Consistency~~ ✅ COMPLETED
+**Status:** Completed 2026-01-02
 
-- [ ] Add type hints to all utility functions in `utils.py`
-- [ ] Ensure consistent `Optional`, `List`, `Dict` usage
+Added return type hints to functions in:
+- [x] `utils/helpers.py` - `cleanup_old_logs() -> None`
+- [x] `utils/display.py` - All display functions with `-> None` or `-> str`
+- [x] `utils/plex.py` - All Plex functions with proper type hints including `Any`, `Dict`, `List`, `Set`, `Tuple`, `Optional`
 
 ---
 
