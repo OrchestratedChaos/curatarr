@@ -109,23 +109,20 @@ Collections automatically appear:
 Pin them to your home screen. They update daily.
 
 ### External Watchlists
-Markdown files showing what to acquire:
+Interactive HTML files with export buttons:
+```
+recommendations/external/john_watchlist.html
+
+- Select which movies/shows to export
+- Click "Export to Radarr" → downloads IMDB IDs for import
+- Click "Export to Sonarr" → downloads IMDB IDs for import
+- Grouped by streaming service availability
+- Auto-opens in browser after run (configurable)
+```
+
+Also generates markdown for reference:
 ```
 recommendations/external/john_watchlist.md
-
-## Movies to Watch
-
-### Available on Your Services
-#### Netflix (4 movies)
-- The Power of the Dog (2021) - Drama
-- Glass Onion (2022) - Mystery
-
-#### Disney+ (2 movies)
-- ...
-
-### Need to Acquire (15 movies)
-- Oppenheimer (2023) - Drama, History
-- ...
 ```
 
 ---
@@ -193,6 +190,7 @@ collections:
 
 external_recommendations:
   min_relevance_score: 0.25   # See note below
+  auto_open_html: false       # Open HTML watchlist in browser after run
 ```
 
 ### External Recommendations: Relevance Score
