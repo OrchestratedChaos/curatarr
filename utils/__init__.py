@@ -8,6 +8,12 @@ All public functions are re-exported here for backwards compatibility.
 # Config utilities
 from .config import (
     CACHE_VERSION,
+    TOP_CAST_COUNT,
+    TMDB_RATE_LIMIT_DELAY,
+    DEFAULT_RATING,
+    WEIGHT_SUM_TOLERANCE,
+    DEFAULT_LIMIT_PLEX_RESULTS,
+    TOP_POOL_PERCENTAGE,
     DEFAULT_RATING_MULTIPLIERS,
     RATING_MULTIPLIERS,
     check_cache_version,
@@ -117,6 +123,12 @@ from .plex import (
 __all__ = [
     # Config
     'CACHE_VERSION',
+    'TOP_CAST_COUNT',
+    'TMDB_RATE_LIMIT_DELAY',
+    'DEFAULT_RATING',
+    'WEIGHT_SUM_TOLERANCE',
+    'DEFAULT_LIMIT_PLEX_RESULTS',
+    'TOP_POOL_PERCENTAGE',
     'DEFAULT_RATING_MULTIPLIERS',
     'RATING_MULTIPLIERS',
     'check_cache_version',
