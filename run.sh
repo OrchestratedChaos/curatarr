@@ -266,7 +266,7 @@ main() {
     echo ""
 
     echo -e "${YELLOW}Step 1/2: Movie recommendations...${NC}"
-    if python3 movie_recommender.py $DEBUG_FLAG; then
+    if python3 recommenders/movie.py $DEBUG_FLAG; then
         echo -e "${GREEN}✓ Movie recommendations complete${NC}"
     else
         echo -e "${RED}❌ Movie recommendations failed${NC}"
@@ -275,7 +275,7 @@ main() {
     echo ""
 
     echo -e "${YELLOW}Step 2/2: TV recommendations...${NC}"
-    if python3 tv_recommender.py $DEBUG_FLAG; then
+    if python3 recommenders/tv.py $DEBUG_FLAG; then
         echo -e "${GREEN}✓ TV recommendations complete${NC}"
     else
         echo -e "${RED}❌ TV recommendations failed${NC}"
@@ -286,7 +286,7 @@ main() {
     # Step 6: Generate external recommendations (watchlist)
     if grep -A 2 "external_recommendations:" config.yml | grep -q "enabled: true" 2>/dev/null; then
         echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
-        if python3 external_recommender.py; then
+        if python3 recommenders/external.py; then
             echo -e "${GREEN}✓ External watchlists generated${NC}"
         else
             echo -e "${YELLOW}⚠ External watchlist generation failed (non-fatal)${NC}"
