@@ -374,7 +374,7 @@ def build_user_profile(plex, config, username, media_type='movie'):
                     tmdb_id = int(guid.id.split('tmdb://')[1])
                     counters['tmdb_ids'].add(tmdb_id)
                     break
-                except:
+                except (ValueError, IndexError):
                     pass
 
         if tmdb_id:
@@ -405,7 +405,7 @@ def get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type='movie'):
             # Movies use 'keywords', TV uses 'results'
             keywords_list = data.get('keywords', data.get('results', []))
             return [kw['name'] for kw in keywords_list[:10]]  # Top 10 keywords
-    except:
+    except Exception:
         pass
     return []
 

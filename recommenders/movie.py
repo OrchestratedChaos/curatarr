@@ -20,31 +20,30 @@ import copy
 # Import shared utilities
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS, ANSI_PATTERN, CACHE_VERSION, check_cache_version,
+    RATING_MULTIPLIERS, CACHE_VERSION, check_cache_version,
     get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
     log_warning, log_error, update_plex_collection, cleanup_old_collections,
-    load_config, init_plex, get_configured_users, get_current_users,
-    get_excluded_genres_for_user, get_user_specific_connection,
+    load_config, init_plex, get_configured_users,
+    get_excluded_genres_for_user,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score, find_plex_movie,
-    map_path, show_progress, TeeLogger,
+    show_progress, TeeLogger,
     # Consolidated utilities
     extract_genres, extract_ids_from_guids, fetch_tmdb_with_retry,
     get_tmdb_id_for_item, get_tmdb_keywords, adapt_config_for_media_type,
-    save_json_cache, load_json_cache,
     # Additional consolidated utilities
-    user_select_recommendations, extract_rating, format_media_output,
+    user_select_recommendations, format_media_output,
     build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
-    get_library_imdb_ids, print_similarity_breakdown, process_counters_from_cache,
+    get_library_imdb_ids, print_similarity_breakdown,
     load_media_cache, save_media_cache, create_empty_counters,
-    get_plex_user_ids as get_plex_user_ids_util, save_watched_cache
+    save_watched_cache
 )
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 class MovieCache:
     """Cache for movie metadata including TMDB data, genres, and keywords."""
@@ -315,7 +314,6 @@ class PlexMovieRecommender:
 
         # Verify Plex user configuration
         if self.users['plex_users']:
-            pass
             # Plex-only mode: No external validation needed
             users_to_process = [self.single_user] if self.single_user else self.users['plex_users']
             print(f"{GREEN}Processing recommendations for Plex users: {users_to_process}{RESET}")
@@ -537,7 +535,6 @@ class PlexMovieRecommender:
 
             movie_info = self.movie_cache.cache['movies'].get(str(movie_id))
             if movie_info:
-                pass
                 # Calculate recency multiplier for this movie
                 viewed_at = watched_movie_dates.get(movie_id)
                 recency_multiplier = calculate_recency_multiplier(viewed_at, self.config.get('recency_decay', {})) if viewed_at else 1.0
@@ -581,7 +578,6 @@ class PlexMovieRecommender:
         
         # Determine which users to process
         if self.single_user:
-            pass
             # Check if the single user is the admin
             if self.single_user.lower() in ['admin', 'administrator']:
                 users_to_process = [admin_user]
@@ -718,7 +714,6 @@ class PlexMovieRecommender:
         """Check if a movie is already in the library by ID first, then by title/year"""
         # If no title provided, we can only check by ID
         if not title:
-            pass
             # Check IDs if available
             if tmdb_id or imdb_id:
                 all_movies = self.movie_cache.cache['movies']
@@ -775,7 +770,7 @@ class PlexMovieRecommender:
         return any(lib_title == title_lower or 
                   lib_title == f"{title_lower} ({year})" or
                   lib_title.replace(f" ({year})", "") == title_lower 
-                  for lib_title, lib_year in self.library_movie_titles)
+                  for lib_title, _ in self.library_movie_titles)
     
     def _process_movie_counters(self, movie, counters):
         """Extract and count attributes from a movie"""
@@ -839,7 +834,6 @@ class PlexMovieRecommender:
             
             # Improved rating extraction logic
             if self.show_rating:
-                pass
                 # Try to get userRating first (personal rating)
                 if hasattr(movie, 'userRating') and movie.userRating:
                     audience_rating = float(movie.userRating)
@@ -1028,25 +1022,20 @@ class PlexMovieRecommender:
         unwatched_movies = []
         excluded_count = 0
         quality_filtered_count = 0
-        watched_count = 0
 
         # Get quality filters from config (Netflix-style)
         quality_filters = self.config.get('quality_filters', {})
         min_rating = quality_filters.get('min_rating', 0.0)
         min_vote_count = quality_filters.get('min_vote_count', 0)
 
-
         for movie_id, movie_info in all_movies.items():
             # Skip if movie is watched
             movie_id_int = int(str(movie_id))
             if movie_id_int in self.watched_movie_ids:
-                watched_count += 1
                 continue
 
             # Skip if movie has excluded genres (including user-specific exclusions)
             excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
-            if excluded_count == 0:  # Debug: print excluded genres once
-                pass
             movie_genres = movie_info.get('genres', [])
             if any(g.lower() in excluded_genres for g in movie_genres):
                 excluded_count += 1
@@ -1091,7 +1080,6 @@ class PlexMovieRecommender:
             scored_movies.sort(key=lambda x: x['similarity_score'], reverse=True)
             
             if self.randomize_recommendations:
-                pass
                 # Take top 10% of movies by similarity score and randomize
                 top_count = max(int(len(scored_movies) * 0.1), self.limit_plex_results)
                 top_pool = scored_movies[:top_count]
@@ -1254,7 +1242,6 @@ class PlexMovieRecommender:
             print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
 
             # Build final collection from top candidates (already sorted by score)
-            similarity_scores = {movie_id: score for movie_id, (_, score) in top_candidates}
             final_collection_movies = [plex_movie for movie_id, (plex_movie, score) in top_candidates]
 
             print(f"{GREEN}Final collection size: {len(final_collection_movies)} movies (sorted by similarity){RESET}")
@@ -1436,7 +1423,6 @@ def main():
     
     # Check if Plex users are configured and not 'none'
     if plex_users and str(plex_users).lower() != 'none':
-        pass
         # Process Plex users
         if isinstance(plex_users, str):
             all_users = [u.strip() for u in plex_users.split(',') if u.strip()]
@@ -1453,7 +1439,6 @@ def main():
         combine_watch_history = True  # Force combined mode for single user
 
     if combine_watch_history or not all_users:
-        pass
         # Original behavior - single run
         process_recommendations(base_config, config_path, log_retention_days, single_user)
     else:
