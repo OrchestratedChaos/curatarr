@@ -239,7 +239,9 @@ def calculate_similarity_score(
     normalize_counters: bool = True,
     use_fuzzy_keywords: bool = True,
     use_tfidf: bool = True,
-    tfidf_penalty_threshold: float = 0.15
+    tfidf_penalty_threshold: float = 0.15,
+    use_popularity_dampening: bool = True,
+    popularity_threshold: int = 50000
 ) -> Tuple[float, Dict]:
     """
     Calculate similarity score between content and user profile.
@@ -256,6 +258,8 @@ def calculate_similarity_score(
         use_fuzzy_keywords: If True, use fuzzy matching for keywords
         use_tfidf: If True, penalize content with genres/keywords rare in user's profile
         tfidf_penalty_threshold: Genres below this % of max count trigger penalty (default 15%)
+        use_popularity_dampening: If True, slightly penalize very popular content (default True)
+        popularity_threshold: Vote count above which dampening applies (default 50000)
 
     Returns:
         Tuple of (score 0-1, breakdown dict with component scores)
@@ -602,6 +606,20 @@ def calculate_similarity_score(
                     score += extra_score
 
         score = min(score, 1.0)
+
+        # Apply popularity dampening for very popular content
+        # This prevents blockbusters from dominating just because they have more metadata
+        if use_popularity_dampening:
+            vote_count = content_info.get('vote_count', 0) or 0
+            if vote_count > popularity_threshold:
+                # Logarithmic dampening: ~3% penalty per order of magnitude above threshold
+                # 50k votes: no penalty, 500k votes: ~3% penalty, 5M votes: ~6% penalty
+                excess_ratio = vote_count / popularity_threshold
+                dampening = 1 - (math.log10(excess_ratio) * 0.03)
+                dampening = max(0.90, dampening)  # Cap at 10% max penalty
+                score = score * dampening
+                score_breakdown['popularity_dampening'] = round(dampening, 3)
+
         return score, score_breakdown
 
     except Exception as e:
