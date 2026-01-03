@@ -26,9 +26,14 @@ def init_plex(config: dict) -> plexapi.server.PlexServer:
         PlexServer instance
     """
     try:
+        # Create session with SSL verification settings
+        session = requests.Session()
+        session.verify = config['plex'].get('verify_ssl', False)
+
         return plexapi.server.PlexServer(
             config['plex']['url'],
-            config['plex']['token']
+            config['plex']['token'],
+            session=session
         )
     except Exception as e:
         log_error(f"Error connecting to Plex server: {e}")
@@ -51,7 +56,8 @@ def get_plex_account_ids(config: Dict, users_to_match: List[str]) -> List[str]:
         response = requests.get(
             f"{config['plex']['url']}/accounts",
             headers={'X-Plex-Token': config['plex']['token']},
-            verify=False
+            verify=config['plex'].get('verify_ssl', False),
+            timeout=30
         )
         response.raise_for_status()
         root = ET.fromstring(response.content)
@@ -119,7 +125,7 @@ def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
         watched_movies = set()
         for account_id in account_ids:
             url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
-            response = requests.get(url, verify=False)
+            response = requests.get(url, verify=config['plex'].get('verify_ssl', False), timeout=30)
             root = ET.fromstring(response.content)
 
             for video in root.findall('.//Video'):
@@ -165,7 +171,7 @@ def get_watched_show_count(config: Dict, users_to_check: List[str]) -> int:
         watched_shows = set()
         for account_id in account_ids:
             url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
-            response = requests.get(url, verify=False)
+            response = requests.get(url, verify=config['plex'].get('verify_ssl', False), timeout=30)
             root = ET.fromstring(response.content)
 
             for video in root.findall('.//Video'):
@@ -226,7 +232,7 @@ def fetch_plex_watch_history_movies(config: Dict, account_ids: List[str], movies
                         'X-Plex-Container-Size': 10000
                     }
 
-                    response = requests.get(history_url, params=params, verify=False)
+                    response = requests.get(history_url, params=params, verify=config['plex'].get('verify_ssl', False), timeout=30)
                     response.raise_for_status()
 
                     root = ET.fromstring(response.content)
@@ -291,7 +297,7 @@ def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_sect
         }
 
         try:
-            response = requests.get(url, params=params, verify=False)
+            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', False), timeout=30)
             response.raise_for_status()
 
             root = ET.fromstring(response.content)
@@ -341,7 +347,7 @@ def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str
         }
 
         try:
-            response = requests.get(url, params=params, verify=False)
+            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', False), timeout=30)
             if response.status_code != 200:
                 continue
 
@@ -501,7 +507,11 @@ def get_configured_users(config: dict) -> dict:
     managed_users = [u.strip() for u in raw_managed.split(',') if u.strip()]
 
     plex_users = []
-    plex_user_config = config.get('plex_users', {}).get('users')
+    # Check multiple possible config locations for user list
+    plex_user_config = (
+        config.get('plex_users', {}).get('users') or
+        config.get('users', {}).get('list')  # New config format
+    )
     if plex_user_config and str(plex_user_config).lower() != 'none':
         if isinstance(plex_user_config, list):
             plex_users = plex_user_config

@@ -299,7 +299,8 @@ class PlexTVRecommender:
                 params={
                     'apikey': self.config['plex_users']['api_key'],
                     'cmd': 'get_users'
-                }
+                },
+                timeout=30
             )
             users_response.raise_for_status()
             plex_users = users_response.json()['response']['data']

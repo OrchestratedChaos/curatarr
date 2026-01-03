@@ -2,6 +2,33 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.5.0] - 2026-01-03
+
+### Fixed
+- **SSL verification** — Added configurable `verify_ssl` option for Plex connections
+  - Defaults to `false` for backwards compatibility with self-signed certs
+  - PlexAPI session now respects this setting
+- **HTTP timeouts** — Added 30-second timeout to all HTTP requests
+  - Prevents hangs on unresponsive servers
+- **Config schema mismatch** — `get_configured_users()` now reads `config['users']['list']`
+  - Previously only checked legacy `config['plex']['managed_users']` path
+  - Fixes per-user collection labels not being generated correctly
+- **Watched detection** — Now checks both cache AND Plex `isPlayed` flag
+  - Movies manually marked as watched are now properly excluded
+  - Fixes watched movies appearing in recommendation collections
+- **MediaContainer iteration** — Convert to list before processing
+  - Plex MediaContainer is single-use; was causing empty results on second pass
+
+### Changed
+- **Dependencies** — Removed unused packages from requirements.txt
+  - Removed `tmdbv3api` (not used)
+  - Removed `python-dotenv` (not used)
+
+### Added
+- **Console watchlist link** — Prints `file://` URL after generating HTML watchlist
+- **Tests** — Added test for `isPlayed` watched detection
+- **Tests** — Updated `init_plex` tests for new SSL session handling
+
 ## [1.4.0] - 2026-01-03
 
 ### Added
