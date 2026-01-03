@@ -21,6 +21,8 @@ import copy
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     RATING_MULTIPLIERS, CACHE_VERSION, check_cache_version,
+    TOP_CAST_COUNT, TMDB_RATE_LIMIT_DELAY, DEFAULT_RATING,
+    WEIGHT_SUM_TOLERANCE, DEFAULT_LIMIT_PLEX_RESULTS, TOP_POOL_PERCENTAGE,
     get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
@@ -44,7 +46,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 class ShowCache:
     """Cache for TV show metadata including TMDB data, genres, and keywords."""
@@ -99,7 +101,7 @@ class ShowCache:
                     
                     # Add delay between shows
                     if i > 1 and tmdb_api_key:
-                        time.sleep(0.5)  # Basic rate limiting
+                        time.sleep(TMDB_RATE_LIMIT_DELAY)
                     
                     # Extract IDs from GUIDs using utility
                     ids = extract_ids_from_guids(show)
@@ -126,7 +128,7 @@ class ShowCache:
                         'year': getattr(show, 'year', None),
                         'genres': [g.tag.lower() for g in show.genres] if hasattr(show, 'genres') else [],
                         'studio': getattr(show, 'studio', 'N/A'),
-                        'cast': [r.tag for r in show.roles[:3]] if hasattr(show, 'roles') else [],
+                        'cast': [r.tag for r in show.roles[:TOP_CAST_COUNT]] if hasattr(show, 'roles') else [],
                         'summary': getattr(show, 'summary', ''),
                         'language': self._get_show_language(show),
                         'tmdb_keywords': tmdb_keywords,
@@ -229,7 +231,7 @@ class PlexTVRecommender:
         self.show_cache.update_cache(self.plex, self.library_title, self.tmdb_api_key)
 
         self.confirm_operations = general_config.get('confirm_operations', False)
-        self.limit_plex_results = general_config.get('limit_plex_results', 10)
+        self.limit_plex_results = general_config.get('limit_plex_results', DEFAULT_LIMIT_PLEX_RESULTS)
         self.combine_watch_history = general_config.get('combine_watch_history', True)
         self.randomize_recommendations = general_config.get('randomize_recommendations', True)
         self.normalize_counters = general_config.get('normalize_counters', True)
@@ -253,7 +255,7 @@ class PlexTVRecommender:
         }
 
         total_weight = sum(self.weights.values())
-        if not abs(total_weight - 1.0) < 1e-6:
+        if not abs(total_weight - 1.0) < WEIGHT_SUM_TOLERANCE:
             log_warning(f"Warning: Weights sum to {total_weight}, expected 1.0.")
 
         # Verify Plex user configuration
@@ -551,7 +553,7 @@ class PlexTVRecommender:
         try:
             rating = float(show_info.get('user_rating', 0))
             if not rating:
-                rating = float(show_info.get('audience_rating', 5.0))
+                rating = float(show_info.get('audience_rating', DEFAULT_RATING))
             rating = max(0, min(10, int(round(rating))))
             multiplier = RATING_MULTIPLIERS.get(rating, 1.0) * rewatch_multiplier
     
@@ -562,9 +564,9 @@ class PlexTVRecommender:
             if studio := show_info.get('studio'):
                 counters['studio'][studio.lower()] += multiplier
                 
-            for actor in show_info.get('cast', [])[:3]:
+            for actor in show_info.get('cast', [])[:TOP_CAST_COUNT]:
                 counters['actors'][actor] += multiplier
-                
+
             if language := show_info.get('language'):
                 counters['languages'][language.lower()] += multiplier
                 
@@ -641,9 +643,9 @@ class PlexTVRecommender:
             rating = float(getattr(show, 'userRating', 0))
         except (TypeError, ValueError):
             try:
-                rating = float(getattr(show, 'audienceRating', 5.0))
+                rating = float(getattr(show, 'audienceRating', DEFAULT_RATING))
             except (TypeError, ValueError):
-                rating = 5.0
+                rating = DEFAULT_RATING
     
         rating = max(0, min(10, int(round(rating))))
         multiplier = RATING_MULTIPLIERS.get(rating, 1.0)
@@ -655,9 +657,9 @@ class PlexTVRecommender:
         if hasattr(show, 'studio') and show.studio:
             counters['studio'][show.studio.lower()] += multiplier
             
-        for actor in show_details.get('cast', [])[:3]:
+        for actor in show_details.get('cast', [])[:TOP_CAST_COUNT]:
             counters['actors'][actor] += multiplier
-            
+
         if language := show_details.get('language'):
             counters['languages'][language] += multiplier
             
@@ -741,7 +743,7 @@ class PlexTVRecommender:
             }
             
             if self.show_cast and hasattr(show, 'roles'):
-                show_info['cast'] = [r.tag for r in show.roles[:3]]
+                show_info['cast'] = [r.tag for r in show.roles[:TOP_CAST_COUNT]]
                 
             return show_info
                 
@@ -963,7 +965,7 @@ class PlexTVRecommender:
             
             if self.randomize_recommendations:
                 # Take top 10% of shows by similarity score and randomize
-                top_count = max(int(len(scored_shows) * 0.1), self.limit_plex_results)
+                top_count = max(int(len(scored_shows) * TOP_POOL_PERCENTAGE), self.limit_plex_results)
                 top_pool = scored_shows[:top_count]
                 plex_recs = random.sample(top_pool, min(self.limit_plex_results, len(top_pool)))
             else:
