@@ -27,3 +27,4 @@ __pycache__/
 .claude/
 *.xml
 CLAUDE.md
+TODO.md

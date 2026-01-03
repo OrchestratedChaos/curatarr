@@ -2,6 +2,17 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.2.0] - 2026-01-02
+
+### Changed
+- **Project restructure** — Reorganized recommenders into dedicated directory:
+  - `movie_recommender.py` → `recommenders/movie.py`
+  - `tv_recommender.py` → `recommenders/tv.py`
+  - `external_recommender.py` → `recommenders/external.py`
+  - `base.py` → `recommenders/base.py`
+- Updated `run.sh` to use new paths
+- All path references now use project root for config, cache, logs
+
 ## [1.1.0] - 2026-01-02
 
 ### Changed
