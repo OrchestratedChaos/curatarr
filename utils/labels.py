@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Dict, List
 
-from .display import GREEN, RESET, log_warning
+from .display import GREEN, RESET, log_info
 
 
 def build_label_name(base_label: str, users: List[str], single_user: str = None, append_usernames: bool = True) -> str:
@@ -118,7 +118,7 @@ def remove_labels_from_items(items: List, label_name: str, label_dates: Dict, re
         if label_key in label_dates:
             del label_dates[label_key]
         if reason:
-            log_warning(f"Removed ({reason}): {item.title}")
+            log_info(f"Removed ({reason}): {item.title}")
 
 
 def add_labels_to_items(items: List, label_name: str, label_dates: Dict) -> int:

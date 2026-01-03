@@ -3,7 +3,14 @@ Tests for utils/labels.py - Label management functions.
 """
 
 import pytest
-from utils.labels import build_label_name
+from unittest.mock import Mock, patch
+from datetime import datetime, timedelta
+from utils.labels import (
+    build_label_name,
+    categorize_labeled_items,
+    remove_labels_from_items,
+    add_labels_to_items
+)
 
 
 class TestBuildLabelName:
@@ -107,3 +114,210 @@ class TestBuildLabelName:
         )
 
         assert result == "ToWatch_User1"
+
+
+class TestCategorizeLabeledItems:
+    """Tests for categorize_labeled_items() function."""
+
+    def _create_mock_item(self, rating_key, genres=None):
+        """Helper to create mock Plex item."""
+        item = Mock()
+        item.ratingKey = rating_key
+        item.reload = Mock()
+        if genres:
+            item.genres = [Mock(tag=g) for g in genres]
+        else:
+            item.genres = []
+        return item
+
+    def test_categorizes_watched_items(self):
+        """Test that watched items are correctly categorized."""
+        item = self._create_mock_item(123)
+        watched_ids = {123}
+        label_dates = {}
+
+        result = categorize_labeled_items(
+            [item], watched_ids, [], 'Recommended', label_dates
+        )
+
+        assert item in result['watched']
+        assert item not in result['fresh']
+
+    def test_categorizes_fresh_items(self):
+        """Test that fresh items are correctly categorized."""
+        item = self._create_mock_item(456)
+        watched_ids = set()
+        label_dates = {}
+
+        result = categorize_labeled_items(
+            [item], watched_ids, [], 'Recommended', label_dates
+        )
+
+        assert item in result['fresh']
+        assert item not in result['watched']
+
+    def test_categorizes_excluded_genre_items(self):
+        """Test that items with excluded genres are categorized."""
+        item = self._create_mock_item(789, genres=['horror', 'thriller'])
+        watched_ids = set()
+        label_dates = {}
+
+        result = categorize_labeled_items(
+            [item], watched_ids, ['horror'], 'Recommended', label_dates
+        )
+
+        assert item in result['excluded']
+
+    def test_categorizes_stale_items(self):
+        """Test that stale items are correctly categorized."""
+        item = self._create_mock_item(999)
+        watched_ids = set()
+
+        # Set label date to 10 days ago
+        old_date = (datetime.now() - timedelta(days=10)).isoformat()
+        label_dates = {'999_Recommended': old_date}
+
+        result = categorize_labeled_items(
+            [item], watched_ids, [], 'Recommended', label_dates, stale_days=7
+        )
+
+        assert item in result['stale']
+
+    def test_fresh_item_gets_date_tracked(self):
+        """Test that fresh items get their label date tracked."""
+        item = self._create_mock_item(111)
+        watched_ids = set()
+        label_dates = {}
+
+        categorize_labeled_items(
+            [item], watched_ids, [], 'Recommended', label_dates
+        )
+
+        assert '111_Recommended' in label_dates
+
+    def test_empty_list_returns_empty_categories(self):
+        """Test with empty items list."""
+        result = categorize_labeled_items(
+            [], set(), [], 'Recommended', {}
+        )
+
+        assert result['fresh'] == []
+        assert result['watched'] == []
+        assert result['stale'] == []
+        assert result['excluded'] == []
+
+
+class TestRemoveLabelsFromItems:
+    """Tests for remove_labels_from_items() function."""
+
+    @patch('utils.labels.log_info')
+    def test_removes_label_from_item(self, mock_log):
+        """Test that label is removed from item."""
+        item = Mock()
+        item.ratingKey = 123
+        item.title = "Test Movie"
+        label_dates = {'123_Recommended': '2024-01-01'}
+
+        remove_labels_from_items([item], 'Recommended', label_dates, 'test reason')
+
+        item.removeLabel.assert_called_once_with('Recommended')
+        assert '123_Recommended' not in label_dates
+
+    @patch('utils.labels.log_info')
+    def test_logs_reason_when_provided(self, mock_log):
+        """Test that reason is logged."""
+        item = Mock()
+        item.ratingKey = 123
+        item.title = "Test Movie"
+
+        remove_labels_from_items([item], 'Recommended', {}, 'expired')
+
+        mock_log.assert_called_once()
+        assert 'expired' in mock_log.call_args[0][0]
+
+    @patch('utils.labels.log_info')
+    def test_no_log_when_no_reason(self, mock_log):
+        """Test that no log when reason is empty."""
+        item = Mock()
+        item.ratingKey = 123
+        item.title = "Test Movie"
+
+        remove_labels_from_items([item], 'Recommended', {}, '')
+
+        mock_log.assert_not_called()
+
+    @patch('utils.labels.log_info')
+    def test_removes_multiple_items(self, mock_log):
+        """Test removing labels from multiple items."""
+        items = [Mock(ratingKey=i, title=f"Movie {i}") for i in range(3)]
+        label_dates = {f'{i}_Recommended': '2024-01-01' for i in range(3)}
+
+        remove_labels_from_items(items, 'Recommended', label_dates, 'cleanup')
+
+        for item in items:
+            item.removeLabel.assert_called_once_with('Recommended')
+        assert len(label_dates) == 0
+
+
+class TestAddLabelsToItems:
+    """Tests for add_labels_to_items() function."""
+
+    def test_adds_label_to_item_without_label(self):
+        """Test adding label to item that doesn't have it."""
+        item = Mock()
+        item.ratingKey = 123
+        item.title = "Test Movie"
+        item.labels = []
+        label_dates = {}
+
+        count = add_labels_to_items([item], 'Recommended', label_dates)
+
+        item.addLabel.assert_called_once_with('Recommended')
+        assert count == 1
+        assert '123_Recommended' in label_dates
+
+    def test_skips_item_with_existing_label(self):
+        """Test that item with existing label is skipped."""
+        item = Mock()
+        item.ratingKey = 123
+        item.title = "Test Movie"
+        item.labels = [Mock(tag='Recommended')]
+        label_dates = {}
+
+        count = add_labels_to_items([item], 'Recommended', label_dates)
+
+        item.addLabel.assert_not_called()
+        assert count == 0
+
+    def test_adds_labels_to_multiple_items(self):
+        """Test adding labels to multiple items."""
+        items = []
+        for i in range(3):
+            item = Mock()
+            item.ratingKey = i
+            item.title = f"Movie {i}"
+            item.labels = []
+            items.append(item)
+
+        label_dates = {}
+
+        count = add_labels_to_items(items, 'Recommended', label_dates)
+
+        assert count == 3
+        for item in items:
+            item.addLabel.assert_called_once_with('Recommended')
+
+    def test_mixed_existing_and_new_labels(self):
+        """Test with mix of items with and without label."""
+        item1 = Mock(ratingKey=1, title="Movie 1", labels=[])
+        item2 = Mock(ratingKey=2, title="Movie 2", labels=[Mock(tag='Recommended')])
+        item3 = Mock(ratingKey=3, title="Movie 3", labels=[])
+
+        label_dates = {}
+
+        count = add_labels_to_items([item1, item2, item3], 'Recommended', label_dates)
+
+        assert count == 2
+        item1.addLabel.assert_called_once()
+        item2.addLabel.assert_not_called()
+        item3.addLabel.assert_called_once()
