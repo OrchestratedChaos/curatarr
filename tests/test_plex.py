@@ -595,7 +595,7 @@ class TestInitPlex:
 
         assert result == mock_server
         mock_plex_server.assert_called_once_with('http://localhost:32400', 'test_token', session=mock_session)
-        assert mock_session.verify is False  # Default when not specified
+        assert mock_session.verify is True  # Default is secure (verify SSL)
 
     @patch('utils.plex.requests.Session')
     @patch('utils.plex.plexapi.server.PlexServer')

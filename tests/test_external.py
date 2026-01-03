@@ -211,9 +211,8 @@ class TestIsInLibrary:
 class TestGenerateCombinedHtml:
     """Tests for generate_combined_html function"""
 
-    @patch('recommenders.external.get_imdb_id')
-    def test_generates_html_file(self, mock_get_imdb):
-        mock_get_imdb.return_value = 'tt1234567'
+    def test_generates_html_file(self):
+        mock_get_imdb = lambda api_key, tmdb_id, media_type: 'tt1234567'
 
         with tempfile.TemporaryDirectory() as tmpdir:
             all_users_data = [
@@ -235,7 +234,7 @@ class TestGenerateCombinedHtml:
                 }
             ]
 
-            result = generate_combined_html(all_users_data, tmpdir, 'api_key')
+            result = generate_combined_html(all_users_data, tmpdir, 'api_key', mock_get_imdb)
 
             assert os.path.exists(result)
             assert result.endswith('watchlist.html')
@@ -246,9 +245,8 @@ class TestGenerateCombinedHtml:
                 assert 'Test Movie' in content
                 assert 'Plex Watchlist' in content
 
-    @patch('recommenders.external.get_imdb_id')
-    def test_html_contains_tabs_for_multiple_users(self, mock_get_imdb):
-        mock_get_imdb.return_value = 'tt1234567'
+    def test_html_contains_tabs_for_multiple_users(self):
+        mock_get_imdb = lambda api_key, tmdb_id, media_type: 'tt1234567'
 
         with tempfile.TemporaryDirectory() as tmpdir:
             all_users_data = [
@@ -266,7 +264,7 @@ class TestGenerateCombinedHtml:
                 }
             ]
 
-            result = generate_combined_html(all_users_data, tmpdir, 'api_key')
+            result = generate_combined_html(all_users_data, tmpdir, 'api_key', mock_get_imdb)
 
             with open(result) as f:
                 content = f.read()
@@ -274,9 +272,8 @@ class TestGenerateCombinedHtml:
                 assert 'User Two' in content
                 assert 'tab-btn' in content
 
-    @patch('recommenders.external.get_imdb_id')
-    def test_html_contains_export_buttons(self, mock_get_imdb):
-        mock_get_imdb.return_value = 'tt1234567'
+    def test_html_contains_export_buttons(self):
+        mock_get_imdb = lambda api_key, tmdb_id, media_type: 'tt1234567'
 
         with tempfile.TemporaryDirectory() as tmpdir:
             all_users_data = [
@@ -288,7 +285,7 @@ class TestGenerateCombinedHtml:
                 }
             ]
 
-            result = generate_combined_html(all_users_data, tmpdir, 'api_key')
+            result = generate_combined_html(all_users_data, tmpdir, 'api_key', mock_get_imdb)
 
             with open(result) as f:
                 content = f.read()
@@ -297,9 +294,8 @@ class TestGenerateCombinedHtml:
                 assert 'exportRadarr()' in content
                 assert 'exportSonarr()' in content
 
-    @patch('recommenders.external.get_imdb_id')
-    def test_html_checkboxes_unchecked_by_default(self, mock_get_imdb):
-        mock_get_imdb.return_value = 'tt1234567'
+    def test_html_checkboxes_unchecked_by_default(self):
+        mock_get_imdb = lambda api_key, tmdb_id, media_type: 'tt1234567'
 
         with tempfile.TemporaryDirectory() as tmpdir:
             all_users_data = [
@@ -317,7 +313,7 @@ class TestGenerateCombinedHtml:
                 }
             ]
 
-            result = generate_combined_html(all_users_data, tmpdir, 'api_key')
+            result = generate_combined_html(all_users_data, tmpdir, 'api_key', mock_get_imdb)
 
             with open(result) as f:
                 content = f.read()

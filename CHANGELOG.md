@@ -2,6 +2,19 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.2] - 2026-01-03
+
+### Changed
+- **Split external.py** — Extracted output generation to `external_output.py` (607 lines)
+  - `external.py` reduced from 1720 to 1134 lines
+  - Improves maintainability and readability
+
+## [1.6.1] - 2026-01-03
+
+### Changed
+- **SSL verification default** — `verify_ssl` now defaults to `True` (secure by default)
+  - Users with self-signed certs can set `verify_ssl: false` in config
+
 ## [1.6.0] - 2026-01-03
 
 ### Added
