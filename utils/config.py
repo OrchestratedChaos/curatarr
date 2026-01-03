@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
-CACHE_VERSION = 2  # v2: Added TMDB keywords to cache
+CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
 
 # Common constants used across recommenders
 TOP_CAST_COUNT = 3                  # Number of top actors to consider
@@ -37,6 +37,18 @@ DEFAULT_RATING_MULTIPLIERS = {
 
 # Backwards compatibility alias
 RATING_MULTIPLIERS = DEFAULT_RATING_MULTIPLIERS
+
+# Default negative multipliers for low-rated content (ratings 0-3 become penalties)
+# These are applied instead of positive multipliers when rating <= threshold
+DEFAULT_NEGATIVE_MULTIPLIERS = {
+    0: -1.0,   # Strong dislike -> strong penalty
+    1: -0.8,   # Very poor -> significant penalty
+    2: -0.5,   # Poor -> moderate penalty
+    3: -0.3,   # Below average -> mild penalty
+}
+
+# Default threshold for negative signals (Plex 0-10 scale)
+DEFAULT_NEGATIVE_THRESHOLD = 3  # Ratings 0-3 become negative signals
 
 
 def check_cache_version(cache_path: str, cache_type: str = "cache") -> bool:
@@ -166,6 +178,71 @@ def get_rating_multipliers(config: dict = None) -> dict:
     }
 
 
+def get_negative_signals_config(config: dict = None) -> dict:
+    """
+    Get negative signals configuration with defaults.
+
+    Args:
+        config: Configuration dict with optional negative_signals section
+
+    Returns:
+        Dict with negative signal settings
+    """
+    if not config:
+        return {
+            'enabled': True,
+            'bad_ratings': {
+                'enabled': True,
+                'threshold': DEFAULT_NEGATIVE_THRESHOLD,
+                'cap_penalty': 0.5,
+            },
+            'dropped_shows': {
+                'enabled': True,
+                'min_episodes_watched': 2,
+                'max_completion_percent': 25,
+                'penalty_multiplier': -0.4,
+            }
+        }
+
+    ns = config.get('negative_signals', {})
+
+    # If master switch is off, return disabled config
+    if not ns.get('enabled', True):
+        return {'enabled': False, 'bad_ratings': {'enabled': False}, 'dropped_shows': {'enabled': False}}
+
+    bad_ratings = ns.get('bad_ratings', {})
+    dropped_shows = ns.get('dropped_shows', {})
+
+    return {
+        'enabled': True,
+        'bad_ratings': {
+            'enabled': bad_ratings.get('enabled', True),
+            'threshold': bad_ratings.get('threshold', DEFAULT_NEGATIVE_THRESHOLD),
+            'cap_penalty': bad_ratings.get('cap_penalty', 0.5),
+        },
+        'dropped_shows': {
+            'enabled': dropped_shows.get('enabled', True),
+            'min_episodes_watched': dropped_shows.get('min_episodes_watched', 2),
+            'max_completion_percent': dropped_shows.get('max_completion_percent', 25),
+            'penalty_multiplier': dropped_shows.get('penalty_multiplier', -0.4),
+        }
+    }
+
+
+def get_negative_multiplier(rating: int, config: dict = None) -> float:
+    """
+    Get the negative multiplier for a low rating.
+
+    Args:
+        rating: Plex rating (0-10 scale)
+        config: Optional config with custom multipliers
+
+    Returns:
+        Negative multiplier value (negative float)
+    """
+    return DEFAULT_NEGATIVE_MULTIPLIERS.get(rating, -0.3)
+
+
 def adapt_config_for_media_type(root_config: Dict, media_type: str = 'movies') -> Dict:
     """
     Adapt root configuration for a specific media type (movies or TV).
@@ -234,5 +311,8 @@ def adapt_config_for_media_type(root_config: Dict, media_type: str = 'movies') -
     collections = root_config.get('collections', {})
     config['add_label'] = collections.get('add_label', True)
     config['stale_removal_days'] = collections.get('stale_removal_days', 7)
+
+    # Negative signals configuration
+    config['negative_signals'] = get_negative_signals_config(root_config)
 
     return config

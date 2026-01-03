@@ -5,7 +5,11 @@ Tests for utils/counters.py - Counter utility functions.
 import pytest
 from collections import Counter
 from unittest.mock import patch
-from utils.counters import create_empty_counters, process_counters_from_cache
+from utils.counters import (
+    create_empty_counters,
+    process_counters_from_cache,
+    _apply_capped_weight
+)
 
 
 class TestCreateEmptyCounters:
@@ -262,3 +266,204 @@ class TestProcessCountersFromCache:
 
         assert 'studio' in counters
         assert counters['studio']['netflix'] == 1.0
+
+
+class TestApplyCappedWeight:
+    """Tests for _apply_capped_weight() helper function."""
+
+    def test_positive_weight_adds_directly(self):
+        """Test that positive weights are added directly."""
+        counter = Counter()
+        _apply_capped_weight(counter, 'action', 2.0)
+        assert counter['action'] == 2.0
+
+    def test_positive_weight_accumulates(self):
+        """Test that positive weights accumulate."""
+        counter = Counter({'action': 3.0})
+        _apply_capped_weight(counter, 'action', 2.0)
+        assert counter['action'] == 5.0
+
+    def test_negative_weight_on_empty_counter(self):
+        """Test negative weight on empty counter."""
+        counter = Counter()
+        _apply_capped_weight(counter, 'action', -1.0)
+        assert counter['action'] == -1.0
+
+    def test_negative_weight_caps_at_floor(self):
+        """Test that negative weight is capped at floor value."""
+        counter = Counter({'action': 10.0})
+        # With cap_penalty=0.5, floor is 5.0
+        # Applying -8.0 would give 2.0, but floor is 5.0
+        _apply_capped_weight(counter, 'action', -8.0, cap_penalty=0.5)
+        assert counter['action'] == 5.0
+
+    def test_negative_weight_within_cap_applies_fully(self):
+        """Test that negative weight within cap applies fully."""
+        counter = Counter({'action': 10.0})
+        # With cap_penalty=0.5, floor is 5.0
+        # Applying -3.0 gives 7.0, which is above floor
+        _apply_capped_weight(counter, 'action', -3.0, cap_penalty=0.5)
+        assert counter['action'] == 7.0
+
+    def test_custom_cap_penalty(self):
+        """Test custom cap_penalty value."""
+        counter = Counter({'action': 10.0})
+        # With cap_penalty=0.3, floor is 3.0
+        _apply_capped_weight(counter, 'action', -20.0, cap_penalty=0.3)
+        assert counter['action'] == 3.0
+
+    def test_negative_on_already_negative(self):
+        """Test negative weight on already negative counter."""
+        counter = Counter({'action': -2.0})
+        _apply_capped_weight(counter, 'action', -1.0)
+        assert counter['action'] == -3.0
+
+
+class TestProcessCountersNegativeSignals:
+    """Tests for negative signal processing in process_counters_from_cache()."""
+
+    def test_negative_signal_config_enables_negative_weights(self):
+        """Test that negative signals config enables negative weight processing."""
+        counters = create_empty_counters('movie')
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+        ns_config = {
+            'enabled': True,
+            'bad_ratings': {
+                'enabled': True,
+                'threshold': 3,
+                'cap_penalty': 0.5
+            }
+        }
+
+        # Rating of 2 should be below threshold and return negative
+        result = process_counters_from_cache(
+            media_info, counters,
+            rating=2,
+            negative_signals_config=ns_config
+        )
+
+        assert result is True  # Indicates processed as negative signal
+
+    def test_returns_false_for_positive_rating(self):
+        """Test that high ratings return False (not negative signal)."""
+        counters = create_empty_counters('movie')
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+        ns_config = {
+            'enabled': True,
+            'bad_ratings': {
+                'enabled': True,
+                'threshold': 3,
+                'cap_penalty': 0.5
+            }
+        }
+
+        result = process_counters_from_cache(
+            media_info, counters,
+            rating=8,
+            negative_signals_config=ns_config
+        )
+
+        assert result is False
+
+    def test_disabled_negative_signals_ignores_bad_ratings(self):
+        """Test that disabled negative signals ignores bad ratings."""
+        counters = create_empty_counters('movie')
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+        ns_config = {
+            'enabled': False,
+            'bad_ratings': {'enabled': True, 'threshold': 3}
+        }
+
+        result = process_counters_from_cache(
+            media_info, counters,
+            rating=1,
+            negative_signals_config=ns_config
+        )
+
+        assert result is False
+        assert counters['genres']['action'] > 0  # Still positive
+
+    def test_capped_negative_signal_preserves_positive_preference(self):
+        """Test that capped negative signals don't destroy positive preferences."""
+        counters = create_empty_counters('movie')
+        counters['genres']['action'] = 10.0  # Pre-existing preference
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+        ns_config = {
+            'enabled': True,
+            'bad_ratings': {
+                'enabled': True,
+                'threshold': 3,
+                'cap_penalty': 0.5
+            }
+        }
+
+        process_counters_from_cache(
+            media_info, counters,
+            rating=0,  # Strong dislike
+            negative_signals_config=ns_config
+        )
+
+        # Should be capped at 5.0 (50% of 10.0)
+        assert counters['genres']['action'] >= 5.0
+
+
+class TestProcessCountersPreCalculatedWeight:
+    """Tests for pre-calculated weight parameter in process_counters_from_cache()."""
+
+    def test_weight_parameter_skips_internal_calculation(self):
+        """Test that weight parameter bypasses internal weight calculation."""
+        counters = create_empty_counters('movie')
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+
+        # Pass pre-calculated weight directly
+        process_counters_from_cache(media_info, counters, weight=2.5)
+
+        assert counters['genres']['action'] == 2.5
+
+    def test_negative_weight_parameter(self):
+        """Test that negative weight parameter works correctly."""
+        counters = create_empty_counters('movie')
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+
+        result = process_counters_from_cache(media_info, counters, weight=-0.5)
+
+        assert result is True  # Returns True for negative signals
+        assert counters['genres']['action'] == -0.5
+
+    def test_weight_parameter_with_cap_penalty(self):
+        """Test that cap_penalty works with weight parameter."""
+        counters = create_empty_counters('movie')
+        counters['genres']['action'] = 10.0  # Pre-existing preference
+
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+
+        # With cap_penalty=0.5, floor is 5.0
+        process_counters_from_cache(media_info, counters, weight=-8.0, cap_penalty=0.5)
+
+        assert counters['genres']['action'] == 5.0  # Capped at floor
+
+    def test_weight_parameter_ignores_other_multiplier_params(self):
+        """Test that weight parameter ignores view_count, rating, etc."""
+        counters = create_empty_counters('movie')
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+
+        # Even with view_count and rating, weight should be used directly
+        process_counters_from_cache(
+            media_info, counters,
+            view_count=5,
+            rating=10,
+            weight=1.5
+        )
+
+        # Should be exactly 1.5, not affected by view_count or rating
+        assert counters['genres']['action'] == 1.5
+
+    def test_weight_zero_adds_nothing(self):
+        """Test that weight=0 adds nothing to counters."""
+        counters = create_empty_counters('movie')
+        counters['genres']['action'] = 5.0
+        media_info = {'genres': ['Action'], 'title': 'Test'}
+
+        process_counters_from_cache(media_info, counters, weight=0.0)
+
+        assert counters['genres']['action'] == 5.0  # Unchanged

@@ -37,7 +37,6 @@ users:
 general:
   confirm_operations: false
   plex_only: true
-  combine_watch_history: false
   log_retention_days: 7  # Keep logs for 7 days (0 = keep all)
   auto_update: true  # Automatically update from GitHub on run
 
@@ -131,6 +130,20 @@ rating_multipliers:
   star_3: 1.0    # 3 stars (neutral baseline)
   star_2: 0.4    # 2 stars (poor)
   star_1: 0.2    # 1 star (very poor)
+
+# Negative Signals - penalize content similar to disliked items
+# When enabled, low ratings and dropped shows create anti-preferences
+negative_signals:
+  enabled: true                    # Master switch for all negative signals
+  bad_ratings:
+    enabled: true                  # Use low ratings (1-3 stars) as penalties
+    threshold: 3                   # Plex ratings 0-3 become negative (0-10 scale, so 3 = 1.5 stars)
+    cap_penalty: 0.5               # Limit: negative can only reduce positive counter to this fraction
+  dropped_shows:
+    enabled: true                  # Detect abandoned TV shows as negative signals
+    min_episodes_watched: 2        # Must watch at least N episodes to count as "dropped"
+    max_completion_percent: 25     # Consider dropped if watched < 25% of show
+    penalty_multiplier: -0.4       # Weight applied to dropped show attributes
 
 # External Recommendations (watchlist of content NOT in library)
 external_recommendations:
