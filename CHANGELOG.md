@@ -53,6 +53,10 @@ All notable changes to Plex Recommender will be documented in this file.
   higher-scoring ones, not just fill gaps
 
 ### Added
+- **Unit test suite** — 101 tests covering utility functions
+  - Tests for plex extraction, counters, labels, cache, helpers, scoring
+  - Run with: `python3 -m pytest tests/ -v`
+
 - Per-item weight redistribution — If a specific movie's director isn't in your
   profile, that 5% weight goes to keywords/genres/actors instead
 
