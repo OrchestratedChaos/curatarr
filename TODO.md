@@ -2,34 +2,37 @@
 
 ## Architectural Refactoring
 
-### 1. Split Utils into Package
-**Priority:** High
-**Effort:** Medium
+### 1. ~~Split Utils into Package~~ ✅ COMPLETED
+**Status:** Completed 2026-01-02
 **Files:** `utils.py` → `utils/` directory
 
-Split the 2500+ line `utils.py` into focused modules:
+Split the 2500+ line `utils.py` into 10 focused modules:
 
 ```
 utils/
-├── __init__.py          # Re-exports for backwards compatibility
+├── __init__.py          # Re-exports 72 items for backwards compatibility
+├── config.py            # Configuration utilities (CACHE_VERSION, load_config, etc.)
+├── display.py           # Output formatting, logging, colors
 ├── tmdb.py              # TMDB API functions
-├── plex.py              # Plex-specific utilities
 ├── cache.py             # Cache I/O operations
 ├── labels.py            # Label management
-├── display.py           # Output formatting & user prompts
+├── scoring.py           # Similarity scoring functions
 ├── counters.py          # Counter utilities
-└── config.py            # Config utilities
+├── helpers.py           # Miscellaneous helpers
+└── plex.py              # Plex-specific utilities
 ```
 
-Module breakdown:
-- [ ] `tmdb.py` - `fetch_tmdb_with_retry`, `get_tmdb_id_for_item`, `get_tmdb_keywords`, `get_tmdb_config`
-- [ ] `plex.py` - `get_library_imdb_ids`, `extract_genres`, `extract_ids_from_guids`, `get_plex_user_ids`, `extract_rating`
-- [ ] `cache.py` - `load_media_cache`, `save_media_cache`, `save_watched_cache`
-- [ ] `labels.py` - `build_label_name`, `categorize_labeled_items`, `remove_labels_from_items`, `add_labels_to_items`
-- [ ] `display.py` - `format_media_output`, `print_similarity_breakdown`, `user_select_recommendations`
-- [ ] `counters.py` - `create_empty_counters`, `process_counters_from_cache`
-- [ ] `config.py` - `adapt_config_for_media_type`, config loading utilities
-- [ ] `__init__.py` - Re-export all public functions for `from utils import ...` compatibility
+All modules completed:
+- [x] `config.py` - `CACHE_VERSION`, `load_config`, `get_rating_multipliers`, `adapt_config_for_media_type`
+- [x] `display.py` - Colors, `TeeLogger`, `setup_logging`, `format_media_output`, `print_similarity_breakdown`
+- [x] `tmdb.py` - `fetch_tmdb_with_retry`, `get_tmdb_id_for_item`, `get_tmdb_keywords`
+- [x] `cache.py` - `load_media_cache`, `save_media_cache`, `save_watched_cache`
+- [x] `labels.py` - `build_label_name`, `categorize_labeled_items`, label add/remove
+- [x] `scoring.py` - `calculate_similarity_score`, weight redistribution, normalization
+- [x] `counters.py` - `create_empty_counters`, `process_counters_from_cache`
+- [x] `helpers.py` - `normalize_title`, `map_path`, `cleanup_old_logs`
+- [x] `plex.py` - All Plex server, user, collection, and history functions
+- [x] `__init__.py` - Re-exports all 72 public functions/constants for backwards compatibility
 
 ### 2. Base Cache Class
 **Priority:** Medium
