@@ -19,6 +19,14 @@ WEIGHT_SUM_TOLERANCE = 1e-6         # Tolerance for weight sum validation
 DEFAULT_LIMIT_PLEX_RESULTS = 10     # Default recommendation limit
 TOP_POOL_PERCENTAGE = 0.1           # Top 10% for randomization pool
 
+# Recommendation tier percentages (for diversified recommendations)
+# Safe: High-confidence picks similar to user's taste
+# Diverse: Mid-tier picks that introduce variety
+# Wildcard: Lower-scored discoveries for exploration
+TIER_SAFE_PERCENT = 0.6             # 60% safe picks from top scores
+TIER_DIVERSE_PERCENT = 0.3          # 30% diverse picks from mid-tier
+TIER_WILDCARD_PERCENT = 0.1         # 10% wildcard picks for discovery
+
 # Default rating multipliers for similarity scoring (Plex uses 0-10 scale)
 # Higher ratings = stronger signal. 5-star (10) boosted to emphasize favorites.
 DEFAULT_RATING_MULTIPLIERS = {

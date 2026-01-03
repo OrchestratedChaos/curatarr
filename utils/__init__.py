@@ -14,6 +14,9 @@ from .config import (
     WEIGHT_SUM_TOLERANCE,
     DEFAULT_LIMIT_PLEX_RESULTS,
     TOP_POOL_PERCENTAGE,
+    TIER_SAFE_PERCENT,
+    TIER_DIVERSE_PERCENT,
+    TIER_WILDCARD_PERCENT,
     DEFAULT_RATING_MULTIPLIERS,
     RATING_MULTIPLIERS,
     DEFAULT_NEGATIVE_MULTIPLIERS,
@@ -84,6 +87,7 @@ from .scoring import (
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
+    select_tiered_recommendations,
 )
 
 # Counter utilities
@@ -135,6 +139,9 @@ __all__ = [
     'WEIGHT_SUM_TOLERANCE',
     'DEFAULT_LIMIT_PLEX_RESULTS',
     'TOP_POOL_PERCENTAGE',
+    'TIER_SAFE_PERCENT',
+    'TIER_DIVERSE_PERCENT',
+    'TIER_WILDCARD_PERCENT',
     'DEFAULT_RATING_MULTIPLIERS',
     'RATING_MULTIPLIERS',
     'check_cache_version',
@@ -186,6 +193,7 @@ __all__ = [
     'calculate_recency_multiplier',
     'calculate_rewatch_multiplier',
     'calculate_similarity_score',
+    'select_tiered_recommendations',
     # Counters
     'create_empty_counters',
     'process_counters_from_cache',

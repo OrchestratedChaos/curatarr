@@ -2,6 +2,16 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.3] - 2026-01-03
+
+### Added
+- **Tiered recommendations** — Diversified recommendation selection
+  - Safe picks (60%): High-confidence items from top scores
+  - Diverse options (30%): Mid-tier items for variety
+  - Wildcard picks (10%): Lower-scored discoveries
+  - Replaces simple random sampling from top 10%
+  - New `select_tiered_recommendations()` utility function
+
 ## [1.6.2] - 2026-01-03
 
 ### Changed

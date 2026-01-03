@@ -560,3 +560,90 @@ def calculate_similarity_score(
     except Exception as e:
         logging.warning(f"Error calculating similarity score for {content_info.get('title', 'Unknown')}: {e}")
         return 0.0, score_breakdown
+
+
+def select_tiered_recommendations(
+    scored_items: List[Dict],
+    limit: int,
+    safe_percent: float = 0.6,
+    diverse_percent: float = 0.3,
+    wildcard_percent: float = 0.1
+) -> List[Dict]:
+    """
+    Select recommendations using a tiered approach for variety.
+
+    Tiers:
+    - Safe (60%): Top-scored items, high confidence picks
+    - Diverse (30%): Mid-tier items, introduces variety
+    - Wildcard (10%): Lower-scored discoveries
+
+    Args:
+        scored_items: List of items sorted by score (highest first)
+        limit: Total number of recommendations to return
+        safe_percent: Percentage of limit for safe picks (default 0.6)
+        diverse_percent: Percentage of limit for diverse picks (default 0.3)
+        wildcard_percent: Percentage of limit for wildcard picks (default 0.1)
+
+    Returns:
+        List of selected items with tier diversity
+    """
+    import random
+
+    if not scored_items:
+        return []
+
+    total = len(scored_items)
+
+    # Calculate counts per tier (ensure at least 1 for each tier if possible)
+    safe_count = max(1, int(limit * safe_percent))
+    diverse_count = max(1, int(limit * diverse_percent))
+    wildcard_count = max(1, int(limit * wildcard_percent))
+
+    # Adjust if we have fewer items than requested
+    if limit > total:
+        return scored_items[:]
+
+    # Define tier boundaries based on percentile of available items
+    # Top 20% = safe pool, 20-60% = diverse pool, 60-100% = wildcard pool
+    safe_boundary = max(1, int(total * 0.20))
+    diverse_boundary = max(safe_boundary + 1, int(total * 0.60))
+
+    safe_pool = scored_items[:safe_boundary]
+    diverse_pool = scored_items[safe_boundary:diverse_boundary]
+    wildcard_pool = scored_items[diverse_boundary:]
+
+    selected = []
+    used_indices = set()
+
+    # Select safe picks (top tier, highest scores)
+    safe_picks = safe_pool[:min(safe_count, len(safe_pool))]
+    selected.extend(safe_picks)
+
+    # Select diverse picks (mid tier, some randomization for variety)
+    if diverse_pool and diverse_count > 0:
+        available_diverse = min(diverse_count, len(diverse_pool))
+        if len(diverse_pool) > available_diverse:
+            diverse_picks = random.sample(diverse_pool, available_diverse)
+        else:
+            diverse_picks = diverse_pool[:]
+        selected.extend(diverse_picks)
+
+    # Select wildcard picks (lower tier, random for discovery)
+    if wildcard_pool and wildcard_count > 0:
+        available_wildcard = min(wildcard_count, len(wildcard_pool))
+        if len(wildcard_pool) > available_wildcard:
+            wildcard_picks = random.sample(wildcard_pool, available_wildcard)
+        else:
+            wildcard_picks = wildcard_pool[:]
+        selected.extend(wildcard_picks)
+
+    # Fill remaining slots from safe pool if needed
+    remaining = limit - len(selected)
+    if remaining > 0 and len(safe_pool) > safe_count:
+        extra = safe_pool[safe_count:safe_count + remaining]
+        selected.extend(extra)
+
+    # Sort final selection by score for consistent output
+    selected.sort(key=lambda x: x.get('similarity_score', x.get('score', 0)), reverse=True)
+
+    return selected[:limit]
