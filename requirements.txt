@@ -7,9 +7,6 @@ plexapi>=4.13.0
 # The Movie Database API client
 tmdbv3api>=1.7.0
 
-# Trakt API client for external recommendations
-trakt>=3.4.0
-
 # HTTP requests library
 requests>=2.28.0
 

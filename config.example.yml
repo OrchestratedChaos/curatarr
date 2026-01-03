@@ -38,6 +38,7 @@ general:
   plex_only: true
   combine_watch_history: false
   log_retention_days: 7  # Keep logs for 7 days (0 = keep all)
+  auto_update: true  # Automatically update from GitHub on run
 
 # Logging (optional)
 logging:
@@ -58,11 +59,10 @@ movies:
     min_rating: 5.0
     min_vote_count: 15
   weights:
-    genre: 0.20
-    director: 0.25
-    actor: 0.15
-    keyword: 0.30
-    language: 0.10
+    genre: 0.25
+    director: 0.05
+    actor: 0.20
+    keyword: 0.50
   radarr:
     enabled: false
     url: http://localhost:7878
@@ -88,11 +88,10 @@ tv:
     min_rating: 0.0
     min_vote_count: 0
   weights:
-    genre: 0.20
-    studio: 0.20
-    actor: 0.15
-    keyword: 0.35
-    language: 0.10
+    genre: 0.25
+    studio: 0.10
+    actor: 0.20
+    keyword: 0.45
   sonarr:
     enabled: false
     url: http://localhost:8989
@@ -123,20 +122,23 @@ recency_decay:
   days_181_365: 0.25
   days_365_plus: 0.10
 
-# Trakt Integration (optional)
-trakt:
-  access_token: YOUR_TRAKT_ACCESS_TOKEN  # Optional - for Trakt integration (currently disabled)
-  refresh_token: YOUR_TRAKT_REFRESH_TOKEN
-  client_id: YOUR_TRAKT_CLIENT_ID  # Create app at: https://trakt.tv/oauth/applications/new
-  client_secret: YOUR_TRAKT_CLIENT_SECRET
-  clear_watch_history: false
-  sync_watch_history: false
+# Rating Multipliers - how much user ratings influence profile weighting
+# Higher values = ratings matter more. 5-star content dominates profile.
+rating_multipliers:
+  star_5: 2.5    # 5 stars (outstanding) - strong signal
+  star_4: 1.7    # 4 stars (very good)
+  star_3: 1.0    # 3 stars (neutral baseline)
+  star_2: 0.4    # 2 stars (poor)
+  star_1: 0.2    # 1 star (very poor)
 
 # External Recommendations (watchlist of content NOT in library)
 external_recommendations:
   enabled: true  # Generate external watchlists
   movie_limit: 30  # Number of movie recommendations per user
   show_limit: 20  # Number of TV show recommendations per user
+  min_relevance_score: 0.25  # Minimum personal relevance score (0.0-1.0). Items below this
+                              # threshold are only included if not enough high-relevance items exist.
+                              # 0.25 = 25% relevance minimum. Higher = stricter, fewer results.
 
 # Platform Settings
 platform:
