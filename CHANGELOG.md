@@ -2,6 +2,15 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.3.0] - 2026-01-03
+
+### Added
+- **Docker support** — Run Plex Recommender in a container
+  - `Dockerfile` for building the image
+  - `docker-compose.yml` for easy deployment
+  - `.dockerignore` for optimized builds
+  - Updated README with Docker quick start, scheduling, and troubleshooting
+
 ## [1.2.9] - 2026-01-03
 
 ### Added

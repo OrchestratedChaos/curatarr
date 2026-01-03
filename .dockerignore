@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Cache and logs (mounted as volumes)
+cache/
+logs/
+recommendations/
+
+# Config (mounted as volume)
+config.yml
+
+# Tests
+tests/
+pytest.ini
+.pytest_cache/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!requirements.txt
+
+# Windows script (not needed in container)
+run.ps1
+
+# GitHub
+.github/

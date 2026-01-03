@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  plex-recommender:
+    build: .
+    container_name: plex-recommender
+    restart: "no"
+    volumes:
+      # Config file (required)
+      - ./config.yml:/app/config.yml:ro
+      # Persistent cache (speeds up subsequent runs)
+      - ./cache:/app/cache
+      # Logs
+      - ./logs:/app/logs
+      # External recommendations output
+      - ./recommendations:/app/recommendations
+    environment:
+      - TZ=${TZ:-America/New_York}
+    # Optional: run on a schedule using external scheduler (cron/Task Scheduler)
+    # or use Docker restart policies with a wrapper script
