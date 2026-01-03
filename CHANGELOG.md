@@ -2,6 +2,14 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.7] - 2026-01-03
+
+### Added
+- **Score caching** — Computed similarity scores are now cached per movie/show
+  - Scores only recalculated when user profile changes (detected via hash)
+  - Significantly speeds up subsequent runs with unchanged watch history
+  - Profile hash stored with each cached score for invalidation
+
 ## [1.6.6] - 2026-01-03
 
 ### Added
