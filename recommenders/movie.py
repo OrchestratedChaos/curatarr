@@ -43,13 +43,14 @@ from utils import (
     build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
     get_library_imdb_ids, print_similarity_breakdown,
     load_media_cache, save_media_cache, create_empty_counters,
-    save_watched_cache, process_counters_from_cache
+    save_watched_cache, process_counters_from_cache,
+    compute_profile_hash
 )
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.6"
+__version__ = "1.6.7"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -291,6 +292,9 @@ class PlexMovieRecommender:
             if not self.watched_movie_ids and 'watched_movie_ids' in watched_cache:
                 self.watched_movie_ids = {int(id_) for id_ in watched_cache['watched_movie_ids'] if str(id_).isdigit()}
             logger.debug(f"Using cached data: {self.cached_watched_count} watched movies, {len(self.watched_movie_ids)} IDs")
+
+        # Compute profile hash for score caching
+        self.profile_hash = compute_profile_hash(self.watched_data_counters)
 
         print("Fetching library metadata (for existing Movies checks)...")
         self.library_movies = self._get_library_movies_set()
@@ -834,19 +838,43 @@ class PlexMovieRecommender:
             plex_recs = []
         else:
             print(f"Calculating similarity scores for {len(unwatched_movies)} movies...")
-            
-            # Calculate similarity scores
+
+            # Calculate similarity scores (with caching)
             scored_movies = []
+            cache_hits = 0
+            scores_updated = False
             for i, movie_info in enumerate(unwatched_movies, 1):
                 show_progress("Processing", i, len(unwatched_movies))
                 try:
-                    similarity_score, breakdown = self._calculate_similarity_from_cache(movie_info)
+                    # Check for cached score with matching profile hash
+                    cached_hash = movie_info.get('profile_hash')
+                    cached_score = movie_info.get('cached_score')
+
+                    if cached_hash == self.profile_hash and cached_score is not None:
+                        # Use cached score
+                        similarity_score = cached_score
+                        breakdown = movie_info.get('score_breakdown', {})
+                        cache_hits += 1
+                    else:
+                        # Calculate new score and cache it
+                        similarity_score, breakdown = self._calculate_similarity_from_cache(movie_info)
+                        movie_info['cached_score'] = similarity_score
+                        movie_info['profile_hash'] = self.profile_hash
+                        movie_info['score_breakdown'] = breakdown
+                        scores_updated = True
+
                     movie_info['similarity_score'] = similarity_score
-                    movie_info['score_breakdown'] = breakdown
                     scored_movies.append(movie_info)
                 except Exception as e:
                     log_warning(f"Error processing {movie_info['title']}: {e}")
                     continue
+
+            # Save cache if scores were updated
+            if scores_updated:
+                self.movie_cache._save_cache()
+                logger.debug(f"Saved {len(unwatched_movies) - cache_hits} new scores to cache")
+            if cache_hits > 0:
+                logger.debug(f"Used {cache_hits} cached scores")
             
             # Sort by similarity score
             scored_movies.sort(key=lambda x: x['similarity_score'], reverse=True)

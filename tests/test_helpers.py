@@ -6,7 +6,7 @@ import pytest
 import os
 import tempfile
 from datetime import datetime, timedelta
-from utils.helpers import normalize_title, map_path, cleanup_old_logs, TITLE_SUFFIXES_TO_STRIP
+from utils.helpers import normalize_title, map_path, cleanup_old_logs, compute_profile_hash, TITLE_SUFFIXES_TO_STRIP
 
 
 class TestNormalizeTitle:
@@ -261,3 +261,37 @@ class TestCleanupOldLogs:
 
             assert not os.path.exists(old_log)
             assert os.path.exists(new_log)
+
+
+class TestComputeProfileHash:
+    """Tests for compute_profile_hash() function."""
+
+    def test_empty_profile_returns_empty_string(self):
+        """Test that empty profile returns empty string."""
+        assert compute_profile_hash({}) == ""
+        assert compute_profile_hash(None) == ""
+
+    def test_same_data_same_hash(self):
+        """Test that identical data produces identical hash."""
+        profile1 = {'genres': {'action': 10, 'comedy': 5}}
+        profile2 = {'genres': {'action': 10, 'comedy': 5}}
+        assert compute_profile_hash(profile1) == compute_profile_hash(profile2)
+
+    def test_different_data_different_hash(self):
+        """Test that different data produces different hash."""
+        profile1 = {'genres': {'action': 10}}
+        profile2 = {'genres': {'action': 11}}
+        assert compute_profile_hash(profile1) != compute_profile_hash(profile2)
+
+    def test_order_independent(self):
+        """Test that key order doesn't affect hash."""
+        profile1 = {'genres': {'action': 10, 'comedy': 5}, 'actors': {'a': 1}}
+        profile2 = {'actors': {'a': 1}, 'genres': {'comedy': 5, 'action': 10}}
+        assert compute_profile_hash(profile1) == compute_profile_hash(profile2)
+
+    def test_returns_16_char_string(self):
+        """Test that hash is 16 characters."""
+        profile = {'genres': {'action': 10}}
+        result = compute_profile_hash(profile)
+        assert len(result) == 16
+        assert isinstance(result, str)
