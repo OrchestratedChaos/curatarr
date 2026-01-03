@@ -1508,3 +1508,273 @@ class TestCleanupOldCollectionsAdvanced:
         cleanup_old_collections(mock_section, "New Collection", "john", "🎬")
 
         mock_collection.delete.assert_called_once()
+
+
+class TestIdentifyDroppedShows:
+    """Tests for identify_dropped_shows() function."""
+
+    def test_identifies_dropped_show(self):
+        """Test identifying a show as dropped."""
+        from utils.plex import identify_dropped_shows
+
+        show_data = {
+            1: {
+                'watched_episodes': 3,
+                'completion_percent': 15,
+                'total_episodes': 20
+            }
+        }
+        config = {
+            'negative_signals': {
+                'enabled': True,
+                'dropped_shows': {
+                    'enabled': True,
+                    'min_episodes_watched': 2,
+                    'max_completion_percent': 25
+                }
+            }
+        }
+
+        result = identify_dropped_shows(show_data, config)
+
+        assert 1 in result
+
+    def test_does_not_drop_completed_show(self):
+        """Test that completed shows are not marked as dropped."""
+        from utils.plex import identify_dropped_shows
+
+        show_data = {
+            1: {
+                'watched_episodes': 10,
+                'completion_percent': 80,
+                'total_episodes': 12
+            }
+        }
+        config = {
+            'negative_signals': {
+                'enabled': True,
+                'dropped_shows': {
+                    'enabled': True,
+                    'min_episodes_watched': 2,
+                    'max_completion_percent': 25
+                }
+            }
+        }
+
+        result = identify_dropped_shows(show_data, config)
+
+        assert 1 not in result
+
+    def test_skips_show_with_too_few_watched(self):
+        """Test that shows with too few watched episodes are skipped."""
+        from utils.plex import identify_dropped_shows
+
+        show_data = {
+            1: {
+                'watched_episodes': 1,  # Less than min_episodes_watched
+                'completion_percent': 5,
+                'total_episodes': 20
+            }
+        }
+        config = {
+            'negative_signals': {
+                'enabled': True,
+                'dropped_shows': {
+                    'enabled': True,
+                    'min_episodes_watched': 2,
+                    'max_completion_percent': 25
+                }
+            }
+        }
+
+        result = identify_dropped_shows(show_data, config)
+
+        assert 1 not in result
+
+    def test_skips_short_series(self):
+        """Test that short series are not marked as dropped."""
+        from utils.plex import identify_dropped_shows
+
+        show_data = {
+            1: {
+                'watched_episodes': 2,
+                'completion_percent': 50,
+                'total_episodes': 2  # Total equals min_episodes_watched
+            }
+        }
+        config = {
+            'negative_signals': {
+                'enabled': True,
+                'dropped_shows': {
+                    'enabled': True,
+                    'min_episodes_watched': 2,
+                    'max_completion_percent': 25
+                }
+            }
+        }
+
+        result = identify_dropped_shows(show_data, config)
+
+        assert 1 not in result
+
+    def test_returns_empty_when_disabled(self):
+        """Test that empty set is returned when feature is disabled."""
+        from utils.plex import identify_dropped_shows
+
+        show_data = {
+            1: {
+                'watched_episodes': 3,
+                'completion_percent': 15,
+                'total_episodes': 20
+            }
+        }
+        config = {
+            'negative_signals': {
+                'enabled': False
+            }
+        }
+
+        result = identify_dropped_shows(show_data, config)
+
+        assert result == set()
+
+    def test_returns_empty_when_dropped_shows_disabled(self):
+        """Test that empty set is returned when dropped_shows is disabled."""
+        from utils.plex import identify_dropped_shows
+
+        show_data = {
+            1: {
+                'watched_episodes': 3,
+                'completion_percent': 15,
+                'total_episodes': 20
+            }
+        }
+        config = {
+            'negative_signals': {
+                'enabled': True,
+                'dropped_shows': {
+                    'enabled': False
+                }
+            }
+        }
+
+        result = identify_dropped_shows(show_data, config)
+
+        assert result == set()
+
+
+class TestFetchShowCompletionData:
+    """Tests for fetch_show_completion_data() function."""
+
+    @patch('utils.plex.requests.get')
+    def test_returns_empty_dict_on_error(self, mock_get):
+        """Test that empty dict is returned on API error."""
+        from utils.plex import fetch_show_completion_data
+
+        mock_get.side_effect = Exception("API Error")
+
+        config = {'plex': {'url': 'http://localhost', 'token': 'test', 'verify_ssl': False}}
+        mock_section = Mock()
+        mock_section.key = '1'
+        mock_section.all.return_value = []
+
+        result = fetch_show_completion_data(config, ['account1'], mock_section)
+
+        assert result == {}
+
+    @patch('utils.plex.requests.get')
+    def test_processes_episode_data(self, mock_get):
+        """Test processing episode watch data."""
+        from utils.plex import fetch_show_completion_data
+
+        # Mock response XML
+        xml_response = b'''<?xml version="1.0"?>
+        <MediaContainer>
+            <Video type="episode" grandparentKey="/library/metadata/100" ratingKey="200" viewedAt="1704067200"/>
+        </MediaContainer>'''
+
+        mock_response = Mock()
+        mock_response.content = xml_response
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        # Mock show in library
+        mock_show = Mock()
+        mock_show.ratingKey = 100
+        mock_show.title = 'Test Show'
+        mock_episode = Mock()
+        mock_show.episodes.return_value = [mock_episode] * 10
+
+        mock_section = Mock()
+        mock_section.key = '1'
+        mock_section.all.return_value = [mock_show]
+
+        config = {'plex': {'url': 'http://localhost', 'token': 'test', 'verify_ssl': False}}
+
+        result = fetch_show_completion_data(config, ['account1'], mock_section)
+
+        assert 100 in result
+        assert result[100]['watched_episodes'] == 1
+        assert result[100]['total_episodes'] == 10
+
+
+class TestUpdatePlexCollectionSort:
+    """Tests for collection sorting in update_plex_collection()."""
+
+    def test_sets_custom_sort_order(self):
+        """Test that custom sort order is set on collection."""
+        from utils.plex import update_plex_collection
+
+        mock_item1 = Mock()
+        mock_item2 = Mock()
+        items = [mock_item1, mock_item2]
+
+        mock_collection = Mock()
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+        mock_section.createCollection.return_value = mock_collection
+
+        update_plex_collection(mock_section, "Test Collection", items)
+
+        mock_collection.sortUpdate.assert_called_once_with(sort="custom")
+
+    def test_moves_items_in_order(self):
+        """Test that items are moved in correct order."""
+        from utils.plex import update_plex_collection
+
+        mock_item1 = Mock()
+        mock_item2 = Mock()
+        mock_item3 = Mock()
+        items = [mock_item1, mock_item2, mock_item3]
+
+        mock_collection = Mock()
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+        mock_section.createCollection.return_value = mock_collection
+
+        update_plex_collection(mock_section, "Test Collection", items)
+
+        # Should call moveItem for each item in reverse order
+        assert mock_collection.moveItem.call_count == 3
+
+    def test_handles_sort_error_gracefully(self):
+        """Test that sort errors are handled gracefully."""
+        from utils.plex import update_plex_collection
+
+        mock_item1 = Mock()
+        mock_item2 = Mock()
+        items = [mock_item1, mock_item2]
+
+        mock_collection = Mock()
+        mock_collection.sortUpdate.side_effect = Exception("Sort error")
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+        mock_section.createCollection.return_value = mock_collection
+
+        mock_logger = Mock()
+
+        # Should not raise, just log warning
+        result = update_plex_collection(mock_section, "Test Collection", items, logger=mock_logger)
+
+        assert result is True
+        mock_logger.warning.assert_called_once()

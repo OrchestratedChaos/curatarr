@@ -8,10 +8,14 @@ import pytest
 from utils.config import (
     CACHE_VERSION,
     DEFAULT_RATING_MULTIPLIERS,
+    DEFAULT_NEGATIVE_MULTIPLIERS,
+    DEFAULT_NEGATIVE_THRESHOLD,
     check_cache_version,
     get_config_section,
     get_tmdb_config,
     get_rating_multipliers,
+    get_negative_signals_config,
+    get_negative_multiplier,
     adapt_config_for_media_type,
 )
 
@@ -213,3 +217,75 @@ class TestAdaptConfigForMediaType:
         result = adapt_config_for_media_type(config, 'movies')
         assert result['add_label'] is False
         assert result['stale_removal_days'] == 14
+
+
+class TestNegativeSignalsConstants:
+    """Tests for negative signals constants"""
+
+    def test_default_negative_multipliers_defined(self):
+        assert DEFAULT_NEGATIVE_MULTIPLIERS is not None
+        assert isinstance(DEFAULT_NEGATIVE_MULTIPLIERS, dict)
+
+    def test_default_negative_multipliers_are_negative(self):
+        for rating, mult in DEFAULT_NEGATIVE_MULTIPLIERS.items():
+            assert mult < 0, f"Rating {rating} should have negative multiplier"
+
+    def test_default_negative_threshold(self):
+        assert DEFAULT_NEGATIVE_THRESHOLD == 3
+
+    def test_multipliers_increase_severity_with_lower_ratings(self):
+        # Lower rating = more negative multiplier
+        assert DEFAULT_NEGATIVE_MULTIPLIERS[0] < DEFAULT_NEGATIVE_MULTIPLIERS[1]
+        assert DEFAULT_NEGATIVE_MULTIPLIERS[1] < DEFAULT_NEGATIVE_MULTIPLIERS[2]
+        assert DEFAULT_NEGATIVE_MULTIPLIERS[2] < DEFAULT_NEGATIVE_MULTIPLIERS[3]
+
+
+class TestGetNegativeSignalsConfig:
+    """Tests for get_negative_signals_config function"""
+
+    def test_returns_defaults_when_no_config(self):
+        result = get_negative_signals_config(None)
+        assert result['enabled'] is True
+        assert result['bad_ratings']['enabled'] is True
+        assert result['bad_ratings']['threshold'] == 3
+        assert result['bad_ratings']['cap_penalty'] == 0.5
+
+    def test_returns_defaults_when_empty_config(self):
+        result = get_negative_signals_config({})
+        assert result['enabled'] is True
+
+    def test_respects_disabled_flag(self):
+        config = {'negative_signals': {'enabled': False}}
+        result = get_negative_signals_config(config)
+        assert result['enabled'] is False
+
+    def test_custom_threshold(self):
+        config = {'negative_signals': {'bad_ratings': {'threshold': 5}}}
+        result = get_negative_signals_config(config)
+        assert result['bad_ratings']['threshold'] == 5
+
+    def test_dropped_shows_defaults(self):
+        result = get_negative_signals_config(None)
+        assert result['dropped_shows']['enabled'] is True
+        assert result['dropped_shows']['min_episodes_watched'] == 2
+        assert result['dropped_shows']['max_completion_percent'] == 25
+        assert result['dropped_shows']['penalty_multiplier'] == -0.4
+
+
+class TestGetNegativeMultiplier:
+    """Tests for get_negative_multiplier function"""
+
+    def test_returns_negative_for_low_ratings(self):
+        assert get_negative_multiplier(0) < 0
+        assert get_negative_multiplier(1) < 0
+        assert get_negative_multiplier(2) < 0
+        assert get_negative_multiplier(3) < 0
+
+    def test_rating_0_most_negative(self):
+        assert get_negative_multiplier(0) == -1.0
+
+    def test_rating_3_least_negative(self):
+        assert get_negative_multiplier(3) == -0.3
+
+    def test_unknown_rating_returns_mild_negative(self):
+        assert get_negative_multiplier(99) == -0.3
