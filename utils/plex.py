@@ -8,7 +8,7 @@ import urllib3
 import xml.etree.ElementTree as ET
 import plexapi.server
 
-# Suppress InsecureRequestWarning when verify_ssl=False (common for local Plex servers)
+# Suppress InsecureRequestWarning when users explicitly set verify_ssl=False for local Plex servers
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from datetime import datetime
@@ -33,7 +33,7 @@ def init_plex(config: dict) -> plexapi.server.PlexServer:
     try:
         # Create session with SSL verification settings
         session = requests.Session()
-        session.verify = config['plex'].get('verify_ssl', False)
+        session.verify = config['plex'].get('verify_ssl', True)
 
         return plexapi.server.PlexServer(
             config['plex']['url'],
@@ -61,7 +61,7 @@ def get_plex_account_ids(config: Dict, users_to_match: List[str]) -> List[str]:
         response = requests.get(
             f"{config['plex']['url']}/accounts",
             headers={'X-Plex-Token': config['plex']['token']},
-            verify=config['plex'].get('verify_ssl', False),
+            verify=config['plex'].get('verify_ssl', True),
             timeout=30
         )
         response.raise_for_status()
@@ -130,7 +130,7 @@ def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
         watched_movies = set()
         for account_id in account_ids:
             url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
-            response = requests.get(url, verify=config['plex'].get('verify_ssl', False), timeout=30)
+            response = requests.get(url, verify=config['plex'].get('verify_ssl', True), timeout=30)
             root = ET.fromstring(response.content)
 
             for video in root.findall('.//Video'):
@@ -176,7 +176,7 @@ def get_watched_show_count(config: Dict, users_to_check: List[str]) -> int:
         watched_shows = set()
         for account_id in account_ids:
             url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
-            response = requests.get(url, verify=config['plex'].get('verify_ssl', False), timeout=30)
+            response = requests.get(url, verify=config['plex'].get('verify_ssl', True), timeout=30)
             root = ET.fromstring(response.content)
 
             for video in root.findall('.//Video'):
@@ -237,7 +237,7 @@ def fetch_plex_watch_history_movies(config: Dict, account_ids: List[str], movies
                         'X-Plex-Container-Size': 10000
                     }
 
-                    response = requests.get(history_url, params=params, verify=config['plex'].get('verify_ssl', False), timeout=30)
+                    response = requests.get(history_url, params=params, verify=config['plex'].get('verify_ssl', True), timeout=30)
                     response.raise_for_status()
 
                     root = ET.fromstring(response.content)
@@ -302,7 +302,7 @@ def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_sect
         }
 
         try:
-            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', False), timeout=30)
+            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', True), timeout=30)
             response.raise_for_status()
 
             root = ET.fromstring(response.content)
@@ -367,7 +367,7 @@ def fetch_show_completion_data(
         try:
             response = requests.get(
                 url, params=params,
-                verify=config['plex'].get('verify_ssl', False),
+                verify=config['plex'].get('verify_ssl', True),
                 timeout=60
             )
             response.raise_for_status()
@@ -491,7 +491,7 @@ def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str
         }
 
         try:
-            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', False), timeout=30)
+            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', True), timeout=30)
             if response.status_code != 200:
                 continue
 
