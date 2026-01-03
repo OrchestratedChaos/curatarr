@@ -2,7 +2,7 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
-## [Unreleased]
+## [1.1.0] - 2026-01-02
 
 ### Changed
 - **Utils package refactoring** — Split 2500+ line `utils.py` into focused modules:
@@ -33,6 +33,14 @@ All notable changes to Plex Recommender will be documented in this file.
   - Language: 0% (was 5%) — Removed due to unreliable data
 
 ### Fixed
+- **format_media_output() signature** — Fixed function parameter names and order to match callers
+  - Changed `media_info` to `media` parameter name
+  - Added missing `show_director` and `show_genres` parameters
+
+- **Duplicate log messages** — Warnings and errors now appear only once
+  - Enabled ColoredFormatter for colored log output
+  - Removed redundant print() calls from log_warning/log_error
+
 - **Case sensitivity bugs** — Genres, directors, and actors now match case-insensitively
   - "Drama" now correctly matches "drama" in user profiles
   - Fixed major scoring undercount issue

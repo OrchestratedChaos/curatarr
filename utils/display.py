@@ -103,7 +103,7 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
     handler = logging.StreamHandler()
     handler.setLevel(level)
 
-    formatter = logging.Formatter(
+    formatter = ColoredFormatter(
         fmt='%(asctime)s [%(levelname)s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
@@ -145,28 +145,24 @@ def print_status(message: str, level: str = "info"):
         print(f"{GREEN}✓ {message}{RESET}")
         logger.info(message)
     elif level == "warning":
-        log_warning(f"{message}")
-        logger.warning(message)
+        log_warning(message)
     elif level == "error":
-        log_error(f"{message}")
-        logger.error(message)
+        log_error(message)
     else:
         print(message)
         logger.info(message)
 
 
 def log_warning(message: str):
-    """Log warning and print with yellow color"""
+    """Log warning with yellow color (via ColoredFormatter)"""
     logger = logging.getLogger('plex_recommender')
     logger.warning(message)
-    print(f"{YELLOW}{message}{RESET}")
 
 
 def log_error(message: str):
-    """Log error and print with red color"""
+    """Log error with red color (via ColoredFormatter)"""
     logger = logging.getLogger('plex_recommender')
     logger.error(message)
-    print(f"{RED}{message}{RESET}")
 
 
 def show_progress(prefix: str, current: int, total: int):
@@ -187,20 +183,22 @@ def show_progress(prefix: str, current: int, total: int):
 
 
 def format_media_output(
-    media_info: Dict,
+    media: Dict,
+    media_type: str = 'movie',
+    show_summary: bool = False,
     index: int = None,
-    show_summary: bool = True,
-    show_cast: bool = True,
-    show_language: bool = True,
-    show_rating: bool = True,
-    show_imdb_link: bool = False,
-    media_type: str = 'movie'
+    show_cast: bool = False,
+    show_director: bool = False,
+    show_language: bool = False,
+    show_rating: bool = False,
+    show_genres: bool = True,
+    show_imdb_link: bool = False
 ) -> str:
     """
     Format media item (movie or TV show) for display output.
 
     Args:
-        media_info: Dict with title, year, genres, summary, cast, language, rating, etc.
+        media: Dict with title, year, genres, summary, cast, language, rating, etc.
         index: Optional 1-based index for numbered lists
         show_summary: Whether to include summary/overview
         show_cast: Whether to include cast list
@@ -215,9 +213,9 @@ def format_media_output(
     lines = []
 
     # Title line with optional index
-    title = media_info.get('title', 'Unknown')
-    year = media_info.get('year', '')
-    similarity = media_info.get('similarity', media_info.get('score', 0))
+    title = media.get('title', 'Unknown')
+    year = media.get('year', '')
+    similarity = media.get('similarity_score', media.get('similarity', media.get('score', 0)))
 
     if index:
         title_line = f"{index}. {CYAN}{title}{RESET}"
@@ -234,45 +232,48 @@ def format_media_output(
     lines.append(title_line)
 
     # Genres
-    genres = media_info.get('genres', [])
-    if genres:
-        genre_str = ', '.join(genres) if isinstance(genres, list) else genres
-        lines.append(f"  {YELLOW}Genres:{RESET} {genre_str}")
+    if show_genres:
+        genres = media.get('genres', [])
+        if genres:
+            genre_str = ', '.join(genres) if isinstance(genres, list) else genres
+            lines.append(f"  {YELLOW}Genres:{RESET} {genre_str}")
 
     # Rating
     if show_rating:
-        rating = media_info.get('rating', media_info.get('vote_average', 0))
+        rating = media.get('rating', media.get('vote_average', 0))
         if rating:
             lines.append(f"  {YELLOW}Rating:{RESET} {rating:.1f}/10")
 
     # Language
     if show_language:
-        language = media_info.get('language', media_info.get('original_language', ''))
+        language = media.get('language', media.get('original_language', ''))
         if language and language != 'N/A':
             lines.append(f"  {YELLOW}Language:{RESET} {language}")
 
     # Cast
     if show_cast:
-        cast = media_info.get('cast', [])
+        cast = media.get('cast', [])
         if cast:
             cast_str = ', '.join(cast[:5]) if isinstance(cast, list) else cast
             lines.append(f"  {YELLOW}Cast:{RESET} {cast_str}")
 
-    # Director (movies) or Studio (TV)
-    if media_type == 'movie':
-        directors = media_info.get('directors', media_info.get('director', []))
+    # Director (movies only when show_director is True)
+    if show_director and media_type == 'movie':
+        directors = media.get('directors', media.get('director', []))
         if directors:
             dir_str = ', '.join(directors) if isinstance(directors, list) else directors
             lines.append(f"  {YELLOW}Director:{RESET} {dir_str}")
-    else:
-        studio = media_info.get('studio', media_info.get('studios', ''))
+
+    # Studio (TV shows)
+    if media_type == 'tv':
+        studio = media.get('studio', media.get('studios', ''))
         if studio:
             studio_str = studio if isinstance(studio, str) else ', '.join(studio[:2])
             lines.append(f"  {YELLOW}Studio:{RESET} {studio_str}")
 
     # Summary
     if show_summary:
-        summary = media_info.get('summary', media_info.get('overview', ''))
+        summary = media.get('summary', media.get('overview', ''))
         if summary:
             # Truncate long summaries
             if len(summary) > 200:
@@ -281,7 +282,7 @@ def format_media_output(
 
     # IMDB link
     if show_imdb_link:
-        imdb_id = media_info.get('imdb_id')
+        imdb_id = media.get('imdb_id')
         if imdb_id:
             lines.append(f"  {CYAN}https://www.imdb.com/title/{imdb_id}/{RESET}")
 
