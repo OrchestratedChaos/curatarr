@@ -237,7 +237,9 @@ def calculate_similarity_score(
     media_type: str = 'movie',
     weights: Optional[Dict] = None,
     normalize_counters: bool = True,
-    use_fuzzy_keywords: bool = True
+    use_fuzzy_keywords: bool = True,
+    use_tfidf: bool = True,
+    tfidf_penalty_threshold: float = 0.15
 ) -> Tuple[float, Dict]:
     """
     Calculate similarity score between content and user profile.
@@ -252,6 +254,8 @@ def calculate_similarity_score(
         weights: Optional custom weights dict. Defaults to standard weights if None.
         normalize_counters: If True, use sqrt normalization for diminishing returns
         use_fuzzy_keywords: If True, use fuzzy matching for keywords
+        use_tfidf: If True, penalize content with genres/keywords rare in user's profile
+        tfidf_penalty_threshold: Genres below this % of max count trigger penalty (default 15%)
 
     Returns:
         Tuple of (score 0-1, breakdown dict with component scores)
@@ -328,32 +332,55 @@ def calculate_similarity_score(
                 normalized_user_genres[norm_genre] = count
         max_genre_count = max(normalized_user_genres.values()) if normalized_user_genres else 1
 
-        # --- Genre Score ---
+        # --- Genre Score with TF-IDF ---
         content_genres = set(content_info.get('genres', []))
         if content_genres:
             genre_scores = []
             genre_penalty = 0.0
+            # Calculate threshold for TF-IDF penalty
+            tfidf_threshold_count = max_genre_count * tfidf_penalty_threshold if use_tfidf else 0
+
             for genre in content_genres:
                 norm_genre = normalize_genre(genre)
                 genre_count = normalized_user_genres.get(norm_genre, 0)
                 if genre_count == 0:
                     genre_count = user_prefs['genres'].get(genre, 0)
+
                 if genre_count > 0:
-                    if normalize_counters:
-                        normalized_score = math.sqrt(genre_count / max_genre_count)
+                    # TF-IDF: if genre is rare in user's profile, apply penalty
+                    if use_tfidf and genre_count < tfidf_threshold_count:
+                        # Genre exists but is rare - user likely avoids it
+                        # Penalty proportional to how rare it is
+                        rarity = 1 - (genre_count / tfidf_threshold_count)
+                        penalty = rarity * 0.3  # Max 30% penalty per rare genre
+                        genre_penalty += penalty
+                        score_breakdown['details']['genres'].append(
+                            f"{genre} (TF-IDF: count {genre_count:.1f} < threshold {tfidf_threshold_count:.1f}, penalty: {round(penalty, 2)})"
+                        )
                     else:
-                        normalized_score = min(genre_count / max_genre_count, 1.0)
-                    genre_scores.append(normalized_score)
-                    score_breakdown['details']['genres'].append(
-                        f"{genre} (count: {genre_count}, norm: {round(normalized_score, 2)})"
-                    )
+                        # Genre is common in user's profile - good match
+                        if normalize_counters:
+                            normalized_score = math.sqrt(genre_count / max_genre_count)
+                        else:
+                            normalized_score = min(genre_count / max_genre_count, 1.0)
+                        genre_scores.append(normalized_score)
+                        score_breakdown['details']['genres'].append(
+                            f"{genre} (count: {genre_count:.1f}, norm: {round(normalized_score, 2)})"
+                        )
                 elif genre_count < 0:
-                    # Negative signal: penalize this genre
+                    # Explicit negative signal: penalize this genre
                     penalty = abs(genre_count) / max_genre_count * 0.5  # Cap penalty contribution
                     genre_penalty += penalty
                     score_breakdown['details']['genres'].append(
                         f"{genre} (NEGATIVE: {genre_count}, penalty: {round(penalty, 2)})"
                     )
+                elif use_tfidf and genre_count == 0:
+                    # User has never watched this genre - mild penalty
+                    genre_penalty += 0.1
+                    score_breakdown['details']['genres'].append(
+                        f"{genre} (TF-IDF: unseen genre, penalty: 0.1)"
+                    )
+
             if genre_scores or genre_penalty > 0:
                 genre_weight = effective_weights.get('genre', 0.20)
                 genre_sum = sum(genre_scores)
@@ -486,12 +513,14 @@ def calculate_similarity_score(
                 score_breakdown['language_score'] = round(lang_final, 3)
                 score_breakdown['details']['language'] = f"{content_language} (count: {lang_count}, norm: {round(normalized_score, 2)})"
 
-        # --- Keyword Score ---
+        # --- Keyword Score with TF-IDF ---
         content_keywords = content_info.get('keywords', content_info.get('tmdb_keywords', []))
         if content_keywords:
             keyword_scores = []
             keyword_penalty = 0.0
             user_keywords_lower = {k.lower(): v for k, v in user_prefs['keywords'].items()}
+            # Calculate threshold for TF-IDF penalty
+            tfidf_kw_threshold = max_counts['keywords'] * tfidf_penalty_threshold if use_tfidf else 0
 
             for kw in content_keywords:
                 kw_lower = kw.lower() if isinstance(kw, str) else kw
@@ -502,19 +531,37 @@ def calculate_similarity_score(
                     fuzzy_count, matched_kw = fuzzy_keyword_match(kw, user_keywords_lower)
                     count = fuzzy_count
                 if count > 0:
-                    if normalize_counters:
-                        normalized_score = math.sqrt(count / max_counts['keywords'])
+                    # TF-IDF: if keyword is rare in user's profile, apply penalty
+                    if use_tfidf and count < tfidf_kw_threshold:
+                        # Keyword exists but is rare - user likely doesn't prioritize it
+                        rarity = 1 - (count / tfidf_kw_threshold)
+                        penalty = rarity * 0.15  # Max 15% penalty per rare keyword (less than genre)
+                        keyword_penalty += penalty
+                        score_breakdown['details']['keywords'].append(
+                            f"{kw} (TF-IDF: count {count:.1f} < threshold {tfidf_kw_threshold:.1f}, penalty: {round(penalty, 2)})"
+                        )
                     else:
-                        normalized_score = min(count / max_counts['keywords'], 1.0)
-                    keyword_scores.append(normalized_score)
-                    score_breakdown['details']['keywords'].append(
-                        f"{kw} (count: {int(count)}, norm: {round(normalized_score, 2)})"
-                    )
+                        # Keyword is common in user's profile - good match
+                        if normalize_counters:
+                            normalized_score = math.sqrt(count / max_counts['keywords'])
+                        else:
+                            normalized_score = min(count / max_counts['keywords'], 1.0)
+                        keyword_scores.append(normalized_score)
+                        score_breakdown['details']['keywords'].append(
+                            f"{kw} (count: {int(count)}, norm: {round(normalized_score, 2)})"
+                        )
                 elif count < 0:
                     penalty = abs(count) / max_counts['keywords'] * 0.5
                     keyword_penalty += penalty
                     score_breakdown['details']['keywords'].append(
                         f"{kw} (NEGATIVE: {int(count)}, penalty: {round(penalty, 2)})"
+                    )
+                elif use_tfidf and count == 0:
+                    # User has never seen content with this keyword - very mild penalty
+                    # Keywords are more numerous and specific than genres, so smaller penalty
+                    keyword_penalty += 0.02
+                    score_breakdown['details']['keywords'].append(
+                        f"{kw} (TF-IDF: unseen keyword, penalty: 0.02)"
                     )
             if keyword_scores or keyword_penalty > 0:
                 keyword_weight = effective_weights.get('keyword', 0.45)
