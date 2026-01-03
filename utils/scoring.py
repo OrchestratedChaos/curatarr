@@ -301,14 +301,22 @@ def calculate_similarity_score(
             'keywords': Counter(user_profile.get('keywords', user_profile.get('tmdb_keywords', {})))
         }
 
+        # Calculate max counts using only positive values (for proper normalization)
+        def max_positive(counter):
+            positive_vals = [v for v in counter.values() if v > 0]
+            return max(positive_vals) if positive_vals else 1
+
         max_counts = {
-            'genres': max(user_prefs['genres'].values()) if user_prefs['genres'] else 1,
-            'directors': max(user_prefs['directors'].values()) if user_prefs['directors'] else 1,
-            'studios': max(user_prefs['studios'].values()) if user_prefs['studios'] else 1,
-            'actors': max(user_prefs['actors'].values()) if user_prefs['actors'] else 1,
-            'languages': max(user_prefs['languages'].values()) if user_prefs['languages'] else 1,
-            'keywords': max(user_prefs['keywords'].values()) if user_prefs['keywords'] else 1
+            'genres': max_positive(user_prefs['genres']),
+            'directors': max_positive(user_prefs['directors']),
+            'studios': max_positive(user_prefs['studios']),
+            'actors': max_positive(user_prefs['actors']),
+            'languages': max_positive(user_prefs['languages']),
+            'keywords': max_positive(user_prefs['keywords'])
         }
+
+        # Track penalties from negative signals
+        total_penalty = 0.0
 
         # Build normalized genre lookup
         normalized_user_genres = {}
@@ -324,6 +332,7 @@ def calculate_similarity_score(
         content_genres = set(content_info.get('genres', []))
         if content_genres:
             genre_scores = []
+            genre_penalty = 0.0
             for genre in content_genres:
                 norm_genre = normalize_genre(genre)
                 genre_count = normalized_user_genres.get(norm_genre, 0)
@@ -338,12 +347,20 @@ def calculate_similarity_score(
                     score_breakdown['details']['genres'].append(
                         f"{genre} (count: {genre_count}, norm: {round(normalized_score, 2)})"
                     )
-            if genre_scores:
+                elif genre_count < 0:
+                    # Negative signal: penalize this genre
+                    penalty = abs(genre_count) / max_genre_count * 0.5  # Cap penalty contribution
+                    genre_penalty += penalty
+                    score_breakdown['details']['genres'].append(
+                        f"{genre} (NEGATIVE: {genre_count}, penalty: {round(penalty, 2)})"
+                    )
+            if genre_scores or genre_penalty > 0:
                 genre_weight = effective_weights.get('genre', 0.20)
                 genre_sum = sum(genre_scores)
                 genre_ratio = 1 - (1 / (1 + genre_sum))
-                genre_final = genre_ratio * genre_weight
+                genre_final = max(0, genre_ratio - genre_penalty) * genre_weight
                 score += genre_final
+                total_penalty += genre_penalty * genre_weight
                 score_breakdown['genre_score'] = round(genre_final, 3)
 
         # --- Director Score (movies only) ---
@@ -352,6 +369,7 @@ def calculate_similarity_score(
             if content_directors:
                 user_directors_lower = {k.lower(): v for k, v in user_prefs['directors'].items()}
                 director_scores = []
+                director_penalty = 0.0
                 for director in content_directors:
                     director_lower = director.lower() if isinstance(director, str) else director
                     director_count = user_prefs['directors'].get(director, 0)
@@ -366,10 +384,18 @@ def calculate_similarity_score(
                         score_breakdown['details']['directors'].append(
                             f"{director} (count: {director_count}, norm: {round(normalized_score, 2)})"
                         )
-                if director_scores:
+                    elif director_count < 0:
+                        penalty = abs(director_count) / max_counts['directors'] * 0.5
+                        director_penalty += penalty
+                        score_breakdown['details']['directors'].append(
+                            f"{director} (NEGATIVE: {director_count}, penalty: {round(penalty, 2)})"
+                        )
+                if director_scores or director_penalty > 0:
                     director_weight = effective_weights.get('director', 0.15)
-                    director_final = (sum(director_scores) / len(director_scores)) * director_weight
+                    avg_score = (sum(director_scores) / len(director_scores)) if director_scores else 0
+                    director_final = max(0, avg_score - director_penalty) * director_weight
                     score += director_final
+                    total_penalty += director_penalty * director_weight
                     score_breakdown['director_score'] = round(director_final, 3)
 
         # --- Studio Score (TV only) ---
@@ -382,6 +408,7 @@ def calculate_similarity_score(
 
             if studios_to_check:
                 studio_scores = []
+                studio_penalty = 0.0
                 for studio in studios_to_check:
                     studio_lower = studio.lower() if isinstance(studio, str) else studio
                     studio_count = user_prefs['studios'].get(studio_lower, 0)
@@ -394,10 +421,16 @@ def calculate_similarity_score(
                             normalized_score = min(studio_count / max_counts['studios'], 1.0)
                         studio_scores.append(normalized_score)
                         score_breakdown['details']['studio'] = f"{studio} (count: {studio_count}, norm: {round(normalized_score, 2)})"
-                if studio_scores:
+                    elif studio_count < 0:
+                        penalty = abs(studio_count) / max_counts['studios'] * 0.5
+                        studio_penalty += penalty
+                        score_breakdown['details']['studio'] = f"{studio} (NEGATIVE: {studio_count}, penalty: {round(penalty, 2)})"
+                if studio_scores or studio_penalty > 0:
                     studio_weight = effective_weights.get('studio', 0.15)
-                    studio_final = (sum(studio_scores) / len(studio_scores)) * studio_weight
+                    avg_score = (sum(studio_scores) / len(studio_scores)) if studio_scores else 0
+                    studio_final = max(0, avg_score - studio_penalty) * studio_weight
                     score += studio_final
+                    total_penalty += studio_penalty * studio_weight
                     score_breakdown['studio_score'] = round(studio_final, 3)
 
         # --- Actor Score ---
@@ -405,6 +438,7 @@ def calculate_similarity_score(
         if content_cast:
             user_actors_lower = {k.lower(): v for k, v in user_prefs['actors'].items()}
             actor_scores = []
+            actor_penalty = 0.0
             matched_actors = 0
             for actor in content_cast:
                 actor_lower = actor.lower() if isinstance(actor, str) else actor
@@ -421,12 +455,19 @@ def calculate_similarity_score(
                     score_breakdown['details']['actors'].append(
                         f"{actor} (count: {actor_count}, norm: {round(normalized_score, 2)})"
                     )
-            if matched_actors > 0:
+                elif actor_count < 0:
+                    penalty = abs(actor_count) / max_counts['actors'] * 0.5
+                    actor_penalty += penalty
+                    score_breakdown['details']['actors'].append(
+                        f"{actor} (NEGATIVE: {actor_count}, penalty: {round(penalty, 2)})"
+                    )
+            if matched_actors > 0 or actor_penalty > 0:
                 actor_sum = sum(actor_scores)
                 actor_ratio = 1 - (1 / (1 + actor_sum))
                 actor_weight = effective_weights.get('actor', 0.15)
-                actor_final = actor_ratio * actor_weight
+                actor_final = max(0, actor_ratio - actor_penalty) * actor_weight
                 score += actor_final
+                total_penalty += actor_penalty * actor_weight
                 score_breakdown['actor_score'] = round(actor_final, 3)
 
         # --- Language Score ---
@@ -449,6 +490,7 @@ def calculate_similarity_score(
         content_keywords = content_info.get('keywords', content_info.get('tmdb_keywords', []))
         if content_keywords:
             keyword_scores = []
+            keyword_penalty = 0.0
             user_keywords_lower = {k.lower(): v for k, v in user_prefs['keywords'].items()}
 
             for kw in content_keywords:
@@ -468,12 +510,19 @@ def calculate_similarity_score(
                     score_breakdown['details']['keywords'].append(
                         f"{kw} (count: {int(count)}, norm: {round(normalized_score, 2)})"
                     )
-            if keyword_scores:
+                elif count < 0:
+                    penalty = abs(count) / max_counts['keywords'] * 0.5
+                    keyword_penalty += penalty
+                    score_breakdown['details']['keywords'].append(
+                        f"{kw} (NEGATIVE: {int(count)}, penalty: {round(penalty, 2)})"
+                    )
+            if keyword_scores or keyword_penalty > 0:
                 keyword_weight = effective_weights.get('keyword', 0.45)
                 keyword_sum = sum(keyword_scores)
                 keyword_ratio = 1 - (1 / (1 + keyword_sum))
-                keyword_final = keyword_ratio * keyword_weight
+                keyword_final = max(0, keyword_ratio - keyword_penalty) * keyword_weight
                 score += keyword_final
+                total_penalty += keyword_penalty * keyword_weight
                 score_breakdown['keyword_score'] = round(keyword_final, 3)
 
         # Per-item weight redistribution
