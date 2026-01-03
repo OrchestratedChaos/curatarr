@@ -2,6 +2,17 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.4.0] - 2026-01-03
+
+### Added
+- **HTML watchlist with export buttons** — Interactive HTML view of external recommendations
+  - Single page with tabs for each user
+  - Selectable items with checkboxes (unchecked by default)
+  - "Export to Radarr" button downloads IMDB IDs for selected movies
+  - "Export to Sonarr" button downloads IMDB IDs for selected shows
+  - Movie theater themed dark design with gold accents
+  - Auto-open in browser after run (configurable via `auto_open_html`)
+
 ## [1.3.0] - 2026-01-03
 
 ### Added
