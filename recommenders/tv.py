@@ -23,6 +23,8 @@ from utils import (
     RATING_MULTIPLIERS, CACHE_VERSION, check_cache_version,
     TOP_CAST_COUNT, TMDB_RATE_LIMIT_DELAY, DEFAULT_RATING,
     WEIGHT_SUM_TOLERANCE, DEFAULT_LIMIT_PLEX_RESULTS, TOP_POOL_PERCENTAGE,
+    TIER_SAFE_PERCENT, TIER_DIVERSE_PERCENT, TIER_WILDCARD_PERCENT,
+    select_tiered_recommendations,
     DEFAULT_NEGATIVE_MULTIPLIERS, DEFAULT_NEGATIVE_THRESHOLD,
     get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, get_watched_show_count,
@@ -49,7 +51,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.2"
+__version__ = "1.6.3"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -775,10 +777,14 @@ class PlexTVRecommender:
             scored_shows.sort(key=lambda x: x['similarity_score'], reverse=True)
             
             if self.randomize_recommendations:
-                # Take top 10% of shows by similarity score and randomize
-                top_count = max(int(len(scored_shows) * TOP_POOL_PERCENTAGE), self.limit_plex_results)
-                top_pool = scored_shows[:top_count]
-                plex_recs = random.sample(top_pool, min(self.limit_plex_results, len(top_pool)))
+                # Use tiered selection: safe picks + diverse + wildcard
+                plex_recs = select_tiered_recommendations(
+                    scored_shows,
+                    self.limit_plex_results,
+                    TIER_SAFE_PERCENT,
+                    TIER_DIVERSE_PERCENT,
+                    TIER_WILDCARD_PERCENT
+                )
             else:
                 # Take top shows directly by similarity score
                 plex_recs = scored_shows[:self.limit_plex_results]

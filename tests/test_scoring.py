@@ -10,6 +10,7 @@ from utils.scoring import (
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
+    select_tiered_recommendations,
     _redistribute_weights,
     GENRE_NORMALIZATION
 )
@@ -638,3 +639,66 @@ class TestNegativeSignalsScoring:
         assert len(genre_details) > 0
         assert "NEGATIVE" in genre_details[0]
         assert "penalty" in genre_details[0]
+
+
+class TestSelectTieredRecommendations:
+    """Tests for select_tiered_recommendations() function."""
+
+    def test_empty_list_returns_empty(self):
+        """Test that empty input returns empty output."""
+        result = select_tiered_recommendations([], 10)
+        assert result == []
+
+    def test_returns_correct_count(self):
+        """Test that function returns requested number of items."""
+        items = [{'similarity_score': 0.9 - i*0.05} for i in range(50)]
+        result = select_tiered_recommendations(items, 10)
+        assert len(result) == 10
+
+    def test_fewer_items_than_limit(self):
+        """Test when fewer items available than requested."""
+        items = [{'similarity_score': 0.9 - i*0.1} for i in range(5)]
+        result = select_tiered_recommendations(items, 10)
+        assert len(result) == 5
+
+    def test_includes_high_score_items(self):
+        """Test that highest scored items are included (safe picks)."""
+        items = [{'similarity_score': 0.9 - i*0.01, 'title': f'Item{i}'} for i in range(100)]
+        result = select_tiered_recommendations(items, 10)
+
+        # Top item should be in result
+        titles = [r['title'] for r in result]
+        assert 'Item0' in titles
+
+    def test_includes_variety(self):
+        """Test that result includes items from different tiers."""
+        items = [{'similarity_score': 1.0 - i*0.01, 'title': f'Item{i}'} for i in range(100)]
+        result = select_tiered_recommendations(items, 10)
+
+        # Check we have items from different score ranges
+        scores = [r['similarity_score'] for r in result]
+        score_range = max(scores) - min(scores)
+        # Should have some variety (not all from top tier)
+        assert score_range > 0.1
+
+    def test_result_sorted_by_score(self):
+        """Test that final result is sorted by score."""
+        items = [{'similarity_score': 0.9 - i*0.01} for i in range(100)]
+        result = select_tiered_recommendations(items, 10)
+
+        # Result should be sorted descending
+        scores = [r['similarity_score'] for r in result]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_custom_tier_percentages(self):
+        """Test with custom tier percentages."""
+        items = [{'similarity_score': 0.9 - i*0.01} for i in range(100)]
+        # All safe picks
+        result = select_tiered_recommendations(items, 10, safe_percent=1.0, diverse_percent=0.0, wildcard_percent=0.0)
+        assert len(result) == 10
+
+    def test_works_with_score_key(self):
+        """Test with 'score' key instead of 'similarity_score'."""
+        items = [{'score': 0.9 - i*0.01, 'title': f'Item{i}'} for i in range(50)]
+        result = select_tiered_recommendations(items, 10)
+        assert len(result) == 10
