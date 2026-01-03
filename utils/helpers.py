@@ -61,7 +61,7 @@ def map_path(path: str, path_mappings: dict) -> str:
     return path
 
 
-def cleanup_old_logs(log_dir: str, retention_days: int):
+def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
     """
     Remove log files older than specified retention period.
 

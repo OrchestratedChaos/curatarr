@@ -7,7 +7,7 @@ import requests
 import xml.etree.ElementTree as ET
 import plexapi.server
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from plexapi.myplex import MyPlexAccount
 
@@ -35,7 +35,7 @@ def init_plex(config: dict) -> plexapi.server.PlexServer:
         raise
 
 
-def get_plex_account_ids(config, users_to_match):
+def get_plex_account_ids(config: Dict, users_to_match: List[str]) -> List[str]:
     """
     Get Plex account IDs for configured users with flexible name matching.
 
@@ -88,7 +88,7 @@ def get_plex_account_ids(config, users_to_match):
     return account_ids
 
 
-def get_watched_movie_count(config, users_to_check):
+def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
     """
     Get count of unique watched movies from Plex (for cache invalidation).
 
@@ -134,7 +134,7 @@ def get_watched_movie_count(config, users_to_check):
         return 0
 
 
-def get_watched_show_count(config, users_to_check):
+def get_watched_show_count(config: Dict, users_to_check: List[str]) -> int:
     """
     Get count of unique watched TV shows from Plex (for cache invalidation).
 
@@ -180,7 +180,7 @@ def get_watched_show_count(config, users_to_check):
         return 0
 
 
-def fetch_plex_watch_history_movies(config, account_ids, movies_section):
+def fetch_plex_watch_history_movies(config: Dict, account_ids: List[str], movies_section: Any) -> Tuple[List[Any], Dict]:
     """
     Fetch movie watch history for specified account IDs using direct Plex API.
 
@@ -260,7 +260,7 @@ def fetch_plex_watch_history_movies(config, account_ids, movies_section):
         return [], {}
 
 
-def fetch_plex_watch_history_shows(config, account_ids, tv_section):
+def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_section: Any = None) -> Set[int]:
     """
     Fetch TV show watch history for specified account IDs using direct Plex API.
 
@@ -314,7 +314,7 @@ def fetch_plex_watch_history_shows(config, account_ids, tv_section):
     return watched_show_ids
 
 
-def fetch_watch_history_with_tmdb(plex, config, account_ids, section, media_type='movie'):
+def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str], section: Any, media_type: str = 'movie') -> List[Dict]:
     """
     Fetch watch history with TMDB IDs for external recommendations.
 
@@ -388,7 +388,7 @@ def fetch_watch_history_with_tmdb(plex, config, account_ids, section, media_type
     return watched_items
 
 
-def update_plex_collection(section, collection_name: str, items: list, logger=None):
+def update_plex_collection(section: Any, collection_name: str, items: List[Any], logger: Any = None) -> bool:
     """
     Create or update a Plex collection with items in the specified order.
 
@@ -440,7 +440,7 @@ def update_plex_collection(section, collection_name: str, items: list, logger=No
         return False
 
 
-def cleanup_old_collections(section, current_collection_name: str, username: str, emoji: str, logger=None):
+def cleanup_old_collections(section: Any, current_collection_name: str, username: str, emoji: str, logger: Any = None) -> None:
     """
     Delete old collection patterns for a user that don't match current naming.
 
@@ -574,7 +574,7 @@ def get_excluded_genres_for_user(exclude_genres: set, user_preferences: dict, us
     return excluded
 
 
-def get_user_specific_connection(plex, config: dict, users: dict):
+def get_user_specific_connection(plex: Any, config: Dict, users: Dict) -> Any:
     """
     Get Plex connection for specific user context.
 
@@ -597,7 +597,7 @@ def get_user_specific_connection(plex, config: dict, users: dict):
         return plex
 
 
-def find_plex_movie(movies_section, title: str, year: int = None):
+def find_plex_movie(movies_section: Any, title: str, year: Optional[int] = None) -> Optional[Any]:
     """
     Find a movie in Plex library with fuzzy title matching.
 
@@ -728,7 +728,7 @@ def extract_rating(item, prefer_user_rating: bool = True) -> float:
     return 0.0
 
 
-def get_library_imdb_ids(plex_section) -> set:
+def get_library_imdb_ids(plex_section: Any) -> Set[str]:
     """
     Get set of all IMDb IDs in a Plex library section.
 

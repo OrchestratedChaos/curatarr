@@ -217,10 +217,13 @@ Weighted by recency (recent watches count more), user ratings (5-star content co
 
 ```
 plex-recommender/
-├── movie_recommender.py     # Movie recommendations
-├── tv_recommender.py        # TV show recommendations
-├── external_recommender.py  # External watchlist generator
-├── utils.py                 # Shared utilities
+├── recommenders/
+│   ├── movie.py             # Movie recommendations
+│   ├── tv.py                # TV show recommendations
+│   ├── external.py          # External watchlist generator
+│   └── base.py              # Shared base classes
+├── utils/                   # Shared utilities (10 modules)
+├── tests/                   # Unit tests
 ├── config.yml               # Your configuration
 ├── run.sh                   # Main entry point
 ├── cache/                   # TMDB metadata cache
