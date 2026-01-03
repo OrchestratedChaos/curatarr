@@ -11,6 +11,14 @@ from typing import Dict
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 2  # v2: Added TMDB keywords to cache
 
+# Common constants used across recommenders
+TOP_CAST_COUNT = 3                  # Number of top actors to consider
+TMDB_RATE_LIMIT_DELAY = 0.5         # Seconds between TMDB API calls
+DEFAULT_RATING = 5.0                # Default rating when none available
+WEIGHT_SUM_TOLERANCE = 1e-6         # Tolerance for weight sum validation
+DEFAULT_LIMIT_PLEX_RESULTS = 10     # Default recommendation limit
+TOP_POOL_PERCENTAGE = 0.1           # Top 10% for randomization pool
+
 # Default rating multipliers for similarity scoring (Plex uses 0-10 scale)
 # Higher ratings = stronger signal. 5-star (10) boosted to emphasize favorites.
 DEFAULT_RATING_MULTIPLIERS = {
