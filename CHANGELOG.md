@@ -2,6 +2,15 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.5] - 2026-01-03
+
+### Added
+- **TF-IDF scoring** — Penalizes content matching rare genres/keywords in user's profile
+  - Genres below 15% of max count receive penalty proportional to rarity
+  - Unseen genres receive mild penalty (prevents "Brave" recommendations for action fans)
+  - Keywords receive similar treatment with lighter penalties (0.02 per unseen)
+  - Configurable via `use_tfidf` and `tfidf_penalty_threshold` parameters
+
 ## [1.6.4] - 2026-01-03
 
 ### Fixed
