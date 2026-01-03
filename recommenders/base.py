@@ -295,7 +295,7 @@ class BaseRecommender(ABC):
         self.tmdb_api_key = tmdb_config['api_key']
 
         # Setup cache directory
-        self.cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+        self.cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
 
         # Load display options
