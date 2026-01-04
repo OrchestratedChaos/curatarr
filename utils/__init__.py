@@ -132,6 +132,15 @@ from .plex import (
     get_plex_user_ids,
 )
 
+# Trakt utilities
+from .trakt import (
+    TRAKT_RATE_LIMIT_DELAY,
+    TraktAuthError,
+    TraktAPIError,
+    TraktClient,
+    create_trakt_client,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -228,4 +237,10 @@ __all__ = [
     'extract_rating',
     'get_library_imdb_ids',
     'get_plex_user_ids',
+    # Trakt
+    'TRAKT_RATE_LIMIT_DELAY',
+    'TraktAuthError',
+    'TraktAPIError',
+    'TraktClient',
+    'create_trakt_client',
 ]

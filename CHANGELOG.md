@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.7.0] - 2026-01-04
+
+### Added
+- **Trakt API integration foundation** — Core module for Trakt OAuth and API access
+  - `TraktClient` class with device authentication flow (works in Docker/SSH)
+  - Automatic token refresh when expired
+  - Rate limiting (0.2s delay, well under Trakt's 1000/5min limit)
+  - 28 unit tests for Trakt module
+  - Config schema for Trakt credentials (disabled by default)
+
 ## [1.6.21] - 2026-01-04
 
 ### Fixed
