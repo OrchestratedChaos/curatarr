@@ -162,12 +162,12 @@ class PlexTVRecommender(BaseRecommender):
                     self.tmdb_keywords_cache = {str(k): v for k, v in watched_cache.get('tmdb_keywords_cache', {}).items()}
                     self.label_dates = watched_cache.get('label_dates', {})
 
-                    # Load watched show IDs
-                    watched_ids = watched_cache.get('watched_ids', [])
-                    if isinstance(watched_ids, list):
-                        self.watched_ids = {int(id_) for id_ in watched_ids if str(id_).isdigit()}
+                    # Load watched show IDs (cache file uses 'watched_show_ids' key)
+                    watched_ids_list = watched_cache.get('watched_show_ids', [])
+                    if isinstance(watched_ids_list, list):
+                        self.watched_ids = {int(id_) for id_ in watched_ids_list if str(id_).isdigit()}
                     else:
-                        log_warning(f"Warning: Invalid watched_ids format in cache")
+                        log_warning(f"Warning: Invalid watched_show_ids format in cache")
                         self.watched_ids = set()
                     
                     if not self.watched_ids and self.cached_watched_count > 0:
@@ -216,9 +216,9 @@ class PlexTVRecommender(BaseRecommender):
         else:
             print(f"Watched count unchanged. Using cached data for {self.cached_watched_count} shows")
             self.watched_data = self.watched_data_counters
-            # Ensure watched_ids are preserved
-            if not self.watched_ids and 'watched_ids' in watched_cache:
-                self.watched_ids = {int(id_) for id_ in watched_cache['watched_ids'] if str(id_).isdigit()}
+            # Ensure watched_ids are preserved (cache file uses 'watched_show_ids' key)
+            if not self.watched_ids and 'watched_show_ids' in watched_cache:
+                self.watched_ids = {int(id_) for id_ in watched_cache['watched_show_ids'] if str(id_).isdigit()}
             logger.debug(f"Using cached data: {self.cached_watched_count} watched shows, {len(self.watched_ids)} IDs")
 
         # Compute profile hash for score caching
