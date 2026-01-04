@@ -148,6 +148,18 @@ users:
 - [TMDB API Key](https://www.themoviedb.org/settings/api) (free account required)
 - [Plex Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)
 
+### Environment Variables
+
+For Docker or CI environments, you can use environment variables instead of storing tokens in config.yml:
+
+| Variable | Overrides |
+|----------|-----------|
+| `PLEX_URL` | `plex.url` |
+| `PLEX_TOKEN` | `plex.token` |
+| `TMDB_API_KEY` | `tmdb.api_key` |
+
+Environment variables take precedence over config file values.
+
 ### Per-User Preferences
 ```yaml
 users:
