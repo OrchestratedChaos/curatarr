@@ -2,6 +2,15 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.16] - 2026-01-03
+
+### Added
+- **Environment variable support for sensitive tokens** — Security best practice for Docker/CI
+  - `PLEX_URL` overrides `plex.url`
+  - `PLEX_TOKEN` overrides `plex.token`
+  - `TMDB_API_KEY` overrides `tmdb.api_key`
+  - Env vars take precedence over config file values
+
 ## [1.6.15] - 2026-01-03
 
 ### Changed
