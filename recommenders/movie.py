@@ -15,6 +15,7 @@ from datetime import datetime
 
 # Import shared utilities
 from utils import (
+    __version__,
     RED, GREEN, YELLOW, CYAN, RESET,
     TOP_CAST_COUNT,
     DEFAULT_NEGATIVE_THRESHOLD,
@@ -35,8 +36,6 @@ from utils import (
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('curatarr')
-
-__version__ = "1.6.19"
 
 # Import base classes
 from recommenders.base import BaseCache, BaseRecommender

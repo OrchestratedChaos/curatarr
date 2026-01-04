@@ -8,6 +8,9 @@ import json
 import yaml
 from typing import Dict
 
+# Project version - single source of truth
+__version__ = "1.6.20"
+
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
 

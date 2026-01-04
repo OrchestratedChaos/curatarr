@@ -7,6 +7,7 @@ All public functions are re-exported here for backwards compatibility.
 
 # Config utilities
 from .config import (
+    __version__,
     CACHE_VERSION,
     TOP_CAST_COUNT,
     TMDB_RATE_LIMIT_DELAY,
@@ -47,6 +48,7 @@ from .display import (
     print_status,
     log_warning,
     log_error,
+    clickable_link,
     show_progress,
     format_media_output,
     print_similarity_breakdown,
@@ -133,6 +135,7 @@ from .plex import (
 # Define __all__ for explicit public API
 __all__ = [
     # Config
+    '__version__',
     'CACHE_VERSION',
     'TOP_CAST_COUNT',
     'TMDB_RATE_LIMIT_DELAY',
@@ -166,6 +169,7 @@ __all__ = [
     'print_status',
     'log_warning',
     'log_error',
+    'clickable_link',
     'show_progress',
     'format_media_output',
     'print_similarity_breakdown',

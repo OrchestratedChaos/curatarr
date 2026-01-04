@@ -171,6 +171,26 @@ def log_error(message: str) -> None:
     logger.error(message)
 
 
+def clickable_link(url: str, text: str = None) -> str:
+    """
+    Create a clickable hyperlink for modern terminals using OSC 8 escape codes.
+
+    Works in: iTerm2, Windows Terminal, GNOME Terminal, Konsole, and others.
+    Falls back to plain text in unsupported terminals.
+
+    Args:
+        url: The URL to link to
+        text: Display text (defaults to URL if not provided)
+
+    Returns:
+        Formatted string with OSC 8 hyperlink escape codes
+    """
+    if text is None:
+        text = url
+    # OSC 8 format: \033]8;;URL\033\\TEXT\033]8;;\033\\
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
+
+
 def show_progress(prefix: str, current: int, total: int) -> None:
     """
     Display progress indicator on same line.
