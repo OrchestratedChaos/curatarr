@@ -10,7 +10,7 @@ jobs:
     if: github.event.pull_request.user.login != 'OrchestratedChaos'
     steps:
       - name: Close PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.issues.createComment({
