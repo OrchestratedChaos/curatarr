@@ -2,6 +2,13 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.6.21] - 2026-01-04
+
+### Fixed
+- **Docker auto-update now works** — Included `.git` directory in Docker image
+  - Containers can now self-update just like bare metal installs
+  - Only adds ~1MB to image size
+
 ## [1.6.20] - 2026-01-04
 
 ### Added

@@ -1,5 +1,4 @@
-# Git
-.git
+# Git (keep .git for auto-update support in containers)
 .gitignore
 
 # Cache and logs (mounted as volumes)
