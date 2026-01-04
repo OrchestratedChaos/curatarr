@@ -127,7 +127,12 @@ def get_tmdb_config(config: Dict) -> Dict:
 
 def load_config(config_path: str) -> dict:
     """
-    Load YAML configuration file.
+    Load YAML configuration file with environment variable support.
+
+    Environment variables take precedence over config file values:
+        PLEX_URL      -> plex.url
+        PLEX_TOKEN    -> plex.token
+        TMDB_API_KEY  -> tmdb.api_key
 
     Args:
         config_path: Path to config.yml file
@@ -139,7 +144,23 @@ def load_config(config_path: str) -> dict:
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
             print(f"Successfully loaded configuration from {config_path}")
-            return config
+
+        # Override with environment variables (security best practice)
+        env_overrides = [
+            ('PLEX_URL', 'plex', 'url'),
+            ('PLEX_TOKEN', 'plex', 'token'),
+            ('TMDB_API_KEY', 'tmdb', 'api_key'),
+        ]
+
+        for env_var, section, key in env_overrides:
+            value = os.environ.get(env_var)
+            if value:
+                if section not in config:
+                    config[section] = {}
+                config[section][key] = value
+                print(f"  Using {env_var} from environment")
+
+        return config
     except Exception as e:
         print(f"\033[91mError loading config from {config_path}: {e}\033[0m")
         raise

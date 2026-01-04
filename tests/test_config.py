@@ -17,6 +17,7 @@ from utils.config import (
     get_negative_signals_config,
     get_negative_multiplier,
     adapt_config_for_media_type,
+    load_config,
 )
 
 
@@ -289,3 +290,79 @@ class TestGetNegativeMultiplier:
 
     def test_unknown_rating_returns_mild_negative(self):
         assert get_negative_multiplier(99) == -0.3
+
+
+class TestLoadConfig:
+    """Tests for load_config function with environment variable support"""
+
+    def test_loads_yaml_config(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n  token: abc123\n")
+            f.flush()
+            try:
+                result = load_config(f.name)
+                assert result['plex']['url'] == 'http://localhost:32400'
+                assert result['plex']['token'] == 'abc123'
+            finally:
+                os.unlink(f.name)
+
+    def test_env_var_overrides_plex_token(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n  token: file_token\n")
+            f.flush()
+            try:
+                os.environ['PLEX_TOKEN'] = 'env_token'
+                result = load_config(f.name)
+                assert result['plex']['token'] == 'env_token'
+            finally:
+                del os.environ['PLEX_TOKEN']
+                os.unlink(f.name)
+
+    def test_env_var_overrides_plex_url(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n")
+            f.flush()
+            try:
+                os.environ['PLEX_URL'] = 'http://remote:32400'
+                result = load_config(f.name)
+                assert result['plex']['url'] == 'http://remote:32400'
+            finally:
+                del os.environ['PLEX_URL']
+                os.unlink(f.name)
+
+    def test_env_var_overrides_tmdb_api_key(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("tmdb:\n  api_key: file_key\n")
+            f.flush()
+            try:
+                os.environ['TMDB_API_KEY'] = 'env_key'
+                result = load_config(f.name)
+                assert result['tmdb']['api_key'] == 'env_key'
+            finally:
+                del os.environ['TMDB_API_KEY']
+                os.unlink(f.name)
+
+    def test_env_var_creates_section_if_missing(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n")
+            f.flush()
+            try:
+                os.environ['TMDB_API_KEY'] = 'env_key'
+                result = load_config(f.name)
+                assert result['tmdb']['api_key'] == 'env_key'
+            finally:
+                del os.environ['TMDB_API_KEY']
+                os.unlink(f.name)
+
+    def test_no_env_var_uses_file_value(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("plex:\n  token: file_token\n")
+            f.flush()
+            try:
+                # Ensure env var is not set
+                if 'PLEX_TOKEN' in os.environ:
+                    del os.environ['PLEX_TOKEN']
+                result = load_config(f.name)
+                assert result['plex']['token'] == 'file_token'
+            finally:
+                os.unlink(f.name)
