@@ -102,17 +102,17 @@ class TestPlexMovieRecommenderInit:
     """Tests for PlexMovieRecommender initialization."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_init_creates_movie_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that PlexMovieRecommender creates a MovieCache."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
             'general': {},
-            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'keyword': 0.2}
         }
         mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
         mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
@@ -127,10 +127,10 @@ class TestPlexMovieRecommenderWeights:
     """Tests for PlexMovieRecommender weight loading."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_loads_weights_from_config(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that weights are loaded from config."""
@@ -157,10 +157,10 @@ class TestPlexMovieRecommenderWeights:
         assert recommender.weights['actor'] == 0.20
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_uses_default_weights_when_missing(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that default weights are used when not in config."""
@@ -186,10 +186,10 @@ class TestPlexMovieRecommenderLibraryMethods:
     """Tests for PlexMovieRecommender library methods."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_library_movies_set(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_library_movies_set returns movie IDs."""
@@ -220,10 +220,10 @@ class TestPlexMovieRecommenderSimilarity:
 
     @patch('recommenders.movie.calculate_similarity_score')
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_calculate_similarity_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_calc):
         """Test _calculate_similarity_from_cache uses cached data."""
@@ -267,10 +267,10 @@ class TestPlexMovieRecommenderWatchedCache:
 
     @patch('recommenders.movie.save_watched_cache')
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_save_watched_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_save):
         """Test _save_watched_cache saves data correctly."""
@@ -379,10 +379,10 @@ class TestPlexMovieRecommenderWatchedCount:
 
     @patch('recommenders.movie.get_watched_movie_count')
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_watched_count_calls_utility(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_count):
         """Test that _get_watched_count uses utility function."""
@@ -407,10 +407,10 @@ class TestPlexMovieRecommenderTmdbMethods:
     """Tests for PlexMovieRecommender TMDB-related methods."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_plex_movie_tmdb_id_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_plex_movie_tmdb_id returns from cache."""
@@ -435,10 +435,10 @@ class TestPlexMovieRecommenderTmdbMethods:
         assert result == 456
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_plex_movie_imdb_id_from_guids(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_plex_movie_imdb_id extracts from guids."""
@@ -468,17 +468,17 @@ class TestPlexMovieRecommenderRefreshWatchedData:
     """Tests for PlexMovieRecommender._refresh_watched_data method."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_refresh_clears_data(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _refresh_watched_data clears existing data."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
             'general': {},
-            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'keyword': 0.2}
         }
         mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
         mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
@@ -486,26 +486,26 @@ class TestPlexMovieRecommenderRefreshWatchedData:
         mock_cache.return_value = Mock(cache={'movies': {}})
 
         recommender = PlexMovieRecommender('/path/to/config.yml')
-        recommender.watched_movie_ids = {1, 2, 3}
+        recommender.watched_ids = {1, 2, 3}
         recommender.watched_data_counters = {'genres': Counter({'action': 5})}
 
-        # Mock the methods called during refresh
-        recommender._get_plex_watched_data = Mock(return_value={'genres': Counter()})
+        # Mock the methods called during refresh (base class calls _get_watched_data)
+        recommender._get_watched_data = Mock(return_value={'genres': Counter()})
         recommender._save_watched_cache = Mock()
 
         recommender._refresh_watched_data()
 
-        assert len(recommender.watched_movie_ids) == 0
+        assert len(recommender.watched_ids) == 0
 
 
 class TestPlexMovieRecommenderGetRecommendations:
     """Tests for PlexMovieRecommender.get_recommendations method."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_recommendations_returns_dict(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test get_recommendations returns a dict with plex_recommendations."""
@@ -537,17 +537,17 @@ class TestPlexMovieRecommenderGetRecommendations:
         assert 'plex_recommendations' in result
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_recommendations_excludes_watched(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test get_recommendations excludes watched movies."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
             'general': {'limit_plex_results': 10},
-            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'keyword': 0.2}
         }
         mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
         mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
@@ -568,7 +568,7 @@ class TestPlexMovieRecommenderGetRecommendations:
         mock_cache.return_value = mock_cache_inst
 
         recommender = PlexMovieRecommender('/path/to/config.yml')
-        recommender.watched_movie_ids = {1}
+        recommender.watched_ids = {1}
         recommender.cached_watched_count = 1
         recommender.watched_data = {
             'genres': Counter(), 'directors': Counter(), 'actors': Counter(),
@@ -587,10 +587,10 @@ class TestPlexMovieRecommenderCollectionBonus:
 
     @patch('recommenders.movie.calculate_similarity_score')
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_collection_bonus_applied(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_calc):
         """Test that collection bonus is applied for movies in watched collections."""
@@ -707,10 +707,10 @@ class TestPlexMovieRecommenderExcludedGenres:
     """Tests for genre exclusion in recommendations."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_excludes_configured_genres(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that configured excluded genres are filtered."""
@@ -795,10 +795,10 @@ class TestPlexMovieRecommenderManageLabels:
     """Tests for PlexMovieRecommender.manage_plex_labels method."""
 
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_manage_labels_skips_when_disabled(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test manage_plex_labels does nothing when disabled."""
@@ -871,10 +871,10 @@ class TestPlexMovieRecommenderLibraryImdbIds:
 
     @patch('recommenders.movie.get_library_imdb_ids')
     @patch('recommenders.movie.MovieCache')
-    @patch('recommenders.movie.init_plex')
-    @patch('recommenders.movie.get_configured_users')
-    @patch('recommenders.movie.get_tmdb_config')
-    @patch('recommenders.movie.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_library_imdb_ids_calls_utility(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_get_ids):
         """Test that _get_library_imdb_ids uses utility function."""

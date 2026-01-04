@@ -139,10 +139,10 @@ class TestPlexTVRecommenderInit:
     """Tests for PlexTVRecommender initialization."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_init_creates_show_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that PlexTVRecommender creates a ShowCache."""
@@ -165,10 +165,10 @@ class TestPlexTVRecommenderInit:
         mock_cache.assert_called_once()
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_init_sets_library_title(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that PlexTVRecommender sets library title from config."""
@@ -195,10 +195,10 @@ class TestPlexTVRecommenderWeights:
     """Tests for PlexTVRecommender weight loading."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_loads_weights_from_config(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that weights are loaded from config."""
@@ -229,10 +229,10 @@ class TestPlexTVRecommenderWeights:
         assert recommender.weights['actor'] == 0.15
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_uses_default_weights_when_missing(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that default weights are used when not in config."""
@@ -262,10 +262,10 @@ class TestPlexTVRecommenderLibraryMethods:
     """Tests for PlexTVRecommender library methods."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_library_shows_set(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_library_shows_set returns show tuples."""
@@ -294,10 +294,10 @@ class TestPlexTVRecommenderLibraryMethods:
         assert ('breaking bad', 2008) in result
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_library_shows_set_handles_embedded_year(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_library_shows_set handles embedded year in title."""
@@ -333,10 +333,10 @@ class TestPlexTVRecommenderSimilarity:
 
     @patch('recommenders.tv.calculate_similarity_score')
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_calculate_similarity_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_calc):
         """Test _calculate_similarity_from_cache uses cached data."""
@@ -384,10 +384,10 @@ class TestPlexTVRecommenderWatchedCache:
 
     @patch('recommenders.tv.save_watched_cache')
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_save_watched_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_save):
         """Test _save_watched_cache saves data correctly."""
@@ -407,7 +407,7 @@ class TestPlexTVRecommenderWatchedCache:
 
         recommender = PlexTVRecommender('/path/to/config.yml')
         recommender.watched_data_counters = {'genres': Counter({'drama': 5})}
-        recommender.watched_show_ids = {1, 2, 3}
+        recommender.watched_ids = {1, 2, 3}
         recommender.cached_watched_count = 10
 
         recommender._save_watched_cache()
@@ -420,10 +420,10 @@ class TestPlexTVRecommenderWatchedCount:
 
     @patch('recommenders.tv.get_watched_show_count')
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_watched_count_calls_utility(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_count):
         """Test that _get_watched_count uses utility function."""
@@ -452,10 +452,10 @@ class TestPlexTVRecommenderTmdbMethods:
     """Tests for PlexTVRecommender TMDB-related methods."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_plex_show_tmdb_id_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_plex_show_tmdb_id returns from cache."""
@@ -484,10 +484,10 @@ class TestPlexTVRecommenderTmdbMethods:
         assert result == 456
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_plex_show_imdb_id_from_guids(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_plex_show_imdb_id extracts from guids."""
@@ -518,10 +518,10 @@ class TestPlexTVRecommenderTmdbMethods:
 
     @patch('recommenders.tv.get_tmdb_keywords')
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_tmdb_keywords_for_id(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_keywords):
         """Test _get_tmdb_keywords_for_id returns keywords."""
@@ -553,10 +553,10 @@ class TestPlexTVRecommenderRefreshWatchedData:
     """Tests for PlexTVRecommender._refresh_watched_data method."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_refresh_clears_data(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _refresh_watched_data clears existing data."""
@@ -575,7 +575,7 @@ class TestPlexTVRecommenderRefreshWatchedData:
         mock_cache.return_value = Mock(cache={'shows': {}})
 
         recommender = PlexTVRecommender('/path/to/config.yml')
-        recommender.watched_show_ids = {1, 2, 3}
+        recommender.watched_ids = {1, 2, 3}
         recommender.watched_data_counters = {'genres': Counter({'drama': 5})}
 
         # Mock the methods called during refresh
@@ -584,17 +584,17 @@ class TestPlexTVRecommenderRefreshWatchedData:
 
         recommender._refresh_watched_data()
 
-        assert len(recommender.watched_show_ids) == 0
+        assert len(recommender.watched_ids) == 0
 
 
 class TestPlexTVRecommenderGetRecommendations:
     """Tests for PlexTVRecommender.get_recommendations method."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_recommendations_returns_dict(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test get_recommendations returns a dict with plex_recommendations."""
@@ -613,7 +613,7 @@ class TestPlexTVRecommenderGetRecommendations:
         mock_cache.return_value = Mock(cache={'shows': {}})
 
         recommender = PlexTVRecommender('/path/to/config.yml')
-        recommender.watched_show_ids = set()
+        recommender.watched_ids = set()
         recommender.cached_watched_count = 0
         recommender.watched_data = {'genres': Counter(), 'studio': Counter(), 'actors': Counter(), 'languages': Counter(), 'tmdb_keywords': Counter()}
 
@@ -623,10 +623,10 @@ class TestPlexTVRecommenderGetRecommendations:
         assert 'plex_recommendations' in result
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_recommendations_excludes_watched(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test get_recommendations excludes watched shows."""
@@ -655,7 +655,7 @@ class TestPlexTVRecommenderGetRecommendations:
         mock_cache.return_value = mock_cache_inst
 
         recommender = PlexTVRecommender('/path/to/config.yml')
-        recommender.watched_show_ids = {1}  # Show 1 is watched
+        recommender.watched_ids = {1}  # Show 1 is watched
         recommender.cached_watched_count = 1
         recommender.watched_data = {'genres': Counter(), 'studio': Counter(), 'actors': Counter(), 'languages': Counter(), 'tmdb_keywords': Counter()}
         recommender._calculate_similarity_from_cache = Mock(return_value=(0.5, {}))
@@ -763,10 +763,10 @@ class TestPlexTVRecommenderShowDetails:
     """Tests for PlexTVRecommender.get_show_details method."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_show_details_returns_dict(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test get_show_details returns a dict with show info."""
@@ -808,10 +808,10 @@ class TestPlexTVRecommenderPlexAccountIds:
 
     @patch('recommenders.tv.get_plex_account_ids')
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_get_plex_account_ids_calls_utility(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_get_ids):
         """Test that _get_plex_account_ids uses utility function."""
@@ -841,10 +841,10 @@ class TestPlexTVRecommenderManageLabels:
     """Tests for PlexTVRecommender.manage_plex_labels method."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_manage_labels_skips_when_disabled(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test manage_plex_labels does nothing when disabled."""
@@ -873,10 +873,10 @@ class TestPlexTVRecommenderExcludedGenres:
     """Tests for genre exclusion in recommendations."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_excludes_configured_genres(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that configured excluded genres are filtered."""
@@ -904,7 +904,7 @@ class TestPlexTVRecommenderExcludedGenres:
         mock_cache.return_value = mock_cache_inst
 
         recommender = PlexTVRecommender('/path/to/config.yml')
-        recommender.watched_show_ids = set()
+        recommender.watched_ids = set()
         recommender.cached_watched_count = 0
         recommender.watched_data = {'genres': Counter(), 'studio': Counter(), 'actors': Counter(), 'languages': Counter(), 'tmdb_keywords': Counter()}
         recommender._calculate_similarity_from_cache = Mock(return_value=(0.5, {}))
@@ -920,10 +920,10 @@ class TestPlexTVRecommenderExtractGenres:
     """Tests for PlexTVRecommender._extract_genres method."""
 
     @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.tv.init_plex')
-    @patch('recommenders.tv.get_configured_users')
-    @patch('recommenders.tv.get_tmdb_config')
-    @patch('recommenders.tv.load_config')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
     @patch('os.makedirs')
     def test_extract_genres_from_show(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _extract_genres returns list of genres."""
