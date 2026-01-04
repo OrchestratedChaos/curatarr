@@ -704,7 +704,7 @@ def is_in_library(tmdb_id, title, year, library_data):
 
     return False
 
-def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, media_type='movie', limit=50, exclude_genres=None, min_relevance_score=0.25, config=None):
+def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, media_type='movie', limit=50, exclude_genres=None, min_relevance_score=0.25, config=None, exclude_imdb_ids=None):
     """
     Find similar content NOT in library using profile-based scoring.
     Uses TMDB Discover API for quality candidates + profile-based scoring.
@@ -718,10 +718,13 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
         exclude_genres: List of genres to exclude
         min_relevance_score: Minimum score threshold (0-1)
         config: Config dict for weights
+        exclude_imdb_ids: Set of IMDB IDs to exclude (e.g., Trakt watchlist)
 
     Returns:
         List of scored recommendations
     """
+    if exclude_imdb_ids is None:
+        exclude_imdb_ids = set()
     print(f"Finding external {media_type}s using profile-based scoring...")
 
     if not user_profile or not user_profile.get('genres'):
@@ -776,6 +779,12 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
         if exclude_genres:
             content_genres = [g.lower() for g in details.get('genres', [])]
             if any(eg.lower() in content_genres for eg in exclude_genres):
+                continue
+
+        # Check if on Trakt watchlist (exclude if IMDB ID matches)
+        if exclude_imdb_ids:
+            imdb_id = get_imdb_id(tmdb_api_key, candidate_id, media_type)
+            if imdb_id and imdb_id in exclude_imdb_ids:
                 continue
 
         # Calculate similarity score using shared function
@@ -950,6 +959,22 @@ def process_user(config, plex, username):
 
     tmdb_api_key = get_tmdb_config(config)['api_key']
 
+    # Get Trakt watchlist exclusions if enabled
+    trakt_config = config.get('trakt', {})
+    import_config = trakt_config.get('import', {})
+    exclude_movie_imdb_ids = set()
+    exclude_show_imdb_ids = set()
+
+    if trakt_config.get('enabled', False) and import_config.get('enabled', True):
+        if import_config.get('exclude_watchlist', True):
+            trakt_client = create_trakt_client(config)
+            if trakt_client and trakt_client.is_authenticated:
+                print("Loading Trakt watchlist for exclusion...")
+                exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids('movies')
+                exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids('shows')
+                if exclude_movie_imdb_ids or exclude_show_imdb_ids:
+                    print_status(f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist", "info")
+
     new_movies = find_similar_content_with_profile(
         tmdb_api_key,
         movie_profile,
@@ -958,7 +983,8 @@ def process_user(config, plex, username):
         limit=movie_limit,
         exclude_genres=exclude_genres,
         min_relevance_score=min_relevance,
-        config=config
+        config=config,
+        exclude_imdb_ids=exclude_movie_imdb_ids
     )
 
     new_shows = find_similar_content_with_profile(
@@ -969,7 +995,8 @@ def process_user(config, plex, username):
         limit=show_limit,
         exclude_genres=exclude_genres,
         min_relevance_score=min_relevance,
-        config=config
+        config=config,
+        exclude_imdb_ids=exclude_show_imdb_ids
     )
 
     # Merge with existing cache - UPDATE scores for existing items, ADD new ones
@@ -1111,6 +1138,7 @@ def export_to_trakt(config, all_users_data, tmdb_api_key):
         return
 
     list_prefix = export_config.get('list_prefix', 'Curatarr')
+    trakt_username = trakt_client.get_username()
 
     print(f"\n{CYAN}Exporting to Trakt...{RESET}")
 
@@ -1160,7 +1188,10 @@ def export_to_trakt(config, all_users_data, tmdb_api_key):
                     movies=movie_imdb_ids,
                     description=f"Movie recommendations for {display_name} from Curatarr"
                 )
+                movie_slug = movie_list_name.lower().replace(" ", "-").replace("_", "-")
+                movie_url = f"https://trakt.tv/users/{trakt_username}/lists/{movie_slug}"
                 print_status(f"  {display_name}: {len(movie_imdb_ids)} movies -> Trakt", "success")
+                print(f"    {clickable_link(movie_url)}")
 
             if show_imdb_ids:
                 show_list_name = f"{list_prefix} - {display_name} - TV"
@@ -1169,7 +1200,10 @@ def export_to_trakt(config, all_users_data, tmdb_api_key):
                     shows=show_imdb_ids,
                     description=f"TV recommendations for {display_name} from Curatarr"
                 )
+                show_slug = show_list_name.lower().replace(" ", "-").replace("_", "-")
+                show_url = f"https://trakt.tv/users/{trakt_username}/lists/{show_slug}"
                 print_status(f"  {display_name}: {len(show_imdb_ids)} shows -> Trakt", "success")
+                print(f"    {clickable_link(show_url)}")
 
         except (TraktAPIError, TraktAuthError) as e:
             log_error(f"Failed to export {display_name} to Trakt: {e}")

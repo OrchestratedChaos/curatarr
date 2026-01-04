@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.7.2] - 2026-01-04
+
+### Added
+- **Trakt import** — Pull data from Trakt to enhance recommendations
+  - Exclude Trakt watchlist items from recommendations (you already know about them)
+  - Import methods: `get_watched_movies()`, `get_watched_shows()`, `get_ratings()`, `get_watchlist()`
+  - Configurable via `trakt.import.enabled` and `trakt.import.exclude_watchlist`
+  - 8 new unit tests for import functionality
+- **Clickable Trakt list URLs** — After exporting, console shows clickable links to view lists on Trakt
+
 ## [1.7.1] - 2026-01-04
 
 ### Added
