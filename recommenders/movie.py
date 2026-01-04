@@ -11,7 +11,6 @@ import yaml
 import requests
 from typing import Dict, List, Set, Optional, Tuple
 import time
-import random
 import json
 import re
 from datetime import datetime
@@ -20,12 +19,12 @@ import copy
 # Import shared utilities
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS, CACHE_VERSION, check_cache_version,
-    TOP_CAST_COUNT, TMDB_RATE_LIMIT_DELAY, DEFAULT_RATING,
-    WEIGHT_SUM_TOLERANCE, DEFAULT_LIMIT_PLEX_RESULTS, TOP_POOL_PERCENTAGE,
+    CACHE_VERSION, check_cache_version,
+    TOP_CAST_COUNT, TMDB_RATE_LIMIT_DELAY,
+    WEIGHT_SUM_TOLERANCE, DEFAULT_LIMIT_PLEX_RESULTS,
     TIER_SAFE_PERCENT, TIER_DIVERSE_PERCENT, TIER_WILDCARD_PERCENT,
     select_tiered_recommendations,
-    DEFAULT_NEGATIVE_MULTIPLIERS, DEFAULT_NEGATIVE_THRESHOLD,
+    DEFAULT_NEGATIVE_THRESHOLD,
     get_full_language_name, cleanup_old_logs, setup_logging, get_tmdb_config,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
     log_warning, log_error, update_plex_collection, cleanup_old_collections,
@@ -35,10 +34,8 @@ from utils import (
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score, find_plex_movie,
     show_progress, TeeLogger,
-    # Consolidated utilities
     extract_genres, extract_ids_from_guids, fetch_tmdb_with_retry,
     get_tmdb_id_for_item, get_tmdb_keywords, adapt_config_for_media_type,
-    # Additional consolidated utilities
     user_select_recommendations, format_media_output,
     build_label_name, categorize_labeled_items, remove_labels_from_items, add_labels_to_items,
     get_library_imdb_ids, print_similarity_breakdown,
@@ -50,7 +47,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.9"
+__version__ = "1.6.10"
 
 # Import base class
 from recommenders.base import BaseCache
