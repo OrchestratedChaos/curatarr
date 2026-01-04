@@ -28,7 +28,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     RATING_MULTIPLIERS, GENRE_NORMALIZATION,
-    get_plex_account_ids, get_tmdb_config,
+    get_plex_account_ids, get_tmdb_config, get_tmdb_keywords,
     fetch_watch_history_with_tmdb,
     print_user_header, print_user_footer, print_status,
     log_warning, log_error, load_config,
@@ -380,22 +380,6 @@ def build_user_profile(plex, config, username, media_type='movie'):
     print(f"  Top genres: {dict(counters['genres'].most_common(5))}")
 
     return counters
-
-
-def get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type='movie'):
-    """Fetch keywords from TMDB for a given item."""
-    try:
-        media = 'movie' if media_type == 'movie' else 'tv'
-        url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}/keywords"
-        response = requests.get(url, params={'api_key': tmdb_api_key}, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            # Movies use 'keywords', TV uses 'results'
-            keywords_list = data.get('keywords', data.get('results', []))
-            return [kw['name'] for kw in keywords_list[:10]]  # Top 10 keywords
-    except (requests.RequestException, KeyError):
-        pass
-    return []
 
 
 def get_tmdb_details(tmdb_api_key, tmdb_id, media_type='movie'):
@@ -824,14 +808,6 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
 
     return final_recs
 
-
-# Keep old function name for compatibility but redirect to new one
-def find_similar_content(tmdb_api_key, watched_items, library_data, media_type='movie', limit=50, genre_distribution=None, exclude_genres=None, min_relevance_score=0.25):
-    """Legacy wrapper - redirects to profile-based scoring in process_user()"""
-    # This function is kept for compatibility but the actual work
-    # is now done in process_user() using find_similar_content_with_profile()
-    print_status("Warning: Using legacy find_similar_content", "warning")
-    return []
 
 def load_cache(display_name, media_type):
     """Load existing recommendations cache"""
