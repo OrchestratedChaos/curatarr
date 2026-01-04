@@ -155,6 +155,16 @@ external_recommendations:
                               # 0.25 = 25% relevance minimum. Higher = stricter, fewer results.
   auto_open_html: false  # Automatically open HTML watchlist in browser after generation
 
+# Trakt Integration (optional)
+# Sync recommendations to Trakt lists and pull watch history
+trakt:
+  enabled: false  # Set to true to enable Trakt integration
+  client_id: null  # Get from: https://trakt.tv/oauth/applications
+  client_secret: null
+  # Tokens are set automatically after OAuth authentication
+  access_token: null
+  refresh_token: null
+
 # Platform Settings
 platform:
   type: darwin
