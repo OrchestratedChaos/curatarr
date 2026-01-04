@@ -496,3 +496,405 @@ class TestPlexMovieRecommenderRefreshWatchedData:
         recommender._refresh_watched_data()
 
         assert len(recommender.watched_movie_ids) == 0
+
+
+class TestPlexMovieRecommenderGetRecommendations:
+    """Tests for PlexMovieRecommender.get_recommendations method."""
+
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.movie.init_plex')
+    @patch('recommenders.movie.get_configured_users')
+    @patch('recommenders.movie.get_tmdb_config')
+    @patch('recommenders.movie.load_config')
+    @patch('os.makedirs')
+    def test_get_recommendations_returns_dict(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test get_recommendations returns a dict with plex_recommendations."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {'limit_plex_results': 10},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={'movies': {}})
+
+        recommender = PlexMovieRecommender('/path/to/config.yml')
+        recommender.watched_movie_ids = set()
+        recommender.cached_watched_count = 0
+        recommender.watched_data = {
+            'genres': Counter(), 'directors': Counter(), 'actors': Counter(),
+            'languages': Counter(), 'tmdb_keywords': Counter(), 'collections': Counter()
+        }
+
+        result = recommender.get_recommendations()
+
+        assert isinstance(result, dict)
+        assert 'plex_recommendations' in result
+
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.movie.init_plex')
+    @patch('recommenders.movie.get_configured_users')
+    @patch('recommenders.movie.get_tmdb_config')
+    @patch('recommenders.movie.load_config')
+    @patch('os.makedirs')
+    def test_get_recommendations_excludes_watched(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test get_recommendations excludes watched movies."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {'limit_plex_results': 10},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+
+        mock_cache_inst = Mock()
+        mock_cache_inst.cache = {
+            'movies': {
+                '1': {'title': 'Watched Movie', 'genres': [], 'directors': [], 'cast': [], 'language': '', 'tmdb_keywords': []},
+                '2': {'title': 'Unwatched Movie', 'genres': [], 'directors': [], 'cast': [], 'language': '', 'tmdb_keywords': []},
+            }
+        }
+        mock_cache_inst._save_cache = Mock()
+        mock_cache.return_value = mock_cache_inst
+
+        recommender = PlexMovieRecommender('/path/to/config.yml')
+        recommender.watched_movie_ids = {1}
+        recommender.cached_watched_count = 1
+        recommender.watched_data = {
+            'genres': Counter(), 'directors': Counter(), 'actors': Counter(),
+            'languages': Counter(), 'tmdb_keywords': Counter(), 'collections': Counter()
+        }
+        recommender._calculate_similarity_from_cache = Mock(return_value=(0.5, {}))
+
+        result = recommender.get_recommendations()
+
+        rec_titles = [r['title'] for r in result['plex_recommendations']]
+        assert 'Watched Movie' not in rec_titles
+
+
+class TestPlexMovieRecommenderCollectionBonus:
+    """Tests for collection bonus in similarity calculation."""
+
+    @patch('recommenders.movie.calculate_similarity_score')
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.movie.init_plex')
+    @patch('recommenders.movie.get_configured_users')
+    @patch('recommenders.movie.get_tmdb_config')
+    @patch('recommenders.movie.load_config')
+    @patch('os.makedirs')
+    def test_collection_bonus_applied(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_calc):
+        """Test that collection bonus is applied for movies in watched collections."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+        mock_cache.return_value = Mock(cache={'movies': {}})
+        mock_calc.return_value = (0.70, {'genre': 0.20, 'director': 0.10, 'details': {}})
+
+        recommender = PlexMovieRecommender('/path/to/config.yml')
+        recommender.watched_data = {
+            'genres': Counter({'action': 5}),
+            'directors': Counter(),
+            'actors': Counter(),
+            'languages': Counter(),
+            'tmdb_keywords': Counter(),
+            'collections': Counter({789: 3.0})  # User watched 3 movies from collection 789
+        }
+
+        movie_info = {
+            'title': 'Sequel Movie',
+            'genres': ['action'],
+            'directors': [],
+            'cast': [],
+            'language': 'english',
+            'tmdb_keywords': [],
+            'collection_id': 789,
+            'collection_name': 'Action Franchise'
+        }
+
+        score, breakdown = recommender._calculate_similarity_from_cache(movie_info)
+
+        # Score should be boosted due to collection bonus
+        assert score > 0.70
+        assert 'collection_bonus' in breakdown
+
+
+class TestMovieCacheRatingExtraction:
+    """Tests for MovieCache rating extraction."""
+
+    @patch('recommenders.base.load_media_cache')
+    def test_extracts_user_rating(self, mock_load):
+        """Test that userRating is extracted."""
+        mock_load.return_value = {'movies': {}, 'library_count': 0}
+
+        cache = MovieCache('/tmp/cache')
+
+        mock_movie = Mock()
+        mock_movie.title = 'Test Movie'
+        mock_movie.year = 2024
+        mock_movie.summary = ''
+        mock_movie.directors = []
+        mock_movie.genres = []
+        mock_movie.roles = []
+        mock_movie.guids = []
+        mock_movie.userRating = 8.5
+        mock_movie.audienceRating = None
+
+        result = cache._process_item(mock_movie, None)
+
+        assert result['ratings']['audience_rating'] == 8.5
+
+    @patch('recommenders.base.load_media_cache')
+    def test_extracts_audience_rating_as_fallback(self, mock_load):
+        """Test that audienceRating is used as fallback."""
+        mock_load.return_value = {'movies': {}, 'library_count': 0}
+
+        cache = MovieCache('/tmp/cache')
+
+        mock_movie = Mock()
+        mock_movie.title = 'Test Movie'
+        mock_movie.year = 2024
+        mock_movie.summary = ''
+        mock_movie.directors = []
+        mock_movie.genres = []
+        mock_movie.roles = []
+        mock_movie.guids = []
+        mock_movie.userRating = None
+        mock_movie.audienceRating = 7.0
+
+        result = cache._process_item(mock_movie, None)
+
+        assert result['ratings']['audience_rating'] == 7.0
+
+    @patch('recommenders.base.load_media_cache')
+    def test_handles_no_rating(self, mock_load):
+        """Test handling when no rating is available."""
+        mock_load.return_value = {'movies': {}, 'library_count': 0}
+
+        cache = MovieCache('/tmp/cache')
+
+        mock_movie = Mock()
+        mock_movie.title = 'Test Movie'
+        mock_movie.year = 2024
+        mock_movie.summary = ''
+        mock_movie.directors = []
+        mock_movie.genres = []
+        mock_movie.roles = []
+        mock_movie.guids = []
+        mock_movie.userRating = None
+        mock_movie.audienceRating = None
+
+        result = cache._process_item(mock_movie, None)
+
+        assert result['ratings'] == {}
+
+
+class TestPlexMovieRecommenderExcludedGenres:
+    """Tests for genre exclusion in recommendations."""
+
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.movie.init_plex')
+    @patch('recommenders.movie.get_configured_users')
+    @patch('recommenders.movie.get_tmdb_config')
+    @patch('recommenders.movie.load_config')
+    @patch('os.makedirs')
+    def test_excludes_configured_genres(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test that configured excluded genres are filtered."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {'exclude_genre': 'horror,documentary', 'limit_plex_results': 10},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+
+        mock_cache_inst = Mock()
+        mock_cache_inst.cache = {
+            'movies': {
+                '1': {'title': 'Horror Movie', 'genres': ['horror'], 'directors': [], 'cast': [], 'language': '', 'tmdb_keywords': []},
+                '2': {'title': 'Drama Movie', 'genres': ['drama'], 'directors': [], 'cast': [], 'language': '', 'tmdb_keywords': []},
+            }
+        }
+        mock_cache_inst._save_cache = Mock()
+        mock_cache.return_value = mock_cache_inst
+
+        recommender = PlexMovieRecommender('/path/to/config.yml')
+        recommender.watched_movie_ids = set()
+        recommender.cached_watched_count = 0
+        recommender.watched_data = {
+            'genres': Counter(), 'directors': Counter(), 'actors': Counter(),
+            'languages': Counter(), 'tmdb_keywords': Counter(), 'collections': Counter()
+        }
+        recommender._calculate_similarity_from_cache = Mock(return_value=(0.5, {}))
+
+        result = recommender.get_recommendations()
+
+        rec_titles = [r['title'] for r in result['plex_recommendations']]
+        assert 'Horror Movie' not in rec_titles
+        assert 'Drama Movie' in rec_titles
+
+
+class TestMovieCacheCollectionData:
+    """Tests for MovieCache collection data handling."""
+
+    @patch('recommenders.base.load_media_cache')
+    def test_extracts_collection_id(self, mock_load):
+        """Test that collection_id is stored in cache."""
+        mock_load.return_value = {'movies': {}, 'library_count': 0}
+
+        cache = MovieCache('/tmp/cache')
+
+        mock_movie = Mock()
+        mock_movie.title = 'Test Movie'
+        mock_movie.year = 2024
+        mock_movie.summary = ''
+        mock_movie.directors = []
+        mock_movie.genres = []
+        mock_movie.roles = []
+        mock_movie.guids = []
+        mock_movie.userRating = None
+        mock_movie.audienceRating = None
+
+        # Mock _get_tmdb_data to return collection info
+        cache._get_tmdb_data = Mock(return_value={
+            'tmdb_id': 123,
+            'imdb_id': 'tt1234567',
+            'keywords': [],
+            'rating': 7.5,
+            'vote_count': 1000,
+            'collection_id': 789,
+            'collection_name': 'Test Collection'
+        })
+
+        result = cache._process_item(mock_movie, 'api_key')
+
+        assert result['collection_id'] == 789
+        assert result['collection_name'] == 'Test Collection'
+
+
+class TestPlexMovieRecommenderManageLabels:
+    """Tests for PlexMovieRecommender.manage_plex_labels method."""
+
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.movie.init_plex')
+    @patch('recommenders.movie.get_configured_users')
+    @patch('recommenders.movie.get_tmdb_config')
+    @patch('recommenders.movie.load_config')
+    @patch('os.makedirs')
+    def test_manage_labels_skips_when_disabled(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test manage_plex_labels does nothing when disabled."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2},
+            'collections': {'add_label': False}
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={'movies': {}})
+
+        recommender = PlexMovieRecommender('/path/to/config.yml')
+
+        # Should not raise and should not call library methods
+        recommender.manage_plex_labels([{'title': 'Test', 'year': 2020}])
+
+
+class TestFormatMovieOutputExtended:
+    """Extended tests for format_movie_output function."""
+
+    def test_format_with_summary(self):
+        """Test movie formatting with summary."""
+        movie = {
+            'title': 'Test Movie',
+            'year': 2024,
+            'similarity_score': 0.85,
+            'summary': 'This is a great action movie about heroes.'
+        }
+
+        result = format_movie_output(movie, show_summary=True, index=1)
+
+        assert 'action' in result.lower() or 'heroes' in result.lower()
+
+    def test_format_with_language(self):
+        """Test movie formatting with language."""
+        movie = {
+            'title': 'Test Movie',
+            'year': 2024,
+            'similarity_score': 0.85,
+            'language': 'English'
+        }
+
+        result = format_movie_output(movie, index=1, show_language=True)
+
+        assert 'English' in result
+
+    def test_format_with_rating(self):
+        """Test movie formatting with rating."""
+        movie = {
+            'title': 'Test Movie',
+            'year': 2024,
+            'similarity_score': 0.85,
+            'ratings': {'audience_rating': 8.5}
+        }
+
+        result = format_movie_output(movie, index=1, show_rating=True)
+
+        assert '8.5' in result or '8' in result
+
+
+class TestPlexMovieRecommenderLibraryImdbIds:
+    """Tests for PlexMovieRecommender._get_library_imdb_ids method."""
+
+    @patch('recommenders.movie.get_library_imdb_ids')
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.movie.init_plex')
+    @patch('recommenders.movie.get_configured_users')
+    @patch('recommenders.movie.get_tmdb_config')
+    @patch('recommenders.movie.load_config')
+    @patch('os.makedirs')
+    def test_get_library_imdb_ids_calls_utility(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_get_ids):
+        """Test that _get_library_imdb_ids uses utility function."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={'movies': {}})
+        mock_get_ids.return_value = {'tt1234567', 'tt7654321'}
+
+        recommender = PlexMovieRecommender('/path/to/config.yml')
+        result = recommender._get_library_imdb_ids()
+
+        assert 'tt1234567' in result
+        mock_get_ids.assert_called()
