@@ -387,3 +387,50 @@ class TestTmdbProviders:
     def test_contains_disney_plus(self):
         assert 337 in TMDB_PROVIDERS
         assert TMDB_PROVIDERS[337] == 'disney_plus'
+
+
+# Import additional functions for testing
+from recommenders.external import (
+    get_library_items,
+    load_ignore_list,
+)
+
+
+class TestGetLibraryItems:
+    """Tests for get_library_items function"""
+
+    def test_returns_library_data_for_movies(self):
+        mock_movie1 = Mock()
+        mock_movie1.title = 'Movie One'
+        mock_movie1.year = 2023
+        mock_guid = Mock()
+        mock_guid.id = 'tmdb://12345'
+        mock_movie1.guids = [mock_guid]
+
+        mock_movie2 = Mock()
+        mock_movie2.title = 'Movie Two'
+        mock_movie2.year = 2022
+        mock_movie2.guids = []
+
+        mock_section = Mock()
+        mock_section.all.return_value = [mock_movie1, mock_movie2]
+
+        mock_plex = Mock()
+        mock_plex.library.section.return_value = mock_section
+
+        result = get_library_items(mock_plex, 'Movies', 'movie')
+
+        assert 12345 in result['tmdb_ids']
+        assert ('movie one', 2023) in result['titles']
+        assert ('movie two', 2022) in result['titles']
+
+
+class TestLoadIgnoreList:
+    """Tests for load_ignore_list function"""
+
+    def test_returns_empty_set_when_no_file(self):
+        # Non-existent user should return empty set
+        result = load_ignore_list('definitely_nonexistent_user_xyz123')
+
+        assert result == set()
+        assert isinstance(result, set)
