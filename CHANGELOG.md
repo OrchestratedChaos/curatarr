@@ -2,6 +2,16 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.9] - 2026-01-03
+
+### Changed
+- **Improved test coverage** — Added 58 new tests across recommender modules
+  - tv.py: 0% → 42% coverage (33 new tests)
+  - base.py: 82% → 96% coverage (12 new tests)
+  - movie.py: 30% → 39% coverage (10 new tests)
+  - external.py: 21% → 24% coverage (3 new tests)
+  - Overall coverage: 75% → 83% (564 total tests)
+
 ## [1.6.8] - 2026-01-03
 
 ### Added
