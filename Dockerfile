@@ -21,10 +21,11 @@ COPY recommenders/ recommenders/
 COPY utils/ utils/
 COPY run.sh .
 COPY docker-entrypoint.sh .
-RUN chmod +x run.sh docker-entrypoint.sh
+RUN sed -i 's/\r$//' run.sh docker-entrypoint.sh && \
+    chmod +x run.sh docker-entrypoint.sh
 
 # Create directories for mounted volumes
 RUN mkdir -p cache logs recommendations/external
 
 # Entrypoint validates config, then runs the recommendation engine
-ENTRYPOINT ["./docker-entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "./docker-entrypoint.sh"]
