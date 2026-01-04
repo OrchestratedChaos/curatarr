@@ -153,7 +153,8 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
                         'tmdb_id': tmdb_id,
                         'title': title,
                         'year': year,
-                        'rating': item.get('vote_average', 0)
+                        'rating': item.get('vote_average', 0),
+                        'vote_count': item.get('vote_count', 0)
                     }
 
         except (requests.RequestException, KeyError):
@@ -204,7 +205,8 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
                                 'tmdb_id': tmdb_id,
                                 'title': title,
                                 'year': year,
-                                'rating': item.get('vote_average', 0)
+                                'rating': item.get('vote_average', 0),
+                                'vote_count': item.get('vote_count', 0)
                             }
 
         except (requests.RequestException, KeyError):
@@ -431,6 +433,7 @@ def get_tmdb_details(tmdb_api_key, tmdb_id, media_type='movie'):
                 'title': data.get('title') or data.get('name'),
                 'year': (data.get('release_date') or data.get('first_air_date', ''))[:4],
                 'rating': data.get('vote_average', 0),
+                'vote_count': data.get('vote_count', 0),
                 'overview': data.get('overview', '')
             }
     except Exception as e:
@@ -783,6 +786,7 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
             'title': details['title'],
             'year': details['year'],
             'rating': details['rating'],
+            'vote_count': details.get('vote_count', 0),
             'score': score,
             'overview': details.get('overview', ''),
             'genres': details.get('genres', []),
@@ -810,7 +814,7 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
 
 
 def load_cache(display_name, media_type):
-    """Load existing recommendations cache"""
+    """Load existing recommendations cache, filtering out items below quality thresholds"""
     cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
@@ -823,7 +827,22 @@ def load_cache(display_name, media_type):
             for tmdb_id_str, item in cache.items():
                 if 'tmdb_id' not in item:
                     item['tmdb_id'] = int(tmdb_id_str)
-            return cache
+
+            # Filter out items that don't meet current quality thresholds
+            filtered = {}
+            removed_count = 0
+            for tmdb_id_str, item in cache.items():
+                rating = item.get('rating', 0)
+                vote_count = item.get('vote_count', 0)  # Missing vote_count = needs re-fetch
+                if rating >= MIN_RATING and vote_count >= MIN_VOTE_COUNT:
+                    filtered[tmdb_id_str] = item
+                else:
+                    removed_count += 1
+
+            if removed_count > 0:
+                print(f"  Filtered {removed_count} cached items below quality threshold (rating < {MIN_RATING} or votes < {MIN_VOTE_COUNT})")
+
+            return filtered
     return {}
 
 def save_cache(display_name, media_type, cache_data):
@@ -952,6 +971,7 @@ def process_user(config, plex, username):
             old_score = movie_cache[tmdb_id].get('score', 0)
             movie_cache[tmdb_id]['score'] = movie['score']
             movie_cache[tmdb_id]['rating'] = movie['rating']
+            movie_cache[tmdb_id]['vote_count'] = movie.get('vote_count', 0)
             if abs(movie['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {movie['title']} {old_score:.1%} -> {movie['score']:.1%}")
         else:
@@ -961,6 +981,7 @@ def process_user(config, plex, username):
                 'title': movie['title'],
                 'year': movie['year'],
                 'rating': movie['rating'],
+                'vote_count': movie.get('vote_count', 0),
                 'score': movie['score'],
                 'added_date': datetime.now().isoformat()
             }
@@ -972,6 +993,7 @@ def process_user(config, plex, username):
             old_score = show_cache[tmdb_id].get('score', 0)
             show_cache[tmdb_id]['score'] = show['score']
             show_cache[tmdb_id]['rating'] = show['rating']
+            show_cache[tmdb_id]['vote_count'] = show.get('vote_count', 0)
             if abs(show['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {show['title']} {old_score:.1%} -> {show['score']:.1%}")
         else:
@@ -981,6 +1003,7 @@ def process_user(config, plex, username):
                 'title': show['title'],
                 'year': show['year'],
                 'rating': show['rating'],
+                'vote_count': show.get('vote_count', 0),
                 'score': show['score'],
                 'added_date': datetime.now().isoformat()
             }
