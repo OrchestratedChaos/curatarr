@@ -457,8 +457,8 @@ class TestPlexTVRecommenderTmdbMethods:
     @patch('recommenders.base.get_tmdb_config')
     @patch('recommenders.base.load_config')
     @patch('os.makedirs')
-    def test_get_plex_show_tmdb_id_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
-        """Test _get_plex_show_tmdb_id returns from cache."""
+    def test_get_plex_item_tmdb_id_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test _get_plex_item_tmdb_id returns from cache."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
             'general': {},
@@ -479,7 +479,7 @@ class TestPlexTVRecommenderTmdbMethods:
         mock_show = Mock()
         mock_show.ratingKey = 123
 
-        result = recommender._get_plex_show_tmdb_id(mock_show)
+        result = recommender._get_plex_item_tmdb_id(mock_show)
 
         assert result == 456
 
@@ -489,8 +489,8 @@ class TestPlexTVRecommenderTmdbMethods:
     @patch('recommenders.base.get_tmdb_config')
     @patch('recommenders.base.load_config')
     @patch('os.makedirs')
-    def test_get_plex_show_imdb_id_from_guids(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
-        """Test _get_plex_show_imdb_id extracts from guids."""
+    def test_get_plex_item_imdb_id_from_guids(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test _get_plex_item_imdb_id extracts from guids."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
             'general': {},
@@ -512,11 +512,11 @@ class TestPlexTVRecommenderTmdbMethods:
         mock_show = Mock()
         mock_show.guids = [mock_guid]
 
-        result = recommender._get_plex_show_imdb_id(mock_show)
+        result = recommender._get_plex_item_imdb_id(mock_show)
 
         assert result == 'tt0903747'
 
-    @patch('recommenders.tv.get_tmdb_keywords')
+    @patch('recommenders.base.get_tmdb_keywords')
     @patch('recommenders.tv.ShowCache')
     @patch('recommenders.base.init_plex')
     @patch('recommenders.base.get_configured_users')
@@ -916,32 +916,12 @@ class TestPlexTVRecommenderExcludedGenres:
         assert 'Drama Show' in rec_titles
 
 
-class TestPlexTVRecommenderExtractGenres:
-    """Tests for PlexTVRecommender._extract_genres method."""
+class TestExtractGenresFromShow:
+    """Tests for extract_genres utility with TV shows."""
 
-    @patch('recommenders.tv.ShowCache')
-    @patch('recommenders.base.init_plex')
-    @patch('recommenders.base.get_configured_users')
-    @patch('recommenders.base.get_tmdb_config')
-    @patch('recommenders.base.load_config')
-    @patch('os.makedirs')
-    def test_extract_genres_from_show(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
-        """Test _extract_genres returns list of genres."""
-        mock_load.return_value = {
-            'plex': {'url': 'http://localhost', 'token': 'abc'},
-            'general': {},
-            'weights': {}
-        }
-        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
-        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
-        mock_section = Mock()
-        mock_section.all.return_value = []
-        mock_plex_inst = Mock()
-        mock_plex_inst.library.section.return_value = mock_section
-        mock_plex.return_value = mock_plex_inst
-        mock_cache.return_value = Mock(cache={'shows': {}})
-
-        recommender = PlexTVRecommender('/path/to/config.yml')
+    def test_extract_genres_from_show(self):
+        """Test extract_genres returns list of genres from show."""
+        from utils import extract_genres
 
         mock_genre1 = Mock()
         mock_genre1.tag = 'Drama'
@@ -950,7 +930,7 @@ class TestPlexTVRecommenderExtractGenres:
         mock_show = Mock()
         mock_show.genres = [mock_genre1, mock_genre2]
 
-        result = recommender._extract_genres(mock_show)
+        result = extract_genres(mock_show)
 
         assert 'drama' in result
         assert 'thriller' in result

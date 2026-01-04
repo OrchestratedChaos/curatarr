@@ -412,8 +412,8 @@ class TestPlexMovieRecommenderTmdbMethods:
     @patch('recommenders.base.get_tmdb_config')
     @patch('recommenders.base.load_config')
     @patch('os.makedirs')
-    def test_get_plex_movie_tmdb_id_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
-        """Test _get_plex_movie_tmdb_id returns from cache."""
+    def test_get_plex_item_tmdb_id_from_cache(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test _get_plex_item_tmdb_id returns from cache."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
             'general': {},
@@ -430,7 +430,7 @@ class TestPlexMovieRecommenderTmdbMethods:
         mock_movie = Mock()
         mock_movie.ratingKey = 123
 
-        result = recommender._get_plex_movie_tmdb_id(mock_movie)
+        result = recommender._get_plex_item_tmdb_id(mock_movie)
 
         assert result == 456
 
@@ -440,8 +440,8 @@ class TestPlexMovieRecommenderTmdbMethods:
     @patch('recommenders.base.get_tmdb_config')
     @patch('recommenders.base.load_config')
     @patch('os.makedirs')
-    def test_get_plex_movie_imdb_id_from_guids(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
-        """Test _get_plex_movie_imdb_id extracts from guids."""
+    def test_get_plex_item_imdb_id_from_guids(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test _get_plex_item_imdb_id extracts from guids."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
             'general': {},
@@ -459,7 +459,7 @@ class TestPlexMovieRecommenderTmdbMethods:
         mock_movie = Mock()
         mock_movie.guids = [mock_guid]
 
-        result = recommender._get_plex_movie_imdb_id(mock_movie)
+        result = recommender._get_plex_item_imdb_id(mock_movie)
 
         assert result == 'tt1234567'
 
@@ -867,9 +867,9 @@ class TestFormatMovieOutputExtended:
 
 
 class TestPlexMovieRecommenderLibraryImdbIds:
-    """Tests for PlexMovieRecommender._get_library_imdb_ids method."""
+    """Tests for PlexMovieRecommender._get_library_imdb_ids method (inherited from BaseRecommender)."""
 
-    @patch('recommenders.movie.get_library_imdb_ids')
+    @patch('recommenders.base.get_library_imdb_ids')
     @patch('recommenders.movie.MovieCache')
     @patch('recommenders.base.init_plex')
     @patch('recommenders.base.get_configured_users')

@@ -25,10 +25,10 @@ from utils import (
     calculate_rewatch_multiplier,
     calculate_similarity_score,
     show_progress, TeeLogger,
-    extract_genres, extract_ids_from_guids, fetch_tmdb_with_retry,
-    get_tmdb_id_for_item, get_tmdb_keywords, adapt_config_for_media_type,
+    extract_genres, extract_ids_from_guids,
+    adapt_config_for_media_type,
     format_media_output,
-    get_library_imdb_ids, print_similarity_breakdown,
+    print_similarity_breakdown,
     create_empty_counters, process_counters_from_cache,
     compute_profile_hash
 )
@@ -36,7 +36,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.13"
+__version__ = "1.6.14"
 
 # Import base classes
 from recommenders.base import BaseCache, BaseRecommender
@@ -355,9 +355,7 @@ class PlexTVRecommender(BaseRecommender):
             log_error(f"Error getting library shows: {e}")
             return set()
 
-    def _get_library_imdb_ids(self) -> Set[str]:
-        """Get set of all IMDb IDs in the library"""
-        return get_library_imdb_ids(self.plex.library.section(self.library_title))
+    # _get_library_imdb_ids() inherited from BaseRecommender
 
     def get_show_details(self, show) -> Dict:
         try:
@@ -380,17 +378,17 @@ class PlexTVRecommender(BaseRecommender):
                             pass
                             
             if self.use_tmdb_keywords and self.tmdb_api_key:
-                tmdb_id = self._get_plex_show_tmdb_id(show)
+                tmdb_id = self._get_plex_item_tmdb_id(show)
                 if tmdb_id:
                     tmdb_keywords = list(self._get_tmdb_keywords_for_id(tmdb_id))
             
             show_info = {
                 'title': show.title,
                 'year': getattr(show, 'year', None),
-                'genres': self._extract_genres(show),
+                'genres': extract_genres(show),
                 'summary': getattr(show, 'summary', ''),
                 'studio': getattr(show, 'studio', 'N/A'),
-                'language': self._get_show_language(show),
+                'language': self.show_cache._get_language(show),
                 'imdb_id': imdb_id,
                 'ratings': {
                     'audience_rating': audience_rating
@@ -413,81 +411,12 @@ class PlexTVRecommender(BaseRecommender):
         if self.users['plex_users']:
             return self._get_plex_watched_shows_data()
         return self._get_managed_users_watched_data()
-    # ------------------------------------------------------------------------
-    # TMDB HELPER METHODS
-    # ------------------------------------------------------------------------
-    def _get_tmdb_id_via_imdb(self, plex_show) -> Optional[int]:
-        imdb_id = self._get_plex_show_imdb_id(plex_show)
-        if not imdb_id or not self.tmdb_api_key:
-            return None
 
-        data = fetch_tmdb_with_retry(
-            f"https://api.themoviedb.org/3/find/{imdb_id}",
-            {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
-        )
-        if data:
-            results = data.get('tv_results', [])
-            if results:
-                return results[0].get('id')
-        return None
-
-    def _get_plex_show_tmdb_id(self, plex_show) -> Optional[int]:
-        """Get TMDB ID for a Plex show with multiple fallback methods"""
-        # Check cache first
-        cache_key = str(plex_show.ratingKey)
-        if cache_key in self.plex_tmdb_cache:
-            return self.plex_tmdb_cache[cache_key]
-
-        # Use consolidated utility for TMDB ID lookup
-        tmdb_id = get_tmdb_id_for_item(plex_show, self.tmdb_api_key, 'tv', self.plex_tmdb_cache)
-
-        # Update cache if found
-        if tmdb_id:
-            self.plex_tmdb_cache[cache_key] = tmdb_id
-            self._save_watched_cache()
-        return tmdb_id
-
-    def _get_plex_show_imdb_id(self, plex_show) -> Optional[str]:
-        """Get IMDb ID for a Plex show with fallback to TMDB"""
-        # Try extracting from GUIDs first using utility
-        ids = extract_ids_from_guids(plex_show)
-        if ids['imdb_id']:
-            return ids['imdb_id']
-
-        # Fallback: Check legacy guid attribute
-        if hasattr(plex_show, 'guid') and plex_show.guid and plex_show.guid.startswith('imdb://'):
-            return plex_show.guid.split('imdb://')[1]
-
-        # Fallback to TMDB to get IMDb ID
-        tmdb_id = self._get_plex_show_tmdb_id(plex_show)
-        if tmdb_id:
-            # For TV shows, need to get external_ids endpoint
-            data = fetch_tmdb_with_retry(
-                f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids",
-                {'api_key': self.tmdb_api_key}
-            )
-            if data:
-                return data.get('imdb_id')
-        return None
-
-    def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
-        """Get keywords for a TV show from TMDB"""
-        if not tmdb_id or not self.use_tmdb_keywords or not self.tmdb_api_key:
-            return set()
-
-        # Use consolidated utility with local cache
-        keywords = get_tmdb_keywords(self.tmdb_api_key, tmdb_id, 'tv', self.tmdb_keywords_cache)
-        if keywords:
-            self._save_watched_cache()
-        return set(keywords)
-
-    def _get_show_language(self, show) -> str:
-        """Get show's primary audio language - delegates to ShowCache"""
-        return self.show_cache._get_language(show)
-
-    def _extract_genres(self, show) -> List[str]:
-        """Extract genres from a TV show"""
-        return extract_genres(show)
+    # TMDB methods inherited from BaseRecommender:
+    # - _get_plex_item_tmdb_id()
+    # - _get_plex_item_imdb_id()
+    # - _get_tmdb_id_via_imdb()
+    # - _get_tmdb_keywords_for_id()
 
     # ------------------------------------------------------------------------
     # CALCULATE SCORES

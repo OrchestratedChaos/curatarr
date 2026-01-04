@@ -2,6 +2,19 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.14] - 2026-01-03
+
+### Changed
+- **Consolidated TMDB helper methods to BaseRecommender** — Removed ~130 lines of duplicated code
+  - Moved `_get_plex_item_tmdb_id()` to BaseRecommender (was `_get_plex_movie_tmdb_id`/`_get_plex_show_tmdb_id`)
+  - Moved `_get_plex_item_imdb_id()` to BaseRecommender (was `_get_plex_movie_imdb_id`/`_get_plex_show_imdb_id`)
+  - Moved `_get_tmdb_id_via_imdb()` to BaseRecommender (identical logic, different result key)
+  - Moved `_get_tmdb_keywords_for_id()` to BaseRecommender (100% identical between movie/tv)
+  - Moved `_get_library_imdb_ids()` to BaseRecommender (100% identical one-liner)
+  - Removed unnecessary delegate methods `_extract_genres()` and `_get_*_language()` - now call utilities directly
+  - Uses `self.media_type` to handle movie vs tv differences in base class methods
+  - Cleaned up unused imports from movie.py and tv.py
+
 ## [1.6.13] - 2026-01-03
 
 ### Changed
