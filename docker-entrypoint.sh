@@ -14,7 +14,7 @@ if [ ! -f "/app/config.yml" ]; then
     echo "You need to mount your config file. Example:"
     echo "  docker compose up"
     echo ""
-    echo "Make sure config.yml exists in your plex-recommender directory."
+    echo "Make sure config.yml exists in your curatarr directory."
     echo "See README.md for configuration instructions."
     exit 1
 fi

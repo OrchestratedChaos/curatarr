@@ -1,5 +1,5 @@
 """
-Base classes for Plex Recommender caches and recommenders.
+Base classes for Curatarr caches and recommenders.
 Provides shared functionality for movies and TV shows.
 """
 
@@ -57,7 +57,7 @@ from utils import (
     get_library_imdb_ids,
 )
 
-logger = logging.getLogger('plex_recommender')
+logger = logging.getLogger('curatarr')
 
 
 class BaseCache(ABC):

@@ -1,5 +1,5 @@
 """
-Miscellaneous helper utilities for Plex Recommender.
+Miscellaneous helper utilities for Curatarr.
 """
 
 import hashlib

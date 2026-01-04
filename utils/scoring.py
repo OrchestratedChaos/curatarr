@@ -1,5 +1,5 @@
 """
-Similarity scoring utilities for Plex Recommender.
+Similarity scoring utilities for Curatarr.
 Handles content-to-profile similarity calculations.
 """
 

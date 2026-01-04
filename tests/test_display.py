@@ -194,11 +194,11 @@ class TestSetupLogging:
 
         assert logger.level == logging.INFO
 
-    def test_returns_plex_recommender_logger(self):
-        """Test that plex_recommender logger is returned."""
+    def test_returns_curatarr_logger(self):
+        """Test that curatarr logger is returned."""
         logger = setup_logging()
 
-        assert logger.name == 'plex_recommender'
+        assert logger.name == 'curatarr'
 
 
 class TestPrintUserHeader:

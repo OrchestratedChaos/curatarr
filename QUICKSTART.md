@@ -101,7 +101,7 @@ First run will ask. Or manually:
 ```bash
 crontab -e
 # Add:
-0 3 * * * cd /path/to/plex-recommender && ./run.sh >> logs/daily-run.log 2>&1
+0 3 * * * cd /path/to/curatarr && ./run.sh >> logs/daily-run.log 2>&1
 ```
 
 ---

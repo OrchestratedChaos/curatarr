@@ -1,5 +1,5 @@
 """
-Configuration utilities for Plex Recommender.
+Configuration utilities for Curatarr.
 Handles config loading, section access, and rating multipliers.
 """
 

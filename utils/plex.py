@@ -1,5 +1,5 @@
 """
-Plex-specific utilities for Plex Recommender.
+Plex-specific utilities for Curatarr.
 Handles Plex server connections, watch history, collections, and user management.
 """
 

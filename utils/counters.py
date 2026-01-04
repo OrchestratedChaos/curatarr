@@ -1,5 +1,5 @@
 """
-Counter utilities for Plex Recommender.
+Counter utilities for Curatarr.
 Handles preference counting and profile building.
 """
 

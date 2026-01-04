@@ -1,3 +1,3 @@
 """
-Unit tests for Plex Recommender utilities.
+Unit tests for Curatarr utilities.
 """

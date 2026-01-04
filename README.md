@@ -1,4 +1,4 @@
-# Plex Recommender
+# Curatarr
 
 **Personalized recommendations for your Plex library. Simple setup. Powerful results.**
 
@@ -10,7 +10,7 @@ Turn your Plex server into a smart recommendation engine. Analyze what you and y
 
 Your Plex library has thousands of titles. Your users have watched maybe 10% of them. The problem isn't content—it's discovery.
 
-**Plex Recommender solves this by:**
+**Curatarr solves this by:**
 - Analyzing each user's watch history
 - Scoring unwatched content by similarity (keywords, genres, cast, directors)
 - Creating personalized collections that update automatically
@@ -49,8 +49,8 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 ### macOS / Linux
 ```bash
 # 1. Clone and enter directory
-git clone https://github.com/OrchestratedChaos/plex-recommender.git
-cd plex-recommender
+git clone https://github.com/OrchestratedChaos/curatarr.git
+cd curatarr
 
 # 2. Edit config.yml with your details (see links below)
 
@@ -61,8 +61,8 @@ cd plex-recommender
 ### Windows (PowerShell)
 ```powershell
 # 1. Clone and enter directory
-git clone https://github.com/OrchestratedChaos/plex-recommender.git
-cd plex-recommender
+git clone https://github.com/OrchestratedChaos/curatarr.git
+cd curatarr
 
 # 2. Edit config.yml with your details (see links below)
 
@@ -73,8 +73,8 @@ cd plex-recommender
 ### Docker
 ```bash
 # 1. Clone and enter directory
-git clone https://github.com/OrchestratedChaos/plex-recommender.git
-cd plex-recommender
+git clone https://github.com/OrchestratedChaos/curatarr.git
+cd curatarr
 
 # 2. Edit config.yml with your details (see links below)
 
@@ -82,7 +82,7 @@ cd plex-recommender
 docker compose up --build
 
 # Or run once and remove container
-docker compose run --rm plex-recommender
+docker compose run --rm curatarr
 ```
 
 **Required config:**
@@ -254,7 +254,7 @@ Weighted by recency (recent watches count more), user ratings (5-star content co
 ## Project Structure
 
 ```
-plex-recommender/
+curatarr/
 ├── recommenders/
 │   ├── movie.py             # Movie recommendations
 │   ├── tv.py                # TV show recommendations
@@ -282,22 +282,22 @@ First run prompts for automatic scheduling. Or add manually:
 ### macOS / Linux (cron)
 ```bash
 # Daily at 3 AM
-0 3 * * * cd /path/to/plex-recommender && ./run.sh >> logs/daily-run.log 2>&1
+0 3 * * * cd /path/to/curatarr && ./run.sh >> logs/daily-run.log 2>&1
 ```
 
 ### Windows (Task Scheduler)
 The PowerShell script offers to create a scheduled task automatically. Or manually:
 1. Open Task Scheduler
-2. Create Basic Task → "PlexRecommender"
+2. Create Basic Task → "Curatarr"
 3. Trigger: Daily at 3:00 AM
 4. Action: Start a program
    - Program: `powershell.exe`
-   - Arguments: `-ExecutionPolicy Bypass -File "C:\path\to\plex-recommender\run.ps1"`
+   - Arguments: `-ExecutionPolicy Bypass -File "C:\path\to\curatarr\run.ps1"`
 
 ### Docker (cron on host)
 ```bash
 # Daily at 3 AM
-0 3 * * * cd /path/to/plex-recommender && docker compose run --rm plex-recommender >> logs/daily-run.log 2>&1
+0 3 * * * cd /path/to/curatarr && docker compose run --rm curatarr >> logs/daily-run.log 2>&1
 ```
 
 ---

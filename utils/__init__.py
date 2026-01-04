@@ -1,5 +1,5 @@
 """
-Plex Recommender Utilities Package.
+Curatarr Utilities Package.
 
 This package contains modular utility functions organized by responsibility.
 All public functions are re-exported here for backwards compatibility.
