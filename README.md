@@ -49,7 +49,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 ### macOS / Linux
 ```bash
 # 1. Clone and enter directory
-git clone <your-repo-url>
+git clone https://github.com/OrchestratedChaos/plex-recommender.git
 cd plex-recommender
 
 # 2. Edit config.yml with your details (see links below)
@@ -61,7 +61,7 @@ cd plex-recommender
 ### Windows (PowerShell)
 ```powershell
 # 1. Clone and enter directory
-git clone <your-repo-url>
+git clone https://github.com/OrchestratedChaos/plex-recommender.git
 cd plex-recommender
 
 # 2. Edit config.yml with your details (see links below)
@@ -73,7 +73,7 @@ cd plex-recommender
 ### Docker
 ```bash
 # 1. Clone and enter directory
-git clone <your-repo-url>
+git clone https://github.com/OrchestratedChaos/plex-recommender.git
 cd plex-recommender
 
 # 2. Edit config.yml with your details (see links below)
