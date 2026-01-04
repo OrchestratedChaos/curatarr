@@ -337,6 +337,7 @@ class TestCacheOperations:
                         'title': 'Test Movie',
                         'year': '2023',
                         'rating': 7.5,
+                        'vote_count': 500,
                         'score': 0.8,
                         'added_date': '2023-01-01T00:00:00'
                     }

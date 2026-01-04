@@ -289,6 +289,7 @@ class TestPlexMovieRecommenderWatchedCache:
         recommender.watched_movie_ids = {1, 2, 3}
         recommender.cached_watched_count = 10
 
+        mock_save.reset_mock()  # Reset after init
         recommender._save_watched_cache()
 
         mock_save.assert_called_once()
