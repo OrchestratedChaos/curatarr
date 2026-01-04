@@ -228,6 +228,43 @@ run_setup_wizard() {
     echo -e "${GREEN}✓ Got it${NC}"
     echo ""
 
+    # --- Optional: Trakt Integration ---
+    echo -e "${YELLOW}Step 6: Trakt Integration (Optional)${NC}"
+    echo ""
+    echo "Trakt syncs your recommendations to Trakt.tv lists"
+    echo "and can exclude items already on your Trakt watchlist."
+    echo ""
+    read -p "Enable Trakt integration? (y/N): " ENABLE_TRAKT
+    TRAKT_ENABLED="false"
+    TRAKT_CLIENT_ID=""
+    TRAKT_CLIENT_SECRET=""
+
+    if [[ "$ENABLE_TRAKT" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo -e "${CYAN}Creating a Trakt API application:${NC}"
+        echo "1. Go to: ${CYAN}https://trakt.tv/oauth/applications/new${NC}"
+        echo "2. Name: Curatarr"
+        echo "3. Redirect URI: urn:ietf:wg:oauth:2.0:oob"
+        echo "4. Check all permissions"
+        echo "5. Save and copy the Client ID and Client Secret"
+        echo ""
+        read -p "Enter your Trakt Client ID: " TRAKT_CLIENT_ID
+        read -p "Enter your Trakt Client Secret: " TRAKT_CLIENT_SECRET
+
+        if [ -n "$TRAKT_CLIENT_ID" ] && [ -n "$TRAKT_CLIENT_SECRET" ]; then
+            TRAKT_ENABLED="true"
+            echo -e "${GREEN}✓ Trakt credentials saved${NC}"
+            echo ""
+            echo "After setup completes, run: python3 utils/trakt_auth.py"
+            echo "to complete Trakt authentication via device code."
+        else
+            echo -e "${YELLOW}Skipping Trakt (credentials not provided)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Skipping Trakt (can be enabled later in config.yml)${NC}"
+    fi
+    echo ""
+
     # --- Write config.yml ---
     echo -e "${CYAN}Creating config.yml...${NC}"
 
@@ -260,6 +297,19 @@ tv:
 collections:
   add_label: true
   stale_removal_days: 7
+
+trakt:
+  enabled: $TRAKT_ENABLED
+  client_id: ${TRAKT_CLIENT_ID:-null}
+  client_secret: ${TRAKT_CLIENT_SECRET:-null}
+  access_token: null
+  refresh_token: null
+  export:
+    enabled: true
+    list_prefix: "Curatarr"
+  import:
+    enabled: true
+    exclude_watchlist: true
 CONFIGEOF
 
     echo -e "${GREEN}✓ config.yml created!${NC}"

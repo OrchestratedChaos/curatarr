@@ -2,6 +2,15 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.7.3] - 2026-01-04
+
+### Added
+- **Setup wizard Trakt integration** — Interactive setup now includes optional Trakt configuration
+  - Prompts for Trakt API credentials during first-run wizard
+  - Auto-generates Trakt section in config.yml
+  - New `utils/trakt_auth.py` script for device code authentication
+- Completes full Trakt integration suite (foundation, export, import, wizard)
+
 ## [1.7.2] - 2026-01-04
 
 ### Added
