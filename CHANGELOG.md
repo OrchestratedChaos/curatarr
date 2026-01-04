@@ -2,6 +2,12 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.17] - 2026-01-03
+
+### Fixed
+- **External recommendations cache now respects quality thresholds** — Old cached items below MIN_RATING (7.0) or MIN_VOTE_COUNT (500) are automatically filtered out on load
+- **Added vote_count tracking to external cache** — Enables proper filtering of low-vote content
+
 ## [1.6.16] - 2026-01-03
 
 ### Added
