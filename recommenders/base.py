@@ -93,6 +93,10 @@ class BaseCache(ABC):
 
         if current_count == self.cache['library_count']:
             print(f"{GREEN}{self.media_key.title()} cache is up to date{RESET}")
+            # Still check for missing collection data (backfill for existing caches)
+            if self.media_type == 'movie' and tmdb_api_key:
+                if self._backfill_collection_data(tmdb_api_key):
+                    self._save_cache()
             return False
 
         print(f"\n{YELLOW}Analyzing library {self.media_key}...{RESET}")
@@ -138,8 +142,62 @@ class BaseCache(ABC):
 
         self.cache['library_count'] = current_count
         self.cache['last_updated'] = datetime.now().isoformat()
+
+        # Backfill collection data for movies missing it
+        if self.media_type == 'movie' and tmdb_api_key:
+            self._backfill_collection_data(tmdb_api_key)
+
         self._save_cache()
         print(f"\n{GREEN}{self.media_key.title()} cache updated{RESET}")
+        return True
+
+    def _backfill_collection_data(self, tmdb_api_key: str) -> bool:
+        """
+        Backfill collection data for cached movies that don't have it.
+
+        This handles existing cached movies that were stored before
+        collection tracking was added.
+
+        Returns:
+            True if any movies were updated, False otherwise
+        """
+        movies_needing_collection = [
+            (item_id, info) for item_id, info in self.cache[self.media_key].items()
+            if info.get('tmdb_id') and 'collection_id' not in info
+        ]
+
+        if not movies_needing_collection:
+            return False
+
+        total = len(movies_needing_collection)
+        print(f"\n{CYAN}Backfilling collection data for {total} movies (one-time migration)...{RESET}")
+
+        updated = 0
+        for i, (item_id, info) in enumerate(movies_needing_collection, 1):
+            pct = int((i / total) * 100)
+            sys.stdout.write(f"\r{CYAN}Processing {i}/{total} ({pct}%) - Found {updated} collections{RESET}")
+            sys.stdout.flush()
+
+            try:
+                time.sleep(TMDB_RATE_LIMIT_DELAY)
+                detail_data = fetch_tmdb_with_retry(
+                    f"https://api.themoviedb.org/3/movie/{info['tmdb_id']}",
+                    {'api_key': tmdb_api_key}
+                )
+                if detail_data:
+                    collection = detail_data.get('belongs_to_collection')
+                    if collection:
+                        info['collection_id'] = collection.get('id')
+                        info['collection_name'] = collection.get('name')
+                        updated += 1
+                    else:
+                        # Mark as checked (no collection)
+                        info['collection_id'] = None
+                        info['collection_name'] = None
+            except Exception:
+                pass  # Skip failures, will retry next run
+
+        print(f"\n{GREEN}Added collection data for {updated} movies{RESET}")
         return True
 
     @abstractmethod
@@ -211,7 +269,9 @@ class BaseCache(ABC):
             'imdb_id': None,
             'keywords': [],
             'rating': None,
-            'vote_count': None
+            'vote_count': None,
+            'collection_id': None,
+            'collection_name': None
         }
 
         # Extract IDs from GUIDs
@@ -228,7 +288,7 @@ class BaseCache(ABC):
             # Get keywords
             result['keywords'] = get_tmdb_keywords(tmdb_api_key, result['tmdb_id'], self.media_type)
 
-            # Get rating/vote_count (movies only)
+            # Get rating/vote_count/collection (movies only)
             if self.media_type == 'movie':
                 detail_data = fetch_tmdb_with_retry(
                     f"https://api.themoviedb.org/3/movie/{result['tmdb_id']}",
@@ -237,6 +297,11 @@ class BaseCache(ABC):
                 if detail_data:
                     result['rating'] = detail_data.get('vote_average')
                     result['vote_count'] = detail_data.get('vote_count')
+                    # Extract collection info (for sequel bonus)
+                    collection = detail_data.get('belongs_to_collection')
+                    if collection:
+                        result['collection_id'] = collection.get('id')
+                        result['collection_name'] = collection.get('name')
 
         # Update recommender caches if available
         if self.recommender and result['tmdb_id']:

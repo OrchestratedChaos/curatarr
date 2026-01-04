@@ -2,6 +2,14 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.8] - 2026-01-03
+
+### Added
+- **Collection bonus for sequels** — Movies in franchises get a score bonus
+  - Tracks TMDB collection data (e.g., "Harry Potter Collection")
+  - Applies 5-15% bonus for unwatched movies in collections user has watched
+  - Logarithmic scaling: more watched movies = higher bonus (capped at 15%)
+
 ## [1.6.7] - 2026-01-03
 
 ### Added
