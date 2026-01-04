@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  plex-recommender:
+  curatarr:
     build: .
-    container_name: plex-recommender
+    container_name: curatarr
     restart: "no"
     volumes:
       # Config file (required)

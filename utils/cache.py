@@ -1,5 +1,5 @@
 """
-Cache I/O utilities for Plex Recommender.
+Cache I/O utilities for Curatarr.
 Handles loading and saving of various cache files.
 """
 

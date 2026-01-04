@@ -1,5 +1,5 @@
 """
-Display and logging utilities for Plex Recommender.
+Display and logging utilities for Curatarr.
 Handles colored output, progress indicators, and formatting.
 """
 
@@ -120,7 +120,7 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('requests').setLevel(logging.WARNING)
 
-    logger = logging.getLogger('plex_recommender')
+    logger = logging.getLogger('curatarr')
     logger.setLevel(level)
 
     return logger
@@ -140,7 +140,7 @@ def print_user_footer(username: str) -> None:
 
 def print_status(message: str, level: str = "info") -> None:
     """Print a status message with appropriate color and log to file."""
-    logger = logging.getLogger('plex_recommender')
+    logger = logging.getLogger('curatarr')
     if level == "success":
         print(f"{GREEN}✓ {message}{RESET}")
         logger.info(message)
@@ -155,19 +155,19 @@ def print_status(message: str, level: str = "info") -> None:
 
 def log_info(message: str) -> None:
     """Log info message."""
-    logger = logging.getLogger('plex_recommender')
+    logger = logging.getLogger('curatarr')
     logger.info(message)
 
 
 def log_warning(message: str) -> None:
     """Log warning with yellow color (via ColoredFormatter)."""
-    logger = logging.getLogger('plex_recommender')
+    logger = logging.getLogger('curatarr')
     logger.warning(message)
 
 
 def log_error(message: str) -> None:
     """Log error with red color (via ColoredFormatter)."""
-    logger = logging.getLogger('plex_recommender')
+    logger = logging.getLogger('curatarr')
     logger.error(message)
 
 

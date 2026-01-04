@@ -1,5 +1,5 @@
 """
-TMDB API utilities for Plex Recommender.
+TMDB API utilities for Curatarr.
 Handles TMDB API calls, keyword fetching, and ID lookups.
 """
 

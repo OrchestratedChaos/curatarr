@@ -1,5 +1,5 @@
 """
-Label management utilities for Plex Recommender.
+Label management utilities for Curatarr.
 Handles adding, removing, and categorizing Plex labels.
 """
 

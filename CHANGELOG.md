@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Plex Recommender will be documented in this file.
+All notable changes to Curatarr will be documented in this file.
 
 ## [1.6.18] - 2026-01-03
 
@@ -230,7 +230,7 @@ All notable changes to Plex Recommender will be documented in this file.
 ## [1.3.0] - 2026-01-03
 
 ### Added
-- **Docker support** — Run Plex Recommender in a container
+- **Docker support** — Run Curatarr in a container
   - `Dockerfile` for building the image
   - `docker-compose.yml` for easy deployment
   - `.dockerignore` for optimized builds

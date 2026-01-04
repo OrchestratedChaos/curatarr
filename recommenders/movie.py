@@ -34,7 +34,7 @@ from utils import (
 )
 
 # Module-level logger - configured by setup_logging() in main()
-logger = logging.getLogger('plex_recommender')
+logger = logging.getLogger('curatarr')
 
 __version__ = "1.6.18"
 

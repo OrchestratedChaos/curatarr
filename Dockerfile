@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 LABEL maintainer="OrchestratedChaos"
-LABEL description="Plex Recommender - Personalized recommendations for your Plex library"
+LABEL description="Curatarr - Personalized recommendations for your Plex library"
 
 # Set working directory
 WORKDIR /app
