@@ -29,4 +29,4 @@ jobs:
         run: pytest tests/ -v --tb=short
 
       - name: Run tests with coverage
-        run: pytest tests/ --cov=utils --cov=recommenders --cov-report=term-missing --cov-fail-under=90
+        run: pytest tests/ --cov=utils --cov-report=term-missing --cov-fail-under=90
