@@ -540,3 +540,246 @@ class TestBaseRecommenderRefreshWatchedData:
         recommender._refresh_watched_data()
 
         assert len(recommender.watched_ids) == 0
+
+
+class TestBaseCacheBackfillCollectionData:
+    """Tests for BaseCache._backfill_collection_data method."""
+
+    @patch('recommenders.base.save_media_cache')
+    @patch('recommenders.base.load_media_cache')
+    def test_backfill_returns_false_when_no_movies_need_update(self, mock_load, mock_save):
+        """Test backfill returns False when all movies have collection_id."""
+        mock_load.return_value = {
+            'movies': {
+                '123': {'tmdb_id': 456, 'collection_id': 789, 'collection_name': 'Test Collection'}
+            },
+            'library_count': 1
+        }
+
+        cache = ConcreteCache('/tmp/cache')
+        result = cache._backfill_collection_data('api_key')
+
+        assert result is False
+
+    @patch('recommenders.base.time.sleep')
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.save_media_cache')
+    @patch('recommenders.base.load_media_cache')
+    def test_backfill_updates_movies_missing_collection_id(self, mock_load, mock_save, mock_fetch, mock_sleep):
+        """Test backfill adds collection data to movies missing it."""
+        mock_load.return_value = {
+            'movies': {
+                '123': {'tmdb_id': 456, 'title': 'Test Movie'}  # No collection_id
+            },
+            'library_count': 1
+        }
+        mock_fetch.return_value = {
+            'belongs_to_collection': {
+                'id': 789,
+                'name': 'Test Collection'
+            }
+        }
+
+        cache = ConcreteCache('/tmp/cache')
+        result = cache._backfill_collection_data('api_key')
+
+        assert result is True
+        assert cache.cache['movies']['123']['collection_id'] == 789
+        assert cache.cache['movies']['123']['collection_name'] == 'Test Collection'
+
+    @patch('recommenders.base.time.sleep')
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.save_media_cache')
+    @patch('recommenders.base.load_media_cache')
+    def test_backfill_sets_none_when_no_collection(self, mock_load, mock_save, mock_fetch, mock_sleep):
+        """Test backfill sets None when movie has no collection."""
+        mock_load.return_value = {
+            'movies': {
+                '123': {'tmdb_id': 456, 'title': 'Standalone Movie'}
+            },
+            'library_count': 1
+        }
+        mock_fetch.return_value = {'id': 456, 'title': 'Standalone Movie'}  # No belongs_to_collection key
+
+        cache = ConcreteCache('/tmp/cache')
+        result = cache._backfill_collection_data('api_key')
+
+        assert result is True
+        assert cache.cache['movies']['123']['collection_id'] is None
+        assert cache.cache['movies']['123']['collection_name'] is None
+
+    @patch('recommenders.base.time.sleep')
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.save_media_cache')
+    @patch('recommenders.base.load_media_cache')
+    def test_backfill_handles_fetch_error(self, mock_load, mock_save, mock_fetch, mock_sleep):
+        """Test backfill continues when fetch fails."""
+        mock_load.return_value = {
+            'movies': {
+                '123': {'tmdb_id': 456, 'title': 'Movie 1'},
+                '124': {'tmdb_id': 457, 'title': 'Movie 2'}
+            },
+            'library_count': 2
+        }
+        mock_fetch.side_effect = [Exception("Network error"), {'belongs_to_collection': {'id': 1, 'name': 'Collection'}}]
+
+        cache = ConcreteCache('/tmp/cache')
+        result = cache._backfill_collection_data('api_key')
+
+        # Should still return True as some movies were processed
+        assert result is True
+
+    @patch('recommenders.base.save_media_cache')
+    @patch('recommenders.base.load_media_cache')
+    def test_backfill_skips_movies_without_tmdb_id(self, mock_load, mock_save):
+        """Test backfill skips movies without TMDB ID."""
+        mock_load.return_value = {
+            'movies': {
+                '123': {'title': 'No TMDB Movie'}  # No tmdb_id
+            },
+            'library_count': 1
+        }
+
+        cache = ConcreteCache('/tmp/cache')
+        result = cache._backfill_collection_data('api_key')
+
+        assert result is False
+
+
+class TestBaseCacheUpdateWithBackfill:
+    """Tests for BaseCache.update_cache with backfill integration."""
+
+    @patch('recommenders.base.time.sleep')
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.save_media_cache')
+    @patch('recommenders.base.load_media_cache')
+    def test_update_triggers_backfill_when_cache_up_to_date(self, mock_load, mock_save, mock_fetch, mock_sleep):
+        """Test that backfill runs even when cache is up to date."""
+        mock_load.return_value = {
+            'movies': {
+                '123': {'tmdb_id': 456, 'title': 'Test Movie'}  # No collection_id
+            },
+            'library_count': 1
+        }
+        mock_fetch.return_value = {'belongs_to_collection': {'id': 789, 'name': 'Collection'}}
+
+        mock_plex = Mock()
+        mock_item = Mock()
+        mock_item.ratingKey = '123'
+        mock_section = Mock()
+        mock_section.all.return_value = [mock_item]
+        mock_plex.library.section.return_value = mock_section
+
+        cache = ConcreteCache('/tmp/cache')
+        result = cache.update_cache(mock_plex, 'Movies', tmdb_api_key='api_key')
+
+        # Returns False (cache was up to date) but backfill should have run
+        assert result is False
+        assert cache.cache['movies']['123']['collection_id'] == 789
+
+
+class TestBaseCacheGetTmdbDataWithCollection:
+    """Tests for BaseCache._get_tmdb_data collection data extraction."""
+
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.get_tmdb_keywords')
+    @patch('recommenders.base.extract_ids_from_guids')
+    @patch('recommenders.base.load_media_cache')
+    def test_get_tmdb_data_extracts_collection_info(self, mock_load, mock_extract, mock_keywords, mock_fetch):
+        """Test that collection info is extracted from TMDB response."""
+        mock_load.return_value = {'movies': {}, 'library_count': 0}
+        mock_extract.return_value = {'imdb_id': None, 'tmdb_id': 123}
+        mock_keywords.return_value = []
+        mock_fetch.return_value = {
+            'vote_average': 7.5,
+            'vote_count': 1000,
+            'belongs_to_collection': {
+                'id': 456,
+                'name': 'Marvel Collection'
+            }
+        }
+
+        cache = ConcreteCache('/tmp/cache')
+        mock_item = Mock()
+
+        result = cache._get_tmdb_data(mock_item, 'api_key')
+
+        assert result['collection_id'] == 456
+        assert result['collection_name'] == 'Marvel Collection'
+
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.get_tmdb_keywords')
+    @patch('recommenders.base.extract_ids_from_guids')
+    @patch('recommenders.base.load_media_cache')
+    def test_get_tmdb_data_handles_no_collection(self, mock_load, mock_extract, mock_keywords, mock_fetch):
+        """Test that no collection is handled gracefully."""
+        mock_load.return_value = {'movies': {}, 'library_count': 0}
+        mock_extract.return_value = {'imdb_id': None, 'tmdb_id': 123}
+        mock_keywords.return_value = []
+        mock_fetch.return_value = {'vote_average': 7.5, 'vote_count': 1000}
+
+        cache = ConcreteCache('/tmp/cache')
+        mock_item = Mock()
+
+        result = cache._get_tmdb_data(mock_item, 'api_key')
+
+        assert result['collection_id'] is None
+        assert result['collection_name'] is None
+
+
+class TestBaseCacheGetTmdbDataKeywordsCache:
+    """Tests for BaseCache._get_tmdb_data updating keyword caches."""
+
+    @patch('recommenders.base.get_tmdb_keywords')
+    @patch('recommenders.base.extract_ids_from_guids')
+    @patch('recommenders.base.load_media_cache')
+    def test_get_tmdb_data_updates_keywords_cache(self, mock_load, mock_extract, mock_keywords):
+        """Test that TMDB keywords are cached on recommender."""
+        mock_load.return_value = {'movies': {}, 'library_count': 0}
+        mock_extract.return_value = {'imdb_id': None, 'tmdb_id': 123}
+        mock_keywords.return_value = ['action', 'hero', 'superhero']
+
+        mock_recommender = Mock()
+        mock_recommender.plex_tmdb_cache = {}
+        mock_recommender.tmdb_keywords_cache = {}
+
+        cache = ConcreteCache('/tmp/cache', recommender=mock_recommender)
+        mock_item = Mock()
+        mock_item.ratingKey = '456'
+
+        cache._get_tmdb_data(mock_item, 'api_key')
+
+        assert '123' in mock_recommender.tmdb_keywords_cache
+        assert mock_recommender.tmdb_keywords_cache['123'] == ['action', 'hero', 'superhero']
+
+
+class TestBaseCacheTVShowBackfill:
+    """Tests for backfill behavior with TV shows."""
+
+    @patch('recommenders.base.save_media_cache')
+    @patch('recommenders.base.load_media_cache')
+    def test_backfill_skips_tv_shows(self, mock_load, mock_save):
+        """Test that backfill does not run for TV show caches."""
+        mock_load.return_value = {'shows': {}, 'library_count': 1}
+
+        class TVCache(BaseCache):
+            media_type = 'tv'  # Not 'movie'
+            media_key = 'shows'
+            cache_filename = 'test_shows.json'
+            def _process_item(self, item, tmdb_api_key):
+                return {}
+
+        mock_plex = Mock()
+        mock_item = Mock()
+        mock_item.ratingKey = '123'
+        mock_section = Mock()
+        mock_section.all.return_value = [mock_item]
+        mock_plex.library.section.return_value = mock_section
+
+        cache = TVCache('/tmp/cache')
+        # TV caches don't have _backfill_collection_data called (only movies)
+        # This test confirms the method exists but the update_cache only calls it for movies
+        result = cache.update_cache(mock_plex, 'TV Shows', tmdb_api_key='api_key')
+
+        # Should not error - backfill isn't called for TV
+        assert result is False  # Cache was up to date
