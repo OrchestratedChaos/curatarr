@@ -2,6 +2,16 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.10] - 2026-01-03
+
+### Removed
+- **Dead code cleanup** — Removed unused code from recommenders
+  - Removed unused `import random` from movie.py and tv.py
+  - Removed unused utility imports (RATING_MULTIPLIERS, DEFAULT_NEGATIVE_MULTIPLIERS, DEFAULT_RATING, TOP_POOL_PERCENTAGE)
+  - Removed dead `find_similar_content()` function from external.py
+  - Removed duplicate `get_tmdb_keywords()` from external.py (now uses utils version)
+  - Removed unused `self.plex_only` attribute from tv.py
+
 ## [1.6.9] - 2026-01-03
 
 ### Changed
