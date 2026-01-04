@@ -2,6 +2,13 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.6.19] - 2026-01-04
+
+### Fixed
+- **Docker Windows compatibility** — Fixed entrypoint script failing on Windows Docker
+  - Strip CRLF line endings from shell scripts during build
+  - Explicitly invoke bash in ENTRYPOINT to avoid shebang issues
+
 ## [1.6.18] - 2026-01-03
 
 ### Changed
