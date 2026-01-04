@@ -382,7 +382,7 @@ class TestPlexTVRecommenderSimilarity:
 class TestPlexTVRecommenderWatchedCache:
     """Tests for PlexTVRecommender watched cache methods."""
 
-    @patch('recommenders.tv.save_watched_cache')
+    @patch('recommenders.base.save_watched_cache')
     @patch('recommenders.tv.ShowCache')
     @patch('recommenders.base.init_plex')
     @patch('recommenders.base.get_configured_users')

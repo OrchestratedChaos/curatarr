@@ -346,8 +346,17 @@ class ConcreteRecommender(BaseRecommender):
     def _save_watched_cache(self):
         pass
 
-    def get_recommendations(self, username=None):
-        return []
+    def _get_media_cache(self):
+        return Mock()
+
+    def _find_plex_item(self, section, rec):
+        return None
+
+    def _calculate_similarity_from_cache(self, item_info):
+        return (0.5, {})
+
+    def _print_similarity_breakdown(self, item_info, score, breakdown):
+        pass
 
 
 class TestBaseRecommenderInit:

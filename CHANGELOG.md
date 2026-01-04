@@ -2,6 +2,19 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.13] - 2026-01-03
+
+### Changed
+- **Deep inheritance refactor** — Eliminated ~650 lines of duplicated code between movie/tv recommenders
+  - Moved `get_recommendations()` to BaseRecommender (was duplicated in both)
+  - Moved `manage_plex_labels()` to BaseRecommender (was duplicated in both)
+  - Moved `_get_plex_user_ids()` to BaseRecommender (was identical in both)
+  - Moved `_get_managed_users_watched_data()` to BaseRecommender (was near-identical)
+  - Moved `_load_watched_cache()` to BaseRecommender (cache init block was duplicated)
+  - Added `_do_save_watched_cache()` helper to BaseRecommender
+  - Added abstract methods: `_get_media_cache()`, `_find_plex_item()`, `_calculate_similarity_from_cache()`, `_print_similarity_breakdown()`
+  - Added `media_key` class attribute to recommenders for generic cache access
+
 ## [1.6.12] - 2026-01-03
 
 ### Changed
