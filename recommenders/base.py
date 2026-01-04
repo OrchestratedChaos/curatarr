@@ -9,18 +9,23 @@ import sys
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
 import re
 import time
 import logging
+import requests
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
+
+from plexapi.myplex import MyPlexAccount
 
 from utils import (
     CACHE_VERSION,
     TMDB_RATE_LIMIT_DELAY,
     DEFAULT_LIMIT_PLEX_RESULTS,
     WEIGHT_SUM_TOLERANCE,
+    TIER_SAFE_PERCENT, TIER_DIVERSE_PERCENT, TIER_WILDCARD_PERCENT,
     GREEN, YELLOW, CYAN, RESET,
     load_config,
     init_plex,
@@ -29,6 +34,7 @@ from utils import (
     check_cache_version,
     load_media_cache,
     save_media_cache,
+    save_watched_cache,
     extract_ids_from_guids,
     get_tmdb_id_for_item,
     get_tmdb_keywords,
@@ -36,6 +42,18 @@ from utils import (
     get_full_language_name,
     log_warning,
     log_error,
+    select_tiered_recommendations,
+    get_excluded_genres_for_user,
+    show_progress,
+    create_empty_counters,
+    process_counters_from_cache,
+    user_select_recommendations,
+    build_label_name,
+    categorize_labeled_items,
+    remove_labels_from_items,
+    add_labels_to_items,
+    update_plex_collection,
+    cleanup_old_collections,
 )
 
 logger = logging.getLogger('plex_recommender')
@@ -440,6 +458,413 @@ class BaseRecommender(ABC):
         self.watched_data_counters = self.watched_data
         self._save_watched_cache()
 
+    def _get_plex_user_ids(self) -> List[str]:
+        """Resolve configured Plex usernames to their user IDs."""
+        user_ids = []
+        try:
+            users_response = requests.get(
+                f"{self.config['plex_users']['url']}/api/v2",
+                params={
+                    'apikey': self.config['plex_users']['api_key'],
+                    'cmd': 'get_users'
+                },
+                timeout=30
+            )
+            users_response.raise_for_status()
+            plex_users = users_response.json()['response']['data']
+
+            users_to_match = [self.single_user] if self.single_user else self.users['plex_users']
+
+            for username in users_to_match:
+                user = next(
+                    (u for u in plex_users
+                     if u['username'].lower() == username.lower()),
+                    None
+                )
+                if user:
+                    user_ids.append(str(user['user_id']))
+                else:
+                    log_error(f"User '{username}' not found in Plex accounts!")
+
+        except Exception as e:
+            log_error(f"Error resolving Plex users: {e}")
+
+        return user_ids
+
+    def _get_managed_users_watched_data(self) -> Dict:
+        """Get watched data from managed Plex users."""
+        if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
+            logger.debug("Using cached watched data (not single user mode)")
+            return self.watched_data_counters
+
+        if hasattr(self, 'watched_data_counters') and self.watched_data_counters:
+            logger.debug("Using existing watched data counters")
+            return self.watched_data_counters
+
+        counters = create_empty_counters(self.media_type)
+
+        account = MyPlexAccount(token=self.config['plex']['token'])
+        admin_user = self.users['admin_user']
+
+        if self.single_user:
+            if self.single_user.lower() in ['admin', 'administrator']:
+                users_to_process = [admin_user]
+            else:
+                users_to_process = [self.single_user]
+        else:
+            users_to_process = self.users['managed_users'] or [admin_user]
+
+        for username in users_to_process:
+            try:
+                if username.lower() == admin_user.lower():
+                    user_plex = self.plex
+                else:
+                    user = account.user(username)
+                    user_plex = self.plex.switchUser(user)
+
+                watched_items = user_plex.library.section(self.library_title).search(unwatched=False)
+
+                print(f"\nScanning watched {self.media_key} for {username}")
+                for i, item in enumerate(watched_items, 1):
+                    show_progress(f"Processing {username}'s watched", i, len(watched_items))
+                    self.watched_ids.add(int(item.ratingKey))
+
+                    item_info = self._get_media_cache().cache[self.media_key].get(str(item.ratingKey))
+                    if item_info:
+                        process_counters_from_cache(item_info, counters, media_type=self.media_type)
+
+                        if tmdb_id := item_info.get('tmdb_id'):
+                            counters['tmdb_ids'].add(tmdb_id)
+
+            except Exception as e:
+                log_error(f"Error processing user {username}: {e}")
+                continue
+
+        logger.debug(f"Collected {len(counters['tmdb_ids'])} unique TMDB IDs from managed users")
+
+        return counters
+
+    def _load_watched_cache(self) -> Dict:
+        """Load watched cache from file. Returns the loaded cache dict."""
+        watched_cache = {}
+        cache_valid = check_cache_version(self.watched_cache_path, f"{self.media_type.upper()} watched cache")
+        if cache_valid and os.path.exists(self.watched_cache_path):
+            try:
+                with open(self.watched_cache_path, 'r', encoding='utf-8') as f:
+                    watched_cache = json.load(f)
+                    self.cached_watched_count = watched_cache.get('watched_count', 0)
+                    self.watched_data_counters = watched_cache.get('watched_data_counters', {})
+                    self.plex_tmdb_cache = {str(k): v for k, v in watched_cache.get('plex_tmdb_cache', {}).items()}
+                    self.tmdb_keywords_cache = {str(k): v for k, v in watched_cache.get('tmdb_keywords_cache', {}).items()}
+                    self.label_dates = watched_cache.get('label_dates', {})
+
+                    # Load watched IDs (key differs by media type)
+                    watched_ids_key = f'watched_{self.media_type}_ids' if self.media_type == 'movie' else 'watched_show_ids'
+                    watched_ids_list = watched_cache.get(watched_ids_key, [])
+                    if isinstance(watched_ids_list, list):
+                        self.watched_ids = {int(id_) for id_ in watched_ids_list if str(id_).isdigit()}
+                    else:
+                        log_warning(f"Warning: Invalid {watched_ids_key} format in cache")
+                        self.watched_ids = set()
+
+                    if not self.watched_ids and self.cached_watched_count > 0:
+                        log_error(f"Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded")
+                        self._refresh_watched_data()
+
+            except Exception as e:
+                log_warning(f"Error loading watched cache: {e}")
+                self._refresh_watched_data()
+        return watched_cache
+
+    def _do_save_watched_cache(self):
+        """Save watched cache to file using the utility."""
+        save_watched_cache(
+            cache_path=self.watched_cache_path,
+            watched_data_counters=self.watched_data_counters,
+            plex_tmdb_cache=self.plex_tmdb_cache,
+            tmdb_keywords_cache=self.tmdb_keywords_cache,
+            watched_ids=self.watched_ids,
+            label_dates=getattr(self, 'label_dates', {}),
+            watched_count=len(self.watched_ids) if self.media_type == 'movie' else self.cached_watched_count,
+            media_type=self.media_type
+        )
+
+    def get_recommendations(self) -> Dict[str, List[Dict]]:
+        """Get recommendations based on watched content."""
+        if self.cached_watched_count > 0 and not self.watched_ids:
+            self.watched_data = self._get_watched_data()
+            self.watched_data_counters = self.watched_data
+            self._save_watched_cache()
+
+        # Get all items from cache
+        media_cache = self._get_media_cache()
+        all_items = media_cache.cache[self.media_key]
+
+        print(f"\n{YELLOW}Processing recommendations...{RESET}")
+
+        # Filter out watched items and excluded genres
+        unwatched_items = []
+        excluded_count = 0
+        quality_filtered_count = 0
+
+        # Get user-specific excluded genres
+        excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
+
+        # Get quality filters from config
+        quality_filters = self.config.get('quality_filters', {})
+        min_rating = quality_filters.get('min_rating', 0.0)
+        min_vote_count = quality_filters.get('min_vote_count', 0)
+
+        for item_id, item_info in all_items.items():
+            if int(str(item_id)) in self.watched_ids:
+                continue
+
+            if any(g.lower() in excluded_genres for g in item_info.get('genres', [])):
+                excluded_count += 1
+                continue
+
+            rating = item_info.get('rating') or 0.0
+            vote_count = item_info.get('vote_count') or 0
+
+            if rating < min_rating or vote_count < min_vote_count:
+                quality_filtered_count += 1
+                continue
+
+            unwatched_items.append(item_info)
+
+        if excluded_count > 0:
+            print(f"Excluded {excluded_count} {self.media_key} based on genre filters")
+        if quality_filtered_count > 0:
+            log_warning(f"Filtered {quality_filtered_count} {self.media_key} below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+)")
+
+        if not unwatched_items:
+            log_warning(f"No unwatched {self.media_key} found matching your criteria.")
+            plex_recs = []
+        else:
+            print(f"Calculating similarity scores for {len(unwatched_items)} {self.media_key}...")
+
+            scored_items = []
+            cache_hits = 0
+            scores_updated = False
+            for i, item_info in enumerate(unwatched_items, 1):
+                show_progress("Processing", i, len(unwatched_items))
+                try:
+                    cached_hash = item_info.get('profile_hash')
+                    cached_score = item_info.get('cached_score')
+
+                    if cached_hash == self.profile_hash and cached_score is not None:
+                        similarity_score = cached_score
+                        breakdown = item_info.get('score_breakdown', {})
+                        cache_hits += 1
+                    else:
+                        similarity_score, breakdown = self._calculate_similarity_from_cache(item_info)
+                        item_info['cached_score'] = similarity_score
+                        item_info['profile_hash'] = self.profile_hash
+                        item_info['score_breakdown'] = breakdown
+                        scores_updated = True
+
+                    item_info['similarity_score'] = similarity_score
+                    scored_items.append(item_info)
+                except Exception as e:
+                    log_warning(f"Error processing {item_info['title']}: {e}")
+                    continue
+
+            if scores_updated:
+                media_cache._save_cache()
+                logger.debug(f"Saved {len(unwatched_items) - cache_hits} new scores to cache")
+            if cache_hits > 0:
+                logger.debug(f"Used {cache_hits} cached scores")
+
+            scored_items.sort(key=lambda x: x['similarity_score'], reverse=True)
+
+            if self.randomize_recommendations:
+                plex_recs = select_tiered_recommendations(
+                    scored_items,
+                    self.limit_plex_results,
+                    TIER_SAFE_PERCENT,
+                    TIER_DIVERSE_PERCENT,
+                    TIER_WILDCARD_PERCENT
+                )
+            else:
+                plex_recs = scored_items[:self.limit_plex_results]
+
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("=== Similarity Score Breakdowns for Recommendations ===")
+                for item in plex_recs:
+                    self._print_similarity_breakdown(item, item['similarity_score'], item['score_breakdown'])
+
+        print(f"\nRecommendation process completed!")
+        return {
+            'plex_recommendations': plex_recs
+        }
+
+    def manage_plex_labels(self, recommended_items: List[Dict]) -> None:
+        """Manage Plex labels and collections for recommendations."""
+        if not self.config.get('collections', {}).get('add_label'):
+            return
+
+        recommended_items = recommended_items or []
+
+        if self.confirm_operations and recommended_items:
+            selected_items = self._user_select_recommendations(recommended_items, "label in Plex")
+            if not selected_items:
+                selected_items = []
+        else:
+            selected_items = recommended_items
+
+        try:
+            section = self.plex.library.section(self.library_title)
+            base_label = self.config.get('collections', {}).get('label_name', 'Recommended')
+            append_usernames = self.config.get('collections', {}).get('append_usernames', False)
+            users = self.users['plex_users'] or self.users['managed_users']
+            label_name = build_label_name(base_label, users, self.single_user, append_usernames)
+
+            # Find items in Plex
+            items_to_update = []
+            skipped_items = []
+            for rec in selected_items:
+                plex_item = self._find_plex_item(section, rec)
+                if plex_item:
+                    plex_item.reload()
+                    items_to_update.append(plex_item)
+                else:
+                    skipped_items.append(f"{rec['title']} ({rec.get('year', 'N/A')})")
+
+            if skipped_items:
+                log_warning(f"Skipped {len(skipped_items)} {self.media_key} not found in Plex:")
+                for item in skipped_items[:5]:
+                    print(f"  - {item}")
+                if len(skipped_items) > 5:
+                    print(f"  ... and {len(skipped_items) - 5} more")
+
+            print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
+
+            if not hasattr(self, 'label_dates') or not self.label_dates:
+                self.label_dates = {}
+
+            stale_days = self.config.get('collections', {}).get('stale_removal_days', 7)
+
+            currently_labeled = section.search(label=label_name)
+            print(f"Found {len(currently_labeled)} currently labeled {self.media_key}")
+
+            excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
+
+            categories = categorize_labeled_items(
+                currently_labeled, self.watched_ids, excluded_genres,
+                label_name, self.label_dates, stale_days
+            )
+            unwatched_labeled = categories['fresh']
+            watched_labeled = categories['watched']
+            stale_labeled = categories['stale']
+            excluded_labeled = categories['excluded']
+
+            print(f"{GREEN}Keeping {len(unwatched_labeled)} fresh unwatched recommendations{RESET}")
+            print(f"{YELLOW}Removing {len(watched_labeled)} watched {self.media_key} from recommendations{RESET}")
+            print(f"{YELLOW}Removing {len(stale_labeled)} stale recommendations (unwatched > {stale_days} days){RESET}")
+            print(f"{YELLOW}Removing {len(excluded_labeled)} {self.media_key} with excluded genres{RESET}")
+
+            remove_labels_from_items(watched_labeled, label_name, self.label_dates, "watched")
+            remove_labels_from_items(stale_labeled, label_name, self.label_dates, "stale")
+            remove_labels_from_items(excluded_labeled, label_name, self.label_dates, "excluded genre")
+
+            target_count = self.config['general'].get('limit_plex_results', 50 if self.media_type == 'movie' else 20)
+
+            print(f"{GREEN}Building optimal collection of top {target_count} recommendations...{RESET}")
+
+            all_candidates = {}
+            media_cache = self._get_media_cache()
+
+            for item in unwatched_labeled:
+                item_id = int(item.ratingKey)
+                item_info = media_cache.cache[self.media_key].get(str(item_id))
+                if item_info:
+                    try:
+                        score, _ = self._calculate_similarity_from_cache(item_info)
+                        all_candidates[item_id] = (item, score)
+                    except Exception:
+                        all_candidates[item_id] = (item, 0.0)
+
+            for rec in selected_items:
+                plex_item = next(
+                    (m for m in items_to_update if m.title == rec['title'] and m.year == rec.get('year')),
+                    None
+                )
+                if plex_item:
+                    item_id = int(plex_item.ratingKey)
+                    is_watched = item_id in self.watched_ids or getattr(plex_item, 'isPlayed', False)
+                    if not is_watched:
+                        score = rec.get('similarity_score', 0.0)
+                        if item_id not in all_candidates or score > all_candidates[item_id][1]:
+                            all_candidates[item_id] = (plex_item, score)
+
+            sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
+            top_candidates = sorted_candidates[:target_count]
+            top_ids = {item_id for item_id, _ in top_candidates}
+
+            current_ids = {int(m.ratingKey) for m in unwatched_labeled}
+            ids_to_add = top_ids - current_ids
+            ids_to_remove = current_ids - top_ids
+
+            if ids_to_remove:
+                items_to_remove = [m for m in unwatched_labeled if int(m.ratingKey) in ids_to_remove]
+                print(f"{YELLOW}Removing {len(items_to_remove)} lower-scoring items to make room for better ones{RESET}")
+                remove_labels_from_items(items_to_remove, label_name, self.label_dates, "replaced by higher score")
+
+            items_to_add = [all_candidates[mid][0] for mid in ids_to_add if mid in all_candidates]
+            if items_to_add:
+                print(f"{GREEN}Adding {len(items_to_add)} new high-scoring recommendations{RESET}")
+                add_labels_to_items(items_to_add, label_name, self.label_dates)
+
+            self._save_watched_cache()
+
+            print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
+
+            final_collection_items = [plex_item for item_id, (plex_item, score) in top_candidates]
+
+            print(f"{GREEN}Final collection size: {len(final_collection_items)} {self.media_key} (sorted by similarity){RESET}")
+            print(f"{GREEN}Successfully updated labels incrementally{RESET}")
+
+            if final_collection_items:
+                username = label_name.replace('Recommended_', '')
+                if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
+                    display_name = self.user_preferences[username]['display_name']
+                else:
+                    display_name = username.capitalize()
+
+                emoji = "🎬" if self.media_type == 'movie' else "📺"
+                collection_name = f"{emoji} {display_name} - Recommendation"
+                update_plex_collection(section, collection_name, final_collection_items, logger)
+                cleanup_old_collections(section, collection_name, username, emoji, logger)
+
+        except Exception as e:
+            log_error(f"Error managing Plex labels: {e}")
+            import traceback
+            print(traceback.format_exc())
+
+    def _user_select_recommendations(self, recommended_items: List[Dict], operation_label: str) -> List[Dict]:
+        """Prompt user to select recommendations - delegates to utility."""
+        return user_select_recommendations(recommended_items, operation_label)
+
+    @abstractmethod
+    def _get_media_cache(self):
+        """Return the media cache instance (movie_cache or show_cache)."""
+        pass
+
+    @abstractmethod
+    def _find_plex_item(self, section, rec: Dict):
+        """Find a Plex item matching the recommendation."""
+        pass
+
+    @abstractmethod
+    def _calculate_similarity_from_cache(self, item_info: Dict) -> Tuple[float, Dict]:
+        """Calculate similarity score for an item."""
+        pass
+
+    @abstractmethod
+    def _print_similarity_breakdown(self, item_info: Dict, score: float, breakdown: Dict):
+        """Print detailed breakdown of similarity score."""
+        pass
+
     @abstractmethod
     def _get_watched_data(self) -> Dict:
         """
@@ -470,20 +895,5 @@ class BaseRecommender(ABC):
         Save watched data cache to file.
 
         Must be implemented by subclasses.
-        """
-        pass
-
-    @abstractmethod
-    def get_recommendations(self, username: str = None) -> List[Dict]:
-        """
-        Get recommendations for a user.
-
-        Must be implemented by subclasses.
-
-        Args:
-            username: Optional username for single-user recommendations
-
-        Returns:
-            List of recommendation dicts sorted by similarity score
         """
         pass
