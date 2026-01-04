@@ -33,7 +33,8 @@ from utils import (
     print_user_header, print_user_footer, print_status,
     log_warning, log_error, load_config, clickable_link,
     calculate_rewatch_multiplier, calculate_recency_multiplier,
-    calculate_similarity_score, normalize_genre, fuzzy_keyword_match
+    calculate_similarity_score, normalize_genre, fuzzy_keyword_match,
+    create_trakt_client, TraktAPIError, TraktAuthError
 )
 
 # Import output generation
@@ -1084,6 +1085,96 @@ def process_user(config, plex, username):
         'shows_categorized': shows_categorized
     }
 
+def export_to_trakt(config, all_users_data, tmdb_api_key):
+    """
+    Export recommendations to Trakt lists.
+
+    Creates/updates lists named: "{prefix} - {username} - Movies/TV"
+    """
+    trakt_config = config.get('trakt', {})
+    export_config = trakt_config.get('export', {})
+
+    # Check if export is enabled
+    if not trakt_config.get('enabled', False):
+        return
+    if not export_config.get('enabled', True):
+        return
+
+    # Create Trakt client
+    trakt_client = create_trakt_client(config)
+    if not trakt_client:
+        log_warning("Trakt enabled but client could not be created (check credentials)")
+        return
+
+    if not trakt_client.is_authenticated:
+        log_warning("Trakt not authenticated - run setup wizard to authenticate")
+        return
+
+    list_prefix = export_config.get('list_prefix', 'Curatarr')
+
+    print(f"\n{CYAN}Exporting to Trakt...{RESET}")
+
+    for user_data in all_users_data:
+        display_name = user_data['display_name']
+        movies_categorized = user_data['movies_categorized']
+        shows_categorized = user_data['shows_categorized']
+
+        # Collect all movie IMDB IDs
+        movie_imdb_ids = []
+        all_movies = []
+        for items in movies_categorized['user_services'].values():
+            all_movies.extend(items)
+        for items in movies_categorized['other_services'].values():
+            all_movies.extend(items)
+        all_movies.extend(movies_categorized['acquire'])
+
+        for movie in all_movies:
+            tmdb_id = movie.get('tmdb_id')
+            if tmdb_id:
+                imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'movie')
+                if imdb_id:
+                    movie_imdb_ids.append(imdb_id)
+
+        # Collect all show IMDB IDs
+        show_imdb_ids = []
+        all_shows = []
+        for items in shows_categorized['user_services'].values():
+            all_shows.extend(items)
+        for items in shows_categorized['other_services'].values():
+            all_shows.extend(items)
+        all_shows.extend(shows_categorized['acquire'])
+
+        for show in all_shows:
+            tmdb_id = show.get('tmdb_id')
+            if tmdb_id:
+                imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'tv')
+                if imdb_id:
+                    show_imdb_ids.append(imdb_id)
+
+        # Sync to Trakt lists
+        try:
+            if movie_imdb_ids:
+                movie_list_name = f"{list_prefix} - {display_name} - Movies"
+                trakt_client.sync_list(
+                    movie_list_name,
+                    movies=movie_imdb_ids,
+                    description=f"Movie recommendations for {display_name} from Curatarr"
+                )
+                print_status(f"  {display_name}: {len(movie_imdb_ids)} movies -> Trakt", "success")
+
+            if show_imdb_ids:
+                show_list_name = f"{list_prefix} - {display_name} - TV"
+                trakt_client.sync_list(
+                    show_list_name,
+                    shows=show_imdb_ids,
+                    description=f"TV recommendations for {display_name} from Curatarr"
+                )
+                print_status(f"  {display_name}: {len(show_imdb_ids)} shows -> Trakt", "success")
+
+        except (TraktAPIError, TraktAuthError) as e:
+            log_error(f"Failed to export {display_name} to Trakt: {e}")
+
+
 def main():
     print(f"\n{CYAN}External Recommendations Generator{RESET}")
     print("-" * 50)
@@ -1137,6 +1228,10 @@ def main():
     if external_config.get('auto_open_html', False) and html_file:
         print_status("Opening watchlist in browser...", "info")
         webbrowser.open(f'file://{html_file}')
+
+    # Export to Trakt if enabled
+    if all_users_data:
+        export_to_trakt(config, all_users_data, tmdb_api_key)
 
 if __name__ == "__main__":
     main()

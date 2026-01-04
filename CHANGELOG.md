@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.7.1] - 2026-01-04
+
+### Added
+- **Trakt list export** — Push external recommendations to Trakt lists
+  - Auto-syncs recommendations to Trakt after generating external watchlists
+  - Creates per-user lists: "Curatarr - {username} - Movies" and "Curatarr - {username} - TV"
+  - Full sync replaces list contents each run (no duplicates)
+  - Configurable list prefix and privacy settings
+  - 9 new unit tests for list management and sync functionality
+
 ## [1.7.0] - 2026-01-04
 
 ### Added

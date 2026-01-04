@@ -395,3 +395,215 @@ class TestTraktClientUserInfo:
         result = client.get_username()
 
         assert result is None
+
+
+class TestTraktClientListManagement:
+    """Tests for list management methods."""
+
+    @patch('utils.trakt.requests.request')
+    def test_get_lists(self, mock_request):
+        """Test getting user lists."""
+        # First call returns user settings, second returns lists
+        settings_response = Mock()
+        settings_response.status_code = 200
+        settings_response.json.return_value = {"user": {"username": "testuser"}}
+
+        lists_response = Mock()
+        lists_response.status_code = 200
+        lists_response.json.return_value = [
+            {"name": "List 1", "ids": {"slug": "list-1"}},
+            {"name": "List 2", "ids": {"slug": "list-2"}}
+        ]
+
+        mock_request.side_effect = [settings_response, lists_response]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_lists()
+
+        assert len(result) == 2
+        assert result[0]["name"] == "List 1"
+
+    @patch('utils.trakt.requests.request')
+    def test_get_list_not_found(self, mock_request):
+        """Test getting a list that doesn't exist."""
+        settings_response = Mock()
+        settings_response.status_code = 200
+        settings_response.json.return_value = {"user": {"username": "testuser"}}
+
+        not_found_response = Mock()
+        not_found_response.status_code = 404
+        not_found_response.text = "Not Found"
+
+        mock_request.side_effect = [settings_response, not_found_response]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_list("nonexistent")
+
+        assert result is None
+
+    @patch('utils.trakt.requests.request')
+    def test_create_list(self, mock_request):
+        """Test creating a new list."""
+        settings_response = Mock()
+        settings_response.status_code = 200
+        settings_response.json.return_value = {"user": {"username": "testuser"}}
+
+        create_response = Mock()
+        create_response.status_code = 200
+        create_response.json.return_value = {
+            "name": "New List",
+            "ids": {"slug": "new-list"}
+        }
+
+        mock_request.side_effect = [settings_response, create_response]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.create_list("New List", description="Test")
+
+        assert result["name"] == "New List"
+        assert result["ids"]["slug"] == "new-list"
+
+    @patch('utils.trakt.requests.request')
+    def test_add_to_list(self, mock_request):
+        """Test adding items to a list."""
+        settings_response = Mock()
+        settings_response.status_code = 200
+        settings_response.json.return_value = {"user": {"username": "testuser"}}
+
+        add_response = Mock()
+        add_response.status_code = 200
+        add_response.json.return_value = {
+            "added": {"movies": 2, "shows": 1},
+            "existing": {"movies": 0, "shows": 0},
+            "not_found": {"movies": [], "shows": []}
+        }
+
+        mock_request.side_effect = [settings_response, add_response]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.add_to_list(
+            "my-list",
+            movies=[{"ids": {"imdb": "tt123"}}, {"ids": {"imdb": "tt456"}}],
+            shows=[{"ids": {"imdb": "tt789"}}]
+        )
+
+        assert result["added"]["movies"] == 2
+        assert result["added"]["shows"] == 1
+
+    @patch('utils.trakt.requests.request')
+    def test_remove_from_list(self, mock_request):
+        """Test removing items from a list."""
+        settings_response = Mock()
+        settings_response.status_code = 200
+        settings_response.json.return_value = {"user": {"username": "testuser"}}
+
+        remove_response = Mock()
+        remove_response.status_code = 200
+        remove_response.json.return_value = {
+            "deleted": {"movies": 1, "shows": 0},
+            "not_found": {"movies": [], "shows": []}
+        }
+
+        mock_request.side_effect = [settings_response, remove_response]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.remove_from_list(
+            "my-list",
+            movies=[{"ids": {"imdb": "tt123"}}]
+        )
+
+        assert result["deleted"]["movies"] == 1
+
+    def test_add_to_list_empty(self):
+        """Test adding empty lists returns immediately."""
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.add_to_list("my-list")
+
+        assert result == {"added": {"movies": 0, "shows": 0}}
+
+    def test_remove_from_list_empty(self):
+        """Test removing empty lists returns immediately."""
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.remove_from_list("my-list")
+
+        assert result == {"deleted": {"movies": 0, "shows": 0}}
+
+
+class TestTraktClientSyncList:
+    """Tests for list sync functionality."""
+
+    @patch('utils.trakt.requests.request')
+    def test_sync_list_creates_new(self, mock_request):
+        """Test syncing to a new list."""
+        # Mock responses in order: get_username, get_list (404), get_lists, create_list,
+        # get_list_items, add_to_list
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        not_found = Mock(status_code=404, text="Not Found")
+
+        empty_lists = Mock(status_code=200)
+        empty_lists.json.return_value = []
+
+        created = Mock(status_code=200)
+        created.json.return_value = {"name": "Test", "ids": {"slug": "test"}}
+
+        empty_items = Mock(status_code=200)
+        empty_items.json.return_value = []
+
+        added = Mock(status_code=200)
+        added.json.return_value = {"added": {"movies": 2, "shows": 0}}
+
+        mock_request.side_effect = [
+            settings,  # get_username for get_or_create_list
+            not_found,  # get_list (not found)
+            settings,  # get_username for get_lists
+            empty_lists,  # get_lists
+            settings,  # get_username for create_list
+            created,  # create_list
+            settings,  # get_username for get_list_items
+            empty_items,  # get_list_items
+            settings,  # get_username for add_to_list
+            added,  # add_to_list
+        ]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.sync_list("Test", movies=["tt123", "tt456"])
+
+        assert result["added"]["movies"] == 2
+
+    @patch('utils.trakt.requests.request')
+    def test_sync_list_clears_and_adds(self, mock_request):
+        """Test syncing clears existing items before adding new ones."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        existing_list = Mock(status_code=200)
+        existing_list.json.return_value = {"name": "Test", "ids": {"slug": "test"}}
+
+        existing_items = Mock(status_code=200)
+        existing_items.json.return_value = [
+            {"type": "movie", "movie": {"ids": {"imdb": "tt000"}}}
+        ]
+
+        removed = Mock(status_code=200)
+        removed.json.return_value = {"deleted": {"movies": 1, "shows": 0}}
+
+        added = Mock(status_code=200)
+        added.json.return_value = {"added": {"movies": 1, "shows": 0}}
+
+        mock_request.side_effect = [
+            settings,  # get_username for get_or_create_list
+            existing_list,  # get_list
+            settings,  # get_username for get_list_items
+            existing_items,  # get_list_items (has old items)
+            settings,  # get_username for remove_from_list
+            removed,  # remove_from_list
+            settings,  # get_username for add_to_list
+            added,  # add_to_list
+        ]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.sync_list("Test", movies=["tt123"])
+
+        assert result["added"]["movies"] == 1

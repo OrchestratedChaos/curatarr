@@ -164,6 +164,11 @@ trakt:
   # Tokens are set automatically after OAuth authentication
   access_token: null
   refresh_token: null
+  # Export settings
+  export:
+    enabled: true  # Export recommendations to Trakt lists
+    list_prefix: "Curatarr"  # Lists named: "Curatarr - Username - Movies"
+    privacy: "private"  # private, friends, or public
 
 # Platform Settings
 platform:
