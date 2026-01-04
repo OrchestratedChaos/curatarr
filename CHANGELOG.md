@@ -2,6 +2,15 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.18] - 2026-01-03
+
+### Changed
+- **External recommendations now prioritize match score over audience rating**
+  - Match score is king - recommendations based on YOUR taste, not general audience
+  - Discovery casts wider net (rating >= 5.0, votes >= 50) to find more candidates
+  - Output requires 65%+ match and 200+ votes - no rating gate
+  - Expanded search: 10 genres, 40 results per genre, 10 keywords, 1500 max candidates
+
 ## [1.6.17] - 2026-01-03
 
 ### Fixed

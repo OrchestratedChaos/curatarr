@@ -76,10 +76,18 @@ TMDB_PROVIDERS = {
 TMDB_MOVIE_GENRE_IDS = {v.lower(): k for k, v in TMDB_MOVIE_GENRES.items()}
 TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
 
-# Quality thresholds for candidate filtering
-MIN_RATING = 7.0
-MIN_VOTE_COUNT = 500
-MAX_CANDIDATES = 500
+# Discovery thresholds - cast a wide net to find candidates
+DISCOVER_MIN_RATING = 5.0       # Low bar - just filter out garbage
+DISCOVER_MIN_VOTES = 50         # Enough to know it's a real film
+MAX_CANDIDATES = 1500           # Bigger pool = more chances for great matches
+
+# Output thresholds - match score is king, rating is just tiebreaker
+OUTPUT_MIN_SCORE = 0.65         # 65%+ match required - this is what matters
+OUTPUT_MIN_VOTES = 200          # Enough votes to be reliable
+
+# Legacy aliases for cache filtering (votes only, no rating gate)
+MIN_RATING = 0.0                # Don't filter by rating in cache
+MIN_VOTE_COUNT = OUTPUT_MIN_VOTES
 SCORE_CHANGE_THRESHOLD = 0.01  # Minimum score change to log during updates
 
 # Default weights (specificity-first approach - same as internal recommenders)
@@ -105,7 +113,7 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
     media = 'movie' if media_type == 'movie' else 'tv'
 
     # Get top genres from profile
-    top_genres = list(user_profile['genres'].most_common(5))
+    top_genres = list(user_profile['genres'].most_common(10))  # More genres = wider net
     genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == 'movie' else TMDB_TV_GENRE_IDS
 
     # Get top keywords from profile
@@ -129,8 +137,8 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
             params = {
                 'api_key': tmdb_api_key,
                 'with_genres': genre_id,
-                'vote_average.gte': MIN_RATING,
-                'vote_count.gte': MIN_VOTE_COUNT,
+                'vote_average.gte': DISCOVER_MIN_RATING,
+                'vote_count.gte': DISCOVER_MIN_VOTES,
                 'sort_by': 'vote_average.desc',
                 'page': 1
             }
@@ -138,7 +146,7 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
 
             if response.status_code == 200:
                 results = response.json().get('results', [])
-                for item in results[:20]:  # Top 20 per genre
+                for item in results[:40]:  # Top 40 per genre - wider net
                     tmdb_id = item['id']
                     title = item.get('title') or item.get('name')
                     year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
@@ -163,7 +171,7 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
     print(f"    Found {len(candidates)} candidates from genre search")
 
     # Also search by top keywords using search API
-    for keyword, _ in top_keywords[:5]:  # Top 5 keywords
+    for keyword, _ in top_keywords[:10]:  # Top 10 keywords - wider net
         if len(candidates) >= max_candidates:
             break
 
@@ -182,8 +190,8 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
                     params = {
                         'api_key': tmdb_api_key,
                         'with_keywords': kw_id,
-                        'vote_average.gte': MIN_RATING,
-                        'vote_count.gte': MIN_VOTE_COUNT,
+                        'vote_average.gte': DISCOVER_MIN_RATING,
+                        'vote_count.gte': DISCOVER_MIN_VOTES,
                         'sort_by': 'vote_average.desc',
                         'page': 1
                     }
@@ -747,7 +755,7 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
         print_status("No candidates found", "warning")
         return []
 
-    print(f"  Found {len(candidates)} quality candidates (rating >= {MIN_RATING}, votes >= {MIN_VOTE_COUNT})")
+    print(f"  Found {len(candidates)} candidates (discovery: rating >= {DISCOVER_MIN_RATING}, votes >= {DISCOVER_MIN_VOTES})")
 
     # Now score each candidate using profile-based similarity
     scored_recommendations = []
@@ -796,16 +804,17 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
     # Sort by score (highest first), then by rating as tiebreaker
     scored_recommendations.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
 
-    # Apply threshold filtering
-    high_score = [r for r in scored_recommendations if r['score'] >= min_relevance_score]
-    low_score = [r for r in scored_recommendations if r['score'] < min_relevance_score]
+    # Apply output filtering - match score is king, votes just validates it's real
+    quality_recs = [
+        r for r in scored_recommendations
+        if r['score'] >= OUTPUT_MIN_SCORE
+        and r.get('vote_count', 0) >= OUTPUT_MIN_VOTES
+    ]
 
-    print(f"  {len(high_score)} items above {int(min_relevance_score*100)}% threshold, {len(low_score)} below")
+    print(f"  {len(quality_recs)} items meet quality bar (>={int(OUTPUT_MIN_SCORE*100)}% match, >={OUTPUT_MIN_VOTES} votes)")
 
-    # Take high-score items first, backfill if needed
-    final_recs = high_score[:limit]
-    if len(final_recs) < limit:
-        final_recs.extend(low_score[:limit - len(final_recs)])
+    # Take quality items only - no backfill with low-quality
+    final_recs = quality_recs[:limit]
 
     if final_recs:
         print(f"  Top recommendation: {final_recs[0]['title']} ({final_recs[0]['score']:.1%})")
@@ -828,19 +837,18 @@ def load_cache(display_name, media_type):
                 if 'tmdb_id' not in item:
                     item['tmdb_id'] = int(tmdb_id_str)
 
-            # Filter out items that don't meet current quality thresholds
+            # Filter out items without enough votes (match score filtering happens at output)
             filtered = {}
             removed_count = 0
             for tmdb_id_str, item in cache.items():
-                rating = item.get('rating', 0)
                 vote_count = item.get('vote_count', 0)  # Missing vote_count = needs re-fetch
-                if rating >= MIN_RATING and vote_count >= MIN_VOTE_COUNT:
+                if vote_count >= MIN_VOTE_COUNT:
                     filtered[tmdb_id_str] = item
                 else:
                     removed_count += 1
 
             if removed_count > 0:
-                print(f"  Filtered {removed_count} cached items below quality threshold (rating < {MIN_RATING} or votes < {MIN_VOTE_COUNT})")
+                print(f"  Filtered {removed_count} cached items with < {MIN_VOTE_COUNT} votes")
 
             return filtered
     return {}
