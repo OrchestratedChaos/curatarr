@@ -553,6 +553,139 @@ class TraktClient:
 
         return result
 
+    # =========================================================================
+    # Watch History and Ratings Import
+    # =========================================================================
+
+    def get_watched_movies(self) -> List[Dict[str, Any]]:
+        """
+        Get user's watched movies from Trakt.
+
+        Returns:
+            List of watched movie objects with 'movie' containing title, year, and ids
+        """
+        username = self.get_username()
+        if not username:
+            return []
+        try:
+            return self._make_request("GET", f"/users/{username}/watched/movies")
+        except TraktAPIError:
+            return []
+
+    def get_watched_shows(self) -> List[Dict[str, Any]]:
+        """
+        Get user's watched shows from Trakt.
+
+        Returns:
+            List of watched show objects with 'show' containing title, year, and ids
+        """
+        username = self.get_username()
+        if not username:
+            return []
+        try:
+            return self._make_request("GET", f"/users/{username}/watched/shows")
+        except TraktAPIError:
+            return []
+
+    def get_ratings(self, media_type: str = None) -> List[Dict[str, Any]]:
+        """
+        Get user's ratings from Trakt.
+
+        Args:
+            media_type: Optional filter - 'movies', 'shows', or None for all
+
+        Returns:
+            List of rating objects with 'rating', 'rated_at', and media info
+        """
+        username = self.get_username()
+        if not username:
+            return []
+        try:
+            endpoint = f"/users/{username}/ratings"
+            if media_type:
+                endpoint += f"/{media_type}"
+            return self._make_request("GET", endpoint)
+        except TraktAPIError:
+            return []
+
+    def get_watchlist(self, media_type: str = None) -> List[Dict[str, Any]]:
+        """
+        Get user's watchlist from Trakt.
+
+        Args:
+            media_type: Optional filter - 'movies', 'shows', or None for all
+
+        Returns:
+            List of watchlist items with media info and ids
+        """
+        username = self.get_username()
+        if not username:
+            return []
+        try:
+            endpoint = f"/users/{username}/watchlist"
+            if media_type:
+                endpoint += f"/{media_type}"
+            return self._make_request("GET", endpoint)
+        except TraktAPIError:
+            return []
+
+    def get_watch_history_imdb_ids(self, media_type: str = 'movies') -> set:
+        """
+        Get set of IMDB IDs from user's Trakt watch history.
+
+        Args:
+            media_type: 'movies' or 'shows'
+
+        Returns:
+            Set of IMDB IDs for watched items
+        """
+        imdb_ids = set()
+
+        if media_type == 'movies':
+            watched = self.get_watched_movies()
+            for item in watched:
+                movie = item.get('movie', {})
+                imdb_id = movie.get('ids', {}).get('imdb')
+                if imdb_id:
+                    imdb_ids.add(imdb_id)
+        else:
+            watched = self.get_watched_shows()
+            for item in watched:
+                show = item.get('show', {})
+                imdb_id = show.get('ids', {}).get('imdb')
+                if imdb_id:
+                    imdb_ids.add(imdb_id)
+
+        return imdb_ids
+
+    def get_watchlist_imdb_ids(self, media_type: str = None) -> set:
+        """
+        Get set of IMDB IDs from user's Trakt watchlist.
+
+        Args:
+            media_type: 'movies', 'shows', or None for all
+
+        Returns:
+            Set of IMDB IDs for watchlist items
+        """
+        imdb_ids = set()
+        watchlist = self.get_watchlist(media_type)
+
+        for item in watchlist:
+            item_type = item.get('type')
+            if item_type == 'movie':
+                media = item.get('movie', {})
+            elif item_type == 'show':
+                media = item.get('show', {})
+            else:
+                continue
+
+            imdb_id = media.get('ids', {}).get('imdb')
+            if imdb_id:
+                imdb_ids.add(imdb_id)
+
+        return imdb_ids
+
 
 def create_trakt_client(config: Dict) -> Optional[TraktClient]:
     """

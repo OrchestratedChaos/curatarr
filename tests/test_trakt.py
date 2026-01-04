@@ -607,3 +607,136 @@ class TestTraktClientSyncList:
         result = client.sync_list("Test", movies=["tt123"])
 
         assert result["added"]["movies"] == 1
+
+
+class TestTraktClientImport:
+    """Tests for watch history and watchlist import methods."""
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watched_movies(self, mock_request):
+        """Test getting watched movies."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        watched = Mock(status_code=200)
+        watched.json.return_value = [
+            {"movie": {"title": "Movie 1", "ids": {"imdb": "tt123"}}},
+            {"movie": {"title": "Movie 2", "ids": {"imdb": "tt456"}}}
+        ]
+
+        mock_request.side_effect = [settings, watched]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watched_movies()
+
+        assert len(result) == 2
+        assert result[0]["movie"]["title"] == "Movie 1"
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watched_shows(self, mock_request):
+        """Test getting watched shows."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        watched = Mock(status_code=200)
+        watched.json.return_value = [
+            {"show": {"title": "Show 1", "ids": {"imdb": "tt789"}}}
+        ]
+
+        mock_request.side_effect = [settings, watched]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watched_shows()
+
+        assert len(result) == 1
+        assert result[0]["show"]["title"] == "Show 1"
+
+    @patch('utils.trakt.requests.request')
+    def test_get_ratings(self, mock_request):
+        """Test getting user ratings."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        ratings = Mock(status_code=200)
+        ratings.json.return_value = [
+            {"rating": 10, "movie": {"title": "Great Movie", "ids": {"imdb": "tt123"}}},
+            {"rating": 5, "movie": {"title": "OK Movie", "ids": {"imdb": "tt456"}}}
+        ]
+
+        mock_request.side_effect = [settings, ratings]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_ratings("movies")
+
+        assert len(result) == 2
+        assert result[0]["rating"] == 10
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watchlist(self, mock_request):
+        """Test getting watchlist."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        watchlist = Mock(status_code=200)
+        watchlist.json.return_value = [
+            {"type": "movie", "movie": {"title": "Want to Watch", "ids": {"imdb": "tt111"}}},
+            {"type": "show", "show": {"title": "Want to Watch Show", "ids": {"imdb": "tt222"}}}
+        ]
+
+        mock_request.side_effect = [settings, watchlist]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watchlist()
+
+        assert len(result) == 2
+        assert result[0]["type"] == "movie"
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watch_history_imdb_ids(self, mock_request):
+        """Test getting IMDB IDs from watch history."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        watched = Mock(status_code=200)
+        watched.json.return_value = [
+            {"movie": {"title": "Movie 1", "ids": {"imdb": "tt123"}}},
+            {"movie": {"title": "Movie 2", "ids": {"imdb": "tt456"}}}
+        ]
+
+        mock_request.side_effect = [settings, watched]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watch_history_imdb_ids("movies")
+
+        assert result == {"tt123", "tt456"}
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watchlist_imdb_ids(self, mock_request):
+        """Test getting IMDB IDs from watchlist."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        watchlist = Mock(status_code=200)
+        watchlist.json.return_value = [
+            {"type": "movie", "movie": {"ids": {"imdb": "tt111"}}},
+            {"type": "show", "show": {"ids": {"imdb": "tt222"}}}
+        ]
+
+        mock_request.side_effect = [settings, watchlist]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watchlist_imdb_ids()
+
+        assert result == {"tt111", "tt222"}
+
+    def test_get_watched_movies_no_auth(self):
+        """Test get_watched_movies returns empty when not authenticated."""
+        client = TraktClient("id", "secret")
+        result = client.get_watched_movies()
+        assert result == []
+
+    def test_get_watchlist_no_auth(self):
+        """Test get_watchlist returns empty when not authenticated."""
+        client = TraktClient("id", "secret")
+        result = client.get_watchlist()
+        assert result == []
