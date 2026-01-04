@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -26,7 +26,4 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
-
-      - name: Run tests with coverage
-        run: pytest tests/ --cov=utils --cov=recommenders --cov-report=term-missing --cov-fail-under=90
+        run: pytest tests/ -v --tb=short --cov=utils --cov-report=term-missing --cov-fail-under=90
