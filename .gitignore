@@ -28,3 +28,4 @@ __pycache__/
 *.xml
 CLAUDE.md
 TODO.md
+.coverage

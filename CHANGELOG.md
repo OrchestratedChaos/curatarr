@@ -2,6 +2,13 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.15] - 2026-01-03
+
+### Changed
+- **Raised external recommendation quality thresholds** — Filters out mediocre content
+  - MIN_RATING: 6.0 → 7.0 (only recommend actually good content)
+  - MIN_VOTE_COUNT: 100 → 500 (enough votes to be reliable)
+
 ## [1.6.14] - 2026-01-03
 
 ### Changed
