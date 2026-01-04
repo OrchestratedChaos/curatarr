@@ -88,7 +88,7 @@ class PlexTVRecommender(BaseRecommender):
     # Required class attributes for BaseRecommender
     media_type = 'tv'
     media_key = 'shows'
-    library_config_key = 'TV_library_title'
+    library_config_key = 'tv_library'
     default_library_name = 'TV Shows'
 
     def _load_weights(self, weights_config: Dict) -> Dict:

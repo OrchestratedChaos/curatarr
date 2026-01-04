@@ -331,7 +331,7 @@ class TestBaseCacheGetTmdbData:
 class ConcreteRecommender(BaseRecommender):
     """Concrete implementation of BaseRecommender for testing."""
     media_type = 'movie'
-    library_config_key = 'movie_library_title'
+    library_config_key = 'movie_library'
     default_library_name = 'Movies'
 
     def _load_weights(self, weights_config):

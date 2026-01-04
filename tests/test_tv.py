@@ -173,7 +173,7 @@ class TestPlexTVRecommenderInit:
     def test_init_sets_library_title(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test that PlexTVRecommender sets library title from config."""
         mock_load.return_value = {
-            'plex': {'url': 'http://localhost', 'token': 'abc', 'TV_library_title': 'My TV Shows'},
+            'plex': {'url': 'http://localhost', 'token': 'abc', 'tv_library': 'My TV Shows'},
             'general': {},
             'weights': {}
         }

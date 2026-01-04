@@ -194,7 +194,7 @@ class TestPlexMovieRecommenderLibraryMethods:
     def test_get_library_movies_set(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
         """Test _get_library_movies_set returns movie IDs."""
         mock_load.return_value = {
-            'plex': {'url': 'http://localhost', 'token': 'abc', 'movie_library_title': 'Movies'},
+            'plex': {'url': 'http://localhost', 'token': 'abc', 'movie_library': 'Movies'},
             'general': {},
             'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'tmdb_keywords': 0.2}
         }
