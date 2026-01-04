@@ -77,8 +77,8 @@ TMDB_MOVIE_GENRE_IDS = {v.lower(): k for k, v in TMDB_MOVIE_GENRES.items()}
 TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
 
 # Quality thresholds for candidate filtering
-MIN_RATING = 6.0
-MIN_VOTE_COUNT = 100
+MIN_RATING = 7.0
+MIN_VOTE_COUNT = 500
 MAX_CANDIDATES = 500
 SCORE_CHANGE_THRESHOLD = 0.01  # Minimum score change to log during updates
 
