@@ -119,7 +119,7 @@ class PlexMovieRecommender(BaseRecommender):
     # Required class attributes for BaseRecommender
     media_type = 'movie'
     media_key = 'movies'
-    library_config_key = 'movie_library_title'
+    library_config_key = 'movie_library'
     default_library_name = 'Movies'
 
     def _load_weights(self, weights_config: Dict) -> Dict:
