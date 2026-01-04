@@ -54,6 +54,7 @@ from utils import (
     add_labels_to_items,
     update_plex_collection,
     cleanup_old_collections,
+    get_library_imdb_ids,
 )
 
 logger = logging.getLogger('plex_recommender')
@@ -849,6 +850,110 @@ class BaseRecommender(ABC):
     def _get_media_cache(self):
         """Return the media cache instance (movie_cache or show_cache)."""
         pass
+
+    # ------------------------------------------------------------------------
+    # TMDB HELPER METHODS (shared by movie and TV recommenders)
+    # ------------------------------------------------------------------------
+    def _get_plex_item_tmdb_id(self, plex_item) -> Optional[int]:
+        """Get TMDB ID for a Plex item with caching.
+
+        Args:
+            plex_item: Plex media item (movie or show)
+
+        Returns:
+            TMDB ID or None if not found
+        """
+        cache_key = str(plex_item.ratingKey)
+        if cache_key in self.plex_tmdb_cache:
+            return self.plex_tmdb_cache[cache_key]
+
+        tmdb_id = get_tmdb_id_for_item(plex_item, self.tmdb_api_key, self.media_type, self.plex_tmdb_cache)
+
+        if tmdb_id:
+            self.plex_tmdb_cache[cache_key] = tmdb_id
+            self._save_watched_cache()
+        return tmdb_id
+
+    def _get_plex_item_imdb_id(self, plex_item) -> Optional[str]:
+        """Get IMDb ID for a Plex item with fallback to TMDB.
+
+        Args:
+            plex_item: Plex media item (movie or show)
+
+        Returns:
+            IMDb ID string or None if not found
+        """
+        # Try extracting from GUIDs first
+        ids = extract_ids_from_guids(plex_item)
+        if ids['imdb_id']:
+            return ids['imdb_id']
+
+        # Fallback: Check legacy guid attribute
+        if hasattr(plex_item, 'guid') and plex_item.guid and plex_item.guid.startswith('imdb://'):
+            return plex_item.guid.split('imdb://')[1]
+
+        # Fallback to TMDB to get IMDb ID
+        tmdb_id = self._get_plex_item_tmdb_id(plex_item)
+        if tmdb_id:
+            if self.media_type == 'movie':
+                data = fetch_tmdb_with_retry(
+                    f"https://api.themoviedb.org/3/movie/{tmdb_id}",
+                    {'api_key': self.tmdb_api_key}
+                )
+                return data.get('imdb_id') if data else None
+            else:
+                # TV shows need the external_ids endpoint
+                data = fetch_tmdb_with_retry(
+                    f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids",
+                    {'api_key': self.tmdb_api_key}
+                )
+                return data.get('imdb_id') if data else None
+        return None
+
+    def _get_tmdb_id_via_imdb(self, plex_item) -> Optional[int]:
+        """Get TMDB ID using IMDb ID as a fallback method.
+
+        Args:
+            plex_item: Plex media item (movie or show)
+
+        Returns:
+            TMDB ID or None if not found
+        """
+        imdb_id = self._get_plex_item_imdb_id(plex_item)
+        if not imdb_id or not self.tmdb_api_key:
+            return None
+
+        data = fetch_tmdb_with_retry(
+            f"https://api.themoviedb.org/3/find/{imdb_id}",
+            {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
+        )
+        if data:
+            results_key = 'movie_results' if self.media_type == 'movie' else 'tv_results'
+            results = data.get(results_key, [])
+            if results:
+                return results[0].get('id')
+        return None
+
+    def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
+        """Get keywords for a media item from TMDB.
+
+        Args:
+            tmdb_id: TMDB ID of the item
+
+        Returns:
+            Set of keyword strings
+        """
+        if not tmdb_id or not self.use_tmdb_keywords or not self.tmdb_api_key:
+            return set()
+
+        keywords = get_tmdb_keywords(self.tmdb_api_key, tmdb_id, self.media_type, self.tmdb_keywords_cache)
+        if keywords:
+            self._save_watched_cache()
+        return set(keywords)
+
+    def _get_library_imdb_ids(self) -> Set[str]:
+        """Get set of all IMDb IDs in the library."""
+        return get_library_imdb_ids(self.plex.library.section(self.library_title))
 
     @abstractmethod
     def _find_plex_item(self, section, rec: Dict):
