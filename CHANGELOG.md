@@ -2,6 +2,12 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.11] - 2026-01-03
+
+### Fixed
+- **Backfill handles API failures** — Collection backfill now marks movies as processed even when TMDB API returns 404
+  - Prevents infinite retry loop for movies removed from TMDB
+
 ## [1.6.10] - 2026-01-03
 
 ### Removed

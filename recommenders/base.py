@@ -191,11 +191,16 @@ class BaseCache(ABC):
                         info['collection_name'] = collection.get('name')
                         updated += 1
                     else:
-                        # Mark as checked (no collection)
                         info['collection_id'] = None
                         info['collection_name'] = None
+                else:
+                    # API failed (404, etc) - mark as processed to avoid infinite retries
+                    info['collection_id'] = None
+                    info['collection_name'] = None
             except Exception:
-                pass  # Skip failures, will retry next run
+                # Mark as processed even on exception
+                info['collection_id'] = None
+                info['collection_name'] = None
 
         print(f"\n{GREEN}Added collection data for {updated} movies{RESET}")
         return True
