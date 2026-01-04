@@ -2,6 +2,18 @@
 
 All notable changes to Plex Recommender will be documented in this file.
 
+## [1.6.12] - 2026-01-03
+
+### Changed
+- **Recommenders now inherit from BaseRecommender** — Major refactoring to reduce code duplication
+  - PlexMovieRecommender and PlexTVRecommender now properly inherit from BaseRecommender
+  - Moved common initialization logic (config, plex, display options, weights) to base class
+  - Implemented abstract methods: `_load_weights()`, `_get_watched_data()`, `_get_watched_count()`, `_save_watched_cache()`
+  - Renamed `watched_movie_ids`/`watched_show_ids` to `watched_ids` for consistency
+  - Removed duplicate `_refresh_watched_data()` (now uses base class version)
+  - Uses `_get_user_context()` from base class instead of duplicating logic
+  - Updated tests to mock at `recommenders.base.*` instead of media-specific modules
+
 ## [1.6.11] - 2026-01-03
 
 ### Fixed
