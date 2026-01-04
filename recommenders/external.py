@@ -31,7 +31,7 @@ from utils import (
     get_plex_account_ids, get_tmdb_config, get_tmdb_keywords,
     fetch_watch_history_with_tmdb,
     print_user_header, print_user_footer, print_status,
-    log_warning, log_error, load_config,
+    log_warning, log_error, load_config, clickable_link,
     calculate_rewatch_multiplier, calculate_recency_multiplier,
     calculate_similarity_score, normalize_genre, fuzzy_keyword_match
 )
@@ -1129,7 +1129,8 @@ def main():
 
     print(f"Watchlists saved to: {output_dir}")
     if html_file:
-        print(f"\nView watchlist: file://{html_file}")
+        file_url = f"file://{html_file}"
+        print(f"\nView watchlist: {clickable_link(file_url)}")
 
     # Auto-open HTML if enabled
     external_config = config.get('external_recommendations', {})

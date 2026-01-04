@@ -2,6 +2,19 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.6.20] - 2026-01-04
+
+### Added
+- **Clickable HTML watchlist link** — Console output now shows a clickable link to open the HTML watchlist
+  - Uses OSC 8 hyperlink escape codes for modern terminal support (iTerm2, Windows Terminal, GNOME Terminal, etc.)
+  - Added `clickable_link()` utility function
+
+### Changed
+- **Consolidated version to single location** — `__version__` now defined only in `utils/config.py`
+  - Imported by movie.py and tv.py instead of duplicated
+  - Makes version bumps and rollbacks easier
+- **Added `auto_open_html` to config.example.yml** — Documents the setting (defaults to false)
+
 ## [1.6.19] - 2026-01-04
 
 ### Fixed

@@ -153,6 +153,7 @@ external_recommendations:
   min_relevance_score: 0.25  # Minimum personal relevance score (0.0-1.0). Items below this
                               # threshold are only included if not enough high-relevance items exist.
                               # 0.25 = 25% relevance minimum. Higher = stricter, fewer results.
+  auto_open_html: false  # Automatically open HTML watchlist in browser after generation
 
 # Platform Settings
 platform:
