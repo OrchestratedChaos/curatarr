@@ -50,7 +50,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.7"
+__version__ = "1.6.8"
 
 # Import base class
 from recommenders.base import BaseCache
@@ -116,6 +116,8 @@ class MovieCache(BaseCache):
             'imdb_id': tmdb_data['imdb_id'],
             'rating': tmdb_data['rating'],
             'vote_count': tmdb_data['vote_count'],
+            'collection_id': tmdb_data.get('collection_id'),
+            'collection_name': tmdb_data.get('collection_name'),
             'ratings': {'audience_rating': audience_rating} if audience_rating > 0 else {}
         }
 
@@ -759,11 +761,12 @@ class PlexMovieRecommender:
             'cast': movie_info.get('cast', []),
             'language': movie_info.get('language', 'N/A'),
             'keywords': movie_info.get('tmdb_keywords', []),
-            'vote_count': movie_info.get('vote_count', 0)
+            'vote_count': movie_info.get('vote_count', 0),
+            'collection_id': movie_info.get('collection_id')
         }
 
         # Use shared scoring function
-        return calculate_similarity_score(
+        score, breakdown = calculate_similarity_score(
             content_info=content_info,
             user_profile=user_profile,
             media_type='movie',
@@ -771,6 +774,22 @@ class PlexMovieRecommender:
             normalize_counters=self.normalize_counters,
             use_fuzzy_keywords=self.use_tmdb_keywords
         )
+
+        # Apply collection bonus for sequels/prequels
+        collection_id = movie_info.get('collection_id')
+        user_collections = self.watched_data.get('collections', {})
+        if collection_id and collection_id in user_collections:
+            # User has watched other movies in this collection - apply bonus
+            collection_count = user_collections[collection_id]
+            # Logarithmic bonus: 1 movie = 5%, 2 = 7.5%, 4 = 10%, etc.
+            import math
+            bonus = 0.05 * (1 + math.log2(max(1, collection_count)) * 0.5)
+            bonus = min(bonus, 0.15)  # Cap at 15% bonus
+            score = min(1.0, score * (1 + bonus))
+            breakdown['collection_bonus'] = round(bonus, 3)
+            breakdown['details']['collection'] = f"{movie_info.get('collection_name', 'Unknown')} (watched: {collection_count:.1f}, bonus: {round(bonus * 100, 1)}%)"
+
+        return score, breakdown
     
     def _print_similarity_breakdown(self, movie_info: Dict, score: float, breakdown: Dict):
         """Print detailed breakdown of similarity score calculation"""
