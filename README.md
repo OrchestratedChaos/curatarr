@@ -377,6 +377,25 @@ git pull origin main
 
 ---
 
+## Feature Requests
+
+Have an idea for Curatarr? We track feature requests as GitHub Issues and **your vote matters!**
+
+### How to Vote
+
+1. Browse [open enhancement requests](https://github.com/OrchestratedChaos/curatarr/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement)
+2. Find a feature you want
+3. **Click the 👍 reaction** on the issue (top of the issue, next to the title)
+4. That's it! Issues with more votes get prioritized
+
+### How to Request a Feature
+
+1. [Search existing issues](https://github.com/OrchestratedChaos/curatarr/issues) to avoid duplicates
+2. [Open a new issue](https://github.com/OrchestratedChaos/curatarr/issues/new) with the `enhancement` label
+3. Describe what you want and why it would be useful
+
+---
+
 ## Credits
 
 Inspired by [netplexflix's](https://github.com/netplexflix) Movie/TV Recommendations for Plex. This project takes the core concept of TMDB-based similarity scoring and rebuilds it with:
