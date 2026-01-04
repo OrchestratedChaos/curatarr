@@ -25,10 +25,10 @@ from utils import (
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score, find_plex_movie,
     show_progress, TeeLogger,
-    extract_genres, extract_ids_from_guids, fetch_tmdb_with_retry,
-    get_tmdb_id_for_item, get_tmdb_keywords, adapt_config_for_media_type,
+    extract_genres, extract_ids_from_guids,
+    adapt_config_for_media_type,
     format_media_output,
-    get_library_imdb_ids, print_similarity_breakdown,
+    print_similarity_breakdown,
     create_empty_counters, process_counters_from_cache,
     compute_profile_hash
 )
@@ -36,7 +36,7 @@ from utils import (
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger('plex_recommender')
 
-__version__ = "1.6.13"
+__version__ = "1.6.14"
 
 # Import base classes
 from recommenders.base import BaseCache, BaseRecommender
@@ -405,10 +405,8 @@ class PlexMovieRecommender(BaseRecommender):
             log_error(f"Error getting library movie titles: {e}")
             return set()
     
-    def _get_library_imdb_ids(self) -> Set[str]:
-        """Get set of all IMDb IDs in the library"""
-        return get_library_imdb_ids(self.plex.library.section(self.library_title))
-    
+    # _get_library_imdb_ids() inherited from BaseRecommender
+
     def get_movie_details(self, movie) -> Dict:
         """Extract comprehensive details from a movie object"""
         try:
@@ -445,17 +443,17 @@ class PlexMovieRecommender(BaseRecommender):
                 directors = [d.tag for d in movie.directors]
                             
             if self.use_tmdb_keywords and self.tmdb_api_key:
-                tmdb_id = self._get_plex_movie_tmdb_id(movie)
+                tmdb_id = self._get_plex_item_tmdb_id(movie)
                 if tmdb_id:
                     tmdb_keywords = list(self._get_tmdb_keywords_for_id(tmdb_id))
             
             movie_info = {
                 'title': movie.title,
                 'year': getattr(movie, 'year', None),
-                'genres': self._extract_genres(movie),
+                'genres': extract_genres(movie),
                 'summary': getattr(movie, 'summary', ''),
                 'directors': directors,
-                'language': self._get_movie_language(movie),
+                'language': self.movie_cache._get_language(movie),
                 'imdb_id': imdb_id,
                 'ratings': {
                     'audience_rating': audience_rating
@@ -473,84 +471,11 @@ class PlexMovieRecommender(BaseRecommender):
             log_warning(f"Error getting movie details for {movie.title}: {e}")
             return {}
     
-    def _extract_genres(self, movie) -> List[str]:
-        """Extract genres from a movie"""
-        return extract_genres(movie)
-    
-    def _get_movie_language(self, movie) -> str:
-        """Get movie's primary audio language - delegates to MovieCache"""
-        return self.movie_cache._get_language(movie)
-
-    # ------------------------------------------------------------------------
-    # TMDB HELPER METHODS
-    # ------------------------------------------------------------------------
-    def _get_tmdb_id_via_imdb(self, plex_movie) -> Optional[int]:
-        """Get TMDB ID using IMDb ID as a fallback method"""
-        imdb_id = self._get_plex_movie_imdb_id(plex_movie)
-        if not imdb_id or not self.tmdb_api_key:
-            return None
-
-        data = fetch_tmdb_with_retry(
-            f"https://api.themoviedb.org/3/find/{imdb_id}",
-            {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
-        )
-        if data:
-            results = data.get('movie_results', [])
-            if results:
-                return results[0].get('id')
-        return None
-    
-    def _get_plex_movie_tmdb_id(self, plex_movie) -> Optional[int]:
-        """Get TMDB ID for a Plex movie with multiple fallback methods"""
-        # Check cache first
-        cache_key = str(plex_movie.ratingKey)
-        if cache_key in self.plex_tmdb_cache:
-            return self.plex_tmdb_cache[cache_key]
-
-        # Use consolidated utility for TMDB ID lookup
-        tmdb_id = get_tmdb_id_for_item(plex_movie, self.tmdb_api_key, 'movie', self.plex_tmdb_cache)
-
-        # Update cache if found
-        if tmdb_id:
-            self.plex_tmdb_cache[cache_key] = tmdb_id
-            self._save_watched_cache()
-        return tmdb_id
-    
-    def _get_plex_movie_imdb_id(self, plex_movie) -> Optional[str]:
-        """Get IMDb ID for a Plex movie with fallback to TMDB"""
-        # Try extracting from GUIDs first using utility
-        ids = extract_ids_from_guids(plex_movie)
-        if ids['imdb_id']:
-            return ids['imdb_id']
-
-        # Fallback: Check legacy guid attribute
-        if hasattr(plex_movie, 'guid') and plex_movie.guid and plex_movie.guid.startswith('imdb://'):
-            return plex_movie.guid.split('imdb://')[1]
-
-        # Fallback to TMDB to get IMDb ID
-        tmdb_id = self._get_plex_movie_tmdb_id(plex_movie)
-        if tmdb_id:
-            return self._get_imdb_id_from_tmdb(tmdb_id)
-        return None
-    
-    def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
-        """Get keywords for a movie from TMDB"""
-        if not tmdb_id or not self.use_tmdb_keywords or not self.tmdb_api_key:
-            return set()
-
-        # Use consolidated utility with local cache
-        keywords = get_tmdb_keywords(self.tmdb_api_key, tmdb_id, 'movie', self.tmdb_keywords_cache)
-        if keywords:
-            self._save_watched_cache()
-        return set(keywords)
-
-    def _get_imdb_id_from_tmdb(self, tmdb_id: int) -> Optional[str]:
-        """Get IMDb ID directly from TMDB"""
-        data = fetch_tmdb_with_retry(
-            f"https://api.themoviedb.org/3/movie/{tmdb_id}",
-            {'api_key': self.tmdb_api_key}
-        )
-        return data.get('imdb_id') if data else None
+    # TMDB methods inherited from BaseRecommender:
+    # - _get_plex_item_tmdb_id()
+    # - _get_plex_item_imdb_id()
+    # - _get_tmdb_id_via_imdb()
+    # - _get_tmdb_keywords_for_id()
 
     # ------------------------------------------------------------------------
     # CALCULATE SCORES
