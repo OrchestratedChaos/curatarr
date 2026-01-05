@@ -740,3 +740,84 @@ class TestTraktClientImport:
         client = TraktClient("id", "secret")
         result = client.get_watchlist()
         assert result == []
+
+
+class TestLoadTraktEnhanceCache:
+    """Tests for load_trakt_enhance_cache function."""
+
+    def test_returns_empty_when_file_not_exists(self, tmp_path):
+        """Test returns empty sets when cache file doesn't exist."""
+        from utils.trakt import load_trakt_enhance_cache
+        result = load_trakt_enhance_cache(str(tmp_path))
+        assert result == {'movie_ids': set(), 'show_ids': set()}
+
+    def test_loads_valid_cache(self, tmp_path):
+        """Test loads valid cache file."""
+        from utils.trakt import load_trakt_enhance_cache, TRAKT_ENHANCE_CACHE_VERSION
+        import json
+
+        cache_path = tmp_path / 'trakt_enhance_cache.json'
+        cache_data = {
+            'version': TRAKT_ENHANCE_CACHE_VERSION,
+            'movie_ids': ['tt1234567', 'tt7654321'],
+            'show_ids': ['tt1111111']
+        }
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f)
+
+        result = load_trakt_enhance_cache(str(tmp_path))
+        assert result['movie_ids'] == {'tt1234567', 'tt7654321'}
+        assert result['show_ids'] == {'tt1111111'}
+
+    def test_returns_empty_on_old_version(self, tmp_path):
+        """Test returns empty sets for old cache version."""
+        from utils.trakt import load_trakt_enhance_cache
+        import json
+
+        cache_path = tmp_path / 'trakt_enhance_cache.json'
+        cache_data = {'version': 0, 'movie_ids': ['tt123'], 'show_ids': []}
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f)
+
+        result = load_trakt_enhance_cache(str(tmp_path))
+        assert result == {'movie_ids': set(), 'show_ids': set()}
+
+    def test_returns_empty_on_invalid_json(self, tmp_path):
+        """Test returns empty sets for corrupted cache."""
+        from utils.trakt import load_trakt_enhance_cache
+
+        cache_path = tmp_path / 'trakt_enhance_cache.json'
+        with open(cache_path, 'w') as f:
+            f.write('not valid json')
+
+        result = load_trakt_enhance_cache(str(tmp_path))
+        assert result == {'movie_ids': set(), 'show_ids': set()}
+
+
+class TestSaveTraktEnhanceCache:
+    """Tests for save_trakt_enhance_cache function."""
+
+    def test_saves_cache_file(self, tmp_path):
+        """Test saves cache to file."""
+        from utils.trakt import save_trakt_enhance_cache, TRAKT_ENHANCE_CACHE_VERSION
+        import json
+
+        movie_ids = {'tt1234567', 'tt7654321'}
+        show_ids = {'tt1111111'}
+        save_trakt_enhance_cache(str(tmp_path), movie_ids, show_ids)
+
+        cache_path = tmp_path / 'trakt_enhance_cache.json'
+        assert cache_path.exists()
+
+        with open(cache_path) as f:
+            data = json.load(f)
+
+        assert data['version'] == TRAKT_ENHANCE_CACHE_VERSION
+        assert set(data['movie_ids']) == movie_ids
+        assert set(data['show_ids']) == show_ids
+
+    def test_handles_invalid_path(self):
+        """Test handles write error gracefully."""
+        from utils.trakt import save_trakt_enhance_cache
+        # Should not raise exception
+        save_trakt_enhance_cache('/nonexistent/path', set(), set())

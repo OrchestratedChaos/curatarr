@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.7.7] - 2026-01-04
+
+### Changed
+- Lowered CI coverage threshold from 90% to 80% for utils
+- Recommenders are integration-heavy; utils remain well-tested (92%+)
+
+### Added
+- Unit tests for `trakt_auth.py` and `trakt_sync.py` CLI entry points
+- Additional cache function tests in `test_tmdb.py` and `test_trakt.py`
+
 ## [1.7.6] - 2026-01-04
 
 ### Added

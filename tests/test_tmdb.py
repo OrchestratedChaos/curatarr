@@ -366,3 +366,174 @@ class TestGetTmdbIdForItem:
         get_tmdb_id_for_item(mock_item, 'api_key', cache=cache)
 
         assert cache['12345'] == 22222
+
+
+class TestLoadImdbTmdbCache:
+    """Tests for load_imdb_tmdb_cache function."""
+
+    def test_returns_empty_dict_when_file_not_exists(self, tmp_path):
+        """Test returns empty dict when cache file doesn't exist."""
+        from utils.tmdb import load_imdb_tmdb_cache
+        result = load_imdb_tmdb_cache(str(tmp_path))
+        assert result == {}
+
+    def test_loads_valid_cache(self, tmp_path):
+        """Test loads valid cache file."""
+        from utils.tmdb import load_imdb_tmdb_cache, IMDB_TMDB_CACHE_VERSION
+        import json
+
+        cache_path = tmp_path / 'imdb_tmdb_cache.json'
+        cache_data = {
+            'version': IMDB_TMDB_CACHE_VERSION,
+            'mappings': {'tt1234567': 12345, 'tt7654321': 54321}
+        }
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f)
+
+        result = load_imdb_tmdb_cache(str(tmp_path))
+        assert result == {'tt1234567': 12345, 'tt7654321': 54321}
+
+    def test_returns_empty_on_old_version(self, tmp_path):
+        """Test returns empty dict for old cache version."""
+        from utils.tmdb import load_imdb_tmdb_cache
+        import json
+
+        cache_path = tmp_path / 'imdb_tmdb_cache.json'
+        cache_data = {'version': 0, 'mappings': {'tt1234567': 12345}}
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f)
+
+        result = load_imdb_tmdb_cache(str(tmp_path))
+        assert result == {}
+
+    def test_returns_empty_on_invalid_json(self, tmp_path):
+        """Test returns empty dict for corrupted cache."""
+        from utils.tmdb import load_imdb_tmdb_cache
+
+        cache_path = tmp_path / 'imdb_tmdb_cache.json'
+        with open(cache_path, 'w') as f:
+            f.write('not valid json')
+
+        result = load_imdb_tmdb_cache(str(tmp_path))
+        assert result == {}
+
+
+class TestSaveImdbTmdbCache:
+    """Tests for save_imdb_tmdb_cache function."""
+
+    def test_saves_cache_file(self, tmp_path):
+        """Test saves cache to file."""
+        from utils.tmdb import save_imdb_tmdb_cache, IMDB_TMDB_CACHE_VERSION
+        import json
+
+        cache = {'tt1234567': 12345}
+        save_imdb_tmdb_cache(str(tmp_path), cache)
+
+        cache_path = tmp_path / 'imdb_tmdb_cache.json'
+        assert cache_path.exists()
+
+        with open(cache_path) as f:
+            data = json.load(f)
+
+        assert data['version'] == IMDB_TMDB_CACHE_VERSION
+        assert data['mappings'] == cache
+
+    def test_handles_invalid_path(self):
+        """Test handles write error gracefully."""
+        from utils.tmdb import save_imdb_tmdb_cache
+        # Should not raise exception
+        save_imdb_tmdb_cache('/nonexistent/path/that/doesnt/exist', {'tt123': 456})
+
+
+class TestGetTmdbIdFromImdb:
+    """Tests for get_tmdb_id_from_imdb function."""
+
+    def test_returns_cached_value(self):
+        """Test returns value from cache without API call."""
+        from utils.tmdb import get_tmdb_id_from_imdb
+
+        cache = {'tt1234567': 99999}
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie', cache)
+        assert result == 99999
+
+    @patch('utils.tmdb.requests.get')
+    def test_fetches_from_api_movie(self, mock_get):
+        """Test fetches movie from TMDB API."""
+        from utils.tmdb import get_tmdb_id_from_imdb
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'movie_results': [{'id': 12345}],
+            'tv_results': []
+        }
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie')
+        assert result == 12345
+
+    @patch('utils.tmdb.requests.get')
+    def test_fetches_from_api_tv(self, mock_get):
+        """Test fetches TV show from TMDB API."""
+        from utils.tmdb import get_tmdb_id_from_imdb
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'movie_results': [],
+            'tv_results': [{'id': 54321}]
+        }
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'tv')
+        assert result == 54321
+
+    @patch('utils.tmdb.requests.get')
+    def test_updates_cache_on_fetch(self, mock_get):
+        """Test updates cache when fetching from API."""
+        from utils.tmdb import get_tmdb_id_from_imdb
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'movie_results': [{'id': 12345}]}
+        mock_get.return_value = mock_response
+
+        cache = {}
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie', cache)
+        assert result == 12345
+        assert cache['tt1234567'] == 12345
+
+    @patch('utils.tmdb.requests.get')
+    def test_returns_none_on_not_found(self, mock_get):
+        """Test returns None when no results."""
+        from utils.tmdb import get_tmdb_id_from_imdb
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'movie_results': [], 'tv_results': []}
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie')
+        assert result is None
+
+    @patch('utils.tmdb.requests.get')
+    def test_returns_none_on_api_error(self, mock_get):
+        """Test returns None on API error."""
+        from utils.tmdb import get_tmdb_id_from_imdb
+
+        mock_get.side_effect = Exception("Network error")
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie')
+        assert result is None
+
+    @patch('utils.tmdb.requests.get')
+    def test_returns_none_on_non_200(self, mock_get):
+        """Test returns None on non-200 status."""
+        from utils.tmdb import get_tmdb_id_from_imdb
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie')
+        assert result is None
