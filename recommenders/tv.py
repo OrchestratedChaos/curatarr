@@ -11,7 +11,7 @@ from typing import Dict, List, Set, Optional, Tuple
 
 # Import shared utilities
 from utils import (
-    RED, GREEN, RESET,
+    RED, GREEN, YELLOW, RESET,
     TOP_CAST_COUNT,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
