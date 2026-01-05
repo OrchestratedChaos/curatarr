@@ -78,6 +78,11 @@ check_and_install_dependencies() {
 # AUTO-UPDATE FROM GITHUB
 # ------------------------------------------------------------------------
 check_for_updates() {
+    # Skip update check in Docker (users should rebuild to update)
+    if [ "$RUNNING_IN_DOCKER" = "true" ]; then
+        return
+    fi
+
     # Check if auto_update is enabled in config
     if [ -f "config/config.yml" ]; then
         AUTO_UPDATE=$(python3 -c "import yaml; c=yaml.safe_load(open('config/config.yml')); print(c.get('general', {}).get('auto_update', False))" 2>/dev/null)
