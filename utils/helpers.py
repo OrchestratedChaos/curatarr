@@ -6,9 +6,21 @@ import hashlib
 import json
 import os
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Dict
 
 from .display import log_warning
+
+
+@lru_cache(maxsize=1)
+def get_project_root() -> str:
+    """
+    Get the project root directory path.
+
+    Returns:
+        Absolute path to the project root (parent of utils/).
+    """
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def compute_profile_hash(profile_data: Dict) -> str:

@@ -4,34 +4,32 @@ import sys
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import argparse
 import logging
 import math
-from plexapi.myplex import MyPlexAccount
-import yaml
+import traceback
 from typing import Dict, List, Set, Optional, Tuple
-import copy
-from datetime import datetime
 
 # Import shared utilities
 from utils import (
-    __version__,
     RED, GREEN, YELLOW, CYAN, RESET,
     TOP_CAST_COUNT,
     DEFAULT_NEGATIVE_THRESHOLD,
-    cleanup_old_logs, setup_logging,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
     log_warning, log_error,
     get_negative_multiplier,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score, find_plex_movie,
-    show_progress, TeeLogger,
+    show_progress,
     extract_genres, extract_ids_from_guids,
     adapt_config_for_media_type,
     format_media_output,
     print_similarity_breakdown,
     create_empty_counters, process_counters_from_cache,
-    compute_profile_hash
+    compute_profile_hash,
+    get_project_root,
+    setup_log_file,
+    teardown_log_file,
+    run_recommender_main,
 )
 
 # Module-level logger - configured by setup_logging() in main()
@@ -521,7 +519,6 @@ class PlexMovieRecommender(BaseRecommender):
             # User has watched other movies in this collection - apply bonus
             collection_count = user_collections[collection_id]
             # Logarithmic bonus: 1 movie = 5%, 2 = 7.5%, 4 = 10%, etc.
-            import math
             bonus = 0.05 * (1 + math.log2(max(1, collection_count)) * 0.5)
             bonus = min(bonus, 0.15)  # Cap at 15% bonus
             score = min(1.0, score * (1 + bonus))
@@ -576,19 +573,8 @@ def adapt_root_config_to_legacy(root_config):
 # ------------------------------------------------------------------------
 def process_recommendations(config, config_path, log_retention_days, single_user=None):
     original_stdout = sys.stdout
-    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
-
-    if log_retention_days > 0:
-        try:
-            os.makedirs(log_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            user_suffix = f"_{single_user}" if single_user else ""
-            log_file_path = os.path.join(log_dir, f"recommendations{user_suffix}_{timestamp}.log")
-            lf = open(log_file_path, "w", encoding="utf-8")
-            sys.stdout = TeeLogger(lf)
-            cleanup_old_logs(log_dir, log_retention_days)
-        except Exception as e:
-            log_error(f"Could not set up logging: {e}")
+    log_dir = os.path.join(get_project_root(), 'logs')
+    setup_log_file(log_dir, log_retention_days, single_user, 'recommendations')
 
     try:
         # Create recommender with single user context
@@ -624,7 +610,6 @@ def process_recommendations(config, config_path, log_retention_days, single_user
 
     except Exception as e:
         print(f"\n{RED}An error occurred: {e}{RESET}")
-        import traceback
         print(traceback.format_exc())
 
         # Check if this is a fatal error that should stop all processing
@@ -637,125 +622,15 @@ def process_recommendations(config, config_path, log_retention_days, single_user
             sys.exit(1)
 
     finally:
-        if log_retention_days > 0 and sys.stdout is not original_stdout:
-            try:
-                sys.stdout.logfile.close()
-                sys.stdout = original_stdout
-            except Exception as e:
-                log_warning(f"Error closing log file: {e}")
+        teardown_log_file(original_stdout, log_retention_days)
 
 def main():
-    if sys.stdout.encoding.lower() != 'utf-8':
-        sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
-
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Movie Recommendations for Plex')
-    parser.add_argument('username', nargs='?', help='Process recommendations for only this user')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
-    args = parser.parse_args()
-
-    start_time = datetime.now()
-    print(f"{CYAN}Movie Recommendations for Plex v{__version__}{RESET}")
-    print("-" * 50)
-
-    # Load config from project root (one level up from recommenders/)
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(project_root, 'config/config.yml')
-
-    try:
-        with open(config_path, 'r') as f:
-            root_config = yaml.safe_load(f)
-        # Adapt root config to legacy format
-        base_config = adapt_root_config_to_legacy(root_config)
-    except Exception as e:
-        log_error(f"Could not load config.yml from project root: {e}")
-        log_warning(f"Looking for config at: {config_path}")
-        sys.exit(1)
-
-    # Setup logging (--debug flag overrides config)
-    logger = setup_logging(debug=args.debug, config=root_config)
-    logger.debug("Debug logging enabled")
-
-    general = base_config.get('general', {})
-    log_retention_days = general.get('log_retention_days', 7)
-
-    # Process single user mode
-    single_user = args.username
-    if single_user:
-        log_warning(f"Single user mode: {single_user}")
-
-    # Get all users that need to be processed
-    all_users = []
-
-    # Check users.list first (new config format)
-    users_config = base_config.get('users', {})
-    user_list = users_config.get('list', '')
-    if user_list:
-        if isinstance(user_list, str):
-            all_users = [u.strip() for u in user_list.split(',') if u.strip()]
-        elif isinstance(user_list, list):
-            all_users = user_list
-
-    # Fall back to plex_users.users (legacy format)
-    if not all_users:
-        plex_config = base_config.get('plex_users', {})
-        plex_users = plex_config.get('users')
-        if plex_users and str(plex_users).lower() != 'none':
-            if isinstance(plex_users, str):
-                all_users = [u.strip() for u in plex_users.split(',') if u.strip()]
-            elif isinstance(plex_users, list):
-                all_users = plex_users
-
-    # Fall back to plex.managed_users (oldest format)
-    if not all_users:
-        managed_users = base_config.get('plex', {}).get('managed_users', '')
-        if managed_users:
-            all_users = [u.strip() for u in managed_users.split(',') if u.strip()]
-
-    # If single user specified via command line, override the user list
-    if single_user:
-        all_users = [single_user]
-
-    if not all_users:
-        # No users configured - shouldn't happen but handle gracefully
-        log_error("No users configured. Please configure plex_users or managed_users in config.yml")
-        sys.exit(1)
-
-    # Process each user individually
-    for user in all_users:
-        print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
-        print("-" * 50)
-
-        # Create modified config for this user
-        user_config = copy.deepcopy(base_config)
-
-        # Resolve Admin to actual username if needed
-        resolved_user = user
-        try:
-            account = MyPlexAccount(token=base_config['plex']['token'])
-            admin_username = account.username
-            if user.lower() in ['admin', 'administrator']:
-                resolved_user = admin_username
-                log_warning(f"Resolved Admin to: {admin_username}")
-        except Exception as e:
-            log_warning(f"Could not resolve admin username: {e}")
-
-        if 'managed_users' in user_config['plex']:
-            user_config['plex']['managed_users'] = resolved_user
-        elif 'users' in user_config.get('plex_users', {}):
-            user_config['plex_users']['users'] = [resolved_user]
-
-        # Process recommendations for this user
-        process_recommendations(user_config, config_path, log_retention_days, resolved_user)
-        print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
-        print("-" * 50)
-
-    runtime = datetime.now() - start_time
-    hours = runtime.seconds // 3600
-    minutes = (runtime.seconds % 3600) // 60
-    seconds = runtime.seconds % 60
-    print(f"\n{GREEN}All processing completed!{RESET}")
-    print(f"Total runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
+    run_recommender_main(
+        media_type='Movie',
+        description='Movie Recommendations for Plex',
+        adapt_config_func=adapt_root_config_to_legacy,
+        process_func=process_recommendations
+    )
 
 if __name__ == "__main__":
     main()

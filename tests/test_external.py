@@ -21,11 +21,11 @@ from recommenders.external import (
     load_cache,
     save_cache,
     get_tmdb_id_from_imdb,
-    enhance_profile_with_trakt,
     export_to_trakt,
     SERVICE_DISPLAY_NAMES,
     TMDB_PROVIDERS,
 )
+from utils.trakt import enhance_profile_with_trakt
 from collections import Counter
 
 
@@ -527,7 +527,7 @@ class TestEnhanceProfileWithTrakt:
         }
         config = {'trakt': {'enabled': False}}
 
-        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+        result = enhance_profile_with_trakt(profile, config, 'api_key', '/tmp/cache', 'movie')
 
         assert result == profile
         assert result['genres']['Action'] == 5
@@ -549,7 +549,7 @@ class TestEnhanceProfileWithTrakt:
             }
         }
 
-        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+        result = enhance_profile_with_trakt(profile, config, 'api_key', '/tmp/cache', 'movie')
 
         assert result['genres']['Drama'] == 3
 
@@ -570,11 +570,11 @@ class TestEnhanceProfileWithTrakt:
             }
         }
 
-        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+        result = enhance_profile_with_trakt(profile, config, 'api_key', '/tmp/cache', 'movie')
 
         assert result['genres']['Comedy'] == 2
 
-    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('utils.trakt.get_authenticated_trakt_client')
     def test_returns_profile_when_not_authenticated(self, mock_get_auth_client):
         """Test returns unchanged profile when Trakt not authenticated."""
         mock_get_auth_client.return_value = None  # Not authenticated
@@ -596,17 +596,17 @@ class TestEnhanceProfileWithTrakt:
             }
         }
 
-        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+        result = enhance_profile_with_trakt(profile, config, 'api_key', '/tmp/cache', 'movie')
 
         assert result['genres']['Horror'] == 1
 
-    @patch('recommenders.external.save_trakt_enhance_cache')
-    @patch('recommenders.external.load_trakt_enhance_cache')
-    @patch('recommenders.external.save_imdb_tmdb_cache')
-    @patch('recommenders.external.load_imdb_tmdb_cache')
-    @patch('recommenders.external.get_tmdb_details')
-    @patch('recommenders.external.get_tmdb_id_from_imdb')
-    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('utils.trakt.save_trakt_enhance_cache')
+    @patch('utils.trakt.load_trakt_enhance_cache')
+    @patch('utils.tmdb.save_imdb_tmdb_cache')
+    @patch('utils.tmdb.load_imdb_tmdb_cache')
+    @patch('utils.trakt.fetch_tmdb_details_for_profile')
+    @patch('utils.tmdb.get_tmdb_id_from_imdb')
+    @patch('utils.trakt.get_authenticated_trakt_client')
     def test_merges_trakt_history_into_profile(self, mock_get_auth_client,
                                                 mock_get_tmdb_id, mock_get_details,
                                                 mock_load_imdb_cache, mock_save_imdb_cache,
@@ -652,21 +652,23 @@ class TestEnhanceProfileWithTrakt:
             }
         }
 
-        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+        result = enhance_profile_with_trakt(profile, config, 'api_key', '/tmp/cache', 'movie')
 
         # Original profile data preserved
         assert result['genres']['Drama'] == 5
-        # New data from Trakt added
-        assert result['genres']['Sci-Fi'] == 1
-        assert result['genres']['Action'] == 1
+        # New data from Trakt added (genres/keywords lowercased by enhance function)
+        assert result['genres']['sci-fi'] == 1
+        assert result['genres']['action'] == 1
         assert result['actors']['Actor A'] == 1
         assert result['keywords']['space'] == 1
         assert result['directors']['Director X'] == 1
         assert 99999 in result['tmdb_ids']
 
-    @patch('recommenders.external.get_authenticated_trakt_client')
-    def test_skips_items_already_in_profile(self, mock_get_auth_client):
+    @patch('utils.trakt.load_trakt_enhance_cache')
+    @patch('utils.trakt.get_authenticated_trakt_client')
+    def test_skips_items_already_in_profile(self, mock_get_auth_client, mock_load_enhance_cache):
         """Test that items already in profile are not re-processed."""
+        mock_load_enhance_cache.return_value = {'movie_ids': set(), 'show_ids': set()}
         mock_client = Mock()
         mock_client.get_watched_movies.return_value = [
             {'movie': {'title': 'Already Watched', 'ids': {'imdb': 'tt1111111'}}}
@@ -690,11 +692,11 @@ class TestEnhanceProfileWithTrakt:
             }
         }
 
-        with patch('recommenders.external.get_tmdb_id_from_imdb') as mock_tmdb:
+        with patch('utils.tmdb.get_tmdb_id_from_imdb') as mock_tmdb:
             # Return None to simulate failed conversion (item should be skipped)
             mock_tmdb.return_value = None
 
-            result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+            result = enhance_profile_with_trakt(profile, config, 'api_key', '/tmp/cache', 'movie')
 
             # Profile unchanged since TMDB ID lookup failed
             assert result['genres']['Drama'] == 5
