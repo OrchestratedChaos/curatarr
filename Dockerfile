@@ -6,9 +6,8 @@ LABEL description="Curatarr - Personalized recommendations for your Plex library
 # Set working directory
 WORKDIR /app
 
-# Install git for auto-update feature
-RUN apt-get update && apt-get install -y --no-install-recommends git && \
-    rm -rf /var/lib/apt/lists/*
+# Mark as Docker container (skips git auto-update check)
+ENV RUNNING_IN_DOCKER=true
 
 # Copy requirements first for layer caching
 COPY requirements.txt .

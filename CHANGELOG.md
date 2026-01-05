@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.1.4] - 2026-01-05
+
+### Changed
+- Skip auto-update check in Docker containers (users should rebuild to update)
+- Removed git package from Docker image (no longer needed)
+
 ## [2.1.3] - 2026-01-04
 
 ### Changed
