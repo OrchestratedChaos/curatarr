@@ -8,12 +8,25 @@ import yaml
 class TestTraktAuthLoadConfig:
     """Tests for trakt_auth load_config function."""
 
-    @patch('builtins.open', mock_open(read_data='trakt:\n  enabled: true'))
-    def test_loads_config_file(self):
-        """Test loads config from yaml file."""
-        from utils.trakt_auth import load_config
-        result = load_config()
+    def test_loads_config_file(self, tmp_path, monkeypatch):
+        """Test loads config from config/ directory."""
+        # Create config directory and files
+        config_dir = tmp_path / 'config'
+        config_dir.mkdir()
+
+        config_path = config_dir / 'config.yml'
+        config_path.write_text('plex:\n  url: http://localhost\n')
+
+        trakt_path = config_dir / 'trakt.yml'
+        trakt_path.write_text('enabled: true\nclient_id: test\n')
+
+        # Patch get_config_dir to return our temp directory
+        from utils import trakt_auth
+        monkeypatch.setattr(trakt_auth, 'get_config_dir', lambda: str(config_dir))
+
+        result = trakt_auth.load_config()
         assert result['trakt']['enabled'] is True
+        assert result['trakt']['client_id'] == 'test'
 
 
 class TestTraktAuthSaveTokens:

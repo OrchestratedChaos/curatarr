@@ -660,7 +660,7 @@ def main():
 
     # Load config from project root (one level up from recommenders/)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(project_root, 'config.yml')
+    config_path = os.path.join(project_root, 'config/config.yml')
 
     try:
         with open(config_path, 'r') as f:

@@ -6,8 +6,8 @@ services:
     container_name: curatarr
     restart: "no"
     volumes:
-      # Config file (required)
-      - ./config.yml:/app/config.yml:ro
+      # Config directory (required) - contains config.yml, tuning.yml, trakt.yml, etc.
+      - ./config:/app/config:rw
       # Persistent cache (speeds up subsequent runs)
       - ./cache:/app/cache
       # Logs

@@ -2,6 +2,31 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.0.0] - 2026-01-04
+
+### Changed
+- **Modular config structure** — Split monolithic config.yml into feature modules
+  - All configs now live in `config/` directory
+  - `config/config.yml` — Core essentials only (plex, tmdb, users, general)
+  - `config/tuning.yml` — Display options, weights, scoring parameters (optional)
+  - `config/trakt.yml` — Trakt integration settings (created if Trakt enabled)
+  - `config/radarr.yml` / `config/sonarr.yml` — Arr integration (optional)
+- **Auto-migration** — Existing configs automatically split on first run
+  - Original config backed up as `config.yml.backup.{timestamp}`
+  - Migration runs transparently, no user action needed
+- Setup wizard now generates slim config.yml (~25 lines vs ~120)
+- Radarr/Sonarr configs now at root level instead of nested under movies/tv
+
+### Added
+- `config/` directory for all configuration files
+- `utils/migrate_config.py` — Manual migration script (`python3 -m utils.migrate_config`)
+- Example files in `config/`: `config.example.yml`, `tuning.example.yml`, etc.
+- Tests for modular config loading and migration
+
+### Migration
+Existing users: Run Curatarr normally — your config will be auto-migrated.
+The original config is backed up, and module files are created in `config/`.
+
 ## [1.7.7] - 2026-01-04
 
 ### Changed

@@ -1,0 +1,20 @@
+# Curatarr Radarr Configuration
+# Auto-add recommended movies to Radarr
+
+enabled: true
+
+# Radarr connection
+url: http://localhost:7878
+api_key: YOUR_RADARR_API_KEY
+
+# Import settings
+root_folder: /path/to/movies
+quality_profile: HD-1080p
+
+# Tagging
+tag: Curatarr  # Tag added to imported movies
+append_usernames: false  # Add username to tag
+
+# Download behavior
+monitor: false  # Monitor for downloads
+search_for_movie: false  # Trigger search immediately

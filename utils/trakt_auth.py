@@ -3,7 +3,7 @@
 Trakt Authentication Helper.
 
 Run this script to authenticate with Trakt using device code flow.
-Tokens are saved to config.yml for future use.
+Tokens are saved to trakt.yml for future use.
 """
 
 import os
@@ -16,27 +16,42 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.trakt import TraktClient, TraktAuthError
 
 
+def get_config_dir():
+    """Get the config directory path."""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config')
+
+
 def load_config():
-    """Load config.yml"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yml')
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
-
-
-def save_tokens(access_token: str, refresh_token: str):
-    """Save tokens to config.yml"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yml')
+    """Load config from config/ directory (main + trakt.yml)."""
+    config_dir = get_config_dir()
+    config_path = os.path.join(config_dir, 'config.yml')
+    trakt_path = os.path.join(config_dir, 'trakt.yml')
 
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    config['trakt']['access_token'] = access_token
-    config['trakt']['refresh_token'] = refresh_token
+    # Merge trakt.yml if it exists
+    if os.path.exists(trakt_path):
+        with open(trakt_path, 'r') as f:
+            config['trakt'] = yaml.safe_load(f)
 
-    with open(config_path, 'w') as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    return config
 
-    print("\033[92mTokens saved to config.yml\033[0m")
+
+def save_tokens(access_token: str, refresh_token: str):
+    """Save tokens to trakt.yml"""
+    trakt_path = os.path.join(get_config_dir(), 'trakt.yml')
+
+    with open(trakt_path, 'r') as f:
+        trakt_config = yaml.safe_load(f)
+
+    trakt_config['access_token'] = access_token
+    trakt_config['refresh_token'] = refresh_token
+
+    with open(trakt_path, 'w') as f:
+        yaml.dump(trakt_config, f, default_flow_style=False, sort_keys=False)
+
+    print("\033[92mTokens saved to config/trakt.yml\033[0m")
 
 
 def main():
@@ -47,14 +62,14 @@ def main():
     try:
         config = load_config()
     except FileNotFoundError:
-        print("\033[91mError: config.yml not found. Run ./run.sh first.\033[0m")
+        print("\033[91mError: config/config.yml not found. Run ./run.sh first.\033[0m")
         sys.exit(1)
 
     trakt_config = config.get('trakt', {})
 
     if not trakt_config.get('enabled', False):
-        print("\033[93mTrakt is disabled in config.yml.\033[0m")
-        print("Set 'trakt.enabled: true' to enable it.")
+        print("\033[93mTrakt is disabled. Create config/trakt.yml to enable it.\033[0m")
+        print("See config/trakt.example.yml for template.")
         sys.exit(1)
 
     client_id = trakt_config.get('client_id')
@@ -62,13 +77,13 @@ def main():
 
     if not client_id or not client_secret or client_id == 'null' or client_secret == 'null':
         print("\033[91mError: Trakt client_id or client_secret not configured.\033[0m")
-        print("Add them to config.yml under trakt: section.")
+        print("Add them to config/trakt.yml")
         sys.exit(1)
 
     # Check if already authenticated
     if trakt_config.get('access_token') and trakt_config.get('access_token') != 'null':
         print("Already authenticated!")
-        print("To re-authenticate, remove access_token from config.yml first.")
+        print("To re-authenticate, remove access_token from config/trakt.yml first.")
         sys.exit(0)
 
     # Create client

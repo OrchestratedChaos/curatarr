@@ -17,7 +17,7 @@ from recommenders.external import sync_watch_history_to_trakt
 def main():
     """Sync Plex watch history to Trakt."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(project_root, 'config.yml')
+    config_path = os.path.join(project_root, 'config/config.yml')
 
     config = load_config(config_path)
     tmdb_api_key = get_tmdb_config(config)['api_key']
