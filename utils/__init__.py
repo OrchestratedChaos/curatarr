@@ -149,6 +149,17 @@ from .trakt import (
     save_trakt_enhance_cache,
 )
 
+# Trakt discovery utilities
+from .trakt_discovery import (
+    DISCOVERY_CACHE_TTL,
+    get_trending_items,
+    get_popular_items,
+    get_anticipated_items,
+    get_recommended_items,
+    discover_from_trakt,
+    get_trakt_discovery_candidates,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -252,4 +263,12 @@ __all__ = [
     'TraktClient',
     'create_trakt_client',
     'get_authenticated_trakt_client',
+    # Trakt Discovery
+    'DISCOVERY_CACHE_TTL',
+    'get_trending_items',
+    'get_popular_items',
+    'get_anticipated_items',
+    'get_recommended_items',
+    'discover_from_trakt',
+    'get_trakt_discovery_candidates',
 ]
