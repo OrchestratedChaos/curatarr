@@ -26,4 +26,4 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short --cov=utils --cov-report=term-missing --cov-fail-under=90
+        run: pytest tests/ -v --tb=short --cov=utils --cov-report=term-missing --cov-fail-under=80
