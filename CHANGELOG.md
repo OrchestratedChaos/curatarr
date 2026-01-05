@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.1.1] - 2026-01-04
+
+### Changed
+- **Code refactoring** — Major cleanup reducing duplicate code by ~300 lines
+  - Extracted shared CLI utilities to `utils/cli.py`
+  - Consolidated Trakt enhancement logic to `utils/trakt.py`
+  - Added `get_project_root()` utility to eliminate repeated path patterns
+  - Simplified main() functions in movie.py and tv.py recommenders
+
+### Fixed
+- Bare except blocks replaced with specific exception types
+- Deferred imports moved to module level for cleaner code
+- Removed redundant `watched_data` variable (now uses `watched_data_counters` consistently)
+- Improved type hints (e.g., `Set[tuple]` → `Set[Tuple[str, Optional[int]]]`)
+- Added debug logging to silent exception handlers for easier troubleshooting
+
 ## [2.1.0] - 2026-01-04
 
 ### Added

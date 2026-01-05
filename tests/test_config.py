@@ -47,7 +47,7 @@ class TestCheckCacheVersion:
                 assert result is False
                 # File should be deleted
                 assert not os.path.exists(f.name)
-            except:
+            except Exception:
                 if os.path.exists(f.name):
                     os.unlink(f.name)
                 raise
@@ -71,7 +71,7 @@ class TestCheckCacheVersion:
                 result = check_cache_version(f.name)
                 # Should return False because v1 < CACHE_VERSION (2)
                 assert result is False
-            except:
+            except Exception:
                 pass
             finally:
                 if os.path.exists(f.name):

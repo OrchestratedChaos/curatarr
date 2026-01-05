@@ -15,6 +15,7 @@ import yaml
 import json
 import math
 import requests
+import traceback
 import urllib3
 from datetime import datetime
 from collections import Counter
@@ -38,6 +39,9 @@ from utils import (
     load_imdb_tmdb_cache, save_imdb_tmdb_cache, get_tmdb_id_from_imdb,
     load_trakt_enhance_cache, save_trakt_enhance_cache,
     get_trakt_discovery_candidates,
+    enhance_profile_with_trakt,
+    fetch_tmdb_details_for_profile,
+    get_project_root,
 )
 
 # Import output generation
@@ -394,196 +398,6 @@ def build_user_profile(plex, config, username, media_type='movie'):
     print(f"  Top genres: {dict(counters['genres'].most_common(5))}")
 
     return counters
-
-
-def get_tmdb_details(tmdb_api_key, tmdb_id, media_type='movie'):
-    """Fetch full details from TMDB for scoring."""
-    try:
-        media = 'movie' if media_type == 'movie' else 'tv'
-        url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}"
-        params = {'api_key': tmdb_api_key, 'append_to_response': 'keywords,credits'}
-        response = requests.get(url, params=params, timeout=10)
-
-        if response.status_code == 200:
-            data = response.json()
-
-            # Extract genres
-            genres = [g['name'] for g in data.get('genres', [])]
-
-            # Extract keywords
-            kw_data = data.get('keywords', {})
-            keywords_list = kw_data.get('keywords', kw_data.get('results', []))
-            keywords = [kw['name'] for kw in keywords_list[:10]]
-
-            # Extract cast (top 5)
-            credits = data.get('credits', {})
-            cast = [c['name'] for c in credits.get('cast', [])[:5]]
-
-            # Extract directors (movies) or created_by (TV)
-            directors = []
-            if media_type == 'movie':
-                crew = credits.get('crew', [])
-                directors = [c['name'] for c in crew if c.get('job') == 'Director']
-
-            # Studio/Network
-            studios = []
-            if media_type == 'movie':
-                studios = [c['name'] for c in data.get('production_companies', [])[:2]]
-            else:
-                studios = [n['name'] for n in data.get('networks', [])[:2]]
-
-            # Language
-            language = data.get('original_language', '')
-
-            return {
-                'genres': genres,
-                'keywords': keywords,
-                'cast': cast,
-                'directors': directors,
-                'studios': studios,
-                'language': language,
-                'title': data.get('title') or data.get('name'),
-                'year': (data.get('release_date') or data.get('first_air_date', ''))[:4],
-                'rating': data.get('vote_average', 0),
-                'vote_count': data.get('vote_count', 0),
-                'overview': data.get('overview', '')
-            }
-    except Exception as e:
-        pass
-    return None
-
-
-def enhance_profile_with_trakt(profile, config, tmdb_api_key, media_type='movie'):
-    """
-    Enhance user profile with Trakt watch history.
-
-    Fetches Trakt watch history for items not already in the profile (from streaming services)
-    and adds their genres, keywords, cast, etc. to build a more complete taste profile.
-
-    Args:
-        profile: Existing profile dict with Counter objects
-        config: Full config dict with Trakt settings
-        tmdb_api_key: TMDB API key for fetching details
-        media_type: 'movie' or 'tv'
-
-    Returns:
-        Enhanced profile (same dict, modified in place)
-    """
-    trakt_config = config.get('trakt', {})
-    import_config = trakt_config.get('import', {})
-
-    # Check if Trakt import is enabled
-    if not trakt_config.get('enabled', False):
-        return profile
-    if not import_config.get('enabled', True):
-        return profile
-    # Check if watch history merging is enabled
-    if not import_config.get('merge_watch_history', True):
-        return profile
-
-    # Get authenticated Trakt client
-    trakt_client = get_authenticated_trakt_client(config)
-    if not trakt_client:
-        return profile
-
-    print(f"  Enhancing {media_type} profile with Trakt watch history...")
-
-    # Get Trakt watch history
-    sys.stdout.write(f"    Fetching Trakt {media_type} history...")
-    sys.stdout.flush()
-    if media_type == 'movie':
-        watched = trakt_client.get_watched_movies()
-    else:
-        watched = trakt_client.get_watched_shows()
-
-    if not watched:
-        print(f"\r    No Trakt {media_type} history found      ")
-        return profile
-
-    # Extract all IMDB IDs from Trakt response
-    media_key = 'movie' if media_type == 'movie' else 'show'
-    current_imdb_ids = set()
-    for item in watched:
-        imdb_id = item.get(media_key, {}).get('ids', {}).get('imdb')
-        if imdb_id:
-            current_imdb_ids.add(imdb_id)
-
-    # Load cached IDs to check for changes
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
-    enhance_cache = load_trakt_enhance_cache(cache_dir)
-    cache_key = 'movie_ids' if media_type == 'movie' else 'show_ids'
-    cached_ids = enhance_cache.get(cache_key, set())
-
-    # Check if anything changed
-    new_ids = current_imdb_ids - cached_ids
-    if not new_ids:
-        print(f"\r    Trakt {media_type}s unchanged ({len(current_imdb_ids)} items) - skipping")
-        return profile
-
-    print(f"\r    Found {len(new_ids)} new Trakt {media_type}s to process")
-
-    # Get existing TMDB IDs from profile to avoid duplicates
-    existing_tmdb_ids = profile.get('tmdb_ids', set())
-
-    # Load IMDB→TMDB cache for fast lookups
-    imdb_cache = load_imdb_tmdb_cache(cache_dir)
-    initial_cache_size = len(imdb_cache)
-
-    # Process only new Trakt watched items
-    added_count = 0
-    total = len(new_ids)
-    for i, imdb_id in enumerate(new_ids, 1):
-        # Show progress
-        pct = int((i / total) * 100)
-        sys.stdout.write(f"\r    Processing new Trakt items {i}/{total} ({pct}%) - {added_count} added")
-        sys.stdout.flush()
-
-        # Convert IMDB to TMDB (uses cache)
-        tmdb_id = get_tmdb_id_from_imdb(tmdb_api_key, imdb_id, media_type, imdb_cache)
-        if not tmdb_id or tmdb_id in existing_tmdb_ids:
-            continue  # Skip if already in profile
-
-        # Fetch TMDB details
-        details = get_tmdb_details(tmdb_api_key, tmdb_id, media_type)
-        if not details:
-            continue
-
-        # Add to profile with base weight (no rating data from Trakt history API)
-        # Could enhance with Trakt ratings API if needed
-        weight = 1.0
-
-        for genre in details.get('genres', []):
-            profile['genres'][genre] += weight
-        for actor in details.get('cast', [])[:3]:  # Top 3 actors
-            profile['actors'][actor] += weight
-        for keyword in details.get('keywords', []):
-            profile['keywords'][keyword] += weight
-
-        if media_type == 'movie':
-            for director in details.get('directors', []):
-                profile['directors'][director] += weight
-        else:
-            for studio in details.get('studios', []):
-                profile['studios'][studio.lower()] += weight
-
-        profile['tmdb_ids'].add(tmdb_id)
-        added_count += 1
-
-    # Save caches
-    if len(imdb_cache) > initial_cache_size:
-        save_imdb_tmdb_cache(cache_dir, imdb_cache)
-
-    # Update enhance cache with all current IDs
-    if media_type == 'movie':
-        save_trakt_enhance_cache(cache_dir, current_imdb_ids, enhance_cache.get('show_ids', set()))
-    else:
-        save_trakt_enhance_cache(cache_dir, enhance_cache.get('movie_ids', set()), current_imdb_ids)
-
-    # Final summary
-    print(f"\r    Processing new Trakt items {total}/{total} (100%) - {added_count} added")
-
-    return profile
 
 
 def flatten_categorized_items(categorized):
@@ -974,7 +788,7 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
             print(f"\r    Scored {i}/{total_candidates} candidates...", end="", flush=True)
 
         # Fetch full details from TMDB
-        details = get_tmdb_details(tmdb_api_key, candidate_id, media_type)
+        details = fetch_tmdb_details_for_profile(tmdb_api_key, candidate_id, media_type)
         if not details:
             continue
 
@@ -1166,10 +980,11 @@ def process_user(config, plex, username):
             should_enhance = False
 
     if should_enhance:
+        cache_dir = os.path.join(get_project_root(), config.get('cache_dir', 'cache'))
         if movie_profile:
-            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, 'movie')
+            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, cache_dir, 'movie')
         if show_profile:
-            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, 'tv')
+            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, cache_dir, 'tv')
 
     # Find new recommendations using profile-based scoring
     external_config = config.get('external_recommendations', {})
@@ -1738,7 +1553,6 @@ def main():
                 all_users_data.append(user_data)
         except Exception as e:
             print_status(f"Error processing {username}: {e}", "error")
-            import traceback
             traceback.print_exc()
 
     # Generate combined HTML with all users

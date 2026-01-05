@@ -3,6 +3,7 @@ Plex-specific utilities for Curatarr.
 Handles Plex server connections, watch history, collections, and user management.
 """
 
+import logging
 import requests
 import urllib3
 import xml.etree.ElementTree as ET
@@ -13,6 +14,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+# Module-level logger
+logger = logging.getLogger('curatarr')
 
 from plexapi.myplex import MyPlexAccount
 
@@ -826,8 +830,8 @@ def extract_genres(item) -> List[str]:
                 genres.append(genre.tag.lower())
             elif isinstance(genre, str):
                 genres.append(genre.lower())
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to extract genres: {e}")
     return genres
 
 
@@ -892,8 +896,8 @@ def extract_rating(item, prefer_user_rating: bool = True) -> float:
                             return float(rating.value)
                         except (ValueError, AttributeError):
                             pass
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to extract rating: {e}")
     return 0.0
 
 

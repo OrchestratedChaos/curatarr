@@ -105,10 +105,22 @@ from .counters import (
 # Helper utilities
 from .helpers import (
     TITLE_SUFFIXES_TO_STRIP,
+    get_project_root,
     normalize_title,
     map_path,
     cleanup_old_logs,
     compute_profile_hash,
+)
+
+# CLI utilities
+from .cli import (
+    get_users_from_config,
+    resolve_admin_username,
+    update_config_for_user,
+    setup_log_file,
+    teardown_log_file,
+    print_runtime,
+    run_recommender_main,
 )
 
 # Plex utilities
@@ -147,6 +159,8 @@ from .trakt import (
     get_authenticated_trakt_client,
     load_trakt_enhance_cache,
     save_trakt_enhance_cache,
+    fetch_tmdb_details_for_profile,
+    enhance_profile_with_trakt,
 )
 
 # Trakt discovery utilities
@@ -232,10 +246,19 @@ __all__ = [
     'process_counters_from_cache',
     # Helpers
     'TITLE_SUFFIXES_TO_STRIP',
+    'get_project_root',
     'normalize_title',
     'map_path',
     'cleanup_old_logs',
     'compute_profile_hash',
+    # CLI
+    'get_users_from_config',
+    'resolve_admin_username',
+    'update_config_for_user',
+    'setup_log_file',
+    'teardown_log_file',
+    'print_runtime',
+    'run_recommender_main',
     # Plex
     'init_plex',
     'get_plex_account_ids',
@@ -263,6 +286,8 @@ __all__ = [
     'TraktClient',
     'create_trakt_client',
     'get_authenticated_trakt_client',
+    'fetch_tmdb_details_for_profile',
+    'enhance_profile_with_trakt',
     # Trakt Discovery
     'DISCOVERY_CACHE_TTL',
     'get_trending_items',

@@ -10,6 +10,9 @@ import logging
 import requests
 from typing import Dict, List, Optional
 
+# Module-level logger
+logger = logging.getLogger('curatarr')
+
 # Cache version for IMDB→TMDB mappings
 IMDB_TMDB_CACHE_VERSION = 1
 
@@ -206,8 +209,8 @@ def load_imdb_tmdb_cache(cache_dir: str) -> Dict[str, int]:
                 data = json.load(f)
                 if data.get('version', 0) >= IMDB_TMDB_CACHE_VERSION:
                     return data.get('mappings', {})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to load IMDB-TMDB cache: {e}")
     return {}
 
 
@@ -223,8 +226,8 @@ def save_imdb_tmdb_cache(cache_dir: str, cache: Dict[str, int]):
     try:
         with open(cache_path, 'w', encoding='utf-8') as f:
             json.dump({'version': IMDB_TMDB_CACHE_VERSION, 'mappings': cache}, f)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to save IMDB-TMDB cache: {e}")
 
 
 def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'movie',
@@ -259,6 +262,6 @@ def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'mo
                 if cache is not None and tmdb_id:
                     cache[imdb_id] = tmdb_id
                 return tmdb_id
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to get TMDB ID for IMDB {imdb_id}: {e}")
     return None
