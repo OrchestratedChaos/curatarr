@@ -40,3 +40,23 @@ import:
   enabled: true
   merge_watch_history: true  # Include Trakt watches in profile
   exclude_watchlist: true  # Don't recommend items on your watchlist
+
+# =============================================================================
+# DISCOVERY SETTINGS
+# =============================================================================
+# Use Trakt's discovery endpoints to find new content
+# These supplement TMDB Discover with community-driven data
+discovery:
+  enabled: true
+
+  # Discovery sources (enable what you want)
+  use_trending: true   # Most watched right now (good for "what's hot")
+  use_popular: false   # Most watched all time (classic hits)
+  use_anticipated: false  # Most anticipated upcoming releases
+  use_recommendations: false  # Trakt's personalized recs (requires auth)
+
+  # Limits per source (fetched every 6 hours)
+  trending_limit: 50
+  popular_limit: 50
+  anticipated_limit: 30
+  recommendations_limit: 30

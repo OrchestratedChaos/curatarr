@@ -2,6 +2,31 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.1.0] - 2026-01-04
+
+### Added
+- **Trakt Discovery** — Use Trakt's community data to find new content
+  - Trending: Most watched right now (great for "what's hot")
+  - Popular: Most watched all time (classic hits)
+  - Anticipated: Most anticipated upcoming releases
+  - Recommendations: Personalized picks based on your Trakt ratings
+- Discovery results are cached for 6 hours to reduce API calls
+- Discovery candidates are merged with TMDB Discover for scoring
+- New config section in `config/trakt.yml`:
+  ```yaml
+  discovery:
+    enabled: true
+    use_trending: true
+    use_popular: false
+    use_anticipated: false
+    use_recommendations: false
+  ```
+
+### Technical
+- Added `utils/trakt_discovery.py` module with caching
+- Added TraktClient methods: `get_trending()`, `get_popular()`, `get_anticipated()`, `get_recommendations()`, `get_related()`
+- 20 new tests for Trakt discovery (698 total)
+
 ## [2.0.0] - 2026-01-04
 
 ### Changed

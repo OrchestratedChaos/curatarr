@@ -37,6 +37,7 @@ from utils import (
     create_trakt_client, get_authenticated_trakt_client, TraktAPIError, TraktAuthError,
     load_imdb_tmdb_cache, save_imdb_tmdb_cache, get_tmdb_id_from_imdb,
     load_trakt_enhance_cache, save_trakt_enhance_cache,
+    get_trakt_discovery_candidates,
 )
 
 # Import output generation
@@ -884,7 +885,7 @@ def is_in_library(tmdb_id, title, year, library_data):
 def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, media_type='movie', limit=50, exclude_genres=None, min_relevance_score=0.25, config=None, exclude_imdb_ids=None):
     """
     Find similar content NOT in library using profile-based scoring.
-    Uses TMDB Discover API for quality candidates + profile-based scoring.
+    Uses TMDB Discover API + Trakt discovery for candidates + profile-based scoring.
 
     Args:
         tmdb_api_key: TMDB API key
@@ -932,11 +933,35 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
         max_candidates=MAX_CANDIDATES
     )
 
+    # Add Trakt discovery candidates (trending, popular, recommendations)
+    if config:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
+        library_tmdb_ids = library_data.get('tmdb_ids', set())
+
+        trakt_candidates = get_trakt_discovery_candidates(
+            config,
+            media_type,
+            cache_dir,
+            library_tmdb_ids,
+            exclude_imdb_ids
+        )
+
+        # Merge Trakt candidates with TMDB candidates (Trakt items get priority if duplicate)
+        trakt_added = 0
+        for tmdb_id, item in trakt_candidates.items():
+            if tmdb_id not in candidates:
+                candidates[tmdb_id] = item
+                trakt_added += 1
+
+        if trakt_added > 0:
+            print(f"  Added {trakt_added} candidates from Trakt discovery")
+
     if not candidates:
         print_status("No candidates found", "warning")
         return []
 
-    print(f"  Found {len(candidates)} candidates (discovery: rating >= {DISCOVER_MIN_RATING}, votes >= {DISCOVER_MIN_VOTES})")
+    print(f"  Found {len(candidates)} total candidates")
 
     # Now score each candidate using profile-based similarity
     scored_recommendations = []

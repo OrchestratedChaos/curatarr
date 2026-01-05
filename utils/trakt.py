@@ -715,6 +715,108 @@ class TraktClient:
 
         return imdb_ids
 
+    # =========================================================================
+    # Discovery: Trending, Popular, Recommendations, Related
+    # =========================================================================
+
+    def get_trending(self, media_type: str = 'movies',
+                     limit: int = 20, page: int = 1) -> List[Dict[str, Any]]:
+        """
+        Get trending movies or shows (most watched right now).
+
+        Args:
+            media_type: 'movies' or 'shows'
+            limit: Number of results (1-100)
+            page: Page number for pagination
+
+        Returns:
+            List of items with 'watchers' count and media info
+        """
+        endpoint = f"/{media_type}/trending"
+        params = f"?limit={min(limit, 100)}&page={page}&extended=full"
+        return self._make_request("GET", endpoint + params, authenticated=False)
+
+    def get_popular(self, media_type: str = 'movies',
+                    limit: int = 20, page: int = 1) -> List[Dict[str, Any]]:
+        """
+        Get popular movies or shows (most watched all time).
+
+        Args:
+            media_type: 'movies' or 'shows'
+            limit: Number of results (1-100)
+            page: Page number for pagination
+
+        Returns:
+            List of media objects with full metadata
+        """
+        endpoint = f"/{media_type}/popular"
+        params = f"?limit={min(limit, 100)}&page={page}&extended=full"
+        return self._make_request("GET", endpoint + params, authenticated=False)
+
+    def get_recommendations(self, media_type: str = 'movies',
+                            limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get personalized recommendations based on user's ratings.
+
+        Requires authentication. Returns items Trakt thinks the user would like
+        based on their watch history and ratings.
+
+        Args:
+            media_type: 'movies' or 'shows'
+            limit: Number of results (1-100)
+
+        Returns:
+            List of recommended media objects
+        """
+        if not self.is_authenticated:
+            logger.warning("Cannot get recommendations: not authenticated")
+            return []
+        endpoint = f"/recommendations/{media_type}"
+        params = f"?limit={min(limit, 100)}&extended=full"
+        try:
+            return self._make_request("GET", endpoint + params)
+        except TraktAPIError as e:
+            logger.warning(f"Failed to get Trakt recommendations: {e}")
+            return []
+
+    def get_related(self, media_type: str, trakt_id: int,
+                    limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get related/similar movies or shows.
+
+        Args:
+            media_type: 'movies' or 'shows'
+            trakt_id: Trakt ID of the source item
+            limit: Number of results (1-100)
+
+        Returns:
+            List of related media objects
+        """
+        endpoint = f"/{media_type}/{trakt_id}/related"
+        params = f"?limit={min(limit, 100)}&extended=full"
+        try:
+            return self._make_request("GET", endpoint + params, authenticated=False)
+        except TraktAPIError as e:
+            logger.warning(f"Failed to get related items for {trakt_id}: {e}")
+            return []
+
+    def get_anticipated(self, media_type: str = 'movies',
+                        limit: int = 20, page: int = 1) -> List[Dict[str, Any]]:
+        """
+        Get most anticipated upcoming movies or shows.
+
+        Args:
+            media_type: 'movies' or 'shows'
+            limit: Number of results (1-100)
+            page: Page number for pagination
+
+        Returns:
+            List of items with 'list_count' and media info
+        """
+        endpoint = f"/{media_type}/anticipated"
+        params = f"?limit={min(limit, 100)}&page={page}&extended=full"
+        return self._make_request("GET", endpoint + params, authenticated=False)
+
 
 def create_trakt_client(config: Dict) -> Optional[TraktClient]:
     """
