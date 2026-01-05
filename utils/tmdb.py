@@ -3,10 +3,15 @@ TMDB API utilities for Curatarr.
 Handles TMDB API calls, keyword fetching, and ID lookups.
 """
 
+import json
+import os
 import time
 import logging
 import requests
 from typing import Dict, List, Optional
+
+# Cache version for IMDB→TMDB mappings
+IMDB_TMDB_CACHE_VERSION = 1
 
 # Language code mappings
 LANGUAGE_CODES = {
@@ -182,3 +187,78 @@ def get_tmdb_keywords(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie'
         return keywords
 
     return []
+
+
+def load_imdb_tmdb_cache(cache_dir: str) -> Dict[str, int]:
+    """
+    Load IMDB→TMDB mapping cache.
+
+    Args:
+        cache_dir: Directory where cache file is stored
+
+    Returns:
+        Dict mapping IMDB IDs to TMDB IDs
+    """
+    cache_path = os.path.join(cache_dir, 'imdb_tmdb_cache.json')
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data.get('version', 0) >= IMDB_TMDB_CACHE_VERSION:
+                    return data.get('mappings', {})
+        except Exception:
+            pass
+    return {}
+
+
+def save_imdb_tmdb_cache(cache_dir: str, cache: Dict[str, int]):
+    """
+    Save IMDB→TMDB mapping cache.
+
+    Args:
+        cache_dir: Directory where cache file is stored
+        cache: Dict mapping IMDB IDs to TMDB IDs
+    """
+    cache_path = os.path.join(cache_dir, 'imdb_tmdb_cache.json')
+    try:
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump({'version': IMDB_TMDB_CACHE_VERSION, 'mappings': cache}, f)
+    except Exception:
+        pass
+
+
+def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'movie',
+                          cache: Dict[str, int] = None) -> Optional[int]:
+    """
+    Convert IMDB ID to TMDB ID using TMDB's find API.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        imdb_id: IMDB ID (e.g., 'tt1234567')
+        media_type: 'movie' or 'tv'
+        cache: Optional dict for caching IMDB→TMDB mappings
+
+    Returns:
+        TMDB ID or None if not found
+    """
+    # Check cache first
+    if cache is not None and imdb_id in cache:
+        return cache[imdb_id]
+
+    try:
+        url = f"https://api.themoviedb.org/3/find/{imdb_id}"
+        params = {'api_key': tmdb_api_key, 'external_source': 'imdb_id'}
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            results_key = 'movie_results' if media_type == 'movie' else 'tv_results'
+            results = data.get(results_key, [])
+            if results:
+                tmdb_id = results[0].get('id')
+                if cache is not None and tmdb_id:
+                    cache[imdb_id] = tmdb_id
+                return tmdb_id
+    except Exception:
+        pass
+    return None

@@ -157,6 +157,10 @@ external_recommendations:
 
 # Trakt Integration (optional)
 # Sync recommendations to Trakt lists and pull watch history
+#
+# WARNING: Trakt export syncs data to YOUR personal Trakt account.
+# Make sure you understand which Plex users' data will be exported.
+# The default is OFF - you must explicitly enable and configure it.
 trakt:
   enabled: false  # Set to true to enable Trakt integration
   client_id: null  # Get from: https://trakt.tv/oauth/applications
@@ -164,14 +168,36 @@ trakt:
   # Tokens are set automatically after OAuth authentication
   access_token: null
   refresh_token: null
+
   # Export settings - push recommendations to Trakt lists
+  # Disabled by default. You must:
+  #   1. Set auto_sync: true
+  #   2. Configure plex_users with YOUR Plex username(s)
   export:
-    enabled: true  # Export recommendations to Trakt lists
+    enabled: true  # Allow export feature (still requires auto_sync or HTML button)
+    auto_sync: false  # OFF by default. Set to true to auto-export on each run.
+                      # When false, you can still export manually via HTML button.
     list_prefix: "Curatarr"  # Lists named: "Curatarr - Username - Movies"
     privacy: "private"  # private, friends, or public
+
+    # Which Plex users to export to YOUR Trakt account:
+    #   mapping  - Only users listed in plex_users below (RECOMMENDED)
+    #   per_user - Separate Trakt list for each Plex user (exports ALL users)
+    #   combined - All users merged into one Trakt list (exports ALL users)
+    #
+    # IMPORTANT: "per_user" and "combined" export ALL Plex users' data to your Trakt.
+    # Most admins should use "mapping" and only list their own username below.
+    user_mode: "mapping"
+
+    # Plex usernames to export (required when user_mode is "mapping")
+    # This should be YOUR Plex username - not your family/household members.
+    # Example: If your Plex username is "jason", set: plex_users: ["jason"]
+    plex_users: []  # Empty by default - you must add your username to enable export
+
   # Import settings - pull data from Trakt to enhance recommendations
   import:
     enabled: true  # Import Trakt data to enhance recommendations
+    merge_watch_history: true  # Merge Trakt watch history into profile (streaming services)
     exclude_watchlist: true  # Exclude items on your Trakt watchlist from recommendations
 
 # Platform Settings

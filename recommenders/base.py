@@ -55,6 +55,12 @@ from utils import (
     update_plex_collection,
     cleanup_old_collections,
     get_library_imdb_ids,
+    get_authenticated_trakt_client,
+    load_imdb_tmdb_cache,
+    save_imdb_tmdb_cache,
+    get_tmdb_id_from_imdb,
+    load_trakt_enhance_cache,
+    save_trakt_enhance_cache,
 )
 
 logger = logging.getLogger('curatarr')
@@ -1002,3 +1008,198 @@ class BaseRecommender(ABC):
         Must be implemented by subclasses.
         """
         pass
+
+    def _enhance_profile_with_trakt(self):
+        """
+        Enhance watched_data_counters with Trakt watch history.
+
+        This adds items watched on streaming services (not in Plex) to the profile,
+        giving the recommender a more complete picture of user preferences.
+
+        Only runs if Trakt is enabled and import.merge_watch_history is True.
+        """
+        trakt_config = self.config.get('trakt', {})
+        import_config = trakt_config.get('import', {})
+        export_config = trakt_config.get('export', {})
+
+        # Check if Trakt import is enabled
+        if not all([
+            trakt_config.get('enabled', False),
+            import_config.get('enabled', True),
+            import_config.get('merge_watch_history', True)
+        ]):
+            return
+
+        # Check user mapping - only enhance for configured users
+        user_mode = export_config.get('user_mode', 'mapping')
+        plex_users = export_config.get('plex_users', [])
+
+        if user_mode == 'mapping' and plex_users:
+            # Only enhance if current user is in the mapping
+            current_user = self.single_user or ''
+            plex_users_lower = [u.lower() for u in plex_users]
+            if current_user.lower() not in plex_users_lower:
+                return  # Skip - user not in Trakt mapping
+
+        # Get authenticated Trakt client
+        trakt_client = get_authenticated_trakt_client(self.config)
+        if not trakt_client:
+            return
+
+        print(f"  Enhancing profile with Trakt watch history...")
+
+        # Get Trakt watch history
+        sys.stdout.write(f"    Fetching Trakt {self.media_type} history...")
+        sys.stdout.flush()
+        if self.media_type == 'movie':
+            watched = trakt_client.get_watched_movies()
+        else:
+            watched = trakt_client.get_watched_shows()
+
+        if not watched:
+            print(f"\r    No Trakt {self.media_type} history found      ")
+            return
+
+        # Extract all IMDB IDs from Trakt response
+        media_key = 'movie' if self.media_type == 'movie' else 'show'
+        current_imdb_ids = set()
+        for item in watched:
+            imdb_id = item.get(media_key, {}).get('ids', {}).get('imdb')
+            if imdb_id:
+                current_imdb_ids.add(imdb_id)
+
+        # Load cached IDs to check for changes
+        enhance_cache = load_trakt_enhance_cache(self.cache_dir)
+        cache_key = 'movie_ids' if self.media_type == 'movie' else 'show_ids'
+        cached_ids = enhance_cache.get(cache_key, set())
+
+        # Check if anything changed
+        new_ids = current_imdb_ids - cached_ids
+        if not new_ids:
+            print(f"\r    Trakt {self.media_type}s unchanged ({len(current_imdb_ids)} items) - skipping")
+            return
+
+        print(f"\r    Found {len(new_ids)} new Trakt {self.media_type}s to process")
+
+        # Get existing TMDB IDs from profile to avoid duplicates
+        existing_tmdb_ids = set()
+        if hasattr(self, 'watched_data_counters') and self.watched_data_counters:
+            existing_tmdb_ids = set(self.watched_data_counters.get('tmdb_ids', []))
+
+        # Load IMDB→TMDB cache for fast lookups
+        imdb_cache = load_imdb_tmdb_cache(self.cache_dir)
+        initial_cache_size = len(imdb_cache)
+
+        # Process only new Trakt watched items
+        added_count = 0
+        total = len(new_ids)
+        for i, imdb_id in enumerate(new_ids, 1):
+            # Show progress
+            pct = int((i / total) * 100)
+            sys.stdout.write(f"\r    Processing new Trakt items {i}/{total} ({pct}%) - {added_count} added")
+            sys.stdout.flush()
+
+            # Convert IMDB to TMDB (uses cache)
+            tmdb_id = get_tmdb_id_from_imdb(self.tmdb_api_key, imdb_id, self.media_type, imdb_cache)
+            if not tmdb_id or tmdb_id in existing_tmdb_ids:
+                continue
+
+            # Fetch TMDB details and add to profile
+            details = self._fetch_tmdb_details_for_profile(tmdb_id)
+            if not details:
+                continue
+
+            # Add to profile with base weight
+            weight = 1.0
+            wdc = self.watched_data_counters
+
+            for genre in details.get('genres', []):
+                genre_lower = genre.lower()
+                wdc['genres'][genre_lower] = wdc.get('genres', {}).get(genre_lower, 0) + weight
+
+            for actor in details.get('cast', [])[:3]:  # Top 3 actors
+                wdc['actors'][actor] = wdc.get('actors', {}).get(actor, 0) + weight
+
+            for keyword in details.get('keywords', []):
+                keyword_lower = keyword.lower()
+                if 'tmdb_keywords' in wdc:
+                    wdc['tmdb_keywords'][keyword_lower] = wdc['tmdb_keywords'].get(keyword_lower, 0) + weight
+                else:
+                    wdc['keywords'] = wdc.get('keywords', {})
+                    wdc['keywords'][keyword_lower] = wdc['keywords'].get(keyword_lower, 0) + weight
+
+            if self.media_type == 'movie':
+                for director in details.get('directors', []):
+                    wdc['directors'][director] = wdc.get('directors', {}).get(director, 0) + weight
+            else:
+                for studio in details.get('studios', []):
+                    studio_lower = studio.lower()
+                    wdc['studio'][studio_lower] = wdc.get('studio', {}).get(studio_lower, 0) + weight
+
+            # Track that we've added this TMDB ID
+            if 'tmdb_ids' not in wdc:
+                wdc['tmdb_ids'] = []
+            if isinstance(wdc['tmdb_ids'], set):
+                wdc['tmdb_ids'].add(tmdb_id)
+            else:
+                wdc['tmdb_ids'].append(tmdb_id)
+
+            added_count += 1
+
+        # Save caches
+        if len(imdb_cache) > initial_cache_size:
+            save_imdb_tmdb_cache(self.cache_dir, imdb_cache)
+
+        # Update enhance cache with all current IDs
+        if self.media_type == 'movie':
+            save_trakt_enhance_cache(self.cache_dir, current_imdb_ids, enhance_cache.get('show_ids', set()))
+        else:
+            save_trakt_enhance_cache(self.cache_dir, enhance_cache.get('movie_ids', set()), current_imdb_ids)
+
+        # Final summary
+        print(f"\r    Processing new Trakt items {total}/{total} (100%) - {added_count} added")
+
+    def _fetch_tmdb_details_for_profile(self, tmdb_id: int) -> Optional[Dict]:
+        """Fetch TMDB details for enhancing profile."""
+        try:
+            endpoint = 'movie' if self.media_type == 'movie' else 'tv'
+            url = f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}"
+            params = {
+                'api_key': self.tmdb_api_key,
+                'append_to_response': 'credits,keywords'
+            }
+            response = fetch_tmdb_with_retry(url, params)
+            if not response:
+                return None
+
+            details = {
+                'genres': [g['name'] for g in response.get('genres', [])],
+                'cast': [],
+                'keywords': [],
+                'directors': [],
+                'studios': []
+            }
+
+            # Extract cast
+            credits = response.get('credits', {})
+            for cast_member in credits.get('cast', [])[:5]:
+                details['cast'].append(cast_member.get('name'))
+
+            # Extract keywords
+            keywords_data = response.get('keywords', {})
+            keyword_list = keywords_data.get('keywords', keywords_data.get('results', []))
+            for kw in keyword_list[:10]:
+                details['keywords'].append(kw.get('name'))
+
+            # Extract directors/studios
+            if self.media_type == 'movie':
+                for crew in credits.get('crew', []):
+                    if crew.get('job') == 'Director':
+                        details['directors'].append(crew.get('name'))
+            else:
+                for network in response.get('networks', []):
+                    details['studios'].append(network.get('name'))
+
+            return details
+        except Exception:
+            return None

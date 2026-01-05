@@ -34,7 +34,9 @@ from utils import (
     log_warning, log_error, load_config, clickable_link,
     calculate_rewatch_multiplier, calculate_recency_multiplier,
     calculate_similarity_score, normalize_genre, fuzzy_keyword_match,
-    create_trakt_client, TraktAPIError, TraktAuthError
+    create_trakt_client, get_authenticated_trakt_client, TraktAPIError, TraktAuthError,
+    load_imdb_tmdb_cache, save_imdb_tmdb_cache, get_tmdb_id_from_imdb,
+    load_trakt_enhance_cache, save_trakt_enhance_cache,
 )
 
 # Import output generation
@@ -450,6 +452,181 @@ def get_tmdb_details(tmdb_api_key, tmdb_id, media_type='movie'):
     return None
 
 
+def enhance_profile_with_trakt(profile, config, tmdb_api_key, media_type='movie'):
+    """
+    Enhance user profile with Trakt watch history.
+
+    Fetches Trakt watch history for items not already in the profile (from streaming services)
+    and adds their genres, keywords, cast, etc. to build a more complete taste profile.
+
+    Args:
+        profile: Existing profile dict with Counter objects
+        config: Full config dict with Trakt settings
+        tmdb_api_key: TMDB API key for fetching details
+        media_type: 'movie' or 'tv'
+
+    Returns:
+        Enhanced profile (same dict, modified in place)
+    """
+    trakt_config = config.get('trakt', {})
+    import_config = trakt_config.get('import', {})
+
+    # Check if Trakt import is enabled
+    if not trakt_config.get('enabled', False):
+        return profile
+    if not import_config.get('enabled', True):
+        return profile
+    # Check if watch history merging is enabled
+    if not import_config.get('merge_watch_history', True):
+        return profile
+
+    # Get authenticated Trakt client
+    trakt_client = get_authenticated_trakt_client(config)
+    if not trakt_client:
+        return profile
+
+    print(f"  Enhancing {media_type} profile with Trakt watch history...")
+
+    # Get Trakt watch history
+    sys.stdout.write(f"    Fetching Trakt {media_type} history...")
+    sys.stdout.flush()
+    if media_type == 'movie':
+        watched = trakt_client.get_watched_movies()
+    else:
+        watched = trakt_client.get_watched_shows()
+
+    if not watched:
+        print(f"\r    No Trakt {media_type} history found      ")
+        return profile
+
+    # Extract all IMDB IDs from Trakt response
+    media_key = 'movie' if media_type == 'movie' else 'show'
+    current_imdb_ids = set()
+    for item in watched:
+        imdb_id = item.get(media_key, {}).get('ids', {}).get('imdb')
+        if imdb_id:
+            current_imdb_ids.add(imdb_id)
+
+    # Load cached IDs to check for changes
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
+    enhance_cache = load_trakt_enhance_cache(cache_dir)
+    cache_key = 'movie_ids' if media_type == 'movie' else 'show_ids'
+    cached_ids = enhance_cache.get(cache_key, set())
+
+    # Check if anything changed
+    new_ids = current_imdb_ids - cached_ids
+    if not new_ids:
+        print(f"\r    Trakt {media_type}s unchanged ({len(current_imdb_ids)} items) - skipping")
+        return profile
+
+    print(f"\r    Found {len(new_ids)} new Trakt {media_type}s to process")
+
+    # Get existing TMDB IDs from profile to avoid duplicates
+    existing_tmdb_ids = profile.get('tmdb_ids', set())
+
+    # Load IMDB→TMDB cache for fast lookups
+    imdb_cache = load_imdb_tmdb_cache(cache_dir)
+    initial_cache_size = len(imdb_cache)
+
+    # Process only new Trakt watched items
+    added_count = 0
+    total = len(new_ids)
+    for i, imdb_id in enumerate(new_ids, 1):
+        # Show progress
+        pct = int((i / total) * 100)
+        sys.stdout.write(f"\r    Processing new Trakt items {i}/{total} ({pct}%) - {added_count} added")
+        sys.stdout.flush()
+
+        # Convert IMDB to TMDB (uses cache)
+        tmdb_id = get_tmdb_id_from_imdb(tmdb_api_key, imdb_id, media_type, imdb_cache)
+        if not tmdb_id or tmdb_id in existing_tmdb_ids:
+            continue  # Skip if already in profile
+
+        # Fetch TMDB details
+        details = get_tmdb_details(tmdb_api_key, tmdb_id, media_type)
+        if not details:
+            continue
+
+        # Add to profile with base weight (no rating data from Trakt history API)
+        # Could enhance with Trakt ratings API if needed
+        weight = 1.0
+
+        for genre in details.get('genres', []):
+            profile['genres'][genre] += weight
+        for actor in details.get('cast', [])[:3]:  # Top 3 actors
+            profile['actors'][actor] += weight
+        for keyword in details.get('keywords', []):
+            profile['keywords'][keyword] += weight
+
+        if media_type == 'movie':
+            for director in details.get('directors', []):
+                profile['directors'][director] += weight
+        else:
+            for studio in details.get('studios', []):
+                profile['studios'][studio.lower()] += weight
+
+        profile['tmdb_ids'].add(tmdb_id)
+        added_count += 1
+
+    # Save caches
+    if len(imdb_cache) > initial_cache_size:
+        save_imdb_tmdb_cache(cache_dir, imdb_cache)
+
+    # Update enhance cache with all current IDs
+    if media_type == 'movie':
+        save_trakt_enhance_cache(cache_dir, current_imdb_ids, enhance_cache.get('show_ids', set()))
+    else:
+        save_trakt_enhance_cache(cache_dir, enhance_cache.get('movie_ids', set()), current_imdb_ids)
+
+    # Final summary
+    print(f"\r    Processing new Trakt items {total}/{total} (100%) - {added_count} added")
+
+    return profile
+
+
+def flatten_categorized_items(categorized):
+    """
+    Flatten categorized items into a single list.
+
+    Args:
+        categorized: Dict with 'user_services', 'other_services', 'acquire' keys
+
+    Returns:
+        List of all items from all categories
+    """
+    items = []
+    for service_items in categorized.get('user_services', {}).values():
+        items.extend(service_items)
+    for service_items in categorized.get('other_services', {}).values():
+        items.extend(service_items)
+    items.extend(categorized.get('acquire', []))
+    return items
+
+
+def collect_imdb_ids(categorized, tmdb_api_key, media_type='movie'):
+    """
+    Collect IMDB IDs from categorized items.
+
+    Args:
+        categorized: Dict with categorized items
+        tmdb_api_key: TMDB API key for ID lookups
+        media_type: 'movie' or 'tv'
+
+    Returns:
+        List of IMDB IDs
+    """
+    items = flatten_categorized_items(categorized)
+    imdb_ids = []
+    for item in items:
+        tmdb_id = item.get('tmdb_id')
+        if tmdb_id:
+            imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, media_type)
+            if imdb_id:
+                imdb_ids.append(imdb_id)
+    return imdb_ids
+
+
 def get_library_items(plex, library_name, media_type='movie'):
     """Get all items currently in Plex library - returns dict with tmdb_ids, tvdb_ids, and titles"""
     try:
@@ -765,10 +942,11 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
     scored_recommendations = []
     candidate_list = list(candidates.keys())
 
-    print(f"  Scoring candidates against user profile...")
-    for i, candidate_id in enumerate(candidate_list):
-        if i % 100 == 0 and i > 0:
-            print(f"    Scored {i}/{len(candidate_list)} candidates...")
+    total_candidates = len(candidate_list)
+    print(f"  Scoring {total_candidates} candidates against user profile...")
+    for i, candidate_id in enumerate(candidate_list, 1):
+        if i % 50 == 0 or i == total_candidates:
+            print(f"\r    Scored {i}/{total_candidates} candidates...", end="", flush=True)
 
         # Fetch full details from TMDB
         details = get_tmdb_details(tmdb_api_key, candidate_id, media_type)
@@ -810,6 +988,8 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
             'genres': details.get('genres', []),
             'genre_ids': []  # For compatibility with genre balancing
         })
+
+    print()  # newline after progress
 
     # Sort by score (highest first), then by rating as tiebreaker
     scored_recommendations.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
@@ -946,6 +1126,26 @@ def process_user(config, plex, username):
     if not show_profile:
         show_profile = build_user_profile(plex, config, username, 'show')
 
+    # Enhance profiles with Trakt watch history (streaming services not in Plex)
+    # Only for users in the Trakt mapping
+    tmdb_api_key = get_tmdb_config(config)['api_key']
+    trakt_config = config.get('trakt', {})
+    export_config = trakt_config.get('export', {})
+    user_mode = export_config.get('user_mode', 'mapping')
+    plex_users = export_config.get('plex_users', [])
+
+    should_enhance = True
+    if user_mode == 'mapping' and plex_users:
+        plex_users_lower = [u.lower() for u in plex_users]
+        if username.lower() not in plex_users_lower:
+            should_enhance = False
+
+    if should_enhance:
+        if movie_profile:
+            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, 'movie')
+        if show_profile:
+            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, 'tv')
+
     # Find new recommendations using profile-based scoring
     external_config = config.get('external_recommendations', {})
     movie_limit = external_config.get('movie_limit', 30)
@@ -957,23 +1157,20 @@ def process_user(config, plex, username):
     if exclude_genres:
         print(f"Excluding genres: {', '.join(exclude_genres)}")
 
-    tmdb_api_key = get_tmdb_config(config)['api_key']
-
     # Get Trakt watchlist exclusions if enabled
     trakt_config = config.get('trakt', {})
     import_config = trakt_config.get('import', {})
     exclude_movie_imdb_ids = set()
     exclude_show_imdb_ids = set()
 
-    if trakt_config.get('enabled', False) and import_config.get('enabled', True):
-        if import_config.get('exclude_watchlist', True):
-            trakt_client = create_trakt_client(config)
-            if trakt_client and trakt_client.is_authenticated:
-                print("Loading Trakt watchlist for exclusion...")
-                exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids('movies')
-                exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids('shows')
-                if exclude_movie_imdb_ids or exclude_show_imdb_ids:
-                    print_status(f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist", "info")
+    if import_config.get('exclude_watchlist', True):
+        trakt_client = get_authenticated_trakt_client(config)
+        if trakt_client:
+            print("Loading Trakt watchlist for exclusion...")
+            exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids('movies')
+            exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids('shows')
+            if exclude_movie_imdb_ids or exclude_show_imdb_ids:
+                print_status(f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist", "info")
 
     new_movies = find_similar_content_with_profile(
         tmdb_api_key,
@@ -1104,12 +1301,14 @@ def process_user(config, plex, username):
     print_status(f"Processed: {total_movies} movies, {total_shows} shows", "success")
     print_user_footer(f"{display_name} (external recommendations)")
 
-    # Return data for combined HTML generation
+    # Return data for combined HTML generation and Trakt sync
     return {
         'username': username,
         'display_name': display_name,
         'movies_categorized': movies_categorized,
-        'shows_categorized': shows_categorized
+        'shows_categorized': shows_categorized,
+        'movie_profile': movie_profile,
+        'show_profile': show_profile
     }
 
 def export_to_trakt(config, all_users_data, tmdb_api_key):
@@ -1117,6 +1316,16 @@ def export_to_trakt(config, all_users_data, tmdb_api_key):
     Export recommendations to Trakt lists.
 
     Creates/updates lists named: "{prefix} - {username} - Movies/TV"
+
+    Config options:
+        trakt.enabled: Master switch for Trakt integration
+        trakt.export.enabled: Enable export feature (default: true)
+        trakt.export.auto_sync: Auto-sync on each run (default: true)
+        trakt.export.user_mode: How to handle multiple Plex users:
+            - mapping: Only export users in plex_users list (recommended)
+            - per_user: Separate list for each Plex user
+            - combined: All users combined into one list
+        trakt.export.plex_users: List of Plex usernames to export (for mapping mode)
     """
     trakt_config = config.get('trakt', {})
     export_config = trakt_config.get('export', {})
@@ -1126,58 +1335,106 @@ def export_to_trakt(config, all_users_data, tmdb_api_key):
         return
     if not export_config.get('enabled', True):
         return
-
-    # Create Trakt client
-    trakt_client = create_trakt_client(config)
-    if not trakt_client:
-        log_warning("Trakt enabled but client could not be created (check credentials)")
+    # Check if auto-sync is enabled (can still manually export via HTML)
+    if not export_config.get('auto_sync', True):
         return
 
-    if not trakt_client.is_authenticated:
+    # Get authenticated Trakt client
+    trakt_client = get_authenticated_trakt_client(config)
+    if not trakt_client:
         log_warning("Trakt not authenticated - run setup wizard to authenticate")
         return
 
     list_prefix = export_config.get('list_prefix', 'Curatarr')
     trakt_username = trakt_client.get_username()
+    user_mode = export_config.get('user_mode', 'mapping')
+    plex_users = export_config.get('plex_users', [])
+
+    # Safety check: mapping mode requires explicit plex_users configuration
+    if user_mode == 'mapping':
+        # Reject empty list, placeholder, or unconfigured
+        invalid_configs = [[], ['YourPlexUsername'], None]
+        if plex_users in invalid_configs or not plex_users:
+            log_warning(
+                "Trakt export: No plex_users configured.\n"
+                "  Edit config.yml -> trakt.export.plex_users and add YOUR Plex username.\n"
+                "  Example: plex_users: [\"jason\"]\n"
+                "  This prevents accidentally syncing other users' data to YOUR Trakt account."
+            )
+            return
 
     print(f"\n{CYAN}Exporting to Trakt...{RESET}")
 
-    for user_data in all_users_data:
+    # Filter users based on mode
+    if user_mode == 'mapping':
+        # Only export users in the plex_users list (case-insensitive)
+        plex_users_lower = [u.lower() for u in plex_users]
+        users_to_export = [
+            u for u in all_users_data
+            if u['username'].lower() in plex_users_lower
+        ]
+        if not users_to_export:
+            log_warning(
+                f"Trakt export: No matching users found. Configured plex_users: {plex_users}\n"
+                "  Check that your Plex username matches exactly."
+            )
+            return
+    else:
+        users_to_export = all_users_data
+
+    # Handle combined mode - merge all users into one list
+    if user_mode == 'combined':
+        all_movie_imdb_ids = []
+        all_show_imdb_ids = []
+        for user_data in users_to_export:
+            all_movie_imdb_ids.extend(
+                collect_imdb_ids(user_data['movies_categorized'], tmdb_api_key, 'movie')
+            )
+            all_show_imdb_ids.extend(
+                collect_imdb_ids(user_data['shows_categorized'], tmdb_api_key, 'tv')
+            )
+        # Deduplicate
+        all_movie_imdb_ids = list(dict.fromkeys(all_movie_imdb_ids))
+        all_show_imdb_ids = list(dict.fromkeys(all_show_imdb_ids))
+
+        try:
+            if all_movie_imdb_ids:
+                movie_list_name = f"{list_prefix} - Movies"
+                trakt_client.sync_list(
+                    movie_list_name,
+                    movies=all_movie_imdb_ids,
+                    description="Combined movie recommendations from Curatarr"
+                )
+                movie_slug = movie_list_name.lower().replace(" ", "-").replace("_", "-")
+                movie_url = f"https://trakt.tv/users/{trakt_username}/lists/{movie_slug}"
+                print_status(f"  Combined: {len(all_movie_imdb_ids)} movies -> Trakt", "success")
+                print(f"    {clickable_link(movie_url)}")
+
+            if all_show_imdb_ids:
+                show_list_name = f"{list_prefix} - TV"
+                trakt_client.sync_list(
+                    show_list_name,
+                    shows=all_show_imdb_ids,
+                    description="Combined TV recommendations from Curatarr"
+                )
+                show_slug = show_list_name.lower().replace(" ", "-").replace("_", "-")
+                show_url = f"https://trakt.tv/users/{trakt_username}/lists/{show_slug}"
+                print_status(f"  Combined: {len(all_show_imdb_ids)} shows -> Trakt", "success")
+                print(f"    {clickable_link(show_url)}")
+
+        except (TraktAPIError, TraktAuthError) as e:
+            log_error(f"Failed to export combined list to Trakt: {e}")
+        return
+
+    # Per-user or mapping mode - separate list per user
+    for user_data in users_to_export:
         display_name = user_data['display_name']
         movies_categorized = user_data['movies_categorized']
         shows_categorized = user_data['shows_categorized']
 
-        # Collect all movie IMDB IDs
-        movie_imdb_ids = []
-        all_movies = []
-        for items in movies_categorized['user_services'].values():
-            all_movies.extend(items)
-        for items in movies_categorized['other_services'].values():
-            all_movies.extend(items)
-        all_movies.extend(movies_categorized['acquire'])
-
-        for movie in all_movies:
-            tmdb_id = movie.get('tmdb_id')
-            if tmdb_id:
-                imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'movie')
-                if imdb_id:
-                    movie_imdb_ids.append(imdb_id)
-
-        # Collect all show IMDB IDs
-        show_imdb_ids = []
-        all_shows = []
-        for items in shows_categorized['user_services'].values():
-            all_shows.extend(items)
-        for items in shows_categorized['other_services'].values():
-            all_shows.extend(items)
-        all_shows.extend(shows_categorized['acquire'])
-
-        for show in all_shows:
-            tmdb_id = show.get('tmdb_id')
-            if tmdb_id:
-                imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'tv')
-                if imdb_id:
-                    show_imdb_ids.append(imdb_id)
+        # Collect IMDB IDs using helper
+        movie_imdb_ids = collect_imdb_ids(movies_categorized, tmdb_api_key, 'movie')
+        show_imdb_ids = collect_imdb_ids(shows_categorized, tmdb_api_key, 'tv')
 
         # Sync to Trakt lists
         try:
@@ -1209,6 +1466,218 @@ def export_to_trakt(config, all_users_data, tmdb_api_key):
             log_error(f"Failed to export {display_name} to Trakt: {e}")
 
 
+def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
+    """
+    Sync Plex watch history to Trakt.
+
+    Loads watched TMDB IDs from cache files, converts to IMDB IDs,
+    and marks them as watched on Trakt.
+
+    This should run BEFORE processing users so Trakt data is available
+    for profile enhancement.
+
+    Args:
+        config: Full config dict
+        tmdb_api_key: TMDB API key for ID conversion
+        users: Optional list of usernames (defaults to config users list)
+    """
+    trakt_config = config.get('trakt', {})
+    export_config = trakt_config.get('export', {})
+
+    # Check if auto_sync is enabled
+    if not trakt_config.get('enabled', False):
+        return
+    if not export_config.get('auto_sync', False):
+        return
+
+    # Get authenticated Trakt client
+    trakt_client = get_authenticated_trakt_client(config)
+    if not trakt_client:
+        log_warning("Trakt not authenticated - run setup wizard to authenticate")
+        return
+
+    user_mode = export_config.get('user_mode', 'mapping')
+    plex_users = export_config.get('plex_users', [])
+
+    # Safety check for mapping mode
+    if user_mode == 'mapping':
+        if not plex_users or plex_users in [[], ['YourPlexUsername']]:
+            log_warning(
+                "Trakt sync: No plex_users configured.\n"
+                "  Edit config.yml -> trakt.export.plex_users and add YOUR Plex username."
+            )
+            return
+
+    print(f"\n{CYAN}Syncing Plex watch history to Trakt...{RESET}")
+
+    # Get existing Trakt watch history to avoid duplicates
+    existing_movie_imdb = trakt_client.get_watch_history_imdb_ids('movies')
+    existing_show_imdb = trakt_client.get_watch_history_imdb_ids('shows')
+    print(f"  Already on Trakt: {len(existing_movie_imdb)} movies, {len(existing_show_imdb)} shows")
+
+    # Get users to sync
+    if users is None:
+        users = [u.strip() for u in config['users']['list'].split(',')]
+
+    # Filter users based on mode
+    if user_mode == 'mapping':
+        plex_users_lower = [u.lower() for u in plex_users]
+        users_to_sync = [u for u in users if u.lower() in plex_users_lower]
+    else:
+        users_to_sync = users
+
+    if not users_to_sync:
+        log_warning("No matching users to sync")
+        return
+
+    # Load TMDB IDs from cache files (fast - no API calls)
+    all_movie_tmdb_ids = set()
+    all_show_tmdb_ids = set()
+
+    for username in users_to_sync:
+        movie_profile = load_user_profile_from_cache(config, username, 'movie')
+        if movie_profile:
+            all_movie_tmdb_ids.update(movie_profile.get('tmdb_ids', set()))
+
+        tv_profile = load_user_profile_from_cache(config, username, 'tv')
+        if tv_profile:
+            all_show_tmdb_ids.update(tv_profile.get('tmdb_ids', set()))
+
+    if not all_movie_tmdb_ids and not all_show_tmdb_ids:
+        print("  No Plex watch history in cache - run internal recommenders first")
+        return
+
+    # Load cache of already-synced TMDB IDs (avoid re-converting every run)
+    TRAKT_SYNC_CACHE_VERSION = 1
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
+    sync_cache_file = os.path.join(cache_dir, 'trakt_synced_ids.json')
+    synced_movie_tmdb = set()
+    synced_show_tmdb = set()
+
+    if os.path.exists(sync_cache_file):
+        try:
+            with open(sync_cache_file, 'r') as f:
+                sync_cache = json.load(f)
+                # Check cache version
+                if sync_cache.get('version', 0) < TRAKT_SYNC_CACHE_VERSION:
+                    print("  Trakt sync cache outdated, rebuilding...")
+                else:
+                    synced_movie_tmdb = set(sync_cache.get('movies', []))
+                    synced_show_tmdb = set(sync_cache.get('shows', []))
+        except Exception:
+            pass
+
+    # Only process items we haven't synced before
+    new_movie_tmdb = all_movie_tmdb_ids - synced_movie_tmdb
+    new_show_tmdb = all_show_tmdb_ids - synced_show_tmdb
+
+    print(f"  Plex watched: {len(all_movie_tmdb_ids)} movies, {len(all_show_tmdb_ids)} shows")
+    print(f"  Already synced: {len(synced_movie_tmdb)} movies, {len(synced_show_tmdb)} shows")
+
+    if not new_movie_tmdb and not new_show_tmdb:
+        print_status("  Watch history already synced to Trakt", "success")
+        return
+
+    print(f"  New to sync: {len(new_movie_tmdb)} movies, {len(new_show_tmdb)} shows")
+
+    # Convert only NEW TMDB IDs to IMDB IDs
+    new_movie_imdb = []
+    new_show_imdb = []
+    converted_movies = set()  # Track ALL converted (for cache)
+    converted_shows = set()
+
+    # Movies with progress
+    movie_list = list(new_movie_tmdb)
+    total_movies = len(movie_list)
+    if total_movies > 0:
+        if len(synced_movie_tmdb) == 0:
+            print("  (First-time sync - this is a one-time operation)")
+        for i, tmdb_id in enumerate(movie_list, 1):
+            if i % 10 == 0 or i == total_movies:
+                pct = int(i / total_movies * 100)
+                sys.stdout.write(f"\r  Converting movie IDs: {i}/{total_movies} ({pct}%)")
+                sys.stdout.flush()
+            imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'movie')
+            if imdb_id:
+                converted_movies.add(tmdb_id)  # Cache ALL converted
+                if imdb_id not in existing_movie_imdb:
+                    new_movie_imdb.append(imdb_id)
+        print()  # newline after progress
+
+    # Shows with progress
+    show_list = list(new_show_tmdb)
+    total_shows = len(show_list)
+    if total_shows > 0:
+        for i, tmdb_id in enumerate(show_list, 1):
+            if i % 10 == 0 or i == total_shows:
+                pct = int(i / total_shows * 100)
+                sys.stdout.write(f"\r  Converting show IDs: {i}/{total_shows} ({pct}%)")
+                sys.stdout.flush()
+            imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'tv')
+            if imdb_id:
+                converted_shows.add(tmdb_id)  # Cache ALL converted
+                if imdb_id not in existing_show_imdb:
+                    new_show_imdb.append(imdb_id)
+        print()  # newline after progress
+
+    # Update cache with all converted IDs (including ones already on Trakt)
+    synced_movie_tmdb.update(converted_movies)
+    synced_show_tmdb.update(converted_shows)
+    try:
+        with open(sync_cache_file, 'w') as f:
+            json.dump({
+                'version': TRAKT_SYNC_CACHE_VERSION,
+                'movies': list(synced_movie_tmdb),
+                'shows': list(synced_show_tmdb)
+            }, f)
+    except Exception:
+        pass
+
+    if not new_movie_imdb and not new_show_imdb:
+        print_status("  Watch history already synced to Trakt", "success")
+        return
+
+    print(f"  New items to sync: {len(new_movie_imdb)} movies, {len(new_show_imdb)} shows")
+
+    # Sync to Trakt in batches (avoid timeout with large lists)
+    BATCH_SIZE = 100
+    total_movies_added = 0
+    total_shows_added = 0
+
+    try:
+        # Batch movies
+        for i in range(0, len(new_movie_imdb), BATCH_SIZE):
+            batch = new_movie_imdb[i:i + BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            total_batches = (len(new_movie_imdb) + BATCH_SIZE - 1) // BATCH_SIZE
+            sys.stdout.write(f"\r  Syncing movies: batch {batch_num}/{total_batches}")
+            sys.stdout.flush()
+            result = trakt_client.add_to_history(movies=batch)
+            total_movies_added += result.get('added', {}).get('movies', 0)
+        if new_movie_imdb:
+            print()  # newline after progress
+
+        # Batch shows
+        for i in range(0, len(new_show_imdb), BATCH_SIZE):
+            batch = new_show_imdb[i:i + BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            total_batches = (len(new_show_imdb) + BATCH_SIZE - 1) // BATCH_SIZE
+            sys.stdout.write(f"\r  Syncing shows: batch {batch_num}/{total_batches}")
+            sys.stdout.flush()
+            result = trakt_client.add_to_history(shows=batch)
+            total_shows_added += result.get('added', {}).get('episodes', 0)
+        if new_show_imdb:
+            print()  # newline after progress
+
+        print_status(
+            f"  Synced to Trakt: {total_movies_added} movies, {total_shows_added} shows",
+            "success"
+        )
+    except (TraktAPIError, TraktAuthError) as e:
+        log_error(f"Failed to sync watch history to Trakt: {e}")
+
+
 def main():
     print(f"\n{CYAN}External Recommendations Generator{RESET}")
     print("-" * 50)
@@ -1218,6 +1687,15 @@ def main():
     config_path = os.path.join(project_root, 'config.yml')
     config = load_config(config_path)
 
+    # Get TMDB API key
+    tmdb_api_key = get_tmdb_config(config)['api_key']
+
+    # Get users
+    users = [u.strip() for u in config['users']['list'].split(',')]
+
+    # Note: Trakt sync happens in run.sh BEFORE recommenders run
+    # This ensures both internal and external recommenders benefit
+
     # Connect to Plex
     try:
         plex = PlexServer(config['plex']['url'], config['plex']['token'])
@@ -1225,9 +1703,6 @@ def main():
     except Exception as e:
         print_status(f"Error connecting to Plex: {e}", "error")
         sys.exit(1)
-
-    # Get users
-    users = [u.strip() for u in config['users']['list'].split(',')]
 
     # Process each user and collect data for combined HTML
     all_users_data = []
@@ -1243,7 +1718,6 @@ def main():
 
     # Generate combined HTML with all users
     output_dir = os.path.join(project_root, 'recommendations', 'external')
-    tmdb_api_key = get_tmdb_config(config)['api_key']
 
     if all_users_data:
         html_file = generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id)
@@ -1263,9 +1737,6 @@ def main():
         print_status("Opening watchlist in browser...", "info")
         webbrowser.open(f'file://{html_file}')
 
-    # Export to Trakt if enabled
-    if all_users_data:
-        export_to_trakt(config, all_users_data, tmdb_api_key)
 
 if __name__ == "__main__":
     main()
