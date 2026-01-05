@@ -7,6 +7,7 @@ Creates per-user markdown watchlists that update daily and auto-remove acquired 
 import os
 import sys
 import webbrowser
+import logging
 
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,11 +20,15 @@ import traceback
 import urllib3
 from datetime import datetime
 from collections import Counter
+from typing import Dict, List, Set, Optional, Tuple, Any
 from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Module-level logger
+logger = logging.getLogger('curatarr')
 
 # Import shared utilities - same as internal recommenders
 from utils import (
@@ -88,6 +93,9 @@ TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
 DISCOVER_MIN_RATING = 5.0       # Low bar - just filter out garbage
 DISCOVER_MIN_VOTES = 50         # Enough to know it's a real film
 MAX_CANDIDATES = 1500           # Bigger pool = more chances for great matches
+DISCOVER_RESULTS_PER_GENRE = 40     # Top N results per genre search
+DISCOVER_TOP_KEYWORDS = 10          # Number of top keywords to search
+DISCOVER_RESULTS_PER_KEYWORD = 15   # Top N results per keyword search
 
 # Output thresholds - match score is king, rating is just tiebreaker
 OUTPUT_MIN_SCORE = 0.65         # 65%+ match required - this is what matters
@@ -96,7 +104,9 @@ OUTPUT_MIN_VOTES = 200          # Enough votes to be reliable
 # Legacy aliases for cache filtering (votes only, no rating gate)
 MIN_RATING = 0.0                # Don't filter by rating in cache
 MIN_VOTE_COUNT = OUTPUT_MIN_VOTES
-SCORE_CHANGE_THRESHOLD = 0.01  # Minimum score change to log during updates
+SCORE_CHANGE_THRESHOLD = 0.01   # Minimum score change to log during updates
+PROGRESS_UPDATE_FREQUENCY = 50  # Show progress every N items
+TRAKT_BATCH_SIZE = 100                # Batch size for Trakt sync operations
 
 # Default weights (specificity-first approach - same as internal recommenders)
 # Director/language reduced - most people don't care about director, language data unreliable
@@ -110,7 +120,13 @@ DEFAULT_WEIGHTS = {
 }
 
 
-def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, media_type='movie', max_candidates=500):
+def discover_candidates_by_profile(
+    tmdb_api_key: str,
+    user_profile: Dict,
+    library_data: Dict,
+    media_type: str = 'movie',
+    max_candidates: int = 500
+) -> Dict[int, Dict]:
     """
     Discover candidates using TMDB Discover API based on user profile.
     Searches by top genres and keywords for higher quality matches.
@@ -154,7 +170,7 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
 
             if response.status_code == 200:
                 results = response.json().get('results', [])
-                for item in results[:40]:  # Top 40 per genre - wider net
+                for item in results[:DISCOVER_RESULTS_PER_GENRE]:
                     tmdb_id = item['id']
                     title = item.get('title') or item.get('name')
                     year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
@@ -173,13 +189,13 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
                         'vote_count': item.get('vote_count', 0)
                     }
 
-        except (requests.RequestException, KeyError):
-            pass
+        except (requests.RequestException, KeyError) as e:
+            log_warning(f"Error discovering by genre {genre_name}: {e}")
 
     print(f"    Found {len(candidates)} candidates from genre search")
 
     # Also search by top keywords using search API
-    for keyword, _ in top_keywords[:10]:  # Top 10 keywords - wider net
+    for keyword, _ in top_keywords[:DISCOVER_TOP_KEYWORDS]:
         if len(candidates) >= max_candidates:
             break
 
@@ -207,7 +223,7 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
 
                     if response.status_code == 200:
                         results = response.json().get('results', [])
-                        for item in results[:15]:  # Top 15 per keyword
+                        for item in results[:DISCOVER_RESULTS_PER_KEYWORD]:
                             tmdb_id = item['id']
                             title = item.get('title') or item.get('name')
                             year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
@@ -225,14 +241,14 @@ def discover_candidates_by_profile(tmdb_api_key, user_profile, library_data, med
                                 'vote_count': item.get('vote_count', 0)
                             }
 
-        except (requests.RequestException, KeyError):
-            pass
+        except (requests.RequestException, KeyError) as e:
+            log_warning(f"Error discovering by keyword {keyword}: {e}")
 
     print(f"    Total candidates after keyword search: {len(candidates)}")
     return candidates
 
 
-def load_user_profile_from_cache(config, username, media_type='movie'):
+def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 'movie') -> Optional[Dict]:
     """
     Load user profile from the watched cache (pre-computed by internal recommenders).
     This is MUCH faster than rebuilding from API calls.
@@ -280,11 +296,11 @@ def load_user_profile_from_cache(config, username, media_type='movie'):
         return profile
 
     except Exception as e:
-        print(f"  Error loading cache for {username}: {e}")
+        log_warning(f"Error loading cache for {username}: {e}")
         return None
 
 
-def build_user_profile(plex, config, username, media_type='movie'):
+def build_user_profile(plex: Any, config: Dict, username: str, media_type: str = 'movie') -> Dict:
     """
     Build weighted user profile from ALL watch history.
     Uses same weighting as internal recommenders: ratings + rewatches + recency.
@@ -321,8 +337,8 @@ def build_user_profile(plex, config, username, media_type='movie'):
     watched_count = 0
 
     for i, item in enumerate(all_items, 1):
-        # Show progress every 50 items or at the end
-        if i % 50 == 0 or i == total_items:
+        # Show progress periodically or at the end
+        if i % PROGRESS_UPDATE_FREQUENCY == 0 or i == total_items:
             print(f"\r  Scanning library: {i}/{total_items} ({int(i/total_items*100)}%)", end="", flush=True)
 
         if not item.isWatched:
@@ -380,18 +396,13 @@ def build_user_profile(plex, config, username, media_type='movie'):
                     tmdb_id = int(guid.id.split('tmdb://')[1])
                     counters['tmdb_ids'].add(tmdb_id)
                     break
-                except (ValueError, IndexError):
-                    pass
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"Error parsing TMDB ID from guid {guid.id}: {e}")
 
         if tmdb_id:
             keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type)
             for keyword in keywords:
                 counters['keywords'][keyword] += multiplier
-
-        # Language
-        if hasattr(item, 'originallyAvailableAt'):
-            # Try to get language from TMDB
-            pass  # We'll get it from TMDB metadata if needed
 
     print()  # Newline after progress indicator
     print(f"  Found {watched_count} watched {media_type}s")
@@ -400,7 +411,7 @@ def build_user_profile(plex, config, username, media_type='movie'):
     return counters
 
 
-def flatten_categorized_items(categorized):
+def flatten_categorized_items(categorized: Dict) -> List[Dict]:
     """
     Flatten categorized items into a single list.
 
@@ -419,7 +430,47 @@ def flatten_categorized_items(categorized):
     return items
 
 
-def collect_imdb_ids(categorized, tmdb_api_key, media_type='movie'):
+def _sync_items_in_batches(
+    items: List[Dict],
+    trakt_client: Any,
+    media_type: str,
+    result_key: str
+) -> int:
+    """
+    Sync items to Trakt in batches with progress display.
+
+    Args:
+        items: List of items to sync (IMDB ID dicts)
+        trakt_client: Authenticated Trakt client
+        media_type: 'movies' or 'shows' for display
+        result_key: Key to extract from result ('movies' or 'episodes')
+
+    Returns:
+        Total count of items added
+    """
+    if not items:
+        return 0
+
+    total_added = 0
+    for i in range(0, len(items), TRAKT_BATCH_SIZE):
+        batch = items[i:i + TRAKT_BATCH_SIZE]
+        batch_num = (i // TRAKT_BATCH_SIZE) + 1
+        total_batches = (len(items) + TRAKT_BATCH_SIZE - 1) // TRAKT_BATCH_SIZE
+        sys.stdout.write(f"\r  Syncing {media_type}: batch {batch_num}/{total_batches}")
+        sys.stdout.flush()
+
+        if media_type == 'movies':
+            result = trakt_client.add_to_history(movies=batch)
+        else:
+            result = trakt_client.add_to_history(shows=batch)
+
+        total_added += result.get('added', {}).get(result_key, 0)
+
+    print()  # newline after progress
+    return total_added
+
+
+def collect_imdb_ids(categorized: Dict, tmdb_api_key: str, media_type: str = 'movie') -> List[str]:
     """
     Collect IMDB IDs from categorized items.
 
@@ -442,7 +493,7 @@ def collect_imdb_ids(categorized, tmdb_api_key, media_type='movie'):
     return imdb_ids
 
 
-def get_library_items(plex, library_name, media_type='movie'):
+def get_library_items(plex: Any, library_name: str, media_type: str = 'movie') -> Dict[str, Set]:
     """Get all items currently in Plex library - returns dict with tmdb_ids, tvdb_ids, and titles"""
     try:
         library = plex.library.section(library_name)
@@ -464,21 +515,21 @@ def get_library_items(plex, library_name, media_type='movie'):
                     try:
                         tmdb_id = guid.id.split('tmdb://')[1]
                         tmdb_ids.add(int(tmdb_id))
-                    except (ValueError, IndexError):
-                        pass
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Error parsing TMDB ID from guid {guid.id}: {e}")
                 elif 'tvdb://' in guid.id:
                     try:
                         tvdb_id = guid.id.split('tvdb://')[1]
                         tvdb_ids.add(int(tvdb_id))
-                    except (ValueError, IndexError):
-                        pass
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Error parsing TVDB ID from guid {guid.id}: {e}")
 
         return {'tmdb_ids': tmdb_ids, 'tvdb_ids': tvdb_ids, 'titles': titles}
     except Exception as e:
         log_warning(f"Warning: Could not fetch {library_name} library: {e}")
         return {'tmdb_ids': set(), 'tvdb_ids': set(), 'titles': set()}
 
-def get_imdb_id(tmdb_api_key, tmdb_id, media_type='movie'):
+def get_imdb_id(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> Optional[str]:
     """Fetch IMDB ID from TMDB external IDs endpoint."""
     try:
         media = 'movie' if media_type == 'movie' else 'tv'
@@ -487,12 +538,12 @@ def get_imdb_id(tmdb_api_key, tmdb_id, media_type='movie'):
         if response.status_code == 200:
             data = response.json()
             return data.get('imdb_id')
-    except (requests.RequestException, KeyError):
-        pass
+    except (requests.RequestException, KeyError) as e:
+        logger.debug(f"Error fetching IMDB ID for TMDB {tmdb_id}: {e}")
     return None
 
 
-def get_watch_providers(tmdb_api_key, tmdb_id, media_type='movie'):
+def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> List[str]:
     """
     Get streaming providers for a TMDB item (US region)
     Returns list of service names (e.g., ['netflix', 'hulu'])
@@ -522,10 +573,15 @@ def get_watch_providers(tmdb_api_key, tmdb_id, media_type='movie'):
 
         return services
     except Exception as e:
-        # Silently fail for individual items - don't spam logs
+        logger.debug(f"Error fetching watch providers for TMDB {tmdb_id}: {e}")
         return []
 
-def categorize_by_streaming_service(recommendations, tmdb_api_key, user_services, media_type='movie'):
+def categorize_by_streaming_service(
+    recommendations: List[Dict],
+    tmdb_api_key: str,
+    user_services: List[str],
+    media_type: str = 'movie'
+) -> Dict:
     """
     Categorize recommendations by streaming availability
     Returns dict: {
@@ -568,7 +624,7 @@ def categorize_by_streaming_service(recommendations, tmdb_api_key, user_services
 
     return result
 
-def get_genre_distribution(plex, config, username, media_type='movie'):
+def get_genre_distribution(plex: Any, config: Dict, username: str, media_type: str = 'movie') -> Tuple[Dict, int]:
     """Calculate genre distribution from user's watch history"""
     try:
         library_name = config['plex'].get('movie_library' if media_type == 'movie' else 'tv_library')
@@ -597,7 +653,7 @@ def get_genre_distribution(plex, config, username, media_type='movie'):
         log_warning(f"  Warning: Could not calculate genre distribution: {e}")
         return {}, 0
 
-def get_user_watch_history(plex, config, username, media_type='movie'):
+def get_user_watch_history(plex: Any, config: Dict, username: str, media_type: str = 'movie') -> List[Dict]:
     """Get user's watch history from Plex using shared utility"""
     print(f"Fetching {media_type} watch history for {username}...")
 
@@ -620,7 +676,12 @@ def get_user_watch_history(plex, config, username, media_type='movie'):
         log_warning(f"  Warning: Could not fetch watch history: {e}")
         return []
 
-def balance_genres_proportionally(recommendations, genre_distribution, limit, media_type='movie'):
+def balance_genres_proportionally(
+    recommendations: List[Dict],
+    genre_distribution: Dict,
+    limit: int,
+    media_type: str = 'movie'
+) -> List[Dict]:
     """
     Balance recommendations to match user's genre distribution from watch history
     Prevents any single genre from dominating the list
@@ -676,7 +737,7 @@ def balance_genres_proportionally(recommendations, genre_distribution, limit, me
 
     return balanced_recs
 
-def is_in_library(tmdb_id, title, year, library_data):
+def is_in_library(tmdb_id: Optional[int], title: Optional[str], year: Optional[str], library_data: Dict) -> bool:
     """Check if item is in library by TMDB ID or title+year"""
     # Check TMDB ID first
     if tmdb_id and tmdb_id in library_data.get('tmdb_ids', set()):
@@ -696,7 +757,17 @@ def is_in_library(tmdb_id, title, year, library_data):
 
     return False
 
-def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, media_type='movie', limit=50, exclude_genres=None, min_relevance_score=0.25, config=None, exclude_imdb_ids=None):
+def find_similar_content_with_profile(
+    tmdb_api_key: str,
+    user_profile: Dict,
+    library_data: Dict,
+    media_type: str = 'movie',
+    limit: int = 50,
+    exclude_genres: Optional[List[str]] = None,
+    min_relevance_score: float = 0.25,
+    config: Optional[Dict] = None,
+    exclude_imdb_ids: Optional[Set[str]] = None
+) -> List[Dict]:
     """
     Find similar content NOT in library using profile-based scoring.
     Uses TMDB Discover API + Trakt discovery for candidates + profile-based scoring.
@@ -784,7 +855,7 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
     total_candidates = len(candidate_list)
     print(f"  Scoring {total_candidates} candidates against user profile...")
     for i, candidate_id in enumerate(candidate_list, 1):
-        if i % 50 == 0 or i == total_candidates:
+        if i % PROGRESS_UPDATE_FREQUENCY == 0 or i == total_candidates:
             print(f"\r    Scored {i}/{total_candidates} candidates...", end="", flush=True)
 
         # Fetch full details from TMDB
@@ -851,7 +922,7 @@ def find_similar_content_with_profile(tmdb_api_key, user_profile, library_data, 
     return final_recs
 
 
-def load_cache(display_name, media_type):
+def load_cache(display_name: str, media_type: str) -> Dict:
     """Load existing recommendations cache, filtering out items below quality thresholds"""
     cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
@@ -882,7 +953,7 @@ def load_cache(display_name, media_type):
             return filtered
     return {}
 
-def save_cache(display_name, media_type, cache_data):
+def save_cache(display_name: str, media_type: str, cache_data: Dict) -> None:
     """Save recommendations cache"""
     cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
@@ -892,7 +963,7 @@ def save_cache(display_name, media_type, cache_data):
     with open(cache_file, 'w') as f:
         json.dump(cache_data, f, indent=2)
 
-def load_ignore_list(display_name):
+def load_ignore_list(display_name: str) -> Set[str]:
     """Load user's manual ignore list"""
     safe_name = display_name.lower().replace(' ', '_')
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1405,8 +1476,8 @@ def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
                 else:
                     synced_movie_tmdb = set(sync_cache.get('movies', []))
                     synced_show_tmdb = set(sync_cache.get('shows', []))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error loading Trakt sync cache: {e}")
 
     # Only process items we haven't synced before
     new_movie_tmdb = all_movie_tmdb_ids - synced_movie_tmdb
@@ -1471,8 +1542,8 @@ def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
                 'movies': list(synced_movie_tmdb),
                 'shows': list(synced_show_tmdb)
             }, f)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Error saving Trakt sync cache: {e}")
 
     if not new_movie_imdb and not new_show_imdb:
         print_status("  Watch history already synced to Trakt", "success")
@@ -1481,34 +1552,13 @@ def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
     print(f"  New items to sync: {len(new_movie_imdb)} movies, {len(new_show_imdb)} shows")
 
     # Sync to Trakt in batches (avoid timeout with large lists)
-    BATCH_SIZE = 100
-    total_movies_added = 0
-    total_shows_added = 0
-
     try:
-        # Batch movies
-        for i in range(0, len(new_movie_imdb), BATCH_SIZE):
-            batch = new_movie_imdb[i:i + BATCH_SIZE]
-            batch_num = (i // BATCH_SIZE) + 1
-            total_batches = (len(new_movie_imdb) + BATCH_SIZE - 1) // BATCH_SIZE
-            sys.stdout.write(f"\r  Syncing movies: batch {batch_num}/{total_batches}")
-            sys.stdout.flush()
-            result = trakt_client.add_to_history(movies=batch)
-            total_movies_added += result.get('added', {}).get('movies', 0)
-        if new_movie_imdb:
-            print()  # newline after progress
-
-        # Batch shows
-        for i in range(0, len(new_show_imdb), BATCH_SIZE):
-            batch = new_show_imdb[i:i + BATCH_SIZE]
-            batch_num = (i // BATCH_SIZE) + 1
-            total_batches = (len(new_show_imdb) + BATCH_SIZE - 1) // BATCH_SIZE
-            sys.stdout.write(f"\r  Syncing shows: batch {batch_num}/{total_batches}")
-            sys.stdout.flush()
-            result = trakt_client.add_to_history(shows=batch)
-            total_shows_added += result.get('added', {}).get('episodes', 0)
-        if new_show_imdb:
-            print()  # newline after progress
+        total_movies_added = _sync_items_in_batches(
+            new_movie_imdb, trakt_client, 'movies', 'movies'
+        )
+        total_shows_added = _sync_items_in_batches(
+            new_show_imdb, trakt_client, 'shows', 'episodes'
+        )
 
         print_status(
             f"  Synced to Trakt: {total_movies_added} movies, {total_shows_added} shows",

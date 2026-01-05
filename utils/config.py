@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Project version - single source of truth
-__version__ = "2.1.1"
+__version__ = "2.1.2"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
@@ -29,6 +29,16 @@ TOP_POOL_PERCENTAGE = 0.1           # Top 10% for randomization pool
 TIER_SAFE_PERCENT = 0.6             # 60% safe picks from top scores
 TIER_DIVERSE_PERCENT = 0.3          # 30% diverse picks from mid-tier
 TIER_WILDCARD_PERCENT = 0.1         # 10% wildcard picks for discovery
+
+# TF-IDF scoring penalties for rare/unseen content attributes
+TFIDF_GENRE_PENALTY = 0.3           # Max 30% penalty per rare genre
+TFIDF_KEYWORD_PENALTY = 0.15        # Max 15% penalty per rare keyword
+UNSEEN_GENRE_PENALTY = 0.1          # Penalty for genres user has never watched
+UNSEEN_KEYWORD_PENALTY = 0.02       # Penalty for keywords user has never seen
+
+# Popularity dampening for very popular content (prevents blockbusters dominating)
+POPULARITY_DAMPENING_FACTOR = 0.03  # ~3% penalty per order of magnitude above threshold
+POPULARITY_DAMPENING_CAP = 0.90     # Cap at 10% max penalty (minimum multiplier)
 
 # Default rating multipliers for similarity scoring (Plex uses 0-10 scale)
 # Higher ratings = stronger signal. 5-star (10) boosted to emphasize favorites.
