@@ -13,7 +13,6 @@ Usage:
 """
 
 import os
-import sys
 import shutil
 from datetime import datetime
 from typing import Optional

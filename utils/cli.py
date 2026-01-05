@@ -7,9 +7,8 @@ import argparse
 import copy
 import os
 import sys
-import traceback
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Type
+from typing import Callable, Dict, List, Optional
 
 import yaml
 from plexapi.myplex import MyPlexAccount

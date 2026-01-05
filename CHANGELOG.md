@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.1.3] - 2026-01-04
+
+### Changed
+- Removed unused imports across 6 files (traceback, Type, sys, List, Optional, yaml)
+
 ## [2.1.2] - 2026-01-04
 
 ### Changed
