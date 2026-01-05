@@ -2,6 +2,19 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.1.2] - 2026-01-04
+
+### Changed
+- **Silent exception handlers now log debug messages** — All `except: pass` patterns replaced with `logger.debug()` or `log_warning()` calls for easier troubleshooting
+- **Scoring constants extracted to config.py** — TF-IDF penalties and popularity dampening values now defined as named constants
+- **Discovery constants extracted in external.py** — Magic numbers for candidate discovery now use named constants
+- **Deferred import moved to module level** — `import random` in scoring.py moved to top of file
+- **Added type hints** — Key functions in external.py and external_output.py now have proper type annotations
+- **Extracted Trakt batch sync helper** — Duplicate batching code consolidated into `_sync_items_in_batches()` function
+
+### Fixed
+- Removed dead code (unused language extraction block in external.py)
+
 ## [2.1.1] - 2026-01-04
 
 ### Changed

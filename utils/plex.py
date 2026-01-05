@@ -412,7 +412,8 @@ def fetch_show_completion_data(
                     'last_watched': show_last_watched[show_id],
                     'title': show.title
                 }
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Error processing show completion for {show.title}: {e}")
                 continue
 
     return show_data
@@ -533,10 +534,11 @@ def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str
                                 })
                                 seen_tmdb_ids.add(str(rating_key))
                                 seen_tmdb_ids.add(tmdb_id)
-                        except (ValueError, KeyError, AttributeError):
-                            pass
+                        except (ValueError, KeyError, AttributeError) as e:
+                            logger.debug(f"Error extracting TMDB ID for rating key {rating_key}: {e}")
 
         except Exception as e:
+            logger.debug(f"Error fetching watch history for account {account_id}: {e}")
             continue
 
     return watched_items

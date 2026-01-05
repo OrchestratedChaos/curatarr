@@ -260,8 +260,8 @@ class PlexTVRecommender(BaseRecommender):
                     # Calculate actual show rewatches (viewCount / watched_episodes)
                     # If > 1, user rewatched some episodes
                     show_rewatch_counts[show_id] = max(1, view_count // watched_eps)
-        except Exception:
-            pass  # Fall back to no rewatch weighting if this fails
+        except Exception as e:
+            logger.debug(f"Error getting rewatch counts for shows: {e}")
 
         # Process show metadata from cache - exclude dropped shows from positive signals
         # Each show weighted equally (1.0 base) regardless of episode count

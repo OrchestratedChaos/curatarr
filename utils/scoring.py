@@ -5,9 +5,19 @@ Handles content-to-profile similarity calculations.
 
 import math
 import logging
+import random
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional
+
+from utils.config import (
+    TFIDF_GENRE_PENALTY,
+    TFIDF_KEYWORD_PENALTY,
+    UNSEEN_GENRE_PENALTY,
+    UNSEEN_KEYWORD_PENALTY,
+    POPULARITY_DAMPENING_FACTOR,
+    POPULARITY_DAMPENING_CAP,
+)
 
 # Genre normalization: Map various genre names to standard lowercase names
 GENRE_NORMALIZATION = {
@@ -356,7 +366,7 @@ def calculate_similarity_score(
                         # Genre exists but is rare - user likely avoids it
                         # Penalty proportional to how rare it is
                         rarity = 1 - (genre_count / tfidf_threshold_count)
-                        penalty = rarity * 0.3  # Max 30% penalty per rare genre
+                        penalty = rarity * TFIDF_GENRE_PENALTY
                         genre_penalty += penalty
                         score_breakdown['details']['genres'].append(
                             f"{genre} (TF-IDF: count {genre_count:.1f} < threshold {tfidf_threshold_count:.1f}, penalty: {round(penalty, 2)})"
@@ -380,9 +390,9 @@ def calculate_similarity_score(
                     )
                 elif use_tfidf and genre_count == 0:
                     # User has never watched this genre - mild penalty
-                    genre_penalty += 0.1
+                    genre_penalty += UNSEEN_GENRE_PENALTY
                     score_breakdown['details']['genres'].append(
-                        f"{genre} (TF-IDF: unseen genre, penalty: 0.1)"
+                        f"{genre} (TF-IDF: unseen genre, penalty: {UNSEEN_GENRE_PENALTY})"
                     )
 
             if genre_scores or genre_penalty > 0:
@@ -539,7 +549,7 @@ def calculate_similarity_score(
                     if use_tfidf and count < tfidf_kw_threshold:
                         # Keyword exists but is rare - user likely doesn't prioritize it
                         rarity = 1 - (count / tfidf_kw_threshold)
-                        penalty = rarity * 0.15  # Max 15% penalty per rare keyword (less than genre)
+                        penalty = rarity * TFIDF_KEYWORD_PENALTY
                         keyword_penalty += penalty
                         score_breakdown['details']['keywords'].append(
                             f"{kw} (TF-IDF: count {count:.1f} < threshold {tfidf_kw_threshold:.1f}, penalty: {round(penalty, 2)})"
@@ -563,9 +573,9 @@ def calculate_similarity_score(
                 elif use_tfidf and count == 0:
                     # User has never seen content with this keyword - very mild penalty
                     # Keywords are more numerous and specific than genres, so smaller penalty
-                    keyword_penalty += 0.02
+                    keyword_penalty += UNSEEN_KEYWORD_PENALTY
                     score_breakdown['details']['keywords'].append(
-                        f"{kw} (TF-IDF: unseen keyword, penalty: 0.02)"
+                        f"{kw} (TF-IDF: unseen keyword, penalty: {UNSEEN_KEYWORD_PENALTY})"
                     )
             if keyword_scores or keyword_penalty > 0:
                 keyword_weight = effective_weights.get('keyword', 0.45)
@@ -615,8 +625,8 @@ def calculate_similarity_score(
                 # Logarithmic dampening: ~3% penalty per order of magnitude above threshold
                 # 50k votes: no penalty, 500k votes: ~3% penalty, 5M votes: ~6% penalty
                 excess_ratio = vote_count / popularity_threshold
-                dampening = 1 - (math.log10(excess_ratio) * 0.03)
-                dampening = max(0.90, dampening)  # Cap at 10% max penalty
+                dampening = 1 - (math.log10(excess_ratio) * POPULARITY_DAMPENING_FACTOR)
+                dampening = max(POPULARITY_DAMPENING_CAP, dampening)
                 score = score * dampening
                 score_breakdown['popularity_dampening'] = round(dampening, 3)
 
@@ -652,8 +662,6 @@ def select_tiered_recommendations(
     Returns:
         List of selected items with tier diversity
     """
-    import random
-
     if not scored_items:
         return []
 

@@ -224,8 +224,9 @@ class BaseCache(ABC):
                     # API failed (404, etc) - mark as processed to avoid infinite retries
                     info['collection_id'] = None
                     info['collection_name'] = None
-            except Exception:
+            except Exception as e:
                 # Mark as processed even on exception
+                logger.debug(f"Error fetching collection for TMDB {info.get('tmdb_id')}: {e}")
                 info['collection_id'] = None
                 info['collection_name'] = None
 
@@ -281,8 +282,8 @@ class BaseCache(ABC):
                         )
                         if lang_code:
                             return get_full_language_name(lang_code)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error getting language for {getattr(item, 'title', 'unknown')}: {e}")
         return "N/A"
 
     def _get_tmdb_data(self, item, tmdb_api_key: str) -> Dict:

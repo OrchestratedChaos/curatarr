@@ -308,8 +308,8 @@ class PlexMovieRecommender(BaseRecommender):
                 movie_id = int(movie.ratingKey)
                 if movie_id in watched_ids and hasattr(movie, 'viewCount') and movie.viewCount:
                     watched_movie_views[movie_id] = int(movie.viewCount)
-        except Exception:
-            pass  # Fall back to no rewatch weighting if this fails
+        except Exception as e:
+            logger.debug(f"Error getting view counts for rewatch weighting: {e}")
 
         print(f"Found {len(watched_ids)} unique watched movies from history API")
 

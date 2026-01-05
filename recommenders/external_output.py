@@ -5,6 +5,7 @@ Generates markdown watchlists and combined HTML views.
 
 import os
 from datetime import datetime
+from typing import Dict, List, Optional
 
 # Service display name mappings
 SERVICE_DISPLAY_NAMES = {
@@ -24,13 +25,22 @@ SERVICE_DISPLAY_NAMES = {
 }
 
 
-def generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir):
+def generate_markdown(
+    username: str,
+    display_name: str,
+    movies_categorized: Dict,
+    shows_categorized: Dict,
+    output_dir: str
+) -> str:
     """
     Generate markdown watchlist file with streaming service grouping
 
     Args:
         movies_categorized: dict with 'user_services', 'other_services', 'acquire' keys
         shows_categorized: dict with 'user_services', 'other_services', 'acquire' keys
+
+    Returns:
+        Path to the generated markdown file
     """
     os.makedirs(output_dir, exist_ok=True)
     # Use display_name for filename, sanitized for filesystem
@@ -122,7 +132,12 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
     return output_file
 
 
-def generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id_func):
+def generate_combined_html(
+    all_users_data: List[Dict],
+    output_dir: str,
+    tmdb_api_key: str,
+    get_imdb_id_func
+) -> str:
     """
     Generate single HTML watchlist with tabs for all users.
     Users can switch between tabs, select items, and export to Radarr/Sonarr/Trakt.
@@ -132,6 +147,9 @@ def generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id
         output_dir: Directory to write HTML file
         tmdb_api_key: TMDB API key for fetching IMDB IDs
         get_imdb_id_func: Function to fetch IMDB ID from TMDB ID
+
+    Returns:
+        Path to the generated HTML file
     """
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, 'watchlist.html')
@@ -278,7 +296,7 @@ def generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id
     return output_file
 
 
-def _generate_html_template(tabs_html, panels_html, now):
+def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> str:
     """Generate the full HTML template with CSS and JavaScript."""
     return f'''<!DOCTYPE html>
 <html lang="en">
