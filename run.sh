@@ -206,16 +206,109 @@ run_setup_wizard() {
     # --- Users ---
     echo -e "${YELLOW}Step 4: Plex Users${NC}"
     echo ""
-    echo "Which Plex users should get recommendations?"
-    echo "(Comma-separated list of usernames)"
-    echo "Example: john, sarah, kids"
-    echo ""
-    read -p "Enter usernames: " USERS_LIST
-    if [ -z "$USERS_LIST" ]; then
-        echo -e "${RED}At least one user is required. Exiting.${NC}"
-        exit 1
+    echo "Detecting Plex users..."
+
+    # Auto-detect users from Plex
+    PLEX_USERS_DATA=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from plexapi.myplex import MyPlexAccount
+    account = MyPlexAccount(token='$PLEX_TOKEN')
+    # Admin first
+    print(f'{account.username}|{account.title}')
+    # Then managed users
+    for user in account.users():
+        print(f'{user.username}|{user.title}')
+except Exception as e:
+    print(f'ERROR|{e}')
+" 2>/dev/null)
+
+    # Check for errors
+    if echo "$PLEX_USERS_DATA" | grep -q "^ERROR|"; then
+        echo -e "${YELLOW}Could not auto-detect users. Enter manually.${NC}"
+        echo "(Comma-separated list of usernames)"
+        read -p "Enter usernames: " USERS_LIST
+        if [ -z "$USERS_LIST" ]; then
+            echo -e "${RED}At least one user is required. Exiting.${NC}"
+            exit 1
+        fi
+        USER_PREFS=""
+    else
+        echo ""
+        echo "Found these Plex users:"
+        echo ""
+
+        # Parse users into arrays
+        declare -a USERNAMES
+        declare -a DISPLAY_NAMES
+        i=1
+        while IFS='|' read -r username display; do
+            USERNAMES+=("$username")
+            DISPLAY_NAMES+=("$display")
+            echo "  $i) $username ($display)"
+            ((i++))
+        done <<< "$PLEX_USERS_DATA"
+
+        echo ""
+        echo "Which users should get recommendations?"
+        echo "  Enter 'all' for everyone, or comma-separated numbers (e.g., 1,2,4)"
+        echo ""
+        read -p "Choose: " USER_SELECTION
+
+        # Build selected users list
+        declare -a SELECTED_USERNAMES
+        declare -a SELECTED_DISPLAYS
+        if [ "$USER_SELECTION" = "all" ] || [ "$USER_SELECTION" = "ALL" ]; then
+            SELECTED_USERNAMES=("${USERNAMES[@]}")
+            SELECTED_DISPLAYS=("${DISPLAY_NAMES[@]}")
+        else
+            IFS=',' read -ra SELECTIONS <<< "$USER_SELECTION"
+            for sel in "${SELECTIONS[@]}"; do
+                sel=$(echo "$sel" | tr -d ' ')
+                idx=$((sel - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#USERNAMES[@]} ]; then
+                    SELECTED_USERNAMES+=("${USERNAMES[$idx]}")
+                    SELECTED_DISPLAYS+=("${DISPLAY_NAMES[$idx]}")
+                fi
+            done
+        fi
+
+        if [ ${#SELECTED_USERNAMES[@]} -eq 0 ]; then
+            echo -e "${RED}At least one user is required. Exiting.${NC}"
+            exit 1
+        fi
+
+        # Build USERS_LIST
+        USERS_LIST=$(IFS=', '; echo "${SELECTED_USERNAMES[*]}")
+
+        # Ask about display name mapping
+        echo ""
+        read -p "Map usernames to display names? (Recommended for collections) (Y/n): " MAP_NAMES
+        USER_PREFS=""
+
+        if [[ ! "$MAP_NAMES" =~ ^[Nn]$ ]]; then
+            echo ""
+            echo "Enter display name for each user (press Enter to use default):"
+            echo ""
+            for i in "${!SELECTED_USERNAMES[@]}"; do
+                username="${SELECTED_USERNAMES[$i]}"
+                default_display="${SELECTED_DISPLAYS[$i]}"
+                # Extract first name as simpler default
+                first_name=$(echo "$default_display" | awk '{print $1}')
+                read -p "  $username [$first_name]: " custom_name
+                display_name="${custom_name:-$first_name}"
+
+                # Build YAML for user preferences
+                USER_PREFS="${USER_PREFS}
+    ${username}:
+      display_name: ${display_name}"
+            done
+            echo ""
+            echo -e "${GREEN}✓ Display names configured${NC}"
+        fi
     fi
-    echo -e "${GREEN}✓ Got it${NC}"
+    echo -e "${GREEN}✓ Users configured${NC}"
     echo ""
 
     # --- Library Names ---
@@ -253,10 +346,140 @@ run_setup_wizard() {
 
         if [ -n "$TRAKT_CLIENT_ID" ] && [ -n "$TRAKT_CLIENT_SECRET" ]; then
             TRAKT_ENABLED="true"
-            echo -e "${GREEN}✓ Trakt credentials saved${NC}"
+            echo -e "${GREEN}✓ Trakt credentials received${NC}"
             echo ""
-            echo "After setup completes, run: python3 utils/trakt_auth.py"
-            echo "to complete Trakt authentication via device code."
+            echo -e "${CYAN}Authenticating with Trakt...${NC}"
+
+            # Run device auth flow inline
+            TRAKT_AUTH_RESULT=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+from utils.trakt import TraktClient
+
+client = TraktClient('$TRAKT_CLIENT_ID', '$TRAKT_CLIENT_SECRET')
+try:
+    device_info = client.get_device_code()
+    print('URL:' + device_info['verification_url'])
+    print('CODE:' + device_info['user_code'])
+    print('DEVICE:' + device_info['device_code'])
+except Exception as e:
+    print('ERROR:' + str(e))
+" 2>/dev/null)
+
+            TRAKT_URL=$(echo "$TRAKT_AUTH_RESULT" | grep "^URL:" | cut -d: -f2-)
+            TRAKT_CODE=$(echo "$TRAKT_AUTH_RESULT" | grep "^CODE:" | cut -d: -f2-)
+            TRAKT_DEVICE=$(echo "$TRAKT_AUTH_RESULT" | grep "^DEVICE:" | cut -d: -f2-)
+            TRAKT_ERROR=$(echo "$TRAKT_AUTH_RESULT" | grep "^ERROR:" | cut -d: -f2-)
+
+            if [ -n "$TRAKT_ERROR" ]; then
+                echo -e "${RED}Failed to get device code: $TRAKT_ERROR${NC}"
+                echo -e "${YELLOW}You can authenticate later with: python3 utils/trakt_auth.py${NC}"
+            elif [ -n "$TRAKT_CODE" ]; then
+                echo ""
+                echo -e "1. Go to: ${CYAN}$TRAKT_URL${NC}"
+                echo -e "2. Enter code: ${YELLOW}$TRAKT_CODE${NC}"
+                echo ""
+                read -p "Press Enter after you've approved on Trakt..."
+
+                # Poll for token
+                TRAKT_TOKENS=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+from utils.trakt import TraktClient
+
+client = TraktClient('$TRAKT_CLIENT_ID', '$TRAKT_CLIENT_SECRET')
+success = client.poll_for_token('$TRAKT_DEVICE', interval=1, expires_in=30)
+if success:
+    print('ACCESS:' + client.access_token)
+    print('REFRESH:' + client.refresh_token)
+else:
+    print('FAILED')
+" 2>/dev/null)
+
+                TRAKT_ACCESS=$(echo "$TRAKT_TOKENS" | grep "^ACCESS:" | cut -d: -f2-)
+                TRAKT_REFRESH=$(echo "$TRAKT_TOKENS" | grep "^REFRESH:" | cut -d: -f2-)
+
+                if [ -n "$TRAKT_ACCESS" ]; then
+                    echo -e "${GREEN}✓ Trakt authenticated!${NC}"
+                else
+                    echo -e "${YELLOW}Authentication not completed. You can retry later with: python3 utils/trakt_auth.py${NC}"
+                    TRAKT_ACCESS=""
+                    TRAKT_REFRESH=""
+                fi
+            fi
+
+            # --- Trakt Export Configuration ---
+            echo ""
+            echo -e "${YELLOW}Trakt Export Configuration${NC}"
+            echo ""
+            echo -e "${RED}IMPORTANT:${NC} Trakt export syncs recommendations to YOUR personal Trakt account."
+            echo ""
+
+            # Auto-detect admin username from Plex
+            ADMIN_USER=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from plexapi.myplex import MyPlexAccount
+    account = MyPlexAccount(token='$PLEX_TOKEN')
+    print(account.username)
+except Exception as e:
+    print('')
+" 2>/dev/null)
+
+            TRAKT_AUTO_SYNC="false"
+            TRAKT_USER_MODE="mapping"
+            TRAKT_PLEX_USERS="[]"
+
+            echo "Which Plex users' recommendations should be exported to YOUR Trakt?"
+            echo ""
+            if [ -n "$ADMIN_USER" ]; then
+                echo "  1) Just me (admin: $ADMIN_USER) - RECOMMENDED"
+            else
+                echo "  1) Just me (admin) - enter username manually"
+            fi
+            echo "  2) All users - exports everyone's recommendations to your Trakt"
+            echo "  3) Skip - I'll configure manually in config.yml"
+            echo ""
+            read -p "Choose [1/2/3]: " TRAKT_EXPORT_CHOICE
+
+            case "$TRAKT_EXPORT_CHOICE" in
+                1)
+                    if [ -n "$ADMIN_USER" ]; then
+                        TRAKT_PLEX_USER="$ADMIN_USER"
+                    else
+                        read -p "Enter your Plex username: " TRAKT_PLEX_USER
+                    fi
+                    if [ -n "$TRAKT_PLEX_USER" ]; then
+                        TRAKT_PLEX_USERS="[\"$TRAKT_PLEX_USER\"]"
+                        TRAKT_USER_MODE="mapping"
+                        echo ""
+                        read -p "Auto-sync to Trakt on each run? (y/N): " ENABLE_AUTO_SYNC
+                        if [[ "$ENABLE_AUTO_SYNC" =~ ^[Yy]$ ]]; then
+                            TRAKT_AUTO_SYNC="true"
+                            echo -e "${GREEN}✓ Auto-sync enabled for: $TRAKT_PLEX_USER${NC}"
+                        else
+                            echo -e "${YELLOW}Auto-sync disabled. Use HTML export button instead.${NC}"
+                        fi
+                    fi
+                    ;;
+                2)
+                    TRAKT_USER_MODE="per_user"
+                    TRAKT_PLEX_USERS="[]"
+                    echo ""
+                    echo -e "${YELLOW}Warning: This exports ALL Plex users' data to your Trakt account.${NC}"
+                    read -p "Auto-sync to Trakt on each run? (y/N): " ENABLE_AUTO_SYNC
+                    if [[ "$ENABLE_AUTO_SYNC" =~ ^[Yy]$ ]]; then
+                        TRAKT_AUTO_SYNC="true"
+                        echo -e "${GREEN}✓ Auto-sync enabled for all users${NC}"
+                    else
+                        echo -e "${YELLOW}Auto-sync disabled. Use HTML export button instead.${NC}"
+                    fi
+                    ;;
+                *)
+                    echo -e "${YELLOW}Skipping. Configure trakt.export in config.yml later.${NC}"
+                    ;;
+            esac
         else
             echo -e "${YELLOW}Skipping Trakt (credentials not provided)${NC}"
         fi
@@ -283,6 +506,7 @@ tmdb:
 
 users:
   list: $USERS_LIST
+  preferences:${USER_PREFS:-}
 
 general:
   auto_update: true
@@ -298,15 +522,24 @@ collections:
   add_label: true
   stale_removal_days: 7
 
+external_recommendations:
+  enabled: true
+  movie_limit: 30
+  show_limit: 20
+  auto_open_html: false
+
 trakt:
   enabled: $TRAKT_ENABLED
   client_id: ${TRAKT_CLIENT_ID:-null}
   client_secret: ${TRAKT_CLIENT_SECRET:-null}
-  access_token: null
-  refresh_token: null
+  access_token: ${TRAKT_ACCESS:-null}
+  refresh_token: ${TRAKT_REFRESH:-null}
   export:
     enabled: true
+    auto_sync: ${TRAKT_AUTO_SYNC:-false}
     list_prefix: "Curatarr"
+    user_mode: "${TRAKT_USER_MODE:-mapping}"
+    plex_users: ${TRAKT_PLEX_USERS:-[]}
   import:
     enabled: true
     exclude_watchlist: true
@@ -388,6 +621,70 @@ setup_cron() {
 }
 
 # ------------------------------------------------------------------------
+# SHOW INTEGRATION STATUS
+# ------------------------------------------------------------------------
+show_integration_status() {
+    if [ ! -f "config.yml" ]; then
+        return
+    fi
+
+    echo -e "${CYAN}Integrations:${NC}"
+
+    # Plex - always required
+    PLEX_URL=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yml')); print(c.get('plex', {}).get('url', ''))" 2>/dev/null)
+    if [ -n "$PLEX_URL" ] && [ "$PLEX_URL" != "None" ]; then
+        echo -e "  ${GREEN}✓${NC} Plex"
+    else
+        echo -e "  ${RED}✗${NC} Plex (not configured)"
+    fi
+
+    # TMDB - always required
+    TMDB_KEY=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yml')); print(c.get('tmdb', {}).get('api_key', ''))" 2>/dev/null)
+    if [ -n "$TMDB_KEY" ] && [ "$TMDB_KEY" != "None" ]; then
+        echo -e "  ${GREEN}✓${NC} TMDB"
+    else
+        echo -e "  ${RED}✗${NC} TMDB (not configured)"
+    fi
+
+    # Trakt - optional
+    TRAKT_STATUS=$(python3 -c "
+import yaml
+c = yaml.safe_load(open('config.yml'))
+trakt = c.get('trakt', {})
+enabled = trakt.get('enabled', False)
+has_token = bool(trakt.get('access_token'))
+if enabled and has_token:
+    print('authenticated')
+elif enabled:
+    print('enabled_no_auth')
+else:
+    print('disabled')
+" 2>/dev/null)
+
+    case "$TRAKT_STATUS" in
+        "authenticated")
+            echo -e "  ${GREEN}✓${NC} Trakt"
+            ;;
+        "enabled_no_auth")
+            echo -e "  ${YELLOW}○${NC} Trakt (needs authentication)"
+            ;;
+        *)
+            echo -e "  ${YELLOW}○${NC} Trakt (disabled)"
+            ;;
+    esac
+
+    # External Recommendations - optional
+    EXT_ENABLED=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yml')); print(c.get('external_recommendations', {}).get('enabled', False))" 2>/dev/null)
+    if [ "$EXT_ENABLED" = "True" ]; then
+        echo -e "  ${GREEN}✓${NC} External Recommendations"
+    else
+        echo -e "  ${YELLOW}○${NC} External Recommendations (disabled)"
+    fi
+
+    echo ""
+}
+
+# ------------------------------------------------------------------------
 # MAIN EXECUTION
 # ------------------------------------------------------------------------
 main() {
@@ -407,10 +704,21 @@ main() {
         run_setup_wizard
     fi
 
-    # Step 4: Create logs directory
+    # Step 4: Show integration status
+    show_integration_status
+
+    # Step 5: Sync Plex watch history to Trakt (if enabled)
+    # This runs FIRST so both internal and external recommenders benefit
+    if grep -A 10 "trakt:" config.yml | grep -q "auto_sync: true" 2>/dev/null; then
+        echo -e "${CYAN}=== Syncing Watch History to Trakt ===${NC}"
+        python3 utils/trakt_sync.py || echo -e "${YELLOW}⚠ Trakt sync skipped${NC}"
+        echo ""
+    fi
+
+    # Step 6: Create logs directory
     mkdir -p logs
 
-    # Step 5: Run recommendations
+    # Step 7: Run recommendations
     echo -e "${CYAN}=== Running Recommendations ===${NC}"
     echo ""
 
@@ -432,7 +740,7 @@ main() {
     fi
     echo ""
 
-    # Step 6: Generate external recommendations (watchlist)
+    # Step 7: Generate external recommendations (watchlist)
     if grep -A 2 "external_recommendations:" config.yml | grep -q "enabled: true" 2>/dev/null; then
         echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
         if python3 recommenders/external.py; then
@@ -443,7 +751,7 @@ main() {
         echo ""
     fi
 
-    # Step 7: Cron setup (first run only)
+    # Step 8: Cron setup (first run only)
     if is_first_run; then
         setup_cron
     fi

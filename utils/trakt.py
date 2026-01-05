@@ -3,6 +3,8 @@ Trakt API client for Curatarr.
 Handles OAuth device authentication, token management, and API requests.
 """
 
+import json
+import os
 import time
 import logging
 import requests
@@ -16,6 +18,9 @@ TRAKT_AUTH_URL = "https://trakt.tv"
 
 # Rate limiting: 0.2s delay (5 req/sec, well under 1000/5min limit)
 TRAKT_RATE_LIMIT_DELAY = 0.2
+
+# HTTP request timeout in seconds
+TRAKT_REQUEST_TIMEOUT = 30
 
 
 class TraktAuthError(Exception):
@@ -107,7 +112,7 @@ class TraktClient:
                 url=url,
                 headers=headers,
                 json=data,
-                timeout=30
+                timeout=TRAKT_REQUEST_TIMEOUT
             )
 
             # Handle rate limiting
@@ -151,7 +156,7 @@ class TraktClient:
             f"{TRAKT_API_URL}/oauth/device/code",
             json={"client_id": self.client_id},
             headers={"Content-Type": "application/json"},
-            timeout=30
+            timeout=TRAKT_REQUEST_TIMEOUT
         )
 
         if response.status_code != 200:
@@ -183,7 +188,7 @@ class TraktClient:
                     "client_secret": self.client_secret
                 },
                 headers={"Content-Type": "application/json"},
-                timeout=30
+                timeout=TRAKT_REQUEST_TIMEOUT
             )
 
             if response.status_code == 200:
@@ -244,7 +249,7 @@ class TraktClient:
                     "grant_type": "refresh_token"
                 },
                 headers={"Content-Type": "application/json"},
-                timeout=30
+                timeout=TRAKT_REQUEST_TIMEOUT
             )
 
             if response.status_code == 200:
@@ -283,7 +288,7 @@ class TraktClient:
                     "client_secret": self.client_secret
                 },
                 headers={"Content-Type": "application/json"},
-                timeout=30
+                timeout=TRAKT_REQUEST_TIMEOUT
             )
 
             if response.status_code == 200:
@@ -587,6 +592,30 @@ class TraktClient:
         except TraktAPIError:
             return []
 
+    def add_to_history(self,
+                       movies: Optional[List[str]] = None,
+                       shows: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Add items to watch history (mark as watched).
+
+        Args:
+            movies: List of IMDB IDs for movies
+            shows: List of IMDB IDs for shows
+
+        Returns:
+            Response with added/not_found counts
+        """
+        data = {}
+        if movies:
+            data["movies"] = [{"ids": {"imdb": imdb_id}} for imdb_id in movies]
+        if shows:
+            data["shows"] = [{"ids": {"imdb": imdb_id}} for imdb_id in shows]
+
+        if not data:
+            return {"added": {"movies": 0, "episodes": 0}}
+
+        return self._make_request("POST", "/sync/history", data)
+
     def get_ratings(self, media_type: str = None) -> List[Dict[str, Any]]:
         """
         Get user's ratings from Trakt.
@@ -718,3 +747,76 @@ def create_trakt_client(config: Dict) -> Optional[TraktClient]:
         access_token=access_token,
         refresh_token=refresh_token
     )
+
+
+def get_authenticated_trakt_client(config: Dict) -> Optional[TraktClient]:
+    """
+    Get an authenticated TraktClient, or None if unavailable.
+
+    Convenience wrapper that creates client and verifies authentication.
+    Use this instead of create_trakt_client() when you need to make API calls.
+
+    Args:
+        config: Full application config dict
+
+    Returns:
+        Authenticated TraktClient or None if disabled/not authenticated
+    """
+    client = create_trakt_client(config)
+    if not client:
+        return None
+    if not client.is_authenticated:
+        logger.warning("Trakt client created but not authenticated")
+        return None
+    return client
+
+
+
+# Cache version for Trakt enhancement tracking
+TRAKT_ENHANCE_CACHE_VERSION = 1
+
+
+def load_trakt_enhance_cache(cache_dir: str) -> Dict:
+    """
+    Load cache of Trakt IDs already processed for profile enhancement.
+
+    Args:
+        cache_dir: Directory where cache file is stored
+
+    Returns:
+        Dict with 'movie_ids' and 'show_ids' sets
+    """
+    cache_path = os.path.join(cache_dir, 'trakt_enhance_cache.json')
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data.get('version', 0) >= TRAKT_ENHANCE_CACHE_VERSION:
+                    return {
+                        'movie_ids': set(data.get('movie_ids', [])),
+                        'show_ids': set(data.get('show_ids', []))
+                    }
+        except Exception:
+            pass
+    return {'movie_ids': set(), 'show_ids': set()}
+
+
+def save_trakt_enhance_cache(cache_dir: str, movie_ids: set, show_ids: set):
+    """
+    Save cache of Trakt IDs processed for profile enhancement.
+
+    Args:
+        cache_dir: Directory where cache file is stored
+        movie_ids: Set of movie IMDB IDs seen from Trakt
+        show_ids: Set of show IMDB IDs seen from Trakt
+    """
+    cache_path = os.path.join(cache_dir, 'trakt_enhance_cache.json')
+    try:
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'version': TRAKT_ENHANCE_CACHE_VERSION,
+                'movie_ids': list(movie_ids),
+                'show_ids': list(show_ids)
+            }, f)
+    except Exception:
+        pass

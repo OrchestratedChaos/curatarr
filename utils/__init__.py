@@ -58,10 +58,14 @@ from .display import (
 # TMDB utilities
 from .tmdb import (
     LANGUAGE_CODES,
+    IMDB_TMDB_CACHE_VERSION,
     get_full_language_name,
     fetch_tmdb_with_retry,
     get_tmdb_id_for_item,
     get_tmdb_keywords,
+    load_imdb_tmdb_cache,
+    save_imdb_tmdb_cache,
+    get_tmdb_id_from_imdb,
 )
 
 # Cache utilities
@@ -135,10 +139,14 @@ from .plex import (
 # Trakt utilities
 from .trakt import (
     TRAKT_RATE_LIMIT_DELAY,
+    TRAKT_ENHANCE_CACHE_VERSION,
     TraktAuthError,
     TraktAPIError,
     TraktClient,
     create_trakt_client,
+    get_authenticated_trakt_client,
+    load_trakt_enhance_cache,
+    save_trakt_enhance_cache,
 )
 
 # Define __all__ for explicit public API
@@ -243,4 +251,5 @@ __all__ = [
     'TraktAPIError',
     'TraktClient',
     'create_trakt_client',
+    'get_authenticated_trakt_client',
 ]

@@ -39,7 +39,7 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
 
     now = datetime.now()
 
-    def write_service_section(f, items, media_icon):
+    def write_service_section(f, items):
         """Helper to write a table of items"""
         f.write("| Title | Year | Rating | Score | Days on List |\n")
         f.write("|-------|------|--------|-------|-------------|\n")
@@ -63,7 +63,7 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
                 for service, items in sorted(movies_categorized['user_services'].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} movies)\n\n")
-                    write_service_section(f, items, "movie")
+                    write_service_section(f, items)
                 f.write("---\n\n")
 
             # Other services
@@ -73,14 +73,14 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
                 for service, items in sorted(movies_categorized['other_services'].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} movies)\n\n")
-                    write_service_section(f, items, "movie")
+                    write_service_section(f, items)
                 f.write("---\n\n")
 
             # Acquire
             if movies_categorized['acquire']:
                 f.write(f"### Acquire ({len(movies_categorized['acquire'])} movies)\n\n")
                 f.write("*Not available on any streaming service - need physical/digital copy*\n\n")
-                write_service_section(f, movies_categorized['acquire'], "movie")
+                write_service_section(f, movies_categorized['acquire'])
 
         # TV Shows section
         if any([shows_categorized['user_services'], shows_categorized['other_services'], shows_categorized['acquire']]):
@@ -92,7 +92,7 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
                 for service, items in sorted(shows_categorized['user_services'].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} shows)\n\n")
-                    write_service_section(f, items, "show")
+                    write_service_section(f, items)
                 f.write("---\n\n")
 
             # Other services
@@ -102,14 +102,14 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
                 for service, items in sorted(shows_categorized['other_services'].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} shows)\n\n")
-                    write_service_section(f, items, "show")
+                    write_service_section(f, items)
                 f.write("---\n\n")
 
             # Acquire
             if shows_categorized['acquire']:
                 f.write(f"### Acquire ({len(shows_categorized['acquire'])} shows)\n\n")
                 f.write("*Not available on any streaming service - need physical/digital copy*\n\n")
-                write_service_section(f, shows_categorized['acquire'], "show")
+                write_service_section(f, shows_categorized['acquire'])
 
         # Instructions
         f.write("---\n\n")
@@ -125,7 +125,7 @@ def generate_markdown(username, display_name, movies_categorized, shows_categori
 def generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id_func):
     """
     Generate single HTML watchlist with tabs for all users.
-    Users can switch between tabs, select items, and export.
+    Users can switch between tabs, select items, and export to Radarr/Sonarr/Trakt.
 
     Args:
         all_users_data: List of user data dicts with movies_categorized and shows_categorized
@@ -142,53 +142,27 @@ def generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id
     print("  Fetching IMDB IDs for export...")
     all_imdb_ids = {}  # tmdb_id -> imdb_id
 
+    def collect_imdb_ids_from_categorized(categorized, media_type):
+        """Helper to collect IMDB IDs from categorized items."""
+        # Flatten all items from all categories
+        items = []
+        for service_items in categorized.get('user_services', {}).values():
+            items.extend(service_items)
+        for service_items in categorized.get('other_services', {}).values():
+            items.extend(service_items)
+        items.extend(categorized.get('acquire', []))
+
+        # Fetch IMDB IDs for items not already cached
+        for item in items:
+            tmdb_id = item.get('tmdb_id')
+            if tmdb_id and tmdb_id not in all_imdb_ids:
+                imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, media_type)
+                if imdb_id:
+                    all_imdb_ids[tmdb_id] = imdb_id
+
     for user_data in all_users_data:
-        movies_cat = user_data['movies_categorized']
-        shows_cat = user_data['shows_categorized']
-
-        # Gather all movie tmdb_ids
-        for items in movies_cat['user_services'].values():
-            for item in items:
-                tmdb_id = item.get('tmdb_id')
-                if tmdb_id and tmdb_id not in all_imdb_ids:
-                    imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, 'movie')
-                    if imdb_id:
-                        all_imdb_ids[tmdb_id] = imdb_id
-        for items in movies_cat['other_services'].values():
-            for item in items:
-                tmdb_id = item.get('tmdb_id')
-                if tmdb_id and tmdb_id not in all_imdb_ids:
-                    imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, 'movie')
-                    if imdb_id:
-                        all_imdb_ids[tmdb_id] = imdb_id
-        for item in movies_cat['acquire']:
-            tmdb_id = item.get('tmdb_id')
-            if tmdb_id and tmdb_id not in all_imdb_ids:
-                imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, 'movie')
-                if imdb_id:
-                    all_imdb_ids[tmdb_id] = imdb_id
-
-        # Gather all show tmdb_ids
-        for items in shows_cat['user_services'].values():
-            for item in items:
-                tmdb_id = item.get('tmdb_id')
-                if tmdb_id and tmdb_id not in all_imdb_ids:
-                    imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, 'tv')
-                    if imdb_id:
-                        all_imdb_ids[tmdb_id] = imdb_id
-        for items in shows_cat['other_services'].values():
-            for item in items:
-                tmdb_id = item.get('tmdb_id')
-                if tmdb_id and tmdb_id not in all_imdb_ids:
-                    imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, 'tv')
-                    if imdb_id:
-                        all_imdb_ids[tmdb_id] = imdb_id
-        for item in shows_cat['acquire']:
-            tmdb_id = item.get('tmdb_id')
-            if tmdb_id and tmdb_id not in all_imdb_ids:
-                imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, 'tv')
-                if imdb_id:
-                    all_imdb_ids[tmdb_id] = imdb_id
+        collect_imdb_ids_from_categorized(user_data['movies_categorized'], 'movie')
+        collect_imdb_ids_from_categorized(user_data['shows_categorized'], 'tv')
 
     def render_table(items, media_type, user_id):
         """Render HTML table for items with checkboxes (unchecked by default)"""
@@ -392,6 +366,15 @@ def _generate_html_template(tabs_html, panels_html, now):
         .export-btn.sonarr:hover {{
             background: linear-gradient(180deg, #3a3a3a 0%, #2a2a2a 100%);
         }}
+        .export-btn.trakt {{
+            background: linear-gradient(180deg, #ed1c24 0%, #b71c1c 100%);
+            color: #fff;
+            border-color: #ed1c24;
+        }}
+        .export-btn.trakt:hover {{
+            background: linear-gradient(180deg, #ff3333 0%, #ed1c24 100%);
+            box-shadow: 0 0 10px rgba(237, 28, 36, 0.4);
+        }}
         .tabs {{
             display: flex;
             gap: 3px;
@@ -486,6 +469,7 @@ def _generate_html_template(tabs_html, panels_html, now):
         <div class="export-buttons">
             <button class="export-btn" onclick="exportRadarr()">Export to Radarr (<span id="movie-count">0</span>)</button>
             <button class="export-btn sonarr" onclick="exportSonarr()">Export to Sonarr (<span id="show-count">0</span>)</button>
+            <button class="export-btn trakt" onclick="exportTrakt()">Export for Trakt (<span id="total-count">0</span>)</button>
         </div>
     </div>
 
@@ -500,8 +484,9 @@ def _generate_html_template(tabs_html, panels_html, now):
         <ul>
             <li>Click a user tab to view their recommendations</li>
             <li>Check the items you want to export</li>
-            <li><strong>Radarr:</strong> Click "Export to Radarr" to download IMDB IDs for selected movies</li>
-            <li><strong>Sonarr:</strong> Click "Export to Sonarr" to download IMDB IDs for selected shows</li>
+            <li><strong>Radarr:</strong> Download IMDB IDs for selected movies → import via Lists</li>
+            <li><strong>Sonarr:</strong> Download IMDB IDs for selected shows → import via Lists</li>
+            <li><strong>Trakt:</strong> Download IMDB IDs for all selected → paste into Trakt list</li>
             <li>Exports include selections from ALL users, not just the active tab</li>
         </ul>
     </div>
@@ -544,6 +529,7 @@ def _generate_html_template(tabs_html, panels_html, now):
             const showCount = document.querySelectorAll('tr[data-type="show"] .select-item:checked').length;
             document.getElementById('movie-count').textContent = movieCount;
             document.getElementById('show-count').textContent = showCount;
+            document.getElementById('total-count').textContent = movieCount + showCount;
         }}
 
         function exportRadarr() {{
@@ -586,6 +572,28 @@ def _generate_html_template(tabs_html, panels_html, now):
             }}
             downloadFile('sonarr_import.txt', [...new Set(imdbIds)].join('\\n'));
             alert('Exported ' + imdbIds.length + ' shows for Sonarr import.');
+        }}
+
+        function exportTrakt() {{
+            // Export ALL selected items (movies + shows) for Trakt import
+            const allRows = document.querySelectorAll('tr[data-imdb]');
+            const imdbIds = [];
+            allRows.forEach(row => {{
+                const checkbox = row.querySelector('.select-item');
+                if (checkbox && checkbox.checked) {{
+                    const imdb = row.getAttribute('data-imdb');
+                    if (imdb && imdb.startsWith('tt')) {{
+                        imdbIds.push(imdb);
+                    }}
+                }}
+            }});
+            if (imdbIds.length === 0) {{
+                alert('No selected items with IMDB IDs to export. Select items first.');
+                return;
+            }}
+            // Trakt accepts IMDB IDs one per line for list import
+            downloadFile('trakt_import.txt', [...new Set(imdbIds)].join('\\n'));
+            alert('Exported ' + imdbIds.length + ' items for Trakt.\\n\\nTo import:\\n1. Go to trakt.tv/users/YOUR_USERNAME/lists\\n2. Create or edit a list\\n3. Click "Add Items" and paste the IMDB IDs');
         }}
 
         function downloadFile(filename, content) {{

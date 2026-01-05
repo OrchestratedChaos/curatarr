@@ -20,9 +20,13 @@ from recommenders.external import (
     is_in_library,
     load_cache,
     save_cache,
+    get_tmdb_id_from_imdb,
+    enhance_profile_with_trakt,
+    export_to_trakt,
     SERVICE_DISPLAY_NAMES,
     TMDB_PROVIDERS,
 )
+from collections import Counter
 
 
 class TestGetImdbId:
@@ -435,3 +439,485 @@ class TestLoadIgnoreList:
 
         assert result == set()
         assert isinstance(result, set)
+
+
+class TestGetTmdbIdFromImdb:
+    """Tests for get_tmdb_id_from_imdb function"""
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_tmdb_id_for_movie(self, mock_get):
+        """Test successful IMDB to TMDB conversion for movie."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'movie_results': [{'id': 12345}],
+            'tv_results': []
+        }
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie')
+
+        assert result == 12345
+        mock_get.assert_called_once()
+        assert 'find/tt1234567' in mock_get.call_args[0][0]
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_tmdb_id_for_tv(self, mock_get):
+        """Test successful IMDB to TMDB conversion for TV."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'movie_results': [],
+            'tv_results': [{'id': 67890}]
+        }
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt9876543', 'tv')
+
+        assert result == 67890
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_none_when_not_found(self, mock_get):
+        """Test returns None when IMDB ID not found."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'movie_results': [],
+            'tv_results': []
+        }
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt0000000', 'movie')
+
+        assert result is None
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_none_on_api_error(self, mock_get):
+        """Test returns None on API error."""
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_get.return_value = mock_response
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie')
+
+        assert result is None
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_none_on_exception(self, mock_get):
+        """Test returns None when exception occurs."""
+        mock_get.side_effect = Exception("Network error")
+
+        result = get_tmdb_id_from_imdb('api_key', 'tt1234567', 'movie')
+
+        assert result is None
+
+
+class TestEnhanceProfileWithTrakt:
+    """Tests for enhance_profile_with_trakt function"""
+
+    def test_returns_profile_when_trakt_disabled(self):
+        """Test returns unchanged profile when Trakt disabled."""
+        profile = {
+            'genres': Counter({'Action': 5}),
+            'actors': Counter(),
+            'keywords': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'tmdb_ids': set()
+        }
+        config = {'trakt': {'enabled': False}}
+
+        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+
+        assert result == profile
+        assert result['genres']['Action'] == 5
+
+    def test_returns_profile_when_import_disabled(self):
+        """Test returns unchanged profile when import disabled."""
+        profile = {
+            'genres': Counter({'Drama': 3}),
+            'actors': Counter(),
+            'keywords': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'tmdb_ids': set()
+        }
+        config = {
+            'trakt': {
+                'enabled': True,
+                'import': {'enabled': False}
+            }
+        }
+
+        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+
+        assert result['genres']['Drama'] == 3
+
+    def test_returns_profile_when_merge_disabled(self):
+        """Test returns unchanged profile when merge_watch_history disabled."""
+        profile = {
+            'genres': Counter({'Comedy': 2}),
+            'actors': Counter(),
+            'keywords': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'tmdb_ids': set()
+        }
+        config = {
+            'trakt': {
+                'enabled': True,
+                'import': {'enabled': True, 'merge_watch_history': False}
+            }
+        }
+
+        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+
+        assert result['genres']['Comedy'] == 2
+
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_returns_profile_when_not_authenticated(self, mock_get_auth_client):
+        """Test returns unchanged profile when Trakt not authenticated."""
+        mock_get_auth_client.return_value = None  # Not authenticated
+
+        profile = {
+            'genres': Counter({'Horror': 1}),
+            'actors': Counter(),
+            'keywords': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'tmdb_ids': set()
+        }
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'import': {'enabled': True, 'merge_watch_history': True}
+            }
+        }
+
+        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+
+        assert result['genres']['Horror'] == 1
+
+    @patch('recommenders.external.save_trakt_enhance_cache')
+    @patch('recommenders.external.load_trakt_enhance_cache')
+    @patch('recommenders.external.save_imdb_tmdb_cache')
+    @patch('recommenders.external.load_imdb_tmdb_cache')
+    @patch('recommenders.external.get_tmdb_details')
+    @patch('recommenders.external.get_tmdb_id_from_imdb')
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_merges_trakt_history_into_profile(self, mock_get_auth_client,
+                                                mock_get_tmdb_id, mock_get_details,
+                                                mock_load_imdb_cache, mock_save_imdb_cache,
+                                                mock_load_enhance_cache, mock_save_enhance_cache):
+        """Test that Trakt watch history is merged into profile."""
+        # Setup cache mocks - empty caches so items are "new"
+        mock_load_enhance_cache.return_value = {'movie_ids': set(), 'show_ids': set()}
+        mock_load_imdb_cache.return_value = {}
+
+        # Setup mock Trakt client
+        mock_client = Mock()
+        mock_client.get_watched_movies.return_value = [
+            {'movie': {'title': 'Trakt Movie', 'ids': {'imdb': 'tt1111111'}}}
+        ]
+        mock_get_auth_client.return_value = mock_client
+
+        # Setup IMDB to TMDB conversion
+        mock_get_tmdb_id.return_value = 99999
+
+        # Setup TMDB details
+        mock_get_details.return_value = {
+            'genres': ['Sci-Fi', 'Action'],
+            'cast': ['Actor A', 'Actor B'],
+            'keywords': ['space', 'aliens'],
+            'directors': ['Director X'],
+            'studios': []
+        }
+
+        profile = {
+            'genres': Counter({'Drama': 5}),
+            'actors': Counter(),
+            'keywords': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'tmdb_ids': set([12345])  # Existing TMDB ID
+        }
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'import': {'enabled': True, 'merge_watch_history': True}
+            }
+        }
+
+        result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+
+        # Original profile data preserved
+        assert result['genres']['Drama'] == 5
+        # New data from Trakt added
+        assert result['genres']['Sci-Fi'] == 1
+        assert result['genres']['Action'] == 1
+        assert result['actors']['Actor A'] == 1
+        assert result['keywords']['space'] == 1
+        assert result['directors']['Director X'] == 1
+        assert 99999 in result['tmdb_ids']
+
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_skips_items_already_in_profile(self, mock_get_auth_client):
+        """Test that items already in profile are not re-processed."""
+        mock_client = Mock()
+        mock_client.get_watched_movies.return_value = [
+            {'movie': {'title': 'Already Watched', 'ids': {'imdb': 'tt1111111'}}}
+        ]
+        mock_get_auth_client.return_value = mock_client
+
+        profile = {
+            'genres': Counter({'Drama': 5}),
+            'actors': Counter(),
+            'keywords': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'tmdb_ids': set()  # Will check if item gets skipped when TMDB ID matches
+        }
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'import': {'enabled': True, 'merge_watch_history': True}
+            }
+        }
+
+        with patch('recommenders.external.get_tmdb_id_from_imdb') as mock_tmdb:
+            # Return None to simulate failed conversion (item should be skipped)
+            mock_tmdb.return_value = None
+
+            result = enhance_profile_with_trakt(profile, config, 'api_key', 'movie')
+
+            # Profile unchanged since TMDB ID lookup failed
+            assert result['genres']['Drama'] == 5
+            assert len(result['tmdb_ids']) == 0
+
+
+class TestExportToTraktAutoSync:
+    """Tests for export_to_trakt auto_sync configuration."""
+
+    def test_skips_when_trakt_disabled(self):
+        """Test export skips when Trakt disabled."""
+        config = {'trakt': {'enabled': False}}
+        result = export_to_trakt(config, [], 'api_key')
+        assert result is None
+
+    def test_skips_when_export_disabled(self):
+        """Test export skips when export.enabled is false."""
+        config = {
+            'trakt': {
+                'enabled': True,
+                'export': {'enabled': False}
+            }
+        }
+        result = export_to_trakt(config, [], 'api_key')
+        assert result is None
+
+    def test_skips_when_auto_sync_disabled(self):
+        """Test export skips when auto_sync is false."""
+        config = {
+            'trakt': {
+                'enabled': True,
+                'export': {'enabled': True, 'auto_sync': False}
+            }
+        }
+        result = export_to_trakt(config, [], 'api_key')
+        assert result is None
+
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_skips_when_not_authenticated(self, mock_get_auth_client):
+        """Test export skips when client not authenticated."""
+        mock_get_auth_client.return_value = None  # Not authenticated
+
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'export': {'enabled': True, 'auto_sync': True}
+            }
+        }
+        result = export_to_trakt(config, [], 'api_key')
+        assert result is None
+
+
+class TestExportToTraktUserMode:
+    """Tests for export_to_trakt user_mode configuration."""
+
+    def test_mapping_mode_requires_valid_plex_users(self):
+        """Test that mapping mode requires configured plex_users."""
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'access_token': 'token',
+                'export': {
+                    'enabled': True,
+                    'auto_sync': True,
+                    'user_mode': 'mapping',
+                    'plex_users': ['YourPlexUsername']  # Default placeholder
+                }
+            }
+        }
+        result = export_to_trakt(config, [], 'api_key')
+        assert result is None
+
+    def test_mapping_mode_rejects_empty_plex_users(self):
+        """Test that mapping mode rejects empty plex_users list."""
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'access_token': 'token',
+                'export': {
+                    'enabled': True,
+                    'auto_sync': True,
+                    'user_mode': 'mapping',
+                    'plex_users': []
+                }
+            }
+        }
+        result = export_to_trakt(config, [], 'api_key')
+        assert result is None
+
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_mapping_mode_filters_users(self, mock_get_auth_client):
+        """Test that mapping mode only exports specified users."""
+        mock_client = Mock()
+        mock_client.get_username.return_value = 'trakt_user'
+        mock_client.sync_list.return_value = {'added': {'movies': 2}}
+        mock_get_auth_client.return_value = mock_client
+
+        all_users_data = [
+            {'username': 'jason', 'display_name': 'Jason', 'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}, 'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}},
+            {'username': 'guest', 'display_name': 'Guest', 'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}, 'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}},
+        ]
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'access_token': 'token',
+                'export': {
+                    'enabled': True,
+                    'auto_sync': True,
+                    'user_mode': 'mapping',
+                    'plex_users': ['jason']  # Only export jason
+                }
+            }
+        }
+
+        export_to_trakt(config, all_users_data, 'api_key')
+
+        # Should not have called sync_list for 'guest' user
+        call_args_list = [str(call) for call in mock_client.sync_list.call_args_list]
+        assert not any('Guest' in args for args in call_args_list)
+
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_mapping_mode_case_insensitive(self, mock_get_auth_client):
+        """Test that mapping mode matches usernames case-insensitively."""
+        mock_client = Mock()
+        mock_client.get_username.return_value = 'trakt_user'
+        mock_get_auth_client.return_value = mock_client
+
+        all_users_data = [
+            {'username': 'Jason', 'display_name': 'Jason', 'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}, 'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}},
+        ]
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'access_token': 'token',
+                'export': {
+                    'enabled': True,
+                    'auto_sync': True,
+                    'user_mode': 'mapping',
+                    'plex_users': ['jason']  # lowercase
+                }
+            }
+        }
+
+        # Should find 'Jason' even with 'jason' in config
+        export_to_trakt(config, all_users_data, 'api_key')
+        # No warning should have been logged about missing users
+
+    @patch('recommenders.external.collect_imdb_ids')
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_combined_mode_merges_all_users(self, mock_get_auth_client, mock_collect_ids):
+        """Test that combined mode creates single merged list."""
+        mock_client = Mock()
+        mock_client.get_username.return_value = 'trakt_user'
+        mock_client.sync_list.return_value = {'added': {'movies': 3}}
+        mock_get_auth_client.return_value = mock_client
+        mock_collect_ids.side_effect = [
+            ['tt0001', 'tt0002'],  # user1 movies
+            [],  # user1 shows
+            ['tt0003'],  # user2 movies
+            [],  # user2 shows
+        ]
+
+        all_users_data = [
+            {'username': 'user1', 'display_name': 'User1', 'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}, 'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}},
+            {'username': 'user2', 'display_name': 'User2', 'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}, 'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}},
+        ]
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'access_token': 'token',
+                'export': {
+                    'enabled': True,
+                    'auto_sync': True,
+                    'user_mode': 'combined',
+                    'list_prefix': 'Curatarr'
+                }
+            }
+        }
+
+        export_to_trakt(config, all_users_data, 'api_key')
+
+        # Should create combined list, not per-user lists
+        mock_client.sync_list.assert_called()
+        call_args = mock_client.sync_list.call_args
+        # List name should be "Curatarr - Movies" not "Curatarr - User1 - Movies"
+        assert 'Curatarr - Movies' == call_args[0][0]
+
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    def test_per_user_mode_exports_all(self, mock_get_auth_client):
+        """Test that per_user mode exports all users."""
+        mock_client = Mock()
+        mock_client.get_username.return_value = 'trakt_user'
+        mock_get_auth_client.return_value = mock_client
+
+        all_users_data = [
+            {'username': 'user1', 'display_name': 'User1', 'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}, 'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}},
+            {'username': 'user2', 'display_name': 'User2', 'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}, 'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}},
+        ]
+        config = {
+            'trakt': {
+                'enabled': True,
+                'client_id': 'id',
+                'client_secret': 'secret',
+                'access_token': 'token',
+                'export': {
+                    'enabled': True,
+                    'auto_sync': True,
+                    'user_mode': 'per_user'
+                }
+            }
+        }
+
+        export_to_trakt(config, all_users_data, 'api_key')
+        # No error, both users should be processed

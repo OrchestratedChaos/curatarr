@@ -2,6 +2,46 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [1.7.6] - 2026-01-04
+
+### Added
+- **Trakt profile enhancement caching** — Skip processing when nothing changed
+  - Caches seen Trakt IDs in `trakt_enhance_cache.json`
+  - Only processes new items, skips entirely if unchanged
+- **IMDB→TMDB ID conversion cache** — Speeds up Trakt integration
+  - One-time conversion penalty, instant lookups after
+  - Shared cache in `imdb_tmdb_cache.json` with versioning
+- **Plex watch history sync to Trakt** — Runs before recommenders
+  - New `utils/trakt_sync.py` CLI entry point
+  - Syncs watched movies/shows to Trakt with batching
+  - Caches synced IDs to avoid re-syncing
+
+### Changed
+- Consolidated duplicate IMDB→TMDB functions into `utils/tmdb.py`
+- Progress indicators throughout Trakt operations
+- User mapping check ensures only configured users get Trakt enhancement
+
+## [1.7.5] - 2026-01-04
+
+### Added
+- **HTML Export for Trakt** — New "Export for Trakt" button in watchlist HTML
+  - Select items and download IMDB IDs to import into Trakt lists
+  - Works alongside Radarr/Sonarr export buttons
+- **Trakt watch history import** — Merge streaming service history into recommendations
+  - Pulls watch history from Trakt (Netflix, Disney+, Hulu, etc.)
+  - Enhances taste profile with content not in Plex library
+  - New config: `trakt.import.merge_watch_history` (default: true)
+- **Configurable auto-sync** — Control automatic Trakt list syncing
+  - New config: `trakt.export.auto_sync` (default: true)
+  - Set to false to only use manual HTML export
+
+## [1.7.4] - 2026-01-04
+
+### Added
+- **Integration status display** — Shows enabled/disabled status for all integrations at startup
+  - Plex, TMDB (required), Trakt, External Recommendations
+  - Color-coded: green checkmark (active), yellow circle (disabled/needs auth), red X (missing)
+
 ## [1.7.3] - 2026-01-04
 
 ### Added

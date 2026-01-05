@@ -208,6 +208,9 @@ class PlexMovieRecommender(BaseRecommender):
                 self.watched_ids = {int(id_) for id_ in watched_cache['watched_movie_ids'] if str(id_).isdigit()}
             logger.debug(f"Using cached data: {self.cached_watched_count} watched movies, {len(self.watched_ids)} IDs")
 
+        # Enhance profile with Trakt watch history (if enabled)
+        self._enhance_profile_with_trakt()
+
         # Compute profile hash for score caching
         self.profile_hash = compute_profile_hash(self.watched_data_counters)
 
