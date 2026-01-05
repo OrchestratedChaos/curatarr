@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 import math
 import traceback
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, Set, Optional, Tuple
 
 # Import shared utilities
 from utils import (

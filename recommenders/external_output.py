@@ -5,7 +5,7 @@ Generates markdown watchlists and combined HTML views.
 
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # Service display name mappings
 SERVICE_DISPLAY_NAMES = {
