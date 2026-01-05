@@ -1,0 +1,122 @@
+# Curatarr Tuning Configuration
+# Display options, weights, and scoring parameters
+# This file is optional - defaults are used if not present
+
+# =============================================================================
+# MOVIE SETTINGS
+# =============================================================================
+movies:
+  limit_results: 50  # Max recommendations per user
+  randomize_recommendations: false  # Randomize from top pool
+
+  # Display options for recommendations output
+  show_summary: true
+  show_cast: true
+  show_director: true
+  show_genres: true
+  show_language: true
+  show_rating: true
+  show_imdb_link: true
+
+  # Quality filters - exclude low-quality content
+  quality_filters:
+    min_rating: 5.0  # TMDB rating minimum (0-10)
+    min_vote_count: 15  # Minimum votes for reliability
+
+  # Scoring weights - must sum to 1.0
+  weights:
+    genre: 0.25
+    director: 0.05
+    actor: 0.20
+    keyword: 0.50  # TMDB keywords (plot themes, settings)
+
+# =============================================================================
+# TV SHOW SETTINGS
+# =============================================================================
+tv:
+  limit_results: 20
+  randomize_recommendations: false
+  normalize_counters: true  # Normalize across different show lengths
+
+  # Display options
+  show_summary: true
+  show_cast: true
+  show_language: true
+  show_rating: true
+  show_imdb_link: true
+
+  # Quality filters
+  quality_filters:
+    min_rating: 0.0
+    min_vote_count: 0
+
+  # Scoring weights - must sum to 1.0
+  weights:
+    genre: 0.25
+    studio: 0.10  # TV uses studio instead of director
+    actor: 0.20
+    keyword: 0.45
+
+# =============================================================================
+# COLLECTION SETTINGS
+# =============================================================================
+collections:
+  add_label: true  # Add 'Recommended' label to items
+  label_name: Recommended
+  append_usernames: true  # Include username in collection name
+  remove_previous_recommendations: false
+  stale_removal_days: 7  # Remove unwatched recs after N days
+
+# =============================================================================
+# EXTERNAL RECOMMENDATIONS
+# =============================================================================
+# Recommendations for content NOT in your Plex library
+external_recommendations:
+  enabled: true
+  movie_limit: 30  # Per user
+  show_limit: 20
+  min_relevance_score: 0.25  # 0.0-1.0, higher = stricter filtering
+  auto_open_html: false  # Open watchlist in browser after generation
+
+# =============================================================================
+# RECENCY DECAY
+# =============================================================================
+# How much to weight recent watches vs older ones
+recency_decay:
+  enabled: true
+  days_0_30: 1.0      # Full weight for last month
+  days_31_90: 0.75    # 75% weight for 1-3 months ago
+  days_91_180: 0.50   # 50% weight for 3-6 months ago
+  days_181_365: 0.25  # 25% weight for 6-12 months ago
+  days_365_plus: 0.10 # 10% weight for older than 1 year
+
+# =============================================================================
+# RATING MULTIPLIERS
+# =============================================================================
+# How much user ratings influence the profile (5-star scale)
+rating_multipliers:
+  star_5: 2.5  # Outstanding - strong signal
+  star_4: 1.7  # Very good
+  star_3: 1.0  # Neutral baseline
+  star_2: 0.4  # Poor
+  star_1: 0.2  # Very poor
+
+# =============================================================================
+# NEGATIVE SIGNALS
+# =============================================================================
+# Penalize content similar to disliked items
+negative_signals:
+  enabled: true
+
+  # Low ratings create anti-preferences
+  bad_ratings:
+    enabled: true
+    threshold: 3  # Plex 0-10 scale (3 = 1.5 stars)
+    cap_penalty: 0.5  # Limit negative impact
+
+  # Detect abandoned TV shows
+  dropped_shows:
+    enabled: true
+    min_episodes_watched: 2  # Must watch N episodes to count
+    max_completion_percent: 25  # Consider dropped if < 25% watched
+    penalty_multiplier: -0.4

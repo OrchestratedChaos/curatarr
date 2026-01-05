@@ -1,0 +1,42 @@
+# Curatarr Trakt Configuration
+# Sync recommendations to Trakt lists and import watch history
+
+enabled: true
+
+# API credentials - get from https://trakt.tv/oauth/applications
+client_id: YOUR_CLIENT_ID
+client_secret: YOUR_CLIENT_SECRET
+
+# OAuth tokens - set automatically after authentication
+# Run: python3 utils/trakt_auth.py
+access_token: null
+refresh_token: null
+
+# =============================================================================
+# EXPORT SETTINGS
+# =============================================================================
+# Push recommendations to Trakt lists
+export:
+  enabled: true
+  auto_sync: false  # Auto-export on each run (or use HTML button)
+  list_prefix: "Curatarr"  # Lists named: "Curatarr - Username - Movies"
+  privacy: private  # private, friends, or public
+
+  # Which Plex users to export:
+  #   mapping  - Only users in plex_users list (recommended)
+  #   per_user - Separate list per Plex user (exports ALL users)
+  #   combined - All users in one list (exports ALL users)
+  user_mode: mapping
+
+  # Plex usernames to export (for mapping mode)
+  # Usually just YOUR username - not family members
+  plex_users: []
+
+# =============================================================================
+# IMPORT SETTINGS
+# =============================================================================
+# Pull data from Trakt to enhance recommendations
+import:
+  enabled: true
+  merge_watch_history: true  # Include Trakt watches in profile
+  exclude_watchlist: true  # Don't recommend items on your watchlist

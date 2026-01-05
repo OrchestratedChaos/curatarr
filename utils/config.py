@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Project version - single source of truth
-__version__ = "1.7.6"
+__version__ = "2.0.0"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
@@ -128,11 +128,74 @@ def get_tmdb_config(config: Dict) -> Dict:
     }
 
 
+def _load_module_configs(config: dict, config_dir: str) -> dict:
+    """
+    Load and merge modular config files into the main config.
+
+    Loads tuning.yml, trakt.yml, radarr.yml, sonarr.yml if they exist.
+    Module files take precedence over main config.yml.
+    """
+    # Tuning modules merge their sections into root
+    tuning_path = os.path.join(config_dir, 'tuning.yml')
+    if os.path.exists(tuning_path):
+        try:
+            with open(tuning_path, 'r', encoding='utf-8') as f:
+                tuning = yaml.safe_load(f)
+                if tuning:
+                    for key, value in tuning.items():
+                        config[key] = value
+                    print(f"  Loaded tuning.yml")
+        except Exception as e:
+            print(f"\033[93mWarning: Could not load tuning.yml: {e}\033[0m")
+
+    # Feature modules go under their key
+    for module in ['trakt', 'radarr', 'sonarr']:
+        module_path = os.path.join(config_dir, f'{module}.yml')
+        if os.path.exists(module_path):
+            try:
+                with open(module_path, 'r', encoding='utf-8') as f:
+                    module_config = yaml.safe_load(f)
+                    if module_config:
+                        config[module] = module_config
+                        print(f"  Loaded {module}.yml")
+            except Exception as e:
+                print(f"\033[93mWarning: Could not load {module}.yml: {e}\033[0m")
+
+    return config
+
+
+def _auto_migrate_if_needed(config: dict, config_path: str) -> dict:
+    """
+    Auto-migrate monolithic config to modular format if needed.
+
+    Returns the migrated config (reloaded after migration).
+    """
+    # Import here to avoid circular imports
+    from utils.migrate_config import needs_migration, migrate_config
+
+    if needs_migration(config):
+        print("\033[93mDetected legacy config format, migrating to modular files...\033[0m")
+        result = migrate_config(config_path)
+        if result['migrated']:
+            print("\033[92mConfig migration complete!\033[0m")
+            # Reload the now-split config
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+
+    return config
+
+
 def load_config(config_path: str) -> dict:
     """
-    Load YAML configuration file with environment variable support.
+    Load YAML configuration with modular config file support.
 
-    Environment variables take precedence over config file values:
+    Loads config.yml and merges optional module files:
+    - tuning.yml: Display/scoring options (merged into root)
+    - trakt.yml: Trakt integration settings
+    - radarr.yml: Radarr integration settings
+    - sonarr.yml: Sonarr integration settings
+
+    Environment variables take precedence over all config values:
         PLEX_URL      -> plex.url
         PLEX_TOKEN    -> plex.token
         TMDB_API_KEY  -> tmdb.api_key
@@ -141,12 +204,20 @@ def load_config(config_path: str) -> dict:
         config_path: Path to config.yml file
 
     Returns:
-        Parsed config dictionary
+        Parsed and merged config dictionary
     """
     try:
-        with open(config_path, 'r') as file:
+        with open(config_path, 'r', encoding='utf-8') as file:
             config = yaml.safe_load(file)
             print(f"Successfully loaded configuration from {config_path}")
+
+        config_dir = os.path.dirname(config_path) or '.'
+
+        # Auto-migrate legacy monolithic config if needed
+        config = _auto_migrate_if_needed(config, config_path)
+
+        # Load and merge modular config files
+        config = _load_module_configs(config, config_dir)
 
         # Override with environment variables (security best practice)
         env_overrides = [
@@ -335,9 +406,10 @@ def adapt_config_for_media_type(root_config: Dict, media_type: str = 'movies') -
     else:
         config['weights']['studio'] = weights.get('studio', weights.get('studio_weight', 0.10))
 
-    # Radarr/Sonarr integration
+    # Radarr/Sonarr integration - check root level first (new modular format),
+    # then fall back to nested under movies/tv (legacy format)
     arr_key = 'radarr' if media_type == 'movies' else 'sonarr'
-    config[arr_key] = media_config.get(arr_key, {})
+    config[arr_key] = root_config.get(arr_key, media_config.get(arr_key, {}))
 
     # Collection settings
     collections = root_config.get('collections', {})

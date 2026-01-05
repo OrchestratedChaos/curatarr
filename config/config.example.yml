@@ -1,0 +1,50 @@
+# Curatarr Configuration
+# Core settings for Plex recommendations
+
+# Plex Server Connection
+plex:
+  url: http://YOUR_PLEX_URL:32400  # Or https://YOUR-SERVER.plex.direct:32400
+  token: YOUR_PLEX_TOKEN  # Get from: https://support.plex.tv/articles/204059436
+  movie_library: Movies
+  tv_library: TV Shows
+
+# TMDB API (required for metadata)
+tmdb:
+  api_key: YOUR_TMDB_API_KEY  # Get free key from: https://www.themoviedb.org/settings/api
+
+# Users and Preferences
+users:
+  list: user1, user2, user3  # Plex usernames (comma-separated)
+  preferences:
+    user1:
+      display_name: User One
+      exclude_genres:  # Optional: genres to exclude
+        - horror
+      streaming_services:  # Optional: for external recommendations
+        - netflix
+        - disney_plus
+    user2:
+      display_name: User Two
+
+# General Settings
+general:
+  plex_only: true  # Only recommend from Plex library
+  log_retention_days: 7
+  auto_update: true
+
+# Optional: Logging level
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+
+# =============================================================================
+# OPTIONAL MODULE FILES (in this directory)
+# =============================================================================
+# For advanced configuration, create these optional files alongside config.yml:
+#
+#   tuning.yml    - Display options, weights, quality filters, scoring params
+#   trakt.yml     - Trakt.tv integration (sync lists, import watchlist)
+#   radarr.yml    - Radarr integration (auto-add movies)
+#   sonarr.yml    - Sonarr integration (auto-add shows)
+#
+# Copy from *.example.yml files and customize as needed.
+# =============================================================================

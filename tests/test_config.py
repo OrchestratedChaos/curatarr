@@ -366,3 +366,177 @@ class TestLoadConfig:
                 assert result['plex']['token'] == 'file_token'
             finally:
                 os.unlink(f.name)
+
+
+class TestModularConfigLoading:
+    """Tests for modular config file loading"""
+
+    def test_loads_tuning_yml_when_present(self):
+        import shutil
+        config_dir = tempfile.mkdtemp()
+        try:
+            # Write main config
+            config_path = os.path.join(config_dir, 'config.yml')
+            with open(config_path, 'w') as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            # Write tuning.yml
+            tuning_path = os.path.join(config_dir, 'tuning.yml')
+            with open(tuning_path, 'w') as f:
+                f.write("movies:\n  limit_results: 100\n")
+
+            result = load_config(config_path)
+            assert result['movies']['limit_results'] == 100
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_loads_trakt_yml_when_present(self):
+        import shutil
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, 'config.yml')
+            with open(config_path, 'w') as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            trakt_path = os.path.join(config_dir, 'trakt.yml')
+            with open(trakt_path, 'w') as f:
+                f.write("enabled: true\nclient_id: abc123\n")
+
+            result = load_config(config_path)
+            assert result['trakt']['enabled'] is True
+            assert result['trakt']['client_id'] == 'abc123'
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_works_without_module_files(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n")
+            f.flush()
+            try:
+                result = load_config(f.name)
+                assert result['plex']['url'] == 'http://localhost:32400'
+            finally:
+                os.unlink(f.name)
+
+    def test_tuning_merges_into_config(self):
+        import shutil
+        config_dir = tempfile.mkdtemp()
+        try:
+            # Main config with only core sections (no migration triggered)
+            config_path = os.path.join(config_dir, 'config.yml')
+            with open(config_path, 'w') as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            # tuning.yml adds movies settings
+            tuning_path = os.path.join(config_dir, 'tuning.yml')
+            with open(tuning_path, 'w') as f:
+                f.write("movies:\n  limit_results: 200\n")
+
+            result = load_config(config_path)
+            # tuning.yml should be merged in
+            assert result['movies']['limit_results'] == 200
+        finally:
+            shutil.rmtree(config_dir)
+
+
+class TestConfigMigration:
+    """Tests for config migration functionality"""
+
+    def test_needs_migration_detects_tuning_sections(self):
+        from utils.migrate_config import needs_migration
+
+        # Config with tuning sections needs migration
+        config = {'plex': {}, 'movies': {'limit_results': 50}}
+        assert needs_migration(config) is True
+
+        # Config with only core sections doesn't need migration
+        config = {'plex': {}, 'tmdb': {}, 'users': {}}
+        assert needs_migration(config) is False
+
+    def test_needs_migration_detects_feature_modules(self):
+        from utils.migrate_config import needs_migration
+
+        config = {'plex': {}, 'trakt': {'enabled': True}}
+        assert needs_migration(config) is True
+
+    def test_extract_tuning_config(self):
+        from utils.migrate_config import extract_tuning_config
+
+        config = {
+            'plex': {'url': 'http://localhost'},
+            'movies': {'limit_results': 50},
+            'recency_decay': {'enabled': True},
+        }
+        tuning = extract_tuning_config(config)
+        assert 'movies' in tuning
+        assert 'recency_decay' in tuning
+        assert 'plex' not in tuning
+
+    def test_build_core_config(self):
+        from utils.migrate_config import build_core_config
+
+        config = {
+            'plex': {'url': 'http://localhost'},
+            'tmdb': {'api_key': 'abc'},
+            'movies': {'limit_results': 50},
+            'trakt': {'enabled': True},
+        }
+        core = build_core_config(config)
+        assert 'plex' in core
+        assert 'tmdb' in core
+        assert 'movies' not in core
+        assert 'trakt' not in core
+
+    def test_migrate_config_creates_files(self):
+        import shutil
+        from utils.migrate_config import migrate_config
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, 'config.yml')
+            with open(config_path, 'w') as f:
+                f.write("""
+plex:
+  url: http://localhost:32400
+tmdb:
+  api_key: abc123
+movies:
+  limit_results: 50
+trakt:
+  enabled: true
+  client_id: xyz
+""")
+
+            result = migrate_config(config_path)
+
+            assert result['migrated'] is True
+            assert 'tuning.yml' in result['files_created']
+            assert 'trakt.yml' in result['files_created']
+            assert os.path.exists(os.path.join(config_dir, 'tuning.yml'))
+            assert os.path.exists(os.path.join(config_dir, 'trakt.yml'))
+        finally:
+            shutil.rmtree(config_dir)
+
+
+class TestAdaptConfigRadarrSonarr:
+    """Tests for radarr/sonarr config handling in adapt_config_for_media_type"""
+
+    def test_radarr_from_root_level(self):
+        # New modular format - radarr at root level
+        config = {
+            'radarr': {'enabled': True, 'url': 'http://radarr:7878'},
+            'movies': {},
+        }
+        result = adapt_config_for_media_type(config, 'movies')
+        assert result['radarr']['enabled'] is True
+        assert result['radarr']['url'] == 'http://radarr:7878'
+
+    def test_sonarr_from_root_level(self):
+        # New modular format - sonarr at root level
+        config = {
+            'sonarr': {'enabled': True, 'url': 'http://sonarr:8989'},
+            'tv': {},
+        }
+        result = adapt_config_for_media_type(config, 'tv')
+        assert result['sonarr']['enabled'] is True
+        assert result['sonarr']['url'] == 'http://sonarr:8989'

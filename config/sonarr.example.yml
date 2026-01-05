@@ -1,0 +1,22 @@
+# Curatarr Sonarr Configuration
+# Auto-add recommended TV shows to Sonarr
+
+enabled: true
+
+# Sonarr connection
+url: http://localhost:8989
+api_key: YOUR_SONARR_API_KEY
+
+# Import settings
+root_folder: /path/to/tv
+quality_profile: HD-1080p
+season_folder: true
+
+# Tagging
+tag: Curatarr  # Tag added to imported shows
+append_usernames: false  # Add username to tag
+
+# Download behavior
+monitor: false  # Monitor for downloads
+monitor_option: none  # none, all, future, missing, pilot
+search_missing: false  # Search for missing episodes
