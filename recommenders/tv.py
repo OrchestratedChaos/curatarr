@@ -231,6 +231,7 @@ class PlexTVRecommender(BaseRecommender):
 
         # Detect dropped shows (started but abandoned)
         dropped_show_ids = set()
+        show_completion_data = {}  # Initialize before conditional block
         ns_config = self.config.get('negative_signals', {})
         dropped_config = ns_config.get('dropped_shows', {})
         if ns_config.get('enabled', True) and dropped_config.get('enabled', True):
@@ -421,7 +422,7 @@ class PlexTVRecommender(BaseRecommender):
         # Build user profile from watched data
         user_profile = {
             'genres': self.watched_data.get('genres', {}),
-            'studios': self.watched_data.get('studio', {}),
+            'studios': self.watched_data.get('studios', {}),
             'actors': self.watched_data.get('actors', {}),
             'languages': self.watched_data.get('languages', {}),
             'keywords': self.watched_data.get('tmdb_keywords', {})

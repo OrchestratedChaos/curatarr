@@ -3,6 +3,8 @@ Tests for utils/plex.py - Plex extraction and utility functions.
 """
 
 import pytest
+import requests
+import plexapi.exceptions
 from unittest.mock import MagicMock, Mock, patch
 from utils.plex import (
     extract_genres,
@@ -446,7 +448,7 @@ class TestUpdatePlexCollection:
         from utils.plex import update_plex_collection
 
         mock_section = Mock()
-        mock_section.collections.side_effect = Exception("API Error")
+        mock_section.collections.side_effect = plexapi.exceptions.PlexApiException("API Error")
 
         result = update_plex_collection(mock_section, "Test", [Mock()])
 
@@ -502,7 +504,7 @@ class TestCleanupOldCollections:
         from utils.plex import cleanup_old_collections
 
         mock_section = Mock()
-        mock_section.collections.side_effect = Exception("API Error")
+        mock_section.collections.side_effect = plexapi.exceptions.PlexApiException("API Error")
 
         # Should not raise
         cleanup_old_collections(mock_section, "Test", "user", "🎬")
@@ -568,7 +570,7 @@ class TestGetPlexUserIds:
         from utils.plex import get_plex_user_ids
 
         mock_plex = Mock()
-        mock_plex.myPlexAccount.side_effect = Exception("API Error")
+        mock_plex.myPlexAccount.side_effect = plexapi.exceptions.PlexApiException("API Error")
 
         result = get_plex_user_ids(mock_plex, ["John"])
 
@@ -621,7 +623,7 @@ class TestInitPlex:
         """Test handling connection failure."""
         from utils.plex import init_plex
 
-        mock_plex_server.side_effect = Exception("Connection refused")
+        mock_plex_server.side_effect = requests.RequestException("Connection refused")
 
         config = {'plex': {'url': 'http://localhost:32400', 'token': 'test_token'}}
 
@@ -699,7 +701,7 @@ class TestGetPlexAccountIds:
         """Test handling API errors."""
         from utils.plex import get_plex_account_ids
 
-        mock_get.side_effect = Exception("Connection error")
+        mock_get.side_effect = requests.RequestException("Connection error")
 
         config = {'plex': {'url': 'http://localhost:32400', 'token': 'test_token'}}
         result = get_plex_account_ids(config, ['John'])
@@ -750,7 +752,7 @@ class TestGetUserSpecificConnection:
         """Test handling error during user switch."""
         from utils.plex import get_user_specific_connection
 
-        mock_account_class.side_effect = Exception("Auth error")
+        mock_account_class.side_effect = plexapi.exceptions.PlexApiException("Auth error")
 
         mock_plex = Mock()
         config = {'plex': {'token': 'test'}}
@@ -829,7 +831,7 @@ class TestGetLibraryImdbIdsAdvanced:
     def test_handles_exception(self, mock_log):
         """Test exception handling in get_library_imdb_ids."""
         mock_section = Mock()
-        mock_section.all.side_effect = Exception("API Error")
+        mock_section.all.side_effect = plexapi.exceptions.PlexApiException("API Error")
 
         result = get_library_imdb_ids(mock_section)
 
@@ -899,7 +901,7 @@ class TestGetWatchedMovieCount:
         """Test exception handling."""
         from utils.plex import get_watched_movie_count
 
-        mock_account_class.side_effect = Exception("Auth error")
+        mock_account_class.side_effect = plexapi.exceptions.PlexApiException("Auth error")
 
         config = {'plex': {'url': 'http://localhost', 'token': 'test'}}
         result = get_watched_movie_count(config, ['user'])
@@ -982,7 +984,7 @@ class TestGetWatchedShowCount:
         """Test exception handling."""
         from utils.plex import get_watched_show_count
 
-        mock_account_class.side_effect = Exception("Auth error")
+        mock_account_class.side_effect = plexapi.exceptions.PlexApiException("Auth error")
 
         config = {'plex': {'url': 'http://localhost', 'token': 'test'}}
         result = get_watched_show_count(config, ['user'])
@@ -1024,7 +1026,7 @@ class TestFetchPlexWatchHistoryShows:
         """Test handling request errors."""
         from utils.plex import fetch_plex_watch_history_shows
 
-        mock_get.side_effect = Exception("Connection error")
+        mock_get.side_effect = requests.RequestException("Connection error")
 
         mock_section = Mock()
         mock_section.key = 1
@@ -1088,7 +1090,7 @@ class TestExtractGenresAdvanced:
     def test_handles_exception_gracefully(self):
         """Test handling exception during genre extraction."""
         mock_item = Mock()
-        mock_item.genres = Mock(side_effect=Exception("Error"))
+        mock_item.genres = Mock(side_effect=AttributeError("Error"))
 
         # Should not raise, should return empty list
         result = extract_genres(mock_item)
@@ -1163,7 +1165,7 @@ class TestFetchPlexWatchHistoryMovies:
         """Test exception handling."""
         from utils.plex import fetch_plex_watch_history_movies
 
-        mock_account_class.side_effect = Exception("Auth error")
+        mock_account_class.side_effect = plexapi.exceptions.PlexApiException("Auth error")
 
         mock_section = Mock()
         config = {'plex': {'url': 'http://localhost', 'token': 'test'}}
@@ -1289,7 +1291,7 @@ class TestFetchWatchHistoryWithTmdb:
         """Test handling exception when processing items."""
         from utils.plex import fetch_watch_history_with_tmdb
 
-        mock_get.side_effect = Exception("Connection error")
+        mock_get.side_effect = requests.RequestException("Connection error")
 
         mock_plex = Mock()
         mock_section = Mock()
@@ -1472,7 +1474,7 @@ class TestUpdatePlexCollectionAdvanced:
 
         mock_logger = Mock()
         mock_section = Mock()
-        mock_section.collections.side_effect = Exception("Error")
+        mock_section.collections.side_effect = plexapi.exceptions.PlexApiException("Error")
 
         result = update_plex_collection(mock_section, "Test", [Mock()], logger=mock_logger)
 
@@ -1489,7 +1491,7 @@ class TestCleanupOldCollectionsAdvanced:
 
         mock_logger = Mock()
         mock_section = Mock()
-        mock_section.collections.side_effect = Exception("Error")
+        mock_section.collections.side_effect = plexapi.exceptions.PlexApiException("Error")
 
         cleanup_old_collections(mock_section, "Test", "user", "🎬", logger=mock_logger)
 
@@ -1671,7 +1673,7 @@ class TestFetchShowCompletionData:
         """Test that empty dict is returned on API error."""
         from utils.plex import fetch_show_completion_data
 
-        mock_get.side_effect = Exception("API Error")
+        mock_get.side_effect = requests.RequestException("API Error")
 
         config = {'plex': {'url': 'http://localhost', 'token': 'test', 'verify_ssl': False}}
         mock_section = Mock()
@@ -1766,7 +1768,7 @@ class TestUpdatePlexCollectionSort:
         items = [mock_item1, mock_item2]
 
         mock_collection = Mock()
-        mock_collection.sortUpdate.side_effect = Exception("Sort error")
+        mock_collection.sortUpdate.side_effect = plexapi.exceptions.PlexApiException("Sort error")
         mock_section = Mock()
         mock_section.collections.return_value = []
         mock_section.createCollection.return_value = mock_collection

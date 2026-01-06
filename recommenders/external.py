@@ -336,11 +336,11 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
             return None
 
         # Convert to Counter format expected by scoring
-        # Note: cache uses 'tmdb_keywords' and 'studio' (singular for TV)
+        # Note: cache uses 'tmdb_keywords' for keywords
         profile = {
             'genres': Counter(wdc.get('genres', {})),
             'directors': Counter(wdc.get('directors', {})),
-            'studios': Counter(wdc.get('studios', wdc.get('studio', {}))),  # Handle both singular and plural
+            'studios': Counter(wdc.get('studios', {})),
             'actors': Counter(wdc.get('actors', {})),
             'keywords': Counter(wdc.get('tmdb_keywords', {})),
             'languages': Counter(wdc.get('languages', {})),
@@ -466,25 +466,6 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
     print(f"  Top genres: {dict(counters['genres'].most_common(5))}")
 
     return counters
-
-
-def flatten_categorized_items(categorized: Dict) -> List[Dict]:
-    """
-    Flatten categorized items into a single list.
-
-    Args:
-        categorized: Dict with 'user_services', 'other_services', 'acquire' keys
-
-    Returns:
-        List of all items from all categories
-    """
-    items = []
-    for service_items in categorized.get('user_services', {}).values():
-        items.extend(service_items)
-    for service_items in categorized.get('other_services', {}).values():
-        items.extend(service_items)
-    items.extend(categorized.get('acquire', []))
-    return items
 
 
 def get_library_items(plex: Any, library_name: str, media_type: str = 'movie') -> Dict[str, Set]:

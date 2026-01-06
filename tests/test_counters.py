@@ -25,7 +25,7 @@ class TestCreateEmptyCounters:
         assert 'tmdb_keywords' in result
         assert 'tmdb_ids' in result
         assert 'directors' in result
-        assert 'studio' not in result
+        assert 'studios' not in result
 
         assert isinstance(result['genres'], Counter)
         assert isinstance(result['actors'], Counter)
@@ -41,10 +41,10 @@ class TestCreateEmptyCounters:
         assert 'languages' in result
         assert 'tmdb_keywords' in result
         assert 'tmdb_ids' in result
-        assert 'studio' in result
+        assert 'studios' in result
         assert 'directors' not in result
 
-        assert isinstance(result['studio'], Counter)
+        assert isinstance(result['studios'], Counter)
 
     def test_counters_are_empty(self):
         """Test that all counters are initially empty."""
@@ -62,7 +62,7 @@ class TestCreateEmptyCounters:
         result = create_empty_counters()
 
         assert 'directors' in result
-        assert 'studio' not in result
+        assert 'studios' not in result
 
     def test_counters_are_independent(self):
         """Test that each call creates independent counters."""
@@ -113,7 +113,7 @@ class TestProcessCountersFromCache:
 
         process_counters_from_cache(media_info, counters, media_type='tv')
 
-        assert counters['studio']['hbo'] == 1.0
+        assert counters['studios']['hbo'] == 1.0
 
     def test_updates_language_counters(self):
         """Test that language is added to counters."""
@@ -258,14 +258,14 @@ class TestProcessCountersFromCache:
         assert len(counters['genres']) == 0
 
     def test_creates_studio_counter_if_missing(self):
-        """Test that studio counter is created if missing for TV."""
-        counters = create_empty_counters('movie')  # Movie counters don't have studio
+        """Test that studios counter is created if missing for TV."""
+        counters = create_empty_counters('movie')  # Movie counters don't have studios
         media_info = {'studio': 'Netflix', 'title': 'Test'}
 
         process_counters_from_cache(media_info, counters, media_type='tv')
 
-        assert 'studio' in counters
-        assert counters['studio']['netflix'] == 1.0
+        assert 'studios' in counters
+        assert counters['studios']['netflix'] == 1.0
 
 
 class TestApplyCappedWeight:

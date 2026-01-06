@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
 from plexapi.myplex import MyPlexAccount
+import plexapi.exceptions
 
 from utils import (
     CACHE_VERSION,
@@ -164,7 +165,7 @@ class BaseCache(ABC):
                     if item_info:
                         self.cache[self.media_key][item_id] = item_info
 
-                except Exception as e:
+                except (plexapi.exceptions.PlexApiException, requests.RequestException, AttributeError, KeyError) as e:
                     log_warning(f"Error processing {self.media_type} {item.title}: {e}")
                     continue
 
@@ -225,7 +226,7 @@ class BaseCache(ABC):
                     # API failed (404, etc) - mark as processed to avoid infinite retries
                     info['collection_id'] = None
                     info['collection_name'] = None
-            except Exception as e:
+            except (requests.RequestException, KeyError) as e:
                 # Mark as processed even on exception
                 logger.debug(f"Error fetching collection for TMDB {info.get('tmdb_id')}: {e}")
                 info['collection_id'] = None
@@ -283,7 +284,7 @@ class BaseCache(ABC):
                         )
                         if lang_code:
                             return get_full_language_name(lang_code)
-        except Exception as e:
+        except (plexapi.exceptions.PlexApiException, AttributeError, TypeError) as e:
             logger.debug(f"Error getting language for {getattr(item, 'title', 'unknown')}: {e}")
         return "N/A"
 
@@ -496,7 +497,7 @@ class BaseRecommender(ABC):
                 else:
                     log_error(f"User '{username}' not found in Plex accounts!")
 
-        except Exception as e:
+        except (requests.RequestException, KeyError, ValueError) as e:
             log_error(f"Error resolving Plex users: {e}")
 
         return user_ids
@@ -546,7 +547,7 @@ class BaseRecommender(ABC):
                         if tmdb_id := item_info.get('tmdb_id'):
                             counters['tmdb_ids'].add(tmdb_id)
 
-            except Exception as e:
+            except (plexapi.exceptions.PlexApiException, KeyError, AttributeError) as e:
                 log_error(f"Error processing user {username}: {e}")
                 continue
 
@@ -581,7 +582,7 @@ class BaseRecommender(ABC):
                         log_error(f"Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded")
                         self._refresh_watched_data()
 
-            except Exception as e:
+            except (json.JSONDecodeError, KeyError, IOError) as e:
                 log_warning(f"Error loading watched cache: {e}")
                 self._refresh_watched_data()
         return watched_cache
@@ -674,7 +675,7 @@ class BaseRecommender(ABC):
 
                     item_info['similarity_score'] = similarity_score
                     scored_items.append(item_info)
-                except Exception as e:
+                except (KeyError, TypeError, ValueError) as e:
                     log_warning(f"Error processing {item_info['title']}: {e}")
                     continue
 
@@ -868,7 +869,7 @@ class BaseRecommender(ABC):
             # Sync to Plex collection
             self._sync_plex_collection(section, label_name, final_items)
 
-        except Exception as e:
+        except (plexapi.exceptions.PlexApiException, AttributeError, KeyError) as e:
             log_error(f"Error managing Plex labels: {e}")
             print(traceback.format_exc())
 
