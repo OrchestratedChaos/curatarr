@@ -66,16 +66,16 @@ cd curatarr
 ```bash
 git clone https://github.com/OrchestratedChaos/curatarr.git
 cd curatarr
+./setup.sh              # Interactive setup wizard (recommended)
+docker compose up --build
+```
+
+Or manually configure:
+```bash
 cp config/config.example.yml config/config.yml
 # Edit config/config.yml with your details
 docker compose up --build
 ```
-
-**Required config:**
-- `plex.url` — Your Plex server URL (e.g., `http://192.168.1.100:32400`)
-- `plex.token` — [How to find your Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)
-- `tmdb.api_key` — [Get free TMDB API key](https://www.themoviedb.org/settings/api)
-- `users.list` — Your Plex usernames (comma-separated)
 
 First run takes 5-10 minutes to analyze your library. After that, it's fast.
 
