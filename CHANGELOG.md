@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.9] - 2026-01-06
+
+### Fixed
+- External recommendations crash when `users.preferences` not in config
+
 ## [2.5.8] - 2026-01-06
 
 ### Changed
