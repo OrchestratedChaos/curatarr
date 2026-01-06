@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.4] - 2026-01-05
+
+### Fixed
+- Missing `get_authenticated_trakt_client` import in `external.py` after module split
+
 ## [2.5.3] - 2026-01-05
 
 ### Changed
