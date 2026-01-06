@@ -174,6 +174,13 @@ from .trakt_discovery import (
     get_trakt_discovery_candidates,
 )
 
+# Sonarr utilities
+from .sonarr import (
+    SonarrAPIError,
+    SonarrClient,
+    create_sonarr_client,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -296,4 +303,8 @@ __all__ = [
     'get_recommended_items',
     'discover_from_trakt',
     'get_trakt_discovery_candidates',
+    # Sonarr
+    'SonarrAPIError',
+    'SonarrClient',
+    'create_sonarr_client',
 ]

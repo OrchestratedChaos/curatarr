@@ -493,6 +493,160 @@ except Exception as e:
     fi
     echo ""
 
+    # --- Optional: Sonarr Integration ---
+    echo -e "${YELLOW}Step 7: Sonarr Integration (Optional)${NC}"
+    echo ""
+    echo "Sonarr can auto-add recommended TV shows to your download queue."
+    echo ""
+    read -p "Enable Sonarr integration? (y/N): " ENABLE_SONARR
+    SONARR_ENABLED="false"
+    SONARR_URL=""
+    SONARR_API_KEY=""
+    SONARR_ROOT_FOLDER=""
+    SONARR_QUALITY_PROFILE=""
+    SONARR_AUTO_SYNC="false"
+    SONARR_USER_MODE="mapping"
+    SONARR_PLEX_USERS="[]"
+
+    if [[ "$ENABLE_SONARR" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "Enter your Sonarr connection details:"
+        echo "(Find API key in Sonarr: Settings -> General -> API Key)"
+        echo ""
+        read -p "Sonarr URL (e.g., http://localhost:8989): " SONARR_URL
+        read -p "Sonarr API Key: " SONARR_API_KEY
+
+        if [ -n "$SONARR_URL" ] && [ -n "$SONARR_API_KEY" ]; then
+            # Test connection and get profiles/folders
+            echo ""
+            echo -e "${CYAN}Testing Sonarr connection...${NC}"
+
+            SONARR_TEST=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from utils.sonarr import SonarrClient
+    client = SonarrClient('$SONARR_URL', '$SONARR_API_KEY')
+    client.test_connection()
+    print('OK')
+    # Get quality profiles
+    profiles = client.get_quality_profiles()
+    for p in profiles:
+        print(f'PROFILE:{p[\"id\"]}:{p[\"name\"]}')
+    # Get root folders
+    folders = client.get_root_folders()
+    for f in folders:
+        print(f'FOLDER:{f[\"path\"]}')
+except Exception as e:
+    print(f'ERROR:{e}')
+" 2>/dev/null)
+
+            if echo "$SONARR_TEST" | grep -q "^OK"; then
+                echo -e "${GREEN}✓ Connected to Sonarr!${NC}"
+                SONARR_ENABLED="true"
+                echo ""
+
+                # Show quality profiles
+                echo "Available quality profiles:"
+                i=1
+                declare -a PROFILE_NAMES
+                while IFS=':' read -r prefix id name; do
+                    if [ "$prefix" = "PROFILE" ]; then
+                        PROFILE_NAMES+=("$name")
+                        echo "  $i) $name"
+                        ((i++))
+                    fi
+                done <<< "$SONARR_TEST"
+
+                read -p "Choose quality profile [1]: " PROFILE_CHOICE
+                PROFILE_CHOICE=${PROFILE_CHOICE:-1}
+                PROFILE_IDX=$((PROFILE_CHOICE - 1))
+                if [ $PROFILE_IDX -ge 0 ] && [ $PROFILE_IDX -lt ${#PROFILE_NAMES[@]} ]; then
+                    SONARR_QUALITY_PROFILE="${PROFILE_NAMES[$PROFILE_IDX]}"
+                else
+                    SONARR_QUALITY_PROFILE="${PROFILE_NAMES[0]}"
+                fi
+                echo -e "${GREEN}✓ Using: $SONARR_QUALITY_PROFILE${NC}"
+                echo ""
+
+                # Show root folders
+                echo "Available root folders:"
+                i=1
+                declare -a FOLDER_PATHS
+                while IFS=':' read -r prefix path; do
+                    if [ "$prefix" = "FOLDER" ]; then
+                        FOLDER_PATHS+=("$path")
+                        echo "  $i) $path"
+                        ((i++))
+                    fi
+                done <<< "$SONARR_TEST"
+
+                read -p "Choose root folder [1]: " FOLDER_CHOICE
+                FOLDER_CHOICE=${FOLDER_CHOICE:-1}
+                FOLDER_IDX=$((FOLDER_CHOICE - 1))
+                if [ $FOLDER_IDX -ge 0 ] && [ $FOLDER_IDX -lt ${#FOLDER_PATHS[@]} ]; then
+                    SONARR_ROOT_FOLDER="${FOLDER_PATHS[$FOLDER_IDX]}"
+                else
+                    SONARR_ROOT_FOLDER="${FOLDER_PATHS[0]}"
+                fi
+                echo -e "${GREEN}✓ Using: $SONARR_ROOT_FOLDER${NC}"
+                echo ""
+
+                # Ask about which user's recommendations to sync
+                echo "Which Plex user's TV recommendations should go to Sonarr?"
+                echo "  1) Just mine - only YOUR recommendations (recommended)"
+                echo "  2) All users - everyone's recommendations"
+                echo "  3) Skip for now - configure later"
+                echo ""
+                read -p "Choose [1/2/3]: " SONARR_USER_CHOICE
+
+                case "$SONARR_USER_CHOICE" in
+                    1)
+                        # Get first user from USERS_LIST as default
+                        if [ -n "$ADMIN_USER" ]; then
+                            SONARR_PLEX_USER="$ADMIN_USER"
+                        else
+                            read -p "Enter your Plex username: " SONARR_PLEX_USER
+                        fi
+                        if [ -n "$SONARR_PLEX_USER" ]; then
+                            SONARR_PLEX_USERS="[\"$SONARR_PLEX_USER\"]"
+                            SONARR_USER_MODE="mapping"
+
+                            read -p "Auto-add to Sonarr on each run? (y/N): " ENABLE_SONARR_AUTO
+                            if [[ "$ENABLE_SONARR_AUTO" =~ ^[Yy]$ ]]; then
+                                SONARR_AUTO_SYNC="true"
+                                echo -e "${GREEN}✓ Auto-sync enabled for: $SONARR_PLEX_USER${NC}"
+                            else
+                                echo -e "${YELLOW}Manual mode - enable auto_sync in sonarr.yml when ready${NC}"
+                            fi
+                        fi
+                        ;;
+                    2)
+                        SONARR_USER_MODE="combined"
+                        SONARR_PLEX_USERS="[]"
+                        echo -e "${YELLOW}Warning: This adds ALL Plex users' recommendations to Sonarr.${NC}"
+                        read -p "Auto-add to Sonarr on each run? (y/N): " ENABLE_SONARR_AUTO
+                        if [[ "$ENABLE_SONARR_AUTO" =~ ^[Yy]$ ]]; then
+                            SONARR_AUTO_SYNC="true"
+                        fi
+                        ;;
+                    *)
+                        echo -e "${YELLOW}Skipping. Configure sonarr.yml later.${NC}"
+                        ;;
+                esac
+            else
+                SONARR_ERROR=$(echo "$SONARR_TEST" | grep "^ERROR:" | cut -d: -f2-)
+                echo -e "${RED}Could not connect to Sonarr: $SONARR_ERROR${NC}"
+                echo -e "${YELLOW}Check your URL and API key, then configure sonarr.yml manually.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Skipping Sonarr (credentials not provided)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Skipping Sonarr (can be enabled later in config/sonarr.yml)${NC}"
+    fi
+    echo ""
+
     # --- Write config/config.yml (essentials only) ---
     mkdir -p config
     echo -e "${CYAN}Creating config/config.yml...${NC}"
@@ -549,6 +703,41 @@ import:
 TRAKTEOF
 
         echo -e "${GREEN}✓ config/trakt.yml created!${NC}"
+    fi
+
+    # --- Write sonarr.yml if enabled ---
+    if [ "$SONARR_ENABLED" = "true" ]; then
+        echo -e "${CYAN}Creating config/sonarr.yml...${NC}"
+
+        cat > config/sonarr.yml << SONARREOF
+# Curatarr Sonarr Configuration
+
+enabled: true
+url: ${SONARR_URL}
+api_key: ${SONARR_API_KEY}
+
+# Sync behavior
+auto_sync: ${SONARR_AUTO_SYNC:-false}
+user_mode: "${SONARR_USER_MODE:-mapping}"
+plex_users: ${SONARR_PLEX_USERS:-[]}
+
+# Import settings
+root_folder: ${SONARR_ROOT_FOLDER}
+quality_profile: ${SONARR_QUALITY_PROFILE}
+series_type: standard
+season_folder: true
+
+# Tagging
+tag: Curatarr
+append_usernames: false
+
+# Download behavior (safe defaults)
+monitor: false
+monitor_option: none
+search_missing: false
+SONARREOF
+
+        echo -e "${GREEN}✓ config/sonarr.yml created!${NC}"
     fi
     echo ""
 }

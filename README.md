@@ -31,6 +31,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 ### For Acquisition (What to Get)
 - **External watchlists** — Content NOT in your library that users would love
 - **Streaming service grouping** — "Available on Netflix" vs "Need to acquire"
+- **Sonarr integration** — Push TV recommendations directly to Sonarr
 - **Auto-cleanup** — Items removed when they appear in your library
 - **Genre balancing** — Matches user viewing habits proportionally
 
@@ -205,6 +206,38 @@ external_recommendations:
   auto_open_html: false       # Open HTML watchlist in browser after run
 ```
 
+### Sonarr Integration (Optional)
+
+Push your external TV recommendations directly to Sonarr:
+
+```yaml
+# config/sonarr.yml
+enabled: true
+url: http://localhost:8989
+api_key: YOUR_SONARR_API_KEY
+
+# Sync behavior
+auto_sync: true             # Auto-add when external recs finish
+user_mode: mapping          # mapping, per_user, or combined
+plex_users: [john]          # Which users to sync (for mapping mode)
+
+# Import settings
+root_folder: /tv            # Where to store shows
+quality_profile: HD-1080p   # Quality profile name
+tag: Curatarr               # Tag for easy cleanup
+
+# Safe defaults (shows just get added, no downloads)
+monitor: false              # Don't monitor for new episodes
+search_missing: false       # Don't search for episodes
+```
+
+**Setup:** Run `./run.sh` and follow Step 7, or manually create `config/sonarr.yml`.
+
+**User modes:**
+- `mapping` — Only sync users listed in `plex_users`
+- `per_user` — Sync all users separately
+- `combined` — Merge everyone's recommendations
+
 ### External Recommendations: Relevance Score
 
 The `min_relevance_score` setting (0.0-1.0) controls how strictly personal the external watchlist recommendations are:
@@ -260,7 +293,7 @@ curatarr/
 │   ├── tv.py                # TV show recommendations
 │   ├── external.py          # External watchlist generator
 │   └── base.py              # Shared base classes
-├── utils/                   # Shared utilities (10 modules)
+├── utils/                   # Shared utilities (11 modules, incl. sonarr.py)
 ├── tests/                   # Unit tests
 ├── config.yml               # Your configuration
 ├── run.sh                   # Main entry point (macOS/Linux)
