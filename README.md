@@ -271,6 +271,8 @@ replace_existing: true      # Clear list before adding (vs. append)
 
 **Setup:** Run `./run.sh` and follow Step 9, or manually create `config/mdblist.yml`.
 
+**Tip:** MDBList exports work great with [Agregarr](https://agregarr.org) for Plex collection placeholders. See the [wiki](https://github.com/OrchestratedChaos/curatarr/wiki/Agregarr-Integration) for setup instructions.
+
 ### Simkl Integration (Optional)
 
 Full integration with Simkl for anime/TV/movie tracking with excellent anime database:
