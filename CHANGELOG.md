@@ -2,6 +2,17 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.5] - 2026-01-05
+
+### Added
+- Complete setup wizard for Windows `run.ps1` (Steps 6-10: Trakt, Sonarr, Radarr, MDBList, Simkl)
+- Standalone `setup.sh` wizard for Docker users to generate config files before container start
+- OAuth device flow support in both setup wizards for Trakt and Simkl authentication
+
+### Changed
+- Windows setup wizard now matches Linux/Mac feature parity with all integration options
+- Renamed Windows scheduled task from "PlexRecommender" to "Curatarr"
+
 ## [2.5.4] - 2026-01-05
 
 ### Fixed
