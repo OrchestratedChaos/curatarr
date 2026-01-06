@@ -358,6 +358,7 @@ class PlexTVRecommender(BaseRecommender):
     # _get_library_imdb_ids() inherited from BaseRecommender
 
     def get_show_details(self, show) -> Dict:
+        """Extract comprehensive details from a TV show object."""
         try:
             show.reload()
 
@@ -483,6 +484,7 @@ def adapt_root_config_to_legacy(root_config):
     return adapt_config_for_media_type(root_config, 'tv')
 
 def main():
+    """Entry point for TV show recommendations."""
     run_recommender_main(
         media_type='TV Show',
         description='TV Show Recommendations for Plex',
@@ -491,6 +493,7 @@ def main():
     )
 
 def process_recommendations(config, config_path, log_retention_days, single_user=None):
+    """Process and display TV show recommendations for configured users."""
     original_stdout = sys.stdout
     log_dir = os.path.join(get_project_root(), 'logs')
     setup_log_file(log_dir, log_retention_days, single_user, 'recommendations')

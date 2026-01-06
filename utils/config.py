@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Project version - single source of truth
-__version__ = "2.5.1"
+__version__ = "2.5.2"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
@@ -82,6 +82,9 @@ RATING_MULTIPLIER_4_STAR = 0.75    # Moderate preference
 RATING_MULTIPLIER_3_STAR = 0.5     # Weak preference
 RATING_MULTIPLIER_2_STAR = 0.25    # Very weak preference
 RATING_MULTIPLIER_UNRATED = 0.6    # Default for unrated content
+
+# HTTP request timeout for Plex API calls
+PLEX_REQUEST_TIMEOUT = 30
 
 
 def check_cache_version(cache_path: str, cache_type: str = "cache") -> bool:

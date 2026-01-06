@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.2] - 2026-01-05
+
+### Added
+- New `utils/api_client.py` with `BaseAPIClient` class for shared API client functionality
+
+### Changed
+- Refactored `manage_plex_labels()` from 142 lines into 5 smaller helper functions
+- API clients (Radarr, Sonarr, MDBList) now inherit from `BaseAPIClient`
+  - Consolidates rate limiting, request handling, and error parsing
+- Added `PLEX_REQUEST_TIMEOUT` constant to `utils/config.py`
+- Added missing docstrings to `main()` and `process_recommendations()` functions
+
+### Technical
+- Continued code cleanup from v2.5.1 review
+- No functional changes, improved maintainability and code reuse
+
 ## [2.5.1] - 2026-01-05
 
 ### Fixed
