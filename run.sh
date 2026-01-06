@@ -647,6 +647,160 @@ except Exception as e:
     fi
     echo ""
 
+    # --- Optional: Radarr Integration ---
+    echo -e "${YELLOW}Step 8: Radarr Integration (Optional)${NC}"
+    echo ""
+    echo "Radarr can auto-add recommended movies to your download queue."
+    echo ""
+    read -p "Enable Radarr integration? (y/N): " ENABLE_RADARR
+    RADARR_ENABLED="false"
+    RADARR_URL=""
+    RADARR_API_KEY=""
+    RADARR_ROOT_FOLDER=""
+    RADARR_QUALITY_PROFILE=""
+    RADARR_AUTO_SYNC="false"
+    RADARR_USER_MODE="mapping"
+    RADARR_PLEX_USERS="[]"
+
+    if [[ "$ENABLE_RADARR" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "Enter your Radarr connection details:"
+        echo "(Find API key in Radarr: Settings -> General -> API Key)"
+        echo ""
+        read -p "Radarr URL (e.g., http://localhost:7878): " RADARR_URL
+        read -p "Radarr API Key: " RADARR_API_KEY
+
+        if [ -n "$RADARR_URL" ] && [ -n "$RADARR_API_KEY" ]; then
+            # Test connection and get profiles/folders
+            echo ""
+            echo -e "${CYAN}Testing Radarr connection...${NC}"
+
+            RADARR_TEST=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from utils.radarr import RadarrClient
+    client = RadarrClient('$RADARR_URL', '$RADARR_API_KEY')
+    client.test_connection()
+    print('OK')
+    # Get quality profiles
+    profiles = client.get_quality_profiles()
+    for p in profiles:
+        print(f'PROFILE:{p[\"id\"]}:{p[\"name\"]}')
+    # Get root folders
+    folders = client.get_root_folders()
+    for f in folders:
+        print(f'FOLDER:{f[\"path\"]}')
+except Exception as e:
+    print(f'ERROR:{e}')
+" 2>/dev/null)
+
+            if echo "$RADARR_TEST" | grep -q "^OK"; then
+                echo -e "${GREEN}✓ Connected to Radarr!${NC}"
+                RADARR_ENABLED="true"
+                echo ""
+
+                # Show quality profiles
+                echo "Available quality profiles:"
+                i=1
+                declare -a RADARR_PROFILE_NAMES
+                while IFS=':' read -r prefix id name; do
+                    if [ "$prefix" = "PROFILE" ]; then
+                        RADARR_PROFILE_NAMES+=("$name")
+                        echo "  $i) $name"
+                        ((i++))
+                    fi
+                done <<< "$RADARR_TEST"
+
+                read -p "Choose quality profile [1]: " RADARR_PROFILE_CHOICE
+                RADARR_PROFILE_CHOICE=${RADARR_PROFILE_CHOICE:-1}
+                RADARR_PROFILE_IDX=$((RADARR_PROFILE_CHOICE - 1))
+                if [ $RADARR_PROFILE_IDX -ge 0 ] && [ $RADARR_PROFILE_IDX -lt ${#RADARR_PROFILE_NAMES[@]} ]; then
+                    RADARR_QUALITY_PROFILE="${RADARR_PROFILE_NAMES[$RADARR_PROFILE_IDX]}"
+                else
+                    RADARR_QUALITY_PROFILE="${RADARR_PROFILE_NAMES[0]}"
+                fi
+                echo -e "${GREEN}✓ Using: $RADARR_QUALITY_PROFILE${NC}"
+                echo ""
+
+                # Show root folders
+                echo "Available root folders:"
+                i=1
+                declare -a RADARR_FOLDER_PATHS
+                while IFS=':' read -r prefix path; do
+                    if [ "$prefix" = "FOLDER" ]; then
+                        RADARR_FOLDER_PATHS+=("$path")
+                        echo "  $i) $path"
+                        ((i++))
+                    fi
+                done <<< "$RADARR_TEST"
+
+                read -p "Choose root folder [1]: " RADARR_FOLDER_CHOICE
+                RADARR_FOLDER_CHOICE=${RADARR_FOLDER_CHOICE:-1}
+                RADARR_FOLDER_IDX=$((RADARR_FOLDER_CHOICE - 1))
+                if [ $RADARR_FOLDER_IDX -ge 0 ] && [ $RADARR_FOLDER_IDX -lt ${#RADARR_FOLDER_PATHS[@]} ]; then
+                    RADARR_ROOT_FOLDER="${RADARR_FOLDER_PATHS[$RADARR_FOLDER_IDX]}"
+                else
+                    RADARR_ROOT_FOLDER="${RADARR_FOLDER_PATHS[0]}"
+                fi
+                echo -e "${GREEN}✓ Using: $RADARR_ROOT_FOLDER${NC}"
+                echo ""
+
+                # Ask about which user's recommendations to sync
+                echo "Which Plex user's movie recommendations should go to Radarr?"
+                echo "  1) Just mine - only YOUR recommendations (recommended)"
+                echo "  2) All users - everyone's recommendations"
+                echo "  3) Skip for now - configure later"
+                echo ""
+                read -p "Choose [1/2/3]: " RADARR_USER_CHOICE
+
+                case "$RADARR_USER_CHOICE" in
+                    1)
+                        # Get first user from USERS_LIST as default
+                        if [ -n "$ADMIN_USER" ]; then
+                            RADARR_PLEX_USER="$ADMIN_USER"
+                        else
+                            read -p "Enter your Plex username: " RADARR_PLEX_USER
+                        fi
+                        if [ -n "$RADARR_PLEX_USER" ]; then
+                            RADARR_PLEX_USERS="[\"$RADARR_PLEX_USER\"]"
+                            RADARR_USER_MODE="mapping"
+
+                            read -p "Auto-add to Radarr on each run? (y/N): " ENABLE_RADARR_AUTO
+                            if [[ "$ENABLE_RADARR_AUTO" =~ ^[Yy]$ ]]; then
+                                RADARR_AUTO_SYNC="true"
+                                echo -e "${GREEN}✓ Auto-sync enabled for: $RADARR_PLEX_USER${NC}"
+                            else
+                                echo -e "${YELLOW}Manual mode - enable auto_sync in radarr.yml when ready${NC}"
+                            fi
+                        fi
+                        ;;
+                    2)
+                        RADARR_USER_MODE="combined"
+                        RADARR_PLEX_USERS="[]"
+                        echo -e "${YELLOW}Warning: This adds ALL Plex users' recommendations to Radarr.${NC}"
+                        read -p "Auto-add to Radarr on each run? (y/N): " ENABLE_RADARR_AUTO
+                        if [[ "$ENABLE_RADARR_AUTO" =~ ^[Yy]$ ]]; then
+                            RADARR_AUTO_SYNC="true"
+                        fi
+                        ;;
+                    *)
+                        echo -e "${YELLOW}Skipping. Configure radarr.yml later.${NC}"
+                        ;;
+                esac
+            else
+                RADARR_ERROR=$(echo "$RADARR_TEST" | grep "^ERROR:" | cut -d: -f2-)
+                echo -e "${RED}Could not connect to Radarr: $RADARR_ERROR${NC}"
+                echo -e "${YELLOW}Check your URL and API key, then configure radarr.yml manually.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Skipping Radarr (credentials not provided)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Skipping Radarr (can be enabled later in config/radarr.yml)${NC}"
+    fi
+    echo ""
+
     # --- Write config/config.yml (essentials only) ---
     mkdir -p config
     echo -e "${CYAN}Creating config/config.yml...${NC}"
@@ -738,6 +892,39 @@ search_missing: false
 SONARREOF
 
         echo -e "${GREEN}✓ config/sonarr.yml created!${NC}"
+    fi
+
+    # --- Write radarr.yml if enabled ---
+    if [ "$RADARR_ENABLED" = "true" ]; then
+        echo -e "${CYAN}Creating config/radarr.yml...${NC}"
+
+        cat > config/radarr.yml << RADARREOF
+# Curatarr Radarr Configuration
+
+enabled: true
+url: ${RADARR_URL}
+api_key: ${RADARR_API_KEY}
+
+# Sync behavior
+auto_sync: ${RADARR_AUTO_SYNC:-false}
+user_mode: "${RADARR_USER_MODE:-mapping}"
+plex_users: ${RADARR_PLEX_USERS:-[]}
+
+# Import settings
+root_folder: ${RADARR_ROOT_FOLDER}
+quality_profile: ${RADARR_QUALITY_PROFILE}
+minimum_availability: released
+
+# Tagging
+tag: Curatarr
+append_usernames: false
+
+# Download behavior (safe defaults)
+monitor: false
+search_for_movie: false
+RADARREOF
+
+        echo -e "${GREEN}✓ config/radarr.yml created!${NC}"
     fi
     echo ""
 }
