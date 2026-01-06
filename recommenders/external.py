@@ -45,6 +45,7 @@ from utils import (
     enhance_profile_with_trakt,
     fetch_tmdb_details_for_profile,
     get_project_root,
+    get_authenticated_trakt_client,
 )
 
 # Import output generation
