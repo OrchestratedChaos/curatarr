@@ -188,6 +188,13 @@ from .radarr import (
     create_radarr_client,
 )
 
+# MDBList utilities
+from .mdblist import (
+    MDBListAPIError,
+    MDBListClient,
+    create_mdblist_client,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -318,4 +325,8 @@ __all__ = [
     'RadarrAPIError',
     'RadarrClient',
     'create_radarr_client',
+    # MDBList
+    'MDBListAPIError',
+    'MDBListClient',
+    'create_mdblist_client',
 ]

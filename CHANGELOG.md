@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.4.0] - 2026-01-05
+
+### Added
+- **MDBList integration** — Export recommendations to shareable MDBList lists
+  - Push recommendations to MDBList for use with Kometa/PMM and other tools
+  - Configurable via `config/mdblist.yml`
+  - Simple API key authentication (no OAuth)
+  - Supports user_mode: `mapping`, `per_user`, or `combined`
+  - Replace or append mode for list updates
+  - Setup wizard integration in `run.sh` (Step 9)
+  - 36 new unit tests for MDBList client
+
+### Technical
+- New `utils/mdblist.py` module with `MDBListClient` class
+- Uses TMDB IDs directly (no conversion needed)
+- Rate limiting with 0.1s delay between API calls
+
 ## [2.3.0] - 2026-01-05
 
 ### Added

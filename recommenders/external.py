@@ -48,6 +48,7 @@ from utils import (
     get_project_root,
     create_sonarr_client, SonarrAPIError,
     create_radarr_client, RadarrAPIError,
+    create_mdblist_client, MDBListAPIError,
 )
 
 # Import output generation
@@ -1801,6 +1802,160 @@ def export_to_radarr(config, all_users_data, tmdb_api_key):
         print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
 
 
+def export_to_mdblist(config, all_users_data, tmdb_api_key):
+    """
+    Export recommendations to MDBList.
+
+    Creates/updates lists with recommendations for importing into other apps.
+
+    Config options:
+        mdblist.enabled: Master switch for MDBList integration
+        mdblist.auto_sync: Auto-export on each run (default: false)
+        mdblist.user_mode: How to handle multiple Plex users:
+            - mapping: Only export users in plex_users list (recommended)
+            - per_user: Separate list for each Plex user
+            - combined: All users combined into one list
+        mdblist.plex_users: List of Plex usernames to export (for mapping mode)
+        mdblist.list_prefix: Prefix for list names (default: "Curatarr")
+        mdblist.replace_existing: Clear list before adding (default: true)
+    """
+    logger.debug("export_to_mdblist called")
+    mdblist_config = config.get('mdblist', {})
+
+    # Check if MDBList is enabled and auto_sync is on
+    if not mdblist_config.get('enabled', False):
+        return
+    if not mdblist_config.get('auto_sync', False):
+        return
+
+    # Create MDBList client
+    mdblist_client = create_mdblist_client(config)
+    if not mdblist_client:
+        log_warning("MDBList not configured - check config/mdblist.yml")
+        return
+
+    # Test connection
+    try:
+        mdblist_client.test_connection()
+        print(f"\n{CYAN}=== Exporting to MDBList ==={RESET}")
+    except MDBListAPIError as e:
+        log_error(f"Could not connect to MDBList: {e}")
+        return
+
+    user_mode = mdblist_config.get('user_mode', 'mapping')
+    plex_users = mdblist_config.get('plex_users', [])
+    list_prefix = mdblist_config.get('list_prefix', 'Curatarr')
+    replace_existing = mdblist_config.get('replace_existing', True)
+
+    # Safety check: mapping mode requires explicit plex_users configuration
+    if user_mode == 'mapping':
+        invalid_configs = [[], ['YourPlexUsername'], None]
+        if plex_users in invalid_configs or not plex_users:
+            log_warning(
+                "MDBList export: No plex_users configured.\n"
+                "  Edit mdblist.yml -> plex_users and add YOUR Plex username.\n"
+                "  Example: plex_users: [\"jason\"]\n"
+                "  This prevents accidentally exporting other users' recommendations."
+            )
+            return
+
+    # Filter users based on mode
+    if user_mode == 'mapping':
+        plex_users_lower = [u.lower() for u in plex_users]
+        users_to_export = [
+            u for u in all_users_data
+            if u['username'].lower() in plex_users_lower
+        ]
+        if not users_to_export:
+            log_warning(
+                f"MDBList export: No matching users found. Configured plex_users: {plex_users}\n"
+                "  Check that your Plex username matches exactly."
+            )
+            return
+    else:
+        users_to_export = all_users_data
+
+    # Collect TMDB IDs from categorized data
+    def collect_tmdb_ids(categorized):
+        """Extract TMDB IDs from categorized items."""
+        tmdb_ids = []
+        for category_items in categorized.values():
+            if isinstance(category_items, dict):
+                # user_services/other_services have nested dicts
+                for items in category_items.values():
+                    for item in items:
+                        if item.get('tmdb_id'):
+                            tmdb_ids.append(item['tmdb_id'])
+            elif isinstance(category_items, list):
+                # acquire is a flat list
+                for item in category_items:
+                    if item.get('tmdb_id'):
+                        tmdb_ids.append(item['tmdb_id'])
+        return list(dict.fromkeys(tmdb_ids))  # Dedupe while preserving order
+
+    # Handle combined mode
+    if user_mode == 'combined':
+        all_movie_tmdb_ids = []
+        all_show_tmdb_ids = []
+        for user_data in users_to_export:
+            all_movie_tmdb_ids.extend(collect_tmdb_ids(user_data['movies_categorized']))
+            all_show_tmdb_ids.extend(collect_tmdb_ids(user_data['shows_categorized']))
+        # Deduplicate
+        all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
+        all_show_tmdb_ids = list(dict.fromkeys(all_show_tmdb_ids))
+
+        try:
+            if all_movie_tmdb_ids:
+                movie_list_name = f"{list_prefix} Movies"
+                movie_list = mdblist_client.get_or_create_list(movie_list_name)
+                if replace_existing:
+                    mdblist_client.clear_list(movie_list['id'])
+                result = mdblist_client.add_items(movie_list['id'], movies=all_movie_tmdb_ids)
+                print_status(f"  Combined: {result.get('added', 0)} movies -> MDBList", "success")
+
+            if all_show_tmdb_ids:
+                show_list_name = f"{list_prefix} TV"
+                show_list = mdblist_client.get_or_create_list(show_list_name)
+                if replace_existing:
+                    mdblist_client.clear_list(show_list['id'])
+                result = mdblist_client.add_items(show_list['id'], shows=all_show_tmdb_ids)
+                print_status(f"  Combined: {result.get('added', 0)} shows -> MDBList", "success")
+
+        except MDBListAPIError as e:
+            log_error(f"Failed to export combined list to MDBList: {e}")
+        return
+
+    # Per-user or mapping mode
+    for user_data in users_to_export:
+        display_name = user_data['display_name']
+        movies_categorized = user_data['movies_categorized']
+        shows_categorized = user_data['shows_categorized']
+
+        # Collect TMDB IDs
+        movie_tmdb_ids = collect_tmdb_ids(movies_categorized)
+        show_tmdb_ids = collect_tmdb_ids(shows_categorized)
+
+        try:
+            if movie_tmdb_ids:
+                movie_list_name = f"{list_prefix} Movies - {display_name}"
+                movie_list = mdblist_client.get_or_create_list(movie_list_name)
+                if replace_existing:
+                    mdblist_client.clear_list(movie_list['id'])
+                result = mdblist_client.add_items(movie_list['id'], movies=movie_tmdb_ids)
+                print_status(f"  {display_name}: {result.get('added', 0)} movies -> MDBList", "success")
+
+            if show_tmdb_ids:
+                show_list_name = f"{list_prefix} TV - {display_name}"
+                show_list = mdblist_client.get_or_create_list(show_list_name)
+                if replace_existing:
+                    mdblist_client.clear_list(show_list['id'])
+                result = mdblist_client.add_items(show_list['id'], shows=show_tmdb_ids)
+                print_status(f"  {display_name}: {result.get('added', 0)} shows -> MDBList", "success")
+
+        except MDBListAPIError as e:
+            log_error(f"Failed to export {display_name} to MDBList: {e}")
+
+
 def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
     """
     Sync Plex watch history to Trakt.
@@ -2056,6 +2211,7 @@ def main():
         export_to_trakt(config, all_users_data, tmdb_api_key)
         export_to_sonarr(config, all_users_data, tmdb_api_key)
         export_to_radarr(config, all_users_data, tmdb_api_key)
+        export_to_mdblist(config, all_users_data, tmdb_api_key)
 
 
 if __name__ == "__main__":

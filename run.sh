@@ -801,6 +801,113 @@ except Exception as e:
     fi
     echo ""
 
+    # --- Optional: MDBList Integration ---
+    echo -e "${YELLOW}Step 9: MDBList Integration (Optional)${NC}"
+    echo ""
+    echo "MDBList can export recommendations to shareable lists."
+    echo "Lists can be imported into other apps like Kometa/PMM."
+    echo ""
+    read -p "Enable MDBList integration? (y/N): " ENABLE_MDBLIST
+    MDBLIST_ENABLED="false"
+    MDBLIST_API_KEY=""
+    MDBLIST_AUTO_SYNC="false"
+    MDBLIST_USER_MODE="mapping"
+    MDBLIST_PLEX_USERS="[]"
+    MDBLIST_LIST_PREFIX="Curatarr"
+    MDBLIST_REPLACE_EXISTING="true"
+
+    if [[ "$ENABLE_MDBLIST" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "Enter your MDBList API key:"
+        echo "(Get it from https://mdblist.com/preferences/)"
+        echo ""
+        read -p "MDBList API Key: " MDBLIST_API_KEY
+
+        if [ -n "$MDBLIST_API_KEY" ]; then
+            # Test connection
+            echo ""
+            echo -e "${CYAN}Testing MDBList connection...${NC}"
+
+            MDBLIST_TEST=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from utils.mdblist import MDBListClient
+    client = MDBListClient('$MDBLIST_API_KEY')
+    client.test_connection()
+    print('OK')
+except Exception as e:
+    print(f'ERROR:{e}')
+" 2>/dev/null)
+
+            if echo "$MDBLIST_TEST" | grep -q "^OK"; then
+                echo -e "${GREEN}✓ Connected to MDBList!${NC}"
+                MDBLIST_ENABLED="true"
+                echo ""
+
+                # Ask about which user's recommendations to export
+                echo "Which Plex user's recommendations should go to MDBList?"
+                echo "  1) Just mine - only YOUR recommendations (recommended)"
+                echo "  2) All users - everyone's recommendations (combined list)"
+                echo "  3) Per-user - separate list for each user"
+                echo "  4) Skip for now - configure later"
+                echo ""
+                read -p "Choose [1/2/3/4]: " MDBLIST_USER_CHOICE
+
+                case "$MDBLIST_USER_CHOICE" in
+                    1)
+                        # Get first user from USERS_LIST as default
+                        if [ -n "$ADMIN_USER" ]; then
+                            MDBLIST_PLEX_USER="$ADMIN_USER"
+                        else
+                            read -p "Enter your Plex username: " MDBLIST_PLEX_USER
+                        fi
+                        if [ -n "$MDBLIST_PLEX_USER" ]; then
+                            MDBLIST_PLEX_USERS="[\"$MDBLIST_PLEX_USER\"]"
+                            MDBLIST_USER_MODE="mapping"
+
+                            read -p "Auto-export to MDBList on each run? (y/N): " ENABLE_MDBLIST_AUTO
+                            if [[ "$ENABLE_MDBLIST_AUTO" =~ ^[Yy]$ ]]; then
+                                MDBLIST_AUTO_SYNC="true"
+                                echo -e "${GREEN}✓ Auto-sync enabled for: $MDBLIST_PLEX_USER${NC}"
+                            else
+                                echo -e "${YELLOW}Manual mode - enable auto_sync in mdblist.yml when ready${NC}"
+                            fi
+                        fi
+                        ;;
+                    2)
+                        MDBLIST_USER_MODE="combined"
+                        MDBLIST_PLEX_USERS="[]"
+                        read -p "Auto-export to MDBList on each run? (y/N): " ENABLE_MDBLIST_AUTO
+                        if [[ "$ENABLE_MDBLIST_AUTO" =~ ^[Yy]$ ]]; then
+                            MDBLIST_AUTO_SYNC="true"
+                        fi
+                        ;;
+                    3)
+                        MDBLIST_USER_MODE="per_user"
+                        MDBLIST_PLEX_USERS="[]"
+                        read -p "Auto-export to MDBList on each run? (y/N): " ENABLE_MDBLIST_AUTO
+                        if [[ "$ENABLE_MDBLIST_AUTO" =~ ^[Yy]$ ]]; then
+                            MDBLIST_AUTO_SYNC="true"
+                        fi
+                        ;;
+                    *)
+                        echo -e "${YELLOW}Skipping. Configure mdblist.yml later.${NC}"
+                        ;;
+                esac
+            else
+                MDBLIST_ERROR=$(echo "$MDBLIST_TEST" | grep "^ERROR:" | cut -d: -f2-)
+                echo -e "${RED}Could not connect to MDBList: $MDBLIST_ERROR${NC}"
+                echo -e "${YELLOW}Check your API key, then configure mdblist.yml manually.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Skipping MDBList (API key not provided)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Skipping MDBList (can be enabled later in config/mdblist.yml)${NC}"
+    fi
+    echo ""
+
     # --- Write config/config.yml (essentials only) ---
     mkdir -p config
     echo -e "${CYAN}Creating config/config.yml...${NC}"
@@ -925,6 +1032,31 @@ search_for_movie: false
 RADARREOF
 
         echo -e "${GREEN}✓ config/radarr.yml created!${NC}"
+    fi
+
+    # --- Write mdblist.yml if enabled ---
+    if [ "$MDBLIST_ENABLED" = "true" ]; then
+        echo -e "${CYAN}Creating config/mdblist.yml...${NC}"
+
+        cat > config/mdblist.yml << MDBLISTEOF
+# Curatarr MDBList Configuration
+
+enabled: true
+api_key: ${MDBLIST_API_KEY}
+
+# Sync behavior
+auto_sync: ${MDBLIST_AUTO_SYNC:-false}
+user_mode: "${MDBLIST_USER_MODE:-mapping}"
+plex_users: ${MDBLIST_PLEX_USERS:-[]}
+
+# List naming
+list_prefix: "${MDBLIST_LIST_PREFIX:-Curatarr}"
+
+# Replace list contents on each run (true) or append new items (false)
+replace_existing: ${MDBLIST_REPLACE_EXISTING:-true}
+MDBLISTEOF
+
+        echo -e "${GREEN}✓ config/mdblist.yml created!${NC}"
     fi
     echo ""
 }
