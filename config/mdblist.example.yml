@@ -1,0 +1,29 @@
+# MDBList Integration Configuration
+# Export recommendations to MDBList for sharing or importing into other apps
+
+# Enable/disable MDBList integration
+enabled: false
+
+# MDBList API key (get from https://mdblist.com/preferences/)
+api_key: YOUR_MDBLIST_API_KEY
+
+# Sync behavior
+auto_sync: false  # Automatically export on each run
+
+# User mode: mapping, per_user, or combined
+# - mapping: Only sync recommendations for users in plex_users list
+# - per_user: Create separate list for each Plex user
+# - combined: Single list with all users' recommendations
+user_mode: mapping
+
+# Which Plex users to export (for mapping mode)
+# Leave empty to use all users
+plex_users: []
+
+# List naming
+# For per_user mode: "Curatarr Movies - {username}", "Curatarr TV - {username}"
+# For combined mode: "Curatarr Movies", "Curatarr TV"
+list_prefix: "Curatarr"
+
+# Replace list contents on each run (true) or append new items (false)
+replace_existing: true

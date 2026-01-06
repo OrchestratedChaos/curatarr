@@ -250,6 +250,27 @@ search_for_movie: false     # Don't search for movie
 
 **Setup:** Run `./run.sh` and follow Step 8, or manually create `config/radarr.yml`.
 
+### MDBList Integration (Optional)
+
+Export recommendations to MDBList for use with Kometa/PMM and other tools:
+
+```yaml
+# config/mdblist.yml
+enabled: true
+api_key: YOUR_MDBLIST_API_KEY
+
+# Sync behavior
+auto_sync: true             # Auto-export when external recs finish
+user_mode: mapping          # mapping, per_user, or combined
+plex_users: [john]          # Which users to sync (for mapping mode)
+
+# List settings
+list_prefix: Curatarr       # Lists named "Curatarr Movies", "Curatarr TV"
+replace_existing: true      # Clear list before adding (vs. append)
+```
+
+**Setup:** Run `./run.sh` and follow Step 9, or manually create `config/mdblist.yml`.
+
 ### External Recommendations: Relevance Score
 
 The `min_relevance_score` setting (0.0-1.0) controls how strictly personal the external watchlist recommendations are:
