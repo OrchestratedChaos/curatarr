@@ -34,7 +34,7 @@ Quick method:
 
 ## Step 2: Configure (1 minute)
 
-Edit `config.yml`:
+Edit `config/config.yml`:
 
 ```yaml
 plex:
