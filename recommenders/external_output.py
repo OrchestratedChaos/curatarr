@@ -136,7 +136,10 @@ def generate_combined_html(
     all_users_data: List[Dict],
     output_dir: str,
     tmdb_api_key: str,
-    get_imdb_id_func
+    get_imdb_id_func,
+    movie_counts: Dict[str, int] = None,
+    show_counts: Dict[str, int] = None,
+    total_users: int = 1
 ) -> str:
     """
     Generate single HTML watchlist with tabs for all users.
@@ -147,10 +150,15 @@ def generate_combined_html(
         output_dir: Directory to write HTML file
         tmdb_api_key: TMDB API key for fetching IMDB IDs
         get_imdb_id_func: Function to fetch IMDB ID from TMDB ID
+        movie_counts: Dict mapping TMDB ID to count of users wanting the movie
+        show_counts: Dict mapping TMDB ID to count of users wanting the show
+        total_users: Total number of users for displaying "X/N users"
 
     Returns:
         Path to the generated HTML file
     """
+    movie_counts = movie_counts or {}
+    show_counts = show_counts or {}
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, 'watchlist.html')
 
@@ -185,14 +193,18 @@ def generate_combined_html(
     def render_table(items, media_type, user_id):
         """Render HTML table for items with checkboxes (unchecked by default)"""
         rows = []
+        counts = movie_counts if media_type == 'movie' else show_counts
         for item in items:
             tmdb_id = item.get('tmdb_id', '')
             imdb_id = all_imdb_ids.get(tmdb_id, '')
             days_listed = (now - datetime.fromisoformat(item['added_date'])).days
+            # Show shared count if more than one user
+            user_count = counts.get(str(tmdb_id), 1)
+            shared_badge = f'<span class="shared-badge" title="{user_count} of {total_users} users want this">{user_count}/{total_users}</span>' if total_users > 1 else ''
             rows.append(f'''
                 <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="{media_type}" data-user="{user_id}">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{item['title']}</td>
+                    <td>{item['title']} {shared_badge}</td>
                     <td>{item['year']}</td>
                     <td>{item['rating']:.1f}</td>
                     <td>{item['score']:.0%}</td>
@@ -688,6 +700,18 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             cursor: pointer;
             accent-color: #8b0000;
             border-radius: 4px;
+        }}
+        .shared-badge {{
+            display: inline-block;
+            background: linear-gradient(135deg, #8b0000, #a00);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin-left: 8px;
+            vertical-align: middle;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }}
 
         .instructions {{
