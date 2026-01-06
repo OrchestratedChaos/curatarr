@@ -4,16 +4,14 @@ Handles exporting recommendations to MDBList.
 """
 
 import logging
-import time
-import requests
 from typing import Dict, Optional, Any, List
+
+from .api_client import BaseAPIClient
 
 logger = logging.getLogger('curatarr')
 
-# Rate limiting: 0.1s delay between requests
+# Backwards compatibility exports (now defined on class)
 MDBLIST_RATE_LIMIT_DELAY = 0.1
-
-# HTTP request timeout in seconds
 MDBLIST_REQUEST_TIMEOUT = 30
 
 # API base URL
@@ -25,12 +23,17 @@ class MDBListAPIError(Exception):
     pass
 
 
-class MDBListClient:
+class MDBListClient(BaseAPIClient):
     """
     MDBList API client for exporting recommendations.
 
     Uses API key authentication via query parameter.
     """
+
+    api_name = "MDBList"
+    exception_class = MDBListAPIError
+    rate_limit_delay = 0.1
+    request_timeout = 30
 
     def __init__(self, api_key: str):
         """
@@ -39,37 +42,18 @@ class MDBListClient:
         Args:
             api_key: MDBList API key
         """
+        super().__init__()
         self.api_key = api_key
-        self._last_request_time = 0
         self._lists_cache: Optional[List[Dict]] = None
 
-    def _rate_limit(self) -> None:
-        """Enforce rate limiting between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < MDBLIST_RATE_LIMIT_DELAY:
-            time.sleep(MDBLIST_RATE_LIMIT_DELAY - elapsed)
-        self._last_request_time = time.time()
+    def _get_headers(self) -> Dict[str, str]:
+        """MDBList doesn't require auth headers (uses query param)."""
+        return {}
 
     def _make_request(self, method: str, endpoint: str,
                       data: Optional[Dict] = None,
                       params: Optional[Dict] = None) -> Any:
-        """
-        Make an API request with rate limiting and error handling.
-
-        Args:
-            method: HTTP method (GET, POST, DELETE, etc.)
-            endpoint: API endpoint (without base URL)
-            data: Request body data
-            params: Query parameters
-
-        Returns:
-            Response JSON data
-
-        Raises:
-            MDBListAPIError: If request fails
-        """
-        self._rate_limit()
-
+        """Make an API request to MDBList with API key in query params."""
         url = f"{MDBLIST_API_BASE}/{endpoint}"
 
         # Add API key to params
@@ -77,40 +61,7 @@ class MDBListClient:
             params = {}
         params['apikey'] = self.api_key
 
-        try:
-            response = requests.request(
-                method=method,
-                url=url,
-                json=data,
-                params=params,
-                timeout=MDBLIST_REQUEST_TIMEOUT
-            )
-
-            if response.status_code == 401:
-                raise MDBListAPIError("Invalid API key")
-            elif response.status_code == 404:
-                return None
-            elif response.status_code >= 400:
-                error_msg = response.text
-                try:
-                    error_data = response.json()
-                    if isinstance(error_data, dict):
-                        error_msg = error_data.get('error', error_msg)
-                except Exception as e:
-                    logger.debug(f"Failed to parse error response JSON: {e}")
-                raise MDBListAPIError(f"API error {response.status_code}: {error_msg}")
-
-            if response.status_code == 204:
-                return None
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            raise MDBListAPIError(f"Request timeout after {MDBLIST_REQUEST_TIMEOUT}s")
-        except requests.exceptions.ConnectionError:
-            raise MDBListAPIError(f"Could not connect to MDBList API")
-        except requests.exceptions.RequestException as e:
-            raise MDBListAPIError(f"Request failed: {e}")
+        return self._make_request_to_url(method, url, data, params)
 
     def test_connection(self) -> bool:
         """

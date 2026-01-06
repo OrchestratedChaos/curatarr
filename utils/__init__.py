@@ -30,6 +30,7 @@ from .config import (
     RATING_MULTIPLIER_3_STAR,
     RATING_MULTIPLIER_2_STAR,
     RATING_MULTIPLIER_UNRATED,
+    PLEX_REQUEST_TIMEOUT,
     check_cache_version,
     get_config_section,
     get_tmdb_config,

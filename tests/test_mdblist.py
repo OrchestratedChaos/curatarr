@@ -33,8 +33,8 @@ class TestMDBListClientInit:
 class TestMDBListClientRateLimit:
     """Tests for rate limiting."""
 
-    @patch('utils.mdblist.time.sleep')
-    @patch('utils.mdblist.time.time')
+    @patch('utils.api_client.time.sleep')
+    @patch('utils.api_client.time.time')
     def test_rate_limit_sleeps_when_needed(self, mock_time, mock_sleep):
         """Test rate limiting enforces delay between requests."""
         client = MDBListClient("key")
@@ -50,8 +50,8 @@ class TestMDBListClientRateLimit:
         sleep_time = mock_sleep.call_args[0][0]
         assert sleep_time == pytest.approx(MDBLIST_RATE_LIMIT_DELAY - 0.05, abs=0.01)
 
-    @patch('utils.mdblist.time.sleep')
-    @patch('utils.mdblist.time.time')
+    @patch('utils.api_client.time.sleep')
+    @patch('utils.api_client.time.time')
     def test_rate_limit_no_sleep_when_enough_time_passed(self, mock_time, mock_sleep):
         """Test no sleep when enough time has passed."""
         client = MDBListClient("key")
@@ -67,7 +67,7 @@ class TestMDBListClientRateLimit:
 class TestMDBListClientMakeRequest:
     """Tests for API request handling."""
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_successful_request(self, mock_request):
         """Test successful API request."""
         mock_response = Mock()
@@ -81,7 +81,7 @@ class TestMDBListClientMakeRequest:
         assert result == {"status": "ok"}
         mock_request.assert_called_once()
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_api_key_in_params(self, mock_request):
         """Test API key is added to query params."""
         mock_response = Mock()
@@ -95,7 +95,7 @@ class TestMDBListClientMakeRequest:
         call_kwargs = mock_request.call_args[1]
         assert call_kwargs["params"]["apikey"] == "my_api_key"
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_unauthorized_raises_error(self, mock_request):
         """Test 401 raises MDBListAPIError."""
         mock_response = Mock()
@@ -107,7 +107,7 @@ class TestMDBListClientMakeRequest:
         with pytest.raises(MDBListAPIError, match="Invalid API key"):
             client._make_request("GET", "lists/user")
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_404_returns_none(self, mock_request):
         """Test 404 returns None."""
         mock_response = Mock()
@@ -119,7 +119,7 @@ class TestMDBListClientMakeRequest:
 
         assert result is None
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_204_returns_none(self, mock_request):
         """Test 204 No Content returns None."""
         mock_response = Mock()
@@ -131,7 +131,7 @@ class TestMDBListClientMakeRequest:
 
         assert result is None
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_error_response_raises_api_error(self, mock_request):
         """Test error responses raise MDBListAPIError."""
         mock_response = Mock()
@@ -145,7 +145,7 @@ class TestMDBListClientMakeRequest:
         with pytest.raises(MDBListAPIError, match="Invalid list"):
             client._make_request("POST", "lists/user/add")
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_timeout_raises_api_error(self, mock_request):
         """Test timeout raises MDBListAPIError."""
         mock_request.side_effect = requests.exceptions.Timeout()
@@ -155,7 +155,7 @@ class TestMDBListClientMakeRequest:
         with pytest.raises(MDBListAPIError, match="timeout"):
             client._make_request("GET", "lists/user")
 
-    @patch('utils.mdblist.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_connection_error_raises_api_error(self, mock_request):
         """Test connection error raises MDBListAPIError."""
         mock_request.side_effect = requests.exceptions.ConnectionError()

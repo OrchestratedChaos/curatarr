@@ -48,7 +48,7 @@ class TestRadarrClientHeaders:
 class TestRadarrClientMakeRequest:
     """Tests for API request handling."""
 
-    @patch('utils.radarr.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_successful_request(self, mock_request):
         """Test successful API request."""
         mock_response = Mock()
@@ -62,7 +62,7 @@ class TestRadarrClientMakeRequest:
         assert result == {"status": "ok"}
         mock_request.assert_called_once()
 
-    @patch('utils.radarr.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_unauthorized_raises_error(self, mock_request):
         """Test 401 raises RadarrAPIError."""
         mock_response = Mock()
@@ -74,7 +74,7 @@ class TestRadarrClientMakeRequest:
         with pytest.raises(RadarrAPIError, match="Invalid API key"):
             client._make_request("GET", "system/status")
 
-    @patch('utils.radarr.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_404_returns_none(self, mock_request):
         """Test 404 returns None."""
         mock_response = Mock()
@@ -86,7 +86,7 @@ class TestRadarrClientMakeRequest:
 
         assert result is None
 
-    @patch('utils.radarr.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_204_returns_none(self, mock_request):
         """Test 204 No Content returns None."""
         mock_response = Mock()
@@ -98,7 +98,7 @@ class TestRadarrClientMakeRequest:
 
         assert result is None
 
-    @patch('utils.radarr.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_timeout_raises_error(self, mock_request):
         """Test timeout raises RadarrAPIError."""
         mock_request.side_effect = requests.exceptions.Timeout()
@@ -108,7 +108,7 @@ class TestRadarrClientMakeRequest:
         with pytest.raises(RadarrAPIError, match="timeout"):
             client._make_request("GET", "system/status")
 
-    @patch('utils.radarr.requests.request')
+    @patch('utils.api_client.requests.request')
     def test_connection_error_raises_error(self, mock_request):
         """Test connection error raises RadarrAPIError."""
         mock_request.side_effect = requests.exceptions.ConnectionError()

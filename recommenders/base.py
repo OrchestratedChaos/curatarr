@@ -26,6 +26,7 @@ from utils import (
     TMDB_RATE_LIMIT_DELAY,
     DEFAULT_LIMIT_PLEX_RESULTS,
     WEIGHT_SUM_TOLERANCE,
+    PLEX_REQUEST_TIMEOUT,
     TIER_SAFE_PERCENT, TIER_DIVERSE_PERCENT, TIER_WILDCARD_PERCENT,
     GREEN, YELLOW, CYAN, RESET,
     load_config,
@@ -477,7 +478,7 @@ class BaseRecommender(ABC):
                     'apikey': self.config['plex_users']['api_key'],
                     'cmd': 'get_users'
                 },
-                timeout=30
+                timeout=PLEX_REQUEST_TIMEOUT
             )
             users_response.raise_for_status()
             plex_users = users_response.json()['response']['data']
@@ -706,6 +707,110 @@ class BaseRecommender(ABC):
             'plex_recommendations': plex_recs
         }
 
+    def _find_plex_items_for_recs(self, section, selected_items: List[Dict]) -> Tuple[List, List[str]]:
+        """Find Plex items matching recommendations."""
+        items_found = []
+        skipped = []
+        for rec in selected_items:
+            plex_item = self._find_plex_item(section, rec)
+            if plex_item:
+                plex_item.reload()
+                items_found.append(plex_item)
+            else:
+                skipped.append(f"{rec['title']} ({rec.get('year', 'N/A')})")
+        return items_found, skipped
+
+    def _remove_outdated_labels(self, section, label_name: str, stale_days: int) -> List:
+        """Remove labels from watched/stale/excluded items, return fresh items."""
+        currently_labeled = section.search(label=label_name)
+        print(f"Found {len(currently_labeled)} currently labeled {self.media_key}")
+
+        excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
+        categories = categorize_labeled_items(
+            currently_labeled, self.watched_ids, excluded_genres,
+            label_name, self.label_dates, stale_days
+        )
+
+        print(f"{GREEN}Keeping {len(categories['fresh'])} fresh unwatched recommendations{RESET}")
+        print(f"{YELLOW}Removing {len(categories['watched'])} watched {self.media_key} from recommendations{RESET}")
+        print(f"{YELLOW}Removing {len(categories['stale'])} stale recommendations (unwatched > {stale_days} days){RESET}")
+        print(f"{YELLOW}Removing {len(categories['excluded'])} {self.media_key} with excluded genres{RESET}")
+
+        remove_labels_from_items(categories['watched'], label_name, self.label_dates, "watched")
+        remove_labels_from_items(categories['stale'], label_name, self.label_dates, "stale")
+        remove_labels_from_items(categories['excluded'], label_name, self.label_dates, "excluded genre")
+
+        return categories['fresh']
+
+    def _build_scored_candidates(self, unwatched_labeled: List, selected_items: List[Dict], items_found: List) -> Dict:
+        """Build dict of item_id -> (plex_item, score) for all candidates."""
+        all_candidates = {}
+        media_cache = self._get_media_cache()
+
+        for item in unwatched_labeled:
+            item_id = int(item.ratingKey)
+            item_info = media_cache.cache[self.media_key].get(str(item_id))
+            if item_info:
+                try:
+                    score, _ = self._calculate_similarity_from_cache(item_info)
+                    all_candidates[item_id] = (item, score)
+                except Exception:
+                    all_candidates[item_id] = (item, 0.0)
+
+        for rec in selected_items:
+            plex_item = next(
+                (m for m in items_found if m.title == rec['title'] and m.year == rec.get('year')),
+                None
+            )
+            if plex_item:
+                item_id = int(plex_item.ratingKey)
+                is_watched = item_id in self.watched_ids or getattr(plex_item, 'isPlayed', False)
+                if not is_watched:
+                    score = rec.get('similarity_score', 0.0)
+                    if item_id not in all_candidates or score > all_candidates[item_id][1]:
+                        all_candidates[item_id] = (plex_item, score)
+
+        return all_candidates
+
+    def _update_labels_by_rank(self, all_candidates: Dict, unwatched_labeled: List, label_name: str, target_count: int) -> List:
+        """Update labels to keep only top-scoring items, return final collection."""
+        sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
+        top_candidates = sorted_candidates[:target_count]
+        top_ids = {item_id for item_id, _ in top_candidates}
+
+        current_ids = {int(m.ratingKey) for m in unwatched_labeled}
+        ids_to_add = top_ids - current_ids
+        ids_to_remove = current_ids - top_ids
+
+        if ids_to_remove:
+            items_to_remove = [m for m in unwatched_labeled if int(m.ratingKey) in ids_to_remove]
+            print(f"{YELLOW}Removing {len(items_to_remove)} lower-scoring items to make room for better ones{RESET}")
+            remove_labels_from_items(items_to_remove, label_name, self.label_dates, "replaced by higher score")
+
+        items_to_add = [all_candidates[item_id][0] for item_id in ids_to_add if item_id in all_candidates]
+        if items_to_add:
+            print(f"{GREEN}Adding {len(items_to_add)} new high-scoring recommendations{RESET}")
+            add_labels_to_items(items_to_add, label_name, self.label_dates)
+
+        print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
+        return [plex_item for item_id, (plex_item, score) in top_candidates]
+
+    def _sync_plex_collection(self, section, label_name: str, final_items: List) -> None:
+        """Create/update Plex collection with final recommendations."""
+        if not final_items:
+            return
+
+        username = label_name.replace('Recommended_', '')
+        if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
+            display_name = self.user_preferences[username]['display_name']
+        else:
+            display_name = username.capitalize()
+
+        emoji = "🎬" if self.media_type == 'movie' else "📺"
+        collection_name = f"{emoji} {display_name} - Recommendation"
+        update_plex_collection(section, collection_name, final_items, logger)
+        cleanup_old_collections(section, collection_name, username, emoji, logger)
+
     def manage_plex_labels(self, recommended_items: List[Dict]) -> None:
         """Manage Plex labels and collections for recommendations."""
         if not self.config.get('collections', {}).get('add_label'):
@@ -728,22 +833,13 @@ class BaseRecommender(ABC):
             label_name = build_label_name(base_label, users, self.single_user, append_usernames)
 
             # Find items in Plex
-            items_to_update = []
-            skipped_items = []
-            for rec in selected_items:
-                plex_item = self._find_plex_item(section, rec)
-                if plex_item:
-                    plex_item.reload()
-                    items_to_update.append(plex_item)
-                else:
-                    skipped_items.append(f"{rec['title']} ({rec.get('year', 'N/A')})")
-
-            if skipped_items:
-                log_warning(f"Skipped {len(skipped_items)} {self.media_key} not found in Plex:")
-                for item in skipped_items[:5]:
+            items_found, skipped = self._find_plex_items_for_recs(section, selected_items)
+            if skipped:
+                log_warning(f"Skipped {len(skipped)} {self.media_key} not found in Plex:")
+                for item in skipped[:5]:
                     print(f"  - {item}")
-                if len(skipped_items) > 5:
-                    print(f"  ... and {len(skipped_items) - 5} more")
+                if len(skipped) > 5:
+                    print(f"  ... and {len(skipped) - 5} more")
 
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
@@ -752,97 +848,25 @@ class BaseRecommender(ABC):
 
             stale_days = self.config.get('collections', {}).get('stale_removal_days', 7)
 
-            currently_labeled = section.search(label=label_name)
-            print(f"Found {len(currently_labeled)} currently labeled {self.media_key}")
+            # Remove outdated labels and get fresh items
+            unwatched_labeled = self._remove_outdated_labels(section, label_name, stale_days)
 
-            excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
-
-            categories = categorize_labeled_items(
-                currently_labeled, self.watched_ids, excluded_genres,
-                label_name, self.label_dates, stale_days
-            )
-            unwatched_labeled = categories['fresh']
-            watched_labeled = categories['watched']
-            stale_labeled = categories['stale']
-            excluded_labeled = categories['excluded']
-
-            print(f"{GREEN}Keeping {len(unwatched_labeled)} fresh unwatched recommendations{RESET}")
-            print(f"{YELLOW}Removing {len(watched_labeled)} watched {self.media_key} from recommendations{RESET}")
-            print(f"{YELLOW}Removing {len(stale_labeled)} stale recommendations (unwatched > {stale_days} days){RESET}")
-            print(f"{YELLOW}Removing {len(excluded_labeled)} {self.media_key} with excluded genres{RESET}")
-
-            remove_labels_from_items(watched_labeled, label_name, self.label_dates, "watched")
-            remove_labels_from_items(stale_labeled, label_name, self.label_dates, "stale")
-            remove_labels_from_items(excluded_labeled, label_name, self.label_dates, "excluded genre")
-
+            # Build candidates with scores
             target_count = self.config['general'].get('limit_plex_results', 50 if self.media_type == 'movie' else 20)
-
             print(f"{GREEN}Building optimal collection of top {target_count} recommendations...{RESET}")
 
-            all_candidates = {}
-            media_cache = self._get_media_cache()
+            all_candidates = self._build_scored_candidates(unwatched_labeled, selected_items, items_found)
 
-            for item in unwatched_labeled:
-                item_id = int(item.ratingKey)
-                item_info = media_cache.cache[self.media_key].get(str(item_id))
-                if item_info:
-                    try:
-                        score, _ = self._calculate_similarity_from_cache(item_info)
-                        all_candidates[item_id] = (item, score)
-                    except Exception:
-                        all_candidates[item_id] = (item, 0.0)
-
-            for rec in selected_items:
-                plex_item = next(
-                    (m for m in items_to_update if m.title == rec['title'] and m.year == rec.get('year')),
-                    None
-                )
-                if plex_item:
-                    item_id = int(plex_item.ratingKey)
-                    is_watched = item_id in self.watched_ids or getattr(plex_item, 'isPlayed', False)
-                    if not is_watched:
-                        score = rec.get('similarity_score', 0.0)
-                        if item_id not in all_candidates or score > all_candidates[item_id][1]:
-                            all_candidates[item_id] = (plex_item, score)
-
-            sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
-            top_candidates = sorted_candidates[:target_count]
-            top_ids = {item_id for item_id, _ in top_candidates}
-
-            current_ids = {int(m.ratingKey) for m in unwatched_labeled}
-            ids_to_add = top_ids - current_ids
-            ids_to_remove = current_ids - top_ids
-
-            if ids_to_remove:
-                items_to_remove = [m for m in unwatched_labeled if int(m.ratingKey) in ids_to_remove]
-                print(f"{YELLOW}Removing {len(items_to_remove)} lower-scoring items to make room for better ones{RESET}")
-                remove_labels_from_items(items_to_remove, label_name, self.label_dates, "replaced by higher score")
-
-            items_to_add = [all_candidates[item_id][0] for item_id in ids_to_add if item_id in all_candidates]
-            if items_to_add:
-                print(f"{GREEN}Adding {len(items_to_add)} new high-scoring recommendations{RESET}")
-                add_labels_to_items(items_to_add, label_name, self.label_dates)
+            # Update labels to keep top items
+            final_items = self._update_labels_by_rank(all_candidates, unwatched_labeled, label_name, target_count)
 
             self._save_watched_cache()
 
-            print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
-
-            final_collection_items = [plex_item for item_id, (plex_item, score) in top_candidates]
-
-            print(f"{GREEN}Final collection size: {len(final_collection_items)} {self.media_key} (sorted by similarity){RESET}")
+            print(f"{GREEN}Final collection size: {len(final_items)} {self.media_key} (sorted by similarity){RESET}")
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
 
-            if final_collection_items:
-                username = label_name.replace('Recommended_', '')
-                if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
-                    display_name = self.user_preferences[username]['display_name']
-                else:
-                    display_name = username.capitalize()
-
-                emoji = "🎬" if self.media_type == 'movie' else "📺"
-                collection_name = f"{emoji} {display_name} - Recommendation"
-                update_plex_collection(section, collection_name, final_collection_items, logger)
-                cleanup_old_collections(section, collection_name, username, emoji, logger)
+            # Sync to Plex collection
+            self._sync_plex_collection(section, label_name, final_items)
 
         except Exception as e:
             log_error(f"Error managing Plex labels: {e}")

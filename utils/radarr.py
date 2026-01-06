@@ -4,16 +4,14 @@ Handles adding movie recommendations to Radarr.
 """
 
 import logging
-import time
-import requests
 from typing import Dict, Optional, Any, List
+
+from .api_client import BaseAPIClient
 
 logger = logging.getLogger('curatarr')
 
-# Rate limiting: 0.1s delay between requests
+# Backwards compatibility exports (now defined on class)
 RADARR_RATE_LIMIT_DELAY = 0.1
-
-# HTTP request timeout in seconds
 RADARR_REQUEST_TIMEOUT = 30
 
 
@@ -22,12 +20,17 @@ class RadarrAPIError(Exception):
     pass
 
 
-class RadarrClient:
+class RadarrClient(BaseAPIClient):
     """
     Radarr API client for adding movies.
 
     Uses API key authentication (no OAuth required).
     """
+
+    api_name = "Radarr"
+    exception_class = RadarrAPIError
+    rate_limit_delay = 0.1
+    request_timeout = 30
 
     def __init__(self, url: str, api_key: str):
         """
@@ -37,9 +40,9 @@ class RadarrClient:
             url: Radarr base URL (e.g., http://localhost:7878)
             api_key: Radarr API key
         """
+        super().__init__()
         self.url = url.rstrip('/')
         self.api_key = api_key
-        self._last_request_time = 0
         self._existing_movies: Optional[Dict[str, int]] = None
 
     def _get_headers(self) -> Dict[str, str]:
@@ -49,72 +52,12 @@ class RadarrClient:
             "X-Api-Key": self.api_key
         }
 
-    def _rate_limit(self) -> None:
-        """Enforce rate limiting between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < RADARR_RATE_LIMIT_DELAY:
-            time.sleep(RADARR_RATE_LIMIT_DELAY - elapsed)
-        self._last_request_time = time.time()
-
     def _make_request(self, method: str, endpoint: str,
                       data: Optional[Dict] = None,
                       params: Optional[Dict] = None) -> Any:
-        """
-        Make an API request with rate limiting and error handling.
-
-        Args:
-            method: HTTP method (GET, POST, DELETE, etc.)
-            endpoint: API endpoint (without base URL)
-            data: Request body data
-            params: Query parameters
-
-        Returns:
-            Response JSON data
-
-        Raises:
-            RadarrAPIError: If request fails
-        """
-        self._rate_limit()
-
+        """Make an API request to Radarr."""
         url = f"{self.url}/api/v3/{endpoint}"
-
-        try:
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=self._get_headers(),
-                json=data,
-                params=params,
-                timeout=RADARR_REQUEST_TIMEOUT
-            )
-
-            if response.status_code == 401:
-                raise RadarrAPIError("Invalid API key")
-            elif response.status_code == 404:
-                return None
-            elif response.status_code >= 400:
-                error_msg = response.text
-                try:
-                    error_data = response.json()
-                    if isinstance(error_data, list) and error_data:
-                        error_msg = error_data[0].get('errorMessage', error_msg)
-                    elif isinstance(error_data, dict):
-                        error_msg = error_data.get('message', error_msg)
-                except Exception as e:
-                    logger.debug(f"Failed to parse error response JSON: {e}")
-                raise RadarrAPIError(f"API error {response.status_code}: {error_msg}")
-
-            if response.status_code == 204:
-                return None
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            raise RadarrAPIError(f"Request timeout after {RADARR_REQUEST_TIMEOUT}s")
-        except requests.exceptions.ConnectionError:
-            raise RadarrAPIError(f"Could not connect to Radarr at {self.url}")
-        except requests.exceptions.RequestException as e:
-            raise RadarrAPIError(f"Request failed: {e}")
+        return self._make_request_to_url(method, url, data, params)
 
     def test_connection(self) -> bool:
         """

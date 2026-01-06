@@ -600,6 +600,7 @@ def process_recommendations(config, config_path, log_retention_days, single_user
         teardown_log_file(original_stdout, log_retention_days)
 
 def main():
+    """Entry point for movie recommendations."""
     run_recommender_main(
         media_type='Movie',
         description='Movie Recommendations for Plex',
