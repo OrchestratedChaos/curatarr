@@ -14,13 +14,21 @@ from utils import (
     RED, GREEN, YELLOW, CYAN, RESET,
     TOP_CAST_COUNT,
     DEFAULT_NEGATIVE_THRESHOLD,
+    RATING_TIER_5_STAR,
+    RATING_TIER_4_STAR,
+    RATING_TIER_3_STAR,
+    RATING_MULTIPLIER_5_STAR,
+    RATING_MULTIPLIER_4_STAR,
+    RATING_MULTIPLIER_3_STAR,
+    RATING_MULTIPLIER_2_STAR,
+    RATING_MULTIPLIER_UNRATED,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
     log_warning, log_error,
     get_negative_multiplier,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score, find_plex_movie,
     show_progress,
-    extract_genres, extract_ids_from_guids,
+    extract_genres, extract_ids_from_guids, extract_rating,
     adapt_config_for_media_type,
     format_media_output,
     print_similarity_breakdown,
@@ -66,25 +74,8 @@ class MovieCache(BaseCache):
         if hasattr(movie, 'directors'):
             directors = [d.tag for d in movie.directors]
 
-        # Extract ratings
-        audience_rating = 0
-        try:
-            if hasattr(movie, 'userRating') and movie.userRating:
-                audience_rating = float(movie.userRating)
-            elif hasattr(movie, 'audienceRating') and movie.audienceRating:
-                audience_rating = float(movie.audienceRating)
-            elif hasattr(movie, 'ratings'):
-                for rating in movie.ratings:
-                    if hasattr(rating, 'value') and rating.value:
-                        if (getattr(rating, 'image', '') == 'imdb://image.rating' or
-                            getattr(rating, 'type', '') == 'audience'):
-                            try:
-                                audience_rating = float(rating.value)
-                                break
-                            except (ValueError, AttributeError):
-                                pass
-        except Exception as e:
-            logger.debug(f"Error fetching ratings for movie: {e}")
+        # Extract ratings using shared utility
+        audience_rating = extract_rating(movie)
 
         return {
             'title': movie.title,
@@ -237,7 +228,7 @@ class PlexMovieRecommender(BaseRecommender):
         - None/0 (unrated): 0.6x weight - default, slightly lower than neutral
         """
         if not user_rating or user_rating == 0:
-            return 0.6  # Default for unrated content
+            return RATING_MULTIPLIER_UNRATED
 
         rating_int = int(round(user_rating))
 
@@ -252,14 +243,14 @@ class PlexMovieRecommender(BaseRecommender):
             return get_negative_multiplier(rating_int)
 
         # Positive multipliers for higher ratings
-        if user_rating >= 9.0:  # 5 stars
-            return 1.0
-        elif user_rating >= 7.0:  # 4 stars
-            return 0.75
-        elif user_rating >= 5.0:  # 3 stars
-            return 0.5
-        else:  # 2 stars (rating 4)
-            return 0.25
+        if user_rating >= RATING_TIER_5_STAR:
+            return RATING_MULTIPLIER_5_STAR
+        elif user_rating >= RATING_TIER_4_STAR:
+            return RATING_MULTIPLIER_4_STAR
+        elif user_rating >= RATING_TIER_3_STAR:
+            return RATING_MULTIPLIER_3_STAR
+        else:
+            return RATING_MULTIPLIER_2_STAR
 
     def _get_plex_watched_data(self) -> Dict:
         """Get watched movie data from Plex's native history (using Plex API)"""
@@ -419,25 +410,9 @@ class PlexMovieRecommender(BaseRecommender):
             tmdb_keywords = []
             directors = []
             
-            # Improved rating extraction logic
+            # Extract rating using shared utility
             if self.show_rating:
-                # Try to get userRating first (personal rating)
-                if hasattr(movie, 'userRating') and movie.userRating:
-                    audience_rating = float(movie.userRating)
-                # Then try audienceRating (community rating)
-                elif hasattr(movie, 'audienceRating') and movie.audienceRating:
-                    audience_rating = float(movie.audienceRating)
-                # Finally check ratings collection
-                elif hasattr(movie, 'ratings'):
-                    for rating in movie.ratings:
-                        if hasattr(rating, 'value') and rating.value:
-                            if (getattr(rating, 'image', '') == 'imdb://image.rating' or
-                                getattr(rating, 'type', '') == 'audience'):
-                                try:
-                                    audience_rating = float(rating.value)
-                                    break
-                                except (ValueError, AttributeError):
-                                    pass
+                audience_rating = extract_rating(movie)
             
             if hasattr(movie, 'directors') and movie.directors:
                 directors = [d.tag for d in movie.directors]

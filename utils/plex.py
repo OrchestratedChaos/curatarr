@@ -103,6 +103,35 @@ def get_plex_account_ids(config: Dict, users_to_match: List[str]) -> List[str]:
     return account_ids
 
 
+def _resolve_myplex_account_ids(config: Dict, users_to_check: List[str]) -> List[int]:
+    """
+    Resolve Plex usernames to MyPlex account IDs.
+
+    Handles admin user aliases and case-insensitive matching.
+
+    Args:
+        config: Configuration dict with plex token
+        users_to_check: List of usernames to resolve
+
+    Returns:
+        List of MyPlex account ID integers
+    """
+    account_ids = []
+    account = MyPlexAccount(token=config['plex']['token'])
+    all_users = {u.title.lower(): u.id for u in account.users()}
+    admin_username = account.username.lower()
+    admin_account_id = account.id
+
+    for username in users_to_check:
+        username_lower = username.lower()
+        if username_lower in ['admin', 'administrator', admin_username]:
+            account_ids.append(admin_account_id)
+        elif username_lower in all_users:
+            account_ids.append(all_users[username_lower])
+
+    return account_ids
+
+
 def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
     """
     Get count of unique watched movies from Plex (for cache invalidation).
@@ -118,18 +147,7 @@ def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
         if not users_to_check:
             return 0
 
-        account_ids = []
-        account = MyPlexAccount(token=config['plex']['token'])
-        all_users = {u.title.lower(): u.id for u in account.users()}
-        admin_username = account.username.lower()
-        admin_account_id = account.id
-
-        for username in users_to_check:
-            username_lower = username.lower()
-            if username_lower in ['admin', 'administrator', admin_username]:
-                account_ids.append(admin_account_id)
-            elif username_lower in all_users:
-                account_ids.append(all_users[username_lower])
+        account_ids = _resolve_myplex_account_ids(config, users_to_check)
 
         watched_movies = set()
         for account_id in account_ids:
@@ -164,18 +182,7 @@ def get_watched_show_count(config: Dict, users_to_check: List[str]) -> int:
         if not users_to_check:
             return 0
 
-        account_ids = []
-        account = MyPlexAccount(token=config['plex']['token'])
-        all_users = {u.title.lower(): u.id for u in account.users()}
-        admin_username = account.username.lower()
-        admin_account_id = account.id
-
-        for username in users_to_check:
-            username_lower = username.lower()
-            if username_lower in ['admin', 'administrator', admin_username]:
-                account_ids.append(admin_account_id)
-            elif username_lower in all_users:
-                account_ids.append(all_users[username_lower])
+        account_ids = _resolve_myplex_account_ids(config, users_to_check)
 
         watched_shows = set()
         for account_id in account_ids:
