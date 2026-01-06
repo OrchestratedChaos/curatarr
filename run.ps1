@@ -1160,6 +1160,16 @@ function Main {
     Write-Green "==============================================="
     Write-Host ""
     Write-Host "Your recommendations are ready!"
+
+    # Show link to external watchlist HTML if it exists
+    $watchlistFile = Join-Path $ScriptRoot "recommendations\external\watchlist.html"
+    if (Test-Path $watchlistFile) {
+        Write-Host ""
+        Write-Host "View external watchlist: " -NoNewline
+        Write-Cyan "file:///$($watchlistFile -replace '\\', '/')"
+    }
+
+    Write-Host ""
     Write-Host "Check your Plex library for updated collections."
     Write-Host ""
 }

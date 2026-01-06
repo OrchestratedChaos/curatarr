@@ -2,6 +2,24 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.7] - 2026-01-05
+
+### Added
+- Iterative discovery for external recommendations
+  - Automatically expands search if initial pass doesn't hit target count (50 movies, 20 shows)
+  - Up to 5 iterations: each explores new genre/keyword ranges and deeper TMDB pages
+  - Iterations 2+ include "similar-to" queries based on top-scored items found
+  - Configurable via `max_iterations` and `min_votes` in `external_recommendations` config
+- New `fetch_similar_from_tmdb()` helper for finding content similar to high-scoring matches
+
+### Changed
+- Lowered output vote threshold from 200 to 50 for external recommendations
+  - Profile score is the quality signal; 50 votes just filters garbage TMDB entries
+  - Hidden gems that match your profile no longer excluded by popularity filter
+- Default `movie_limit` increased from 30 to 50 in example config
+- Default `min_relevance_score` increased from 0.25 to 0.65 (matches quality bar threshold)
+- End-of-run message now includes clickable link to external watchlist HTML (if generated)
+
 ## [2.5.6] - 2026-01-05
 
 ### Fixed

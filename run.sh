@@ -1454,6 +1454,15 @@ main() {
     echo -e "${GREEN}===============================================${NC}"
     echo ""
     echo "Your recommendations are ready!"
+
+    # Show link to external watchlist HTML if it exists
+    local watchlist_file="$SCRIPT_DIR/recommendations/external/watchlist.html"
+    if [ -f "$watchlist_file" ]; then
+        echo ""
+        echo -e "View external watchlist: ${CYAN}file://$watchlist_file${NC}"
+    fi
+
+    echo ""
     echo "Check your Plex library for updated collections."
     echo ""
 }
