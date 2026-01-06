@@ -112,7 +112,6 @@ OUTPUT_MIN_VOTES = 50           # Filters garbage TMDB entries, profile score is
 
 # Iterative discovery settings
 MAX_DISCOVERY_ITERATIONS = 5    # How many discovery passes before giving up
-MIN_NEW_ITEMS_PER_ITERATION = 3 # Stop iterating if we find fewer than this
 
 # Legacy aliases for cache filtering (votes only, no rating gate)
 MIN_RATING = 0.0                # Don't filter by rating in cache
@@ -815,7 +814,9 @@ def find_similar_content_with_profile(
     exclude_genres: Optional[List[str]] = None,
     min_relevance_score: float = 0.65,
     config: Optional[Dict] = None,
-    exclude_imdb_ids: Optional[Set[str]] = None
+    exclude_imdb_ids: Optional[Set[str]] = None,
+    max_iterations: Optional[int] = None,
+    exclude_cached_ids: Optional[Set[int]] = None
 ) -> List[Dict]:
     """
     Find similar content NOT in library using profile-based scoring.
@@ -833,6 +834,8 @@ def find_similar_content_with_profile(
         min_relevance_score: Minimum score threshold (0-1)
         config: Config dict for weights
         exclude_imdb_ids: Set of IMDB IDs to exclude (e.g., Trakt watchlist)
+        max_iterations: Override max discovery iterations (None = use config/default)
+        exclude_cached_ids: Set of TMDB IDs already in cache (skip scoring)
 
     Returns:
         List of scored recommendations
@@ -845,9 +848,10 @@ def find_similar_content_with_profile(
         print(f"{YELLOW}No user profile data found{RESET}")
         return []
 
-    # Get iteration settings from config
+    # Get iteration settings from config (can be overridden by parameter)
     external_config = config.get('external_recommendations', {}) if config else {}
-    max_iterations = external_config.get('max_iterations', MAX_DISCOVERY_ITERATIONS)
+    if max_iterations is None:
+        max_iterations = external_config.get('max_iterations', MAX_DISCOVERY_ITERATIONS)
     min_votes = external_config.get('min_votes', OUTPUT_MIN_VOTES)
 
     # Get weights from config or use defaults
@@ -866,7 +870,7 @@ def find_similar_content_with_profile(
 
     # Track state across iterations
     quality_recs = []  # Items meeting quality bar
-    seen_ids = set()   # All TMDB IDs we've processed
+    seen_ids = set(exclude_cached_ids or set())  # Include cached IDs to skip
     scored_cache = {}  # tmdb_id -> scored item (avoid re-scoring)
 
     # Get Trakt candidates once (not per-iteration)
@@ -984,11 +988,6 @@ def find_similar_content_with_profile(
 
         print(f"  {CYAN}Iteration {iteration + 1}: {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}")
 
-        # Stop if diminishing returns
-        if new_quality_this_iteration < MIN_NEW_ITEMS_PER_ITERATION:
-            print(f"  Stopping early: only {new_quality_this_iteration} new items (< {MIN_NEW_ITEMS_PER_ITERATION} threshold)")
-            break
-
     print(f"  {GREEN}{len(quality_recs)} items meet quality bar (>={int(OUTPUT_MIN_SCORE*100)}% match, >={min_votes} votes){RESET}")
 
     # Take quality items only - no backfill with low-quality
@@ -1104,6 +1103,28 @@ def process_user(config, plex, username):
     if removed_ignored:
         print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
 
+    # Remove stale items (on list too long without being acquired)
+    stale_days = config.get('collections', {}).get('stale_removal_days', 7)
+    now = datetime.now()
+    stale_removed = 0
+
+    for tmdb_id, item in list(movie_cache.items()):
+        if 'added_date' in item:
+            added = datetime.fromisoformat(item['added_date'])
+            if (now - added).days > stale_days:
+                del movie_cache[tmdb_id]
+                stale_removed += 1
+
+    for tmdb_id, item in list(show_cache.items()):
+        if 'added_date' in item:
+            added = datetime.fromisoformat(item['added_date'])
+            if (now - added).days > stale_days:
+                del show_cache[tmdb_id]
+                stale_removed += 1
+
+    if stale_removed:
+        print(f"{YELLOW}Removed {stale_removed} stale items (>{stale_days} days on list){RESET}")
+
     # Load user profiles from cache (FAST) or build from scratch (SLOW)
     # Cache is pre-computed by internal recommenders with proper weighting
     movie_profile = load_user_profile_from_cache(config, username, 'movie')
@@ -1146,13 +1167,24 @@ def process_user(config, plex, username):
     if exclude_genres:
         print(f"Excluding genres: {', '.join(exclude_genres)}")
 
-    # Get Trakt watchlist exclusions if enabled
+    # Check cache health and calculate deficit
+    quality_movies = [m for m in movie_cache.values() if m.get('score', 0) >= min_relevance]
+    quality_shows = [s for s in show_cache.values() if s.get('score', 0) >= min_relevance]
+
+    movie_deficit = max(0, movie_limit - len(quality_movies))
+    show_deficit = max(0, show_limit - len(quality_shows))
+
+    # Collect cached TMDB IDs for exclusion (avoids re-scoring existing items)
+    cached_movie_ids = {int(tid) for tid in movie_cache.keys()}
+    cached_show_ids = {int(tid) for tid in show_cache.keys()}
+
+    # Get Trakt watchlist exclusions if enabled (only if we need discovery)
     trakt_config = config.get('trakt', {})
     import_config = trakt_config.get('import', {})
     exclude_movie_imdb_ids = set()
     exclude_show_imdb_ids = set()
 
-    if import_config.get('exclude_watchlist', True):
+    if (movie_deficit > 0 or show_deficit > 0) and import_config.get('exclude_watchlist', True):
         trakt_client = get_authenticated_trakt_client(config)
         if trakt_client:
             print("Loading Trakt watchlist for exclusion...")
@@ -1161,29 +1193,43 @@ def process_user(config, plex, username):
             if exclude_movie_imdb_ids or exclude_show_imdb_ids:
                 print(f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist")
 
-    new_movies = find_similar_content_with_profile(
-        tmdb_api_key,
-        movie_profile,
-        library_movies,
-        'movie',
-        limit=movie_limit,
-        exclude_genres=exclude_genres,
-        min_relevance_score=min_relevance,
-        config=config,
-        exclude_imdb_ids=exclude_movie_imdb_ids
-    )
+    # Movie discovery - skip if cache is full, otherwise find deficit items
+    if movie_deficit == 0:
+        print(f"{GREEN}Movie cache healthy ({len(quality_movies)} quality items), skipping discovery{RESET}")
+        new_movies = []
+    else:
+        print(f"{CYAN}Movie cache needs {movie_deficit} items, discovering...{RESET}")
+        new_movies = find_similar_content_with_profile(
+            tmdb_api_key,
+            movie_profile,
+            library_movies,
+            'movie',
+            limit=movie_deficit,  # Only find what we need
+            exclude_genres=exclude_genres,
+            min_relevance_score=min_relevance,
+            config=config,
+            exclude_imdb_ids=exclude_movie_imdb_ids,
+            exclude_cached_ids=cached_movie_ids  # Skip items already in cache
+        )
 
-    new_shows = find_similar_content_with_profile(
-        tmdb_api_key,
-        show_profile,
-        library_shows,
-        'tv',
-        limit=show_limit,
-        exclude_genres=exclude_genres,
-        min_relevance_score=min_relevance,
-        config=config,
-        exclude_imdb_ids=exclude_show_imdb_ids
-    )
+    # Show discovery - skip if cache is full, otherwise find deficit items
+    if show_deficit == 0:
+        print(f"{GREEN}Show cache healthy ({len(quality_shows)} quality items), skipping discovery{RESET}")
+        new_shows = []
+    else:
+        print(f"{CYAN}Show cache needs {show_deficit} items, discovering...{RESET}")
+        new_shows = find_similar_content_with_profile(
+            tmdb_api_key,
+            show_profile,
+            library_shows,
+            'tv',
+            limit=show_deficit,  # Only find what we need
+            exclude_genres=exclude_genres,
+            min_relevance_score=min_relevance,
+            config=config,
+            exclude_imdb_ids=exclude_show_imdb_ids,
+            exclude_cached_ids=cached_show_ids  # Skip items already in cache
+        )
 
     # Merge with existing cache - UPDATE scores for existing items, ADD new ones
     for movie in new_movies:

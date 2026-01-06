@@ -2,6 +2,19 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.8] - 2026-01-06
+
+### Changed
+- External recommendations now skip discovery when cache is healthy
+  - If cache has enough quality items (>= target), discovery is skipped entirely
+  - Removes stale items (on list longer than `stale_removal_days`) before checking
+  - Dramatically faster subsequent runs when cache is already populated
+- Discovery now only finds what's needed (deficit items), not full limit
+  - Excludes cached items so function finds truly NEW items
+  - Runs iterations until target reached OR max_iterations
+  - Much faster when cache just needs a few items topped up
+- Trakt watchlist exclusion only loaded when discovery is needed
+
 ## [2.5.7] - 2026-01-05
 
 ### Added
