@@ -31,14 +31,14 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 ### For Acquisition (What to Get)
 - **External watchlists** — Content NOT in your library that users would love
 - **Streaming service grouping** — "Available on Netflix" vs "Need to acquire"
-- **Sonarr integration** — Push TV recommendations directly to Sonarr
-- **Radarr integration** — Push movie recommendations directly to Radarr
+- **Sonarr/Radarr integration** — Push recommendations directly for download
+- **Trakt/Simkl/MDBList export** — Sync to tracking services and list managers
 - **Auto-cleanup** — Items removed when they appear in your library
 - **Genre balancing** — Matches user viewing habits proportionally
 
 ### For You (Simple & Robust)
 - **One command** — `./run.sh` handles everything
-- **Single config file** — All settings in one place
+- **Modular config** — Main settings plus optional integration files
 - **Auto-updates** — Pulls latest code from GitHub on each run (optional)
 - **Smart caching** — Auto-clears incompatible caches after updates
 - **Auto-scheduling** — Optional daily cron job
@@ -95,20 +95,21 @@ Collections automatically appear:
 Pin them to your home screen. They update daily.
 
 ### External Watchlists
-Interactive HTML files with export buttons:
+Interactive HTML file with export buttons:
 ```
-recommendations/external/john_watchlist.html
+recommendations/external/watchlist.html
 
+- All users combined in one interface
 - Select which movies/shows to export
-- Click "Export to Radarr" → downloads IMDB IDs for import
-- Click "Export to Sonarr" → downloads IMDB IDs for import
+- Click "Export to Radarr/Sonarr" → downloads IMDB IDs
 - Grouped by streaming service availability
 - Auto-opens in browser after run (configurable)
 ```
 
-Also generates markdown for reference:
+Also generates per-user markdown for reference:
 ```
 recommendations/external/john_watchlist.md
+recommendations/external/sarah_watchlist.md
 ```
 
 ---
@@ -190,6 +191,38 @@ external_recommendations:
   min_relevance_score: 0.25   # See note below
   auto_open_html: false       # Open HTML watchlist in browser after run
 ```
+
+### Trakt Integration (Optional)
+
+Full integration with Trakt for watch history import, discovery, and list export:
+
+```yaml
+# config/trakt.yml
+enabled: true
+client_id: YOUR_TRAKT_CLIENT_ID
+client_secret: YOUR_TRAKT_CLIENT_SECRET
+access_token: (filled by setup wizard)
+
+# Import watch history from Trakt
+import:
+  enabled: true
+  include_ratings: true
+
+# Discovery from Trakt trending/popular
+discovery:
+  enabled: true
+  include_trending: true
+  include_popular: true
+
+# Export recommendations to Trakt lists
+export:
+  enabled: true
+  auto_sync: true
+  user_mode: mapping
+  plex_users: [your_username]
+```
+
+**Setup:** Run `./run.sh` and follow Step 6, or manually create `config/trakt.yml`.
 
 ### Sonarr Integration (Optional)
 
@@ -353,14 +386,21 @@ Weighted by recency (recent watches count more), user ratings (5-star content co
 
 ```
 curatarr/
+├── config/                  # Configuration files
+│   ├── config.yml           # Main config (Plex, TMDB, users)
+│   ├── tuning.yml           # Scoring weights and display options
+│   ├── trakt.yml            # Trakt integration
+│   ├── sonarr.yml           # Sonarr integration
+│   ├── radarr.yml           # Radarr integration
+│   ├── mdblist.yml          # MDBList integration
+│   └── simkl.yml            # Simkl integration
 ├── recommenders/
 │   ├── movie.py             # Movie recommendations
 │   ├── tv.py                # TV show recommendations
 │   ├── external.py          # External watchlist generator
 │   └── base.py              # Shared base classes
-├── utils/                   # Shared utilities (11 modules, incl. sonarr.py)
-├── tests/                   # Unit tests
-├── config.yml               # Your configuration
+├── utils/                   # Shared utilities (20 modules)
+├── tests/                   # Unit tests (840+)
 ├── run.sh                   # Main entry point (macOS/Linux)
 ├── run.ps1                  # Main entry point (Windows)
 ├── Dockerfile               # Docker image definition
@@ -430,7 +470,7 @@ tail -100 logs/daily-run.log
 ./run.sh --debug
 
 # Verify config
-python3 -c "import yaml; print(yaml.safe_load(open('config.yml')))"
+python3 -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
 ```
 
 ### Windows (PowerShell)
@@ -442,7 +482,7 @@ Get-Content logs/daily-run.log -Tail 100
 .\run.ps1 -Debug
 
 # Verify config
-python -c "import yaml; print(yaml.safe_load(open('config.yml')))"
+python -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
 ```
 
 **Common issues:**
@@ -450,7 +490,7 @@ python -c "import yaml; print(yaml.safe_load(open('config.yml')))"
 - Plex connection failed → Check URL and token
 - No recommendations → User needs more watch history
 - "Cache outdated" message → Normal after updates, rebuilds automatically
-- Want to disable auto-update → Set `general.auto_update: false` in config.yml
+- Want to disable auto-update → Set `general.auto_update: false` in config/config.yml
 
 ### Docker
 ```bash
@@ -498,11 +538,11 @@ Have an idea for Curatarr? We track feature requests as GitHub Issues and **your
 
 Inspired by [netplexflix's](https://github.com/netplexflix) Movie/TV Recommendations for Plex. This project takes the core concept of TMDB-based similarity scoring and rebuilds it with:
 
-- Simplified architecture (4 files vs complex nested structure)
+- Clean modular architecture
 - Multi-user support with per-user preferences
 - External watchlists with streaming service grouping
 - Automated collection management
-- Single unified configuration
+- Integration ecosystem (Trakt, Simkl, Sonarr, Radarr, MDBList)
 
 ---
 
