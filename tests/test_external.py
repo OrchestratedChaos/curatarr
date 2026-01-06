@@ -247,7 +247,8 @@ class TestGenerateCombinedHtml:
                 content = f.read()
                 assert 'Test User' in content
                 assert 'Test Movie' in content
-                assert 'Plex Watchlist' in content
+                assert 'CURATARR' in content
+                assert 'Watchlist' in content
 
     def test_html_contains_tabs_for_multiple_users(self):
         mock_get_imdb = lambda api_key, tmdb_id, media_type: 'tt1234567'

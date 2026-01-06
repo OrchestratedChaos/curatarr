@@ -303,210 +303,483 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plex Watchlist</title>
+    <title>Curatarr Watchlist</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     <style>
         * {{ box-sizing: border-box; }}
+
+        html {{
+            background: #080808;
+        }}
+
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             max-width: 1200px;
             margin: 0 auto;
-            padding: 20px;
-            background: linear-gradient(135deg, #0d0d0d 0%, #1a1a1a 50%, #0d0d0d 100%);
-            color: #e8e8e8;
+            padding: 50px 70px 40px;
+            background: linear-gradient(180deg, #0c0c0c 0%, #111 50%, #0c0c0c 100%);
+            color: #e0e0e0;
             min-height: 100vh;
+            position: relative;
+            line-height: 1.6;
         }}
-        h1 {{
-            color: #d4af37;
-            margin-bottom: 5px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-            font-size: 2em;
+
+        /* Draped curtain left */
+        body::before {{
+            content: '';
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 60px;
+            height: 100%;
+            background:
+                radial-gradient(ellipse 80% 50% at 100% 0%, transparent 40%, rgba(0,0,0,0.4) 100%),
+                linear-gradient(90deg,
+                    #2a0000 0%,
+                    #4a0000 15%,
+                    #6b0000 30%,
+                    #8b0000 45%,
+                    #7a0000 55%,
+                    #5a0000 70%,
+                    #3a0000 85%,
+                    #1a0000 100%);
+            box-shadow:
+                inset -15px 0 40px rgba(0,0,0,0.6),
+                8px 0 30px rgba(0,0,0,0.5);
+            z-index: 100;
+            border-radius: 0 0 40% 0;
         }}
-        h2 {{
-            background: linear-gradient(90deg, #8b0000 0%, #660000 100%);
-            color: #d4af37;
-            padding: 12px 15px;
-            border-radius: 3px;
-            margin-top: 30px;
-            border-left: 4px solid #d4af37;
+
+        /* Draped curtain right */
+        body::after {{
+            content: '';
+            position: fixed;
+            right: 0;
+            top: 0;
+            width: 60px;
+            height: 100%;
+            background:
+                radial-gradient(ellipse 80% 50% at 0% 0%, transparent 40%, rgba(0,0,0,0.4) 100%),
+                linear-gradient(270deg,
+                    #2a0000 0%,
+                    #4a0000 15%,
+                    #6b0000 30%,
+                    #8b0000 45%,
+                    #7a0000 55%,
+                    #5a0000 70%,
+                    #3a0000 85%,
+                    #1a0000 100%);
+            box-shadow:
+                inset 15px 0 40px rgba(0,0,0,0.6),
+                -8px 0 30px rgba(0,0,0,0.5);
+            z-index: 100;
+            border-radius: 0 0 0 40%;
+        }}
+
+        /* Draped valance top */
+        .curtain-top {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 30px;
+            background: linear-gradient(180deg,
+                #5a0000 0%,
+                #7b0000 40%,
+                #6a0000 70%,
+                #4a0000 100%);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+            z-index: 101;
+        }}
+        .curtain-top::after {{
+            content: '';
+            position: absolute;
+            bottom: -20px;
+            left: 0;
+            right: 0;
+            height: 20px;
+            background:
+                radial-gradient(ellipse 60px 20px at 30px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 90px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 150px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 210px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 270px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 330px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 390px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 450px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 510px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 570px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 630px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 690px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 750px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 810px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 870px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 930px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 990px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1050px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1110px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1170px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1230px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1290px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1350px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1410px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1470px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1530px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1590px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1650px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1710px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1770px 0px, #4a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1830px 0px, #5a0000 70%, transparent 70%),
+                radial-gradient(ellipse 60px 20px at 1890px 0px, #4a0000 70%, transparent 70%);
+            filter: drop-shadow(0 3px 4px rgba(0,0,0,0.4));
+        }}
+
+        .page-wrapper {{
+            position: relative;
+            z-index: 1;
+        }}
+
+        /* Branding */
+        .brand {{
+            text-align: center;
+            margin-bottom: 40px;
+            padding-top: 20px;
+        }}
+        .brand h1 {{
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 3.2em;
+            margin: 0;
+            background: linear-gradient(180deg, #ffd700 0%, #d4af37 30%, #b8960c 60%, #d4af37 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 8px;
+            font-weight: 700;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+        }}
+        .brand .subtitle {{
+            color: #999;
+            font-size: 0.9em;
+            letter-spacing: 6px;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            font-size: 1.1em;
+            margin-top: 8px;
+            font-weight: 500;
+        }}
+        .brand .timestamp {{
+            color: #666;
+            font-size: 0.8em;
+            margin-top: 12px;
+        }}
+
+        h2 {{
+            background: linear-gradient(135deg, #8b0000 0%, #6a0000 50%, #580000 100%);
+            color: #f0d060;
+            padding: 16px 22px;
+            border-radius: 12px;
+            margin-top: 40px;
+            border: none;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-size: 0.95em;
+            font-weight: 600;
+            box-shadow:
+                0 8px 25px rgba(0,0,0,0.4),
+                inset 0 1px 0 rgba(255,255,255,0.1),
+                inset 0 -2px 5px rgba(0,0,0,0.2);
         }}
         h3 {{
-            background: #1c1c1c;
-            color: #c0c0c0;
-            padding: 10px 12px;
-            border-radius: 3px;
-            border-left: 3px solid #8b0000;
-            font-size: 0.95em;
+            background: linear-gradient(135deg, #1e1e1e 0%, #282828 100%);
+            color: #ccc;
+            padding: 14px 18px;
+            border-radius: 10px;
+            border: 1px solid #333;
+            font-size: 0.9em;
+            font-weight: 600;
+            box-shadow:
+                0 4px 15px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.05);
         }}
         h4 {{
             color: #d4af37;
-            margin: 15px 0 8px 0;
-            font-size: 0.9em;
+            margin: 20px 0 12px 0;
+            font-size: 0.85em;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 1.5px;
+            font-weight: 600;
         }}
-        .header {{
+
+        .header-actions {{
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 35px;
             flex-wrap: wrap;
-            gap: 15px;
-            margin-bottom: 25px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid #333;
-        }}
-        .export-buttons {{
-            display: flex;
-            gap: 10px;
         }}
         .export-btn {{
-            background: linear-gradient(180deg, #8b0000 0%, #5c0000 100%);
-            color: #d4af37;
-            border: 1px solid #d4af37;
-            padding: 12px 24px;
-            border-radius: 3px;
+            background: linear-gradient(180deg, #a01010 0%, #8b0000 40%, #6a0000 100%);
+            color: #ffd700;
+            border: none;
+            padding: 14px 32px;
+            border-radius: 50px;
             cursor: pointer;
-            font-size: 13px;
-            font-weight: bold;
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            transition: all 0.2s ease;
+            letter-spacing: 1.5px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow:
+                0 6px 20px rgba(139, 0, 0, 0.4),
+                0 2px 5px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.15),
+                inset 0 -2px 10px rgba(0,0,0,0.2);
+            position: relative;
+            overflow: hidden;
+        }}
+        .export-btn::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            transition: left 0.5s ease;
         }}
         .export-btn:hover {{
-            background: linear-gradient(180deg, #a00000 0%, #700000 100%);
-            box-shadow: 0 0 10px rgba(212, 175, 55, 0.3);
+            transform: translateY(-3px);
+            box-shadow:
+                0 10px 30px rgba(139, 0, 0, 0.5),
+                0 4px 10px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.2);
+        }}
+        .export-btn:hover::before {{
+            left: 100%;
+        }}
+        .export-btn:active {{
+            transform: translateY(-1px);
+            box-shadow:
+                0 4px 15px rgba(139, 0, 0, 0.4),
+                inset 0 2px 5px rgba(0,0,0,0.2);
         }}
         .export-btn.sonarr {{
-            background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 100%);
+            background: linear-gradient(180deg, #404040 0%, #2d2d2d 40%, #1a1a1a 100%);
+            color: #e0e0e0;
+            box-shadow:
+                0 6px 20px rgba(0, 0, 0, 0.4),
+                0 2px 5px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.1),
+                inset 0 -2px 10px rgba(0,0,0,0.2);
         }}
         .export-btn.sonarr:hover {{
-            background: linear-gradient(180deg, #3a3a3a 0%, #2a2a2a 100%);
+            box-shadow:
+                0 10px 30px rgba(0, 0, 0, 0.5),
+                0 4px 10px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.15);
         }}
         .export-btn.trakt {{
-            background: linear-gradient(180deg, #ed1c24 0%, #b71c1c 100%);
+            background: linear-gradient(180deg, #ff3333 0%, #ed1c24 40%, #c41920 100%);
             color: #fff;
-            border-color: #ed1c24;
+            box-shadow:
+                0 6px 20px rgba(237, 28, 36, 0.4),
+                0 2px 5px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.2),
+                inset 0 -2px 10px rgba(0,0,0,0.2);
         }}
         .export-btn.trakt:hover {{
-            background: linear-gradient(180deg, #ff3333 0%, #ed1c24 100%);
-            box-shadow: 0 0 10px rgba(237, 28, 36, 0.4);
+            box-shadow:
+                0 10px 30px rgba(237, 28, 36, 0.5),
+                0 4px 10px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.25);
         }}
+
         .tabs {{
             display: flex;
-            gap: 3px;
-            margin-bottom: 25px;
+            gap: 8px;
+            margin-bottom: 35px;
             flex-wrap: wrap;
-            background: #111;
-            padding: 5px;
-            border-radius: 5px;
+            background: linear-gradient(180deg, #0a0a0a 0%, #0f0f0f 100%);
+            padding: 10px;
+            border-radius: 16px;
+            box-shadow:
+                inset 0 2px 10px rgba(0,0,0,0.6),
+                0 4px 15px rgba(0,0,0,0.3);
         }}
         .tab-btn {{
-            background: #1a1a1a;
+            background: linear-gradient(180deg, #1c1c1c 0%, #151515 100%);
             color: #888;
             border: none;
-            padding: 12px 24px;
-            border-radius: 3px;
+            padding: 14px 28px;
+            border-radius: 12px;
             cursor: pointer;
-            font-size: 13px;
-            font-weight: bold;
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 1px;
-            transition: all 0.2s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         }}
         .tab-btn:hover {{
-            background: #2a2a2a;
-            color: #c0c0c0;
+            background: linear-gradient(180deg, #282828 0%, #1f1f1f 100%);
+            color: #bbb;
+            transform: translateY(-1px);
         }}
         .tab-btn.active {{
-            background: linear-gradient(180deg, #8b0000 0%, #5c0000 100%);
-            color: #d4af37;
+            background: linear-gradient(180deg, #a01010 0%, #8b0000 40%, #6a0000 100%);
+            color: #ffd700;
+            box-shadow:
+                0 6px 20px rgba(139, 0, 0, 0.5),
+                inset 0 1px 0 rgba(255,255,255,0.1);
         }}
         .tab-panel {{ display: none; }}
-        .tab-panel.active {{ display: block; }}
+        .tab-panel.active {{ display: block; animation: fadeIn 0.4s ease; }}
+
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: translateY(15px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+
         table {{
             width: 100%;
-            border-collapse: collapse;
-            margin: 10px 0 25px 0;
-            background: #141414;
-            border-radius: 3px;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 15px 0 35px 0;
+            background: linear-gradient(180deg, #181818 0%, #141414 50%, #111 100%);
+            border-radius: 16px;
             overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            box-shadow:
+                0 10px 40px rgba(0,0,0,0.5),
+                0 2px 10px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.03);
         }}
         th, td {{
-            padding: 12px 10px;
+            padding: 16px 14px;
             text-align: left;
-            border-bottom: 1px solid #2a2a2a;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
         }}
         th {{
-            background: #1c1c1c;
+            background: linear-gradient(180deg, #222 0%, #1a1a1a 100%);
             color: #d4af37;
-            font-size: 0.8em;
+            font-size: 0.7em;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.5px;
+            font-weight: 600;
         }}
-        tr:hover {{ background: #1f1f1f; }}
-        td:first-child, th:first-child {{ width: 40px; text-align: center; }}
+        th:first-child {{ border-radius: 16px 0 0 0; }}
+        th:last-child {{ border-radius: 0 16px 0 0; }}
+        tr {{
+            transition: all 0.2s ease;
+        }}
+        tr:hover {{
+            background: rgba(139, 0, 0, 0.1);
+        }}
+        tr:last-child td {{
+            border-bottom: none;
+        }}
+        tr:last-child td:first-child {{ border-radius: 0 0 0 16px; }}
+        tr:last-child td:last-child {{ border-radius: 0 0 16px 0; }}
+        td:first-child, th:first-child {{ width: 50px; text-align: center; }}
         input[type="checkbox"] {{
-            width: 16px;
-            height: 16px;
+            width: 18px;
+            height: 18px;
             cursor: pointer;
             accent-color: #8b0000;
+            border-radius: 4px;
         }}
-        .timestamp {{ color: #666; font-size: 12px; }}
+
         .instructions {{
-            background: #141414;
-            padding: 20px;
-            border-radius: 3px;
-            margin-top: 40px;
-            border: 1px solid #2a2a2a;
+            background: linear-gradient(180deg, #181818 0%, #121212 100%);
+            padding: 30px 35px;
+            border-radius: 20px;
+            margin-top: 60px;
+            border: 1px solid rgba(255,255,255,0.05);
+            box-shadow:
+                0 10px 40px rgba(0,0,0,0.4),
+                inset 0 1px 0 rgba(255,255,255,0.03);
         }}
         .instructions h3 {{
             background: none;
             border: none;
             padding: 0;
             color: #d4af37;
-            margin-bottom: 15px;
+            margin-bottom: 20px;
+            box-shadow: none;
+            font-size: 1.1em;
         }}
         .instructions ul {{
             margin: 0;
-            padding-left: 20px;
+            padding-left: 24px;
             color: #999;
         }}
-        .instructions li {{ margin-bottom: 8px; }}
-        .instructions strong {{ color: #c0c0c0; }}
+        .instructions li {{
+            margin-bottom: 12px;
+            line-height: 1.7;
+        }}
+        .instructions strong {{
+            color: #ccc;
+            font-weight: 600;
+        }}
+
+        .footer {{
+            text-align: center;
+            margin-top: 50px;
+            padding-top: 30px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            color: #555;
+            font-size: 0.8em;
+            letter-spacing: 1px;
+        }}
+        .footer a {{
+            color: #8b0000;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }}
+        .footer a:hover {{
+            color: #d4af37;
+        }}
     </style>
 </head>
 <body>
-    <div class="header">
-        <div>
-            <h1>Plex Watchlist</h1>
-            <p class="timestamp">Last updated: {now.strftime('%Y-%m-%d %H:%M')}</p>
+    <div class="curtain-top"></div>
+
+    <div class="page-wrapper">
+        <div class="brand">
+            <h1>CURATARR</h1>
+            <div class="subtitle">Watchlist</div>
+            <div class="timestamp">Updated {now.strftime('%B %d, %Y at %H:%M')}</div>
         </div>
-        <div class="export-buttons">
+
+        <div class="header-actions">
             <button class="export-btn" onclick="exportRadarr()">Export to Radarr (<span id="movie-count">0</span>)</button>
             <button class="export-btn sonarr" onclick="exportSonarr()">Export to Sonarr (<span id="show-count">0</span>)</button>
             <button class="export-btn trakt" onclick="exportTrakt()">Export for Trakt (<span id="total-count">0</span>)</button>
         </div>
-    </div>
 
-    <div class="tabs">
-        {tabs_html}
-    </div>
+        <div class="tabs">
+            {tabs_html}
+        </div>
 
-    {panels_html}
+        {panels_html}
 
-    <div class="instructions">
-        <h3>How to Use</h3>
-        <ul>
-            <li>Click a user tab to view their recommendations</li>
-            <li>Check the items you want to export</li>
-            <li><strong>Radarr:</strong> Download IMDB IDs for selected movies → import via Lists</li>
-            <li><strong>Sonarr:</strong> Download IMDB IDs for selected shows → import via Lists</li>
-            <li><strong>Trakt:</strong> Download IMDB IDs for all selected → paste into Trakt list</li>
-            <li>Exports include selections from ALL users, not just the active tab</li>
-        </ul>
+        <div class="instructions">
+            <h3>How to Use</h3>
+            <ul>
+                <li>Click a user tab to view their personalized recommendations</li>
+                <li>Check the items you want to export</li>
+                <li><strong>Radarr:</strong> Download IMDB IDs for selected movies and import via Lists</li>
+                <li><strong>Sonarr:</strong> Download IMDB IDs for selected shows and import via Lists</li>
+                <li><strong>Trakt:</strong> Download IMDB IDs for all selected items to paste into a Trakt list</li>
+                <li>Exports include selections from all users, not just the active tab</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            Powered by <a href="https://github.com/OrchestratedChaos/curatarr" target="_blank">Curatarr</a>
+        </div>
     </div>
 
     <script>

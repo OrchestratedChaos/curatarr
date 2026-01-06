@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.6] - 2026-01-05
+
+### Fixed
+- Sonarr and Radarr exports failing with `'str' object has no attribute 'get'`
+  - Bug caused by nested categorized structure not being properly flattened
+
+### Changed
+- External recommender console output now matches internal recommender style
+  - Added color to key status lines (CYAN for progress, GREEN for success)
+  - Removed checkmarks and dashed separators from status messages
+  - Section headers now use `=== Title ===` format
+- Redesigned HTML watchlist page with polished theater aesthetic
+  - Added red velvet curtains on left, right, and top (valance)
+  - New "CURATARR Watchlist" branding with gold gradient text
+  - Enhanced depth with layered shadows and subtle animations
+  - Footer with "Powered by Curatarr" attribution
+
 ## [2.5.5] - 2026-01-05
 
 ### Added
