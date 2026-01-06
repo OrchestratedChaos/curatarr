@@ -1052,7 +1052,7 @@ def load_ignore_list(display_name: str) -> Set[str]:
 
 def process_user(config, plex, username):
     """Process external recommendations for a single user"""
-    user_prefs = config['users']['preferences'].get(username, {})
+    user_prefs = config.get('users', {}).get('preferences', {}).get(username, {})
     display_name = user_prefs.get('display_name', username)
 
     print(f"\n{GREEN}Processing external recommendations for: {display_name}{RESET}")
