@@ -112,6 +112,7 @@ OUTPUT_MIN_VOTES = 50           # Filters garbage TMDB entries, profile score is
 
 # Iterative discovery settings
 MAX_DISCOVERY_ITERATIONS = 5    # How many discovery passes before giving up
+THRESHOLD_FLOOR = 0.25          # Minimum threshold for last-ditch iteration
 
 # Legacy aliases for cache filtering (votes only, no rating gate)
 MIN_RATING = 0.0                # Don't filter by rating in cache
@@ -652,23 +653,27 @@ def categorize_by_streaming_service(
             # Not available on any streaming service
             result['acquire'].append(item)
         else:
-            # Check which services have it
-            user_has_it = False
+            # Check which services have it - add to FIRST matching service only
+            # Priority: user's services first, then other services
+            placed = False
+
+            # First try user's services
             for service in providers:
                 if service in user_services:
-                    # Available on user's service
                     if service not in result['user_services']:
                         result['user_services'][service] = []
                     result['user_services'][service].append(item)
-                    user_has_it = True
-                else:
-                    # Available on other service
-                    if service not in result['other_services']:
-                        result['other_services'][service] = []
-                    result['other_services'][service].append(item)
+                    placed = True
+                    break  # Only add to ONE service
 
-            # If not on any of user's services, it's in other_services only
-            # (already handled above)
+            # If not on user's services, add to first other service
+            if not placed:
+                for service in providers:
+                    if service not in user_services:
+                        if service not in result['other_services']:
+                            result['other_services'][service] = []
+                        result['other_services'][service].append(item)
+                        break  # Only add to ONE service
 
     return result
 
@@ -895,6 +900,16 @@ def find_similar_content_with_profile(
             print(f"  {GREEN}Target of {limit} reached after {iteration} iteration(s){RESET}")
             break
 
+        # Progressive threshold relaxation: drop 10% each iteration after iter 2, floor at iter 5
+        if iteration < 2:
+            iteration_threshold = min_relevance_score
+        elif iteration == max_iterations - 1:  # Last iteration - drop to floor
+            iteration_threshold = THRESHOLD_FLOOR
+        else:
+            # Iterations 2, 3, etc: drop 10% each
+            drops = iteration - 1
+            iteration_threshold = max(min_relevance_score - (drops * 0.10), THRESHOLD_FLOOR)
+
         # Discover candidates for this iteration
         candidates = discover_candidates_by_profile(
             tmdb_api_key,
@@ -976,8 +991,8 @@ def find_similar_content_with_profile(
                 }
                 scored_cache[candidate_id] = scored_item
 
-                # Check if meets quality bar
-                if score >= OUTPUT_MIN_SCORE and scored_item['vote_count'] >= min_votes:
+                # Check if meets quality bar (threshold relaxes in later iterations)
+                if score >= iteration_threshold and scored_item['vote_count'] >= min_votes:
                     quality_recs.append(scored_item)
                     new_quality_this_iteration += 1
 
@@ -986,9 +1001,9 @@ def find_similar_content_with_profile(
         # Re-sort quality_recs after adding new items
         quality_recs.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
 
-        print(f"  {CYAN}Iteration {iteration + 1}: {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}")
+        print(f"  {CYAN}Iteration {iteration + 1} ({iteration_threshold:.0%} threshold): {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}")
 
-    print(f"  {GREEN}{len(quality_recs)} items meet quality bar (>={int(OUTPUT_MIN_SCORE*100)}% match, >={min_votes} votes){RESET}")
+    print(f"  {GREEN}{len(quality_recs)} items meet quality bar (>={min_votes} votes){RESET}")
 
     # Take quality items only - no backfill with low-quality
     final_recs = quality_recs[:limit]
@@ -1382,11 +1397,39 @@ def main():
             log_error(f"Error processing {username}: {e}")
             traceback.print_exc()
 
+    # Build shared counts: how many users want each item
+    movie_counts = {}  # tmdb_id -> count
+    show_counts = {}
+    total_users = len(all_users_data)
+
+    for user_data in all_users_data:
+        # Count movies across all categories
+        for category in ['user_services', 'other_services']:
+            for service_items in user_data.get('movies_categorized', {}).get(category, {}).values():
+                for item in service_items:
+                    tmdb_id = str(item.get('tmdb_id'))
+                    movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
+        for item in user_data.get('movies_categorized', {}).get('acquire', []):
+            tmdb_id = str(item.get('tmdb_id'))
+            movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
+        # Count shows across all categories
+        for category in ['user_services', 'other_services']:
+            for service_items in user_data.get('shows_categorized', {}).get(category, {}).values():
+                for item in service_items:
+                    tmdb_id = str(item.get('tmdb_id'))
+                    show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
+        for item in user_data.get('shows_categorized', {}).get('acquire', []):
+            tmdb_id = str(item.get('tmdb_id'))
+            show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
+
     # Generate combined HTML with all users
     output_dir = os.path.join(project_root, 'recommendations', 'external')
 
     if all_users_data:
-        html_file = generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id)
+        html_file = generate_combined_html(
+            all_users_data, output_dir, tmdb_api_key, get_imdb_id,
+            movie_counts=movie_counts, show_counts=show_counts, total_users=total_users
+        )
         print(f"{GREEN}Combined watchlist generated!{RESET}")
     else:
         html_file = None

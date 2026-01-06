@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.6.0] - 2026-01-06
+
+### Added
+- Shared count badges on external watchlist HTML
+  - Shows how many users have each movie/show on their list (e.g., "4/6")
+  - Higher count = higher priority to acquire
+- Progressive threshold relaxation for discovery iterations
+  - Iterations 1-2: use configured threshold (default 65%)
+  - Iteration 3: drops 10% (55%)
+  - Iteration 4: drops 10% more (45%)
+  - Iteration 5: drops to 25% floor
+  - Helps fill lists when strict threshold finds few matches
+
+### Fixed
+- Movies appearing multiple times in same user's recommendations
+  - Now places each item in ONE streaming service bucket only
+
 ## [2.5.9] - 2026-01-06
 
 ### Fixed
