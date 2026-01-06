@@ -49,6 +49,7 @@ from utils import (
     create_sonarr_client, SonarrAPIError,
     create_radarr_client, RadarrAPIError,
     create_mdblist_client, MDBListAPIError,
+    create_simkl_client, SimklAPIError, SimklAuthError,
 )
 
 # Import output generation
@@ -1956,6 +1957,126 @@ def export_to_mdblist(config, all_users_data, tmdb_api_key):
             log_error(f"Failed to export {display_name} to MDBList: {e}")
 
 
+def export_to_simkl(config, all_users_data, tmdb_api_key):
+    """
+    Export recommendations to Simkl watchlist.
+
+    Adds recommendations to user's Simkl "Plan to Watch" list.
+
+    Config options:
+        simkl.enabled: Master switch for Simkl integration
+        simkl.export.enabled: Enable export feature
+        simkl.export.auto_sync: Auto-export on each run (default: false)
+        simkl.export.user_mode: How to handle multiple Plex users
+        simkl.export.plex_users: List of Plex usernames to export (for mapping mode)
+    """
+    logger.debug("export_to_simkl called")
+    simkl_config = config.get('simkl', {})
+
+    # Check if Simkl is enabled
+    if not simkl_config.get('enabled', False):
+        return
+
+    export_config = simkl_config.get('export', {})
+    if not export_config.get('enabled', True):
+        return
+    if not export_config.get('auto_sync', False):
+        return
+
+    # Create Simkl client
+    simkl_client = create_simkl_client(config)
+    if not simkl_client:
+        log_warning("Simkl not configured - check config/simkl.yml")
+        return
+
+    # Test connection
+    try:
+        if not simkl_client.test_connection():
+            log_error("Could not connect to Simkl - check your access token")
+            return
+        print(f"\n{CYAN}=== Exporting to Simkl ==={RESET}")
+    except (SimklAPIError, SimklAuthError) as e:
+        log_error(f"Could not connect to Simkl: {e}")
+        return
+
+    user_mode = export_config.get('user_mode', 'mapping')
+    plex_users = export_config.get('plex_users', [])
+
+    # Safety check: mapping mode requires explicit plex_users configuration
+    if user_mode == 'mapping':
+        invalid_configs = [[], ['YourPlexUsername'], None]
+        if plex_users in invalid_configs or not plex_users:
+            log_warning(
+                "Simkl export: No plex_users configured.\n"
+                "  Edit simkl.yml -> export -> plex_users and add YOUR Plex username.\n"
+                "  Example: plex_users: [\"jason\"]\n"
+                "  This prevents accidentally exporting other users' recommendations."
+            )
+            return
+
+    # Filter users based on mode
+    if user_mode == 'mapping':
+        plex_users_lower = [u.lower() for u in plex_users]
+        users_to_export = [
+            u for u in all_users_data
+            if u['username'].lower() in plex_users_lower
+        ]
+        if not users_to_export:
+            log_warning(
+                f"Simkl export: No matching users found. Configured plex_users: {plex_users}\n"
+                "  Check that your Plex username matches exactly."
+            )
+            return
+    else:
+        users_to_export = all_users_data
+
+    # Collect TMDB IDs from categorized data
+    def collect_tmdb_ids(categorized):
+        """Extract TMDB IDs from categorized items."""
+        tmdb_ids = []
+        for category_items in categorized.values():
+            if isinstance(category_items, dict):
+                for items in category_items.values():
+                    for item in items:
+                        if item.get('tmdb_id'):
+                            tmdb_ids.append(item['tmdb_id'])
+            elif isinstance(category_items, list):
+                for item in category_items:
+                    if item.get('tmdb_id'):
+                        tmdb_ids.append(item['tmdb_id'])
+        return list(dict.fromkeys(tmdb_ids))
+
+    # Collect all recommendations
+    all_movie_tmdb_ids = []
+    all_show_tmdb_ids = []
+    for user_data in users_to_export:
+        all_movie_tmdb_ids.extend(collect_tmdb_ids(user_data['movies_categorized']))
+        all_show_tmdb_ids.extend(collect_tmdb_ids(user_data['shows_categorized']))
+
+    # Deduplicate
+    all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
+    all_show_tmdb_ids = list(dict.fromkeys(all_show_tmdb_ids))
+
+    try:
+        added_movies = 0
+        added_shows = 0
+
+        if all_movie_tmdb_ids:
+            movies_data = [{"ids": {"tmdb": tmdb_id}} for tmdb_id in all_movie_tmdb_ids]
+            result = simkl_client.add_to_watchlist(movies=movies_data)
+            added_movies = result.get('added', {}).get('movies', 0)
+
+        if all_show_tmdb_ids:
+            shows_data = [{"ids": {"tmdb": tmdb_id}} for tmdb_id in all_show_tmdb_ids]
+            result = simkl_client.add_to_watchlist(shows=shows_data)
+            added_shows = result.get('added', {}).get('shows', 0)
+
+        print_status(f"  Added {added_movies} movies, {added_shows} shows to Simkl watchlist", "success")
+
+    except (SimklAPIError, SimklAuthError) as e:
+        log_error(f"Failed to export to Simkl: {e}")
+
+
 def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
     """
     Sync Plex watch history to Trakt.
@@ -2212,6 +2333,7 @@ def main():
         export_to_sonarr(config, all_users_data, tmdb_api_key)
         export_to_radarr(config, all_users_data, tmdb_api_key)
         export_to_mdblist(config, all_users_data, tmdb_api_key)
+        export_to_simkl(config, all_users_data, tmdb_api_key)
 
 
 if __name__ == "__main__":

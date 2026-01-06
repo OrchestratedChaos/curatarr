@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.0] - 2026-01-05
+
+### Added
+- **Simkl integration** — Full integration with Simkl for anime/TV/movie tracking
+  - PIN-based OAuth authentication (works in Docker/SSH)
+  - Import watch history from Simkl (especially anime from Crunchyroll, etc.)
+  - Discovery from Simkl trending/popular (excellent for anime recommendations)
+  - Export recommendations to Simkl watchlist
+  - Setup wizard integration (Step 10)
+  - 51 new unit tests for Simkl client
+
+### Technical
+- New `utils/simkl.py` module with `SimklClient` class
+- Supports TMDB, IMDB, MAL, AniDB, and other anime IDs
+- Rate limiting with 0.2s delay between API calls
+
 ## [2.4.0] - 2026-01-05
 
 ### Added

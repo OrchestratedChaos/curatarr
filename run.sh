@@ -908,6 +908,139 @@ except Exception as e:
     fi
     echo ""
 
+    # --- Optional: Simkl Integration ---
+    echo -e "${YELLOW}Step 10: Simkl Integration (Optional)${NC}"
+    echo ""
+    echo "Simkl tracks anime/TV/movies with excellent anime database."
+    echo "Great for anime fans - enhances recommendations with Simkl data."
+    echo ""
+    read -p "Enable Simkl integration? (y/N): " ENABLE_SIMKL
+    SIMKL_ENABLED="false"
+    SIMKL_CLIENT_ID=""
+    SIMKL_ACCESS_TOKEN=""
+    SIMKL_AUTO_SYNC="false"
+    SIMKL_USER_MODE="mapping"
+    SIMKL_PLEX_USERS="[]"
+
+    if [[ "$ENABLE_SIMKL" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "To use Simkl, you need to create an app:"
+        echo "1. Go to https://simkl.com/settings/developer/"
+        echo "2. Click 'New Application'"
+        echo "3. Enter any name (e.g., 'Curatarr')"
+        echo "4. Copy the Client ID"
+        echo ""
+        read -p "Simkl Client ID: " SIMKL_CLIENT_ID
+
+        if [ -n "$SIMKL_CLIENT_ID" ]; then
+            # Get PIN code for auth
+            echo ""
+            echo -e "${CYAN}Getting Simkl PIN code...${NC}"
+
+            SIMKL_PIN=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from utils.simkl import SimklClient
+    client = SimklClient('$SIMKL_CLIENT_ID')
+    pin_data = client.get_pin_code()
+    print(f\"CODE:{pin_data['user_code']}\")
+    print(f\"URL:{pin_data['verification_url']}\")
+except Exception as e:
+    print(f'ERROR:{e}')
+" 2>/dev/null)
+
+            if echo "$SIMKL_PIN" | grep -q "^CODE:"; then
+                PIN_CODE=$(echo "$SIMKL_PIN" | grep "^CODE:" | cut -d: -f2)
+                PIN_URL=$(echo "$SIMKL_PIN" | grep "^URL:" | cut -d: -f2-)
+
+                echo ""
+                echo -e "${CYAN}To authorize Curatarr:${NC}"
+                echo "1. Go to: ${PIN_URL}"
+                echo "2. Enter this code: ${YELLOW}${PIN_CODE}${NC}"
+                echo ""
+                read -p "Press Enter after you've authorized the app..."
+
+                # Poll for token
+                echo -e "${CYAN}Checking authorization...${NC}"
+                SIMKL_AUTH=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from utils.simkl import SimklClient
+    client = SimklClient('$SIMKL_CLIENT_ID')
+    if client.poll_for_token('$PIN_CODE', interval=2, expires_in=30):
+        print(f'TOKEN:{client.access_token}')
+    else:
+        print('ERROR:Authorization timed out or was denied')
+except Exception as e:
+    print(f'ERROR:{e}')
+" 2>/dev/null)
+
+                if echo "$SIMKL_AUTH" | grep -q "^TOKEN:"; then
+                    SIMKL_ACCESS_TOKEN=$(echo "$SIMKL_AUTH" | grep "^TOKEN:" | cut -d: -f2-)
+                    SIMKL_ENABLED="true"
+                    echo -e "${GREEN}✓ Connected to Simkl!${NC}"
+                    echo ""
+
+                    # Ask about export settings
+                    echo "Which Plex user's recommendations should go to Simkl?"
+                    echo "  1) Just mine - only YOUR recommendations (recommended)"
+                    echo "  2) All users - everyone's recommendations"
+                    echo "  3) Skip for now - configure later"
+                    echo ""
+                    read -p "Choose [1/2/3]: " SIMKL_USER_CHOICE
+
+                    case "$SIMKL_USER_CHOICE" in
+                        1)
+                            if [ -n "$ADMIN_USER" ]; then
+                                SIMKL_PLEX_USER="$ADMIN_USER"
+                            else
+                                read -p "Enter your Plex username: " SIMKL_PLEX_USER
+                            fi
+                            if [ -n "$SIMKL_PLEX_USER" ]; then
+                                SIMKL_PLEX_USERS="[\"$SIMKL_PLEX_USER\"]"
+                                SIMKL_USER_MODE="mapping"
+
+                                read -p "Auto-export to Simkl on each run? (y/N): " ENABLE_SIMKL_AUTO
+                                if [[ "$ENABLE_SIMKL_AUTO" =~ ^[Yy]$ ]]; then
+                                    SIMKL_AUTO_SYNC="true"
+                                    echo -e "${GREEN}✓ Auto-sync enabled for: $SIMKL_PLEX_USER${NC}"
+                                else
+                                    echo -e "${YELLOW}Manual mode - enable auto_sync in simkl.yml when ready${NC}"
+                                fi
+                            fi
+                            ;;
+                        2)
+                            SIMKL_USER_MODE="combined"
+                            SIMKL_PLEX_USERS="[]"
+                            read -p "Auto-export to Simkl on each run? (y/N): " ENABLE_SIMKL_AUTO
+                            if [[ "$ENABLE_SIMKL_AUTO" =~ ^[Yy]$ ]]; then
+                                SIMKL_AUTO_SYNC="true"
+                            fi
+                            ;;
+                        *)
+                            echo -e "${YELLOW}Skipping. Configure simkl.yml later.${NC}"
+                            ;;
+                    esac
+                else
+                    SIMKL_ERROR=$(echo "$SIMKL_AUTH" | grep "^ERROR:" | cut -d: -f2-)
+                    echo -e "${RED}Authorization failed: $SIMKL_ERROR${NC}"
+                    echo -e "${YELLOW}You can configure Simkl later in config/simkl.yml${NC}"
+                fi
+            else
+                SIMKL_ERROR=$(echo "$SIMKL_PIN" | grep "^ERROR:" | cut -d: -f2-)
+                echo -e "${RED}Could not get PIN code: $SIMKL_ERROR${NC}"
+                echo -e "${YELLOW}Check your Client ID, then configure simkl.yml manually.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Skipping Simkl (Client ID not provided)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Skipping Simkl (can be enabled later in config/simkl.yml)${NC}"
+    fi
+    echo ""
+
     # --- Write config/config.yml (essentials only) ---
     mkdir -p config
     echo -e "${CYAN}Creating config/config.yml...${NC}"
@@ -1057,6 +1190,40 @@ replace_existing: ${MDBLIST_REPLACE_EXISTING:-true}
 MDBLISTEOF
 
         echo -e "${GREEN}✓ config/mdblist.yml created!${NC}"
+    fi
+
+    # --- Write simkl.yml if enabled ---
+    if [ "$SIMKL_ENABLED" = "true" ]; then
+        echo -e "${CYAN}Creating config/simkl.yml...${NC}"
+
+        cat > config/simkl.yml << SIMKLEOF
+# Curatarr Simkl Configuration
+
+enabled: true
+client_id: ${SIMKL_CLIENT_ID}
+access_token: ${SIMKL_ACCESS_TOKEN}
+
+# Import settings
+import:
+  enabled: true
+  include_anime: true
+
+# Discovery settings
+discovery:
+  enabled: true
+  anime_focus: true
+  include_tv: true
+  include_movies: false
+
+# Export settings
+export:
+  enabled: true
+  auto_sync: ${SIMKL_AUTO_SYNC:-false}
+  user_mode: "${SIMKL_USER_MODE:-mapping}"
+  plex_users: ${SIMKL_PLEX_USERS:-[]}
+SIMKLEOF
+
+        echo -e "${GREEN}✓ config/simkl.yml created!${NC}"
     fi
     echo ""
 }

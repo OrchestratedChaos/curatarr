@@ -1,0 +1,39 @@
+# Simkl Integration Configuration
+# Track anime/TV/movies and enhance recommendations with Simkl data
+
+# Enable/disable Simkl integration
+enabled: false
+
+# Simkl API credentials
+# Get your client ID at: https://simkl.com/settings/developer/
+client_id: YOUR_SIMKL_CLIENT_ID
+
+# Access token (filled automatically by setup wizard after PIN auth)
+access_token: null
+
+# Import settings - enhance profiles with Simkl watch history
+import:
+  enabled: true
+  # Include anime-specific watch history (good for anime users)
+  include_anime: true
+
+# Discovery settings - use Simkl trending/popular for candidates
+discovery:
+  enabled: true
+  # Focus on anime discovery (Simkl's strength)
+  anime_focus: true
+  # Include TV shows from Simkl
+  include_tv: true
+  # Include movies from Simkl
+  include_movies: false
+
+# Export settings - push recommendations to Simkl watchlist
+export:
+  enabled: true
+  auto_sync: false  # Automatically export on each run
+
+  # User mode: mapping, per_user, or combined
+  user_mode: mapping
+
+  # Which Plex users to export (for mapping mode)
+  plex_users: []

@@ -271,6 +271,36 @@ replace_existing: true      # Clear list before adding (vs. append)
 
 **Setup:** Run `./run.sh` and follow Step 9, or manually create `config/mdblist.yml`.
 
+### Simkl Integration (Optional)
+
+Full integration with Simkl for anime/TV/movie tracking with excellent anime database:
+
+```yaml
+# config/simkl.yml
+enabled: true
+client_id: YOUR_SIMKL_CLIENT_ID
+access_token: (filled by setup wizard)
+
+# Import watch history (great for anime from Crunchyroll, etc.)
+import:
+  enabled: true
+  include_anime: true
+
+# Discovery from Simkl trending/popular
+discovery:
+  enabled: true
+  anime_focus: true        # Prioritize anime discovery
+
+# Export recommendations to Simkl watchlist
+export:
+  enabled: true
+  auto_sync: true
+  user_mode: mapping
+  plex_users: [your_username]
+```
+
+**Setup:** Run `./run.sh` and follow Step 10, or manually create `config/simkl.yml`.
+
 ### External Recommendations: Relevance Score
 
 The `min_relevance_score` setting (0.0-1.0) controls how strictly personal the external watchlist recommendations are:
