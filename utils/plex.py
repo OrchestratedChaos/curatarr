@@ -8,6 +8,7 @@ import requests
 import urllib3
 import xml.etree.ElementTree as ET
 import plexapi.server
+import plexapi.exceptions
 
 # Suppress InsecureRequestWarning when users explicitly set verify_ssl=False for local Plex servers
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -44,7 +45,7 @@ def init_plex(config: dict) -> plexapi.server.PlexServer:
             config['plex']['token'],
             session=session
         )
-    except Exception as e:
+    except (requests.RequestException, plexapi.exceptions.PlexApiException) as e:
         log_error(f"Error connecting to Plex server: {e}")
         raise
 
@@ -97,7 +98,7 @@ def get_plex_account_ids(config: Dict, users_to_match: List[str]) -> List[str]:
             else:
                 log_error(f"User '{username}' not found in Plex accounts!")
 
-    except Exception as e:
+    except (requests.RequestException, ET.ParseError) as e:
         log_error(f"Error getting Plex account IDs: {e}")
 
     return account_ids
@@ -162,7 +163,7 @@ def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
                         watched_movies.add(rating_key)
 
         return len(watched_movies)
-    except Exception as e:
+    except (requests.RequestException, ET.ParseError, plexapi.exceptions.PlexApiException) as e:
         log_warning(f"Error getting watched movie count: {e}")
         return 0
 
@@ -197,7 +198,7 @@ def get_watched_show_count(config: Dict, users_to_check: List[str]) -> int:
                         watched_shows.add(show_key)
 
         return len(watched_shows)
-    except Exception as e:
+    except (requests.RequestException, ET.ParseError, plexapi.exceptions.PlexApiException) as e:
         log_warning(f"Error getting watched show count: {e}")
         return 0
 
@@ -272,12 +273,12 @@ def fetch_plex_watch_history_movies(config: Dict, account_ids: List[str], movies
                 else:
                     print(f" {YELLOW}SKIP (account not found in managed users){RESET}")
 
-            except Exception as e:
+            except (requests.RequestException, ET.ParseError) as e:
                 print(f" {RED}ERROR: {e}{RESET}")
 
         return all_history_items, watched_movie_dates
 
-    except Exception as e:
+    except (requests.RequestException, plexapi.exceptions.PlexApiException) as e:
         log_error(f"Error fetching watch history: {e}")
         return [], {}
 
@@ -329,7 +330,7 @@ def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_sect
 
             print(f"Fetched {episode_count} watched episodes from {len(watched_show_ids)} shows")
 
-        except Exception as e:
+        except (requests.RequestException, ET.ParseError) as e:
             log_error(f"Error fetching Plex history: {e}")
             continue
 
@@ -399,7 +400,7 @@ def fetch_show_completion_data(
                         show_episodes[show_id].add(episode_key)
                         show_last_watched[show_id] = max(show_last_watched[show_id], viewed_at)
 
-        except Exception as e:
+        except (requests.RequestException, ET.ParseError) as e:
             log_warning(f"Error fetching show completion data for account {account_id}: {e}")
             continue
 
@@ -419,7 +420,7 @@ def fetch_show_completion_data(
                     'last_watched': show_last_watched[show_id],
                     'title': show.title
                 }
-            except Exception as e:
+            except plexapi.exceptions.PlexApiException as e:
                 logger.debug(f"Error processing show completion for {show.title}: {e}")
                 continue
 
@@ -544,7 +545,7 @@ def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str
                         except (ValueError, KeyError, AttributeError) as e:
                             logger.debug(f"Error extracting TMDB ID for rating key {rating_key}: {e}")
 
-        except Exception as e:
+        except (requests.RequestException, ET.ParseError) as e:
             logger.debug(f"Error fetching watch history for account {account_id}: {e}")
             continue
 
@@ -602,14 +603,14 @@ def update_plex_collection(section: Any, collection_name: str, items: List[Any],
                 # This results in first item ending up at position 1
                 for item in reversed(items):
                     target_collection.moveItem(item, after=None)
-            except Exception as e:
+            except plexapi.exceptions.PlexApiException as e:
                 # Log but don't fail if reordering doesn't work
                 if logger:
                     logger.warning(f"Could not set custom order: {e}")
 
         return True
 
-    except Exception as e:
+    except plexapi.exceptions.PlexApiException as e:
         error_msg = f"Error updating collection {collection_name}: {e}"
         if logger:
             logger.error(error_msg)
@@ -657,7 +658,7 @@ def cleanup_old_collections(section: Any, current_collection_name: str, username
                 else:
                     print(msg)
 
-    except Exception as e:
+    except plexapi.exceptions.PlexApiException as e:
         error_msg = f"Error cleaning up old collections: {e}"
         if logger:
             logger.warning(error_msg)
@@ -774,7 +775,7 @@ def get_user_specific_connection(plex: Any, config: Dict, users: Dict) -> Any:
         account = MyPlexAccount(token=config['plex']['token'])
         user = account.user(users['managed_users'][0])
         return plex.switchUser(user)
-    except Exception as e:
+    except plexapi.exceptions.PlexApiException as e:
         log_warning(f"Could not switch to managed user context: {e}")
         return plex
 
@@ -839,7 +840,7 @@ def extract_genres(item) -> List[str]:
                 genres.append(genre.tag.lower())
             elif isinstance(genre, str):
                 genres.append(genre.lower())
-    except Exception as e:
+    except (AttributeError, TypeError) as e:
         logger.debug(f"Failed to extract genres: {e}")
     return genres
 
@@ -905,7 +906,7 @@ def extract_rating(item, prefer_user_rating: bool = True) -> float:
                             return float(rating.value)
                         except (ValueError, AttributeError):
                             pass
-    except Exception as e:
+    except (AttributeError, TypeError) as e:
         logger.debug(f"Failed to extract rating: {e}")
     return 0.0
 
@@ -928,7 +929,7 @@ def get_library_imdb_ids(plex_section: Any) -> Set[str]:
                     if guid.id.startswith('imdb://'):
                         imdb_ids.add(guid.id.replace('imdb://', ''))
                         break
-    except Exception as e:
+    except (plexapi.exceptions.PlexApiException, TypeError) as e:
         log_warning(f"Error retrieving IMDb IDs from library: {e}")
     return imdb_ids
 
@@ -950,6 +951,6 @@ def get_plex_user_ids(plex, managed_users: List[str]) -> Dict[str, int]:
         for user in account.users():
             if user.title in managed_users:
                 user_ids[user.title] = user.id
-    except Exception as e:
+    except plexapi.exceptions.PlexApiException as e:
         log_warning(f"Error getting Plex user IDs: {e}")
     return user_ids

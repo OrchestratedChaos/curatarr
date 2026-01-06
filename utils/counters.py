@@ -28,12 +28,12 @@ def create_empty_counters(media_type: str = 'movie') -> Dict:
         'tmdb_keywords': Counter(),
         'tmdb_ids': set()
     }
-    # Movies use directors and collections, TV uses studio
+    # Movies use directors and collections, TV uses studios
     if media_type == 'movie':
         counters['directors'] = Counter()
         counters['collections'] = Counter()  # Track TMDB collection IDs for sequel bonus
     else:
-        counters['studio'] = Counter()
+        counters['studios'] = Counter()
     return counters
 
 
@@ -169,9 +169,9 @@ def process_counters_from_cache(
         else:
             studio = media_info.get('studio', '')
             if studio:
-                if 'studio' not in counters:
-                    counters['studio'] = Counter()
-                _apply_capped_weight(counters['studio'], studio.lower(), total_weight, cap_penalty)
+                if 'studios' not in counters:
+                    counters['studios'] = Counter()
+                _apply_capped_weight(counters['studios'], studio.lower(), total_weight, cap_penalty)
 
         # Update language counters
         language = media_info.get('language', '')

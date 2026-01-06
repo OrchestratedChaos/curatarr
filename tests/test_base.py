@@ -4,6 +4,8 @@ Tests for recommenders/base.py - Base cache and recommender classes.
 
 import os
 import pytest
+import requests
+import plexapi.exceptions
 from unittest.mock import Mock, patch, MagicMock
 from collections import Counter
 
@@ -147,7 +149,7 @@ class TestBaseCacheUpdate:
         mock_item = Mock()
         mock_item.ratingKey = '123'
         mock_item.title = 'Bad Movie'
-        mock_item.reload.side_effect = Exception("Network error")
+        mock_item.reload.side_effect = plexapi.exceptions.PlexApiException("Network error")
 
         mock_plex = Mock()
         mock_section = Mock()
@@ -225,13 +227,13 @@ class TestBaseCacheGetLanguage:
 
     @patch('recommenders.base.load_media_cache')
     def test_get_language_returns_na_on_exception(self, mock_load):
-        """Test that N/A is returned on any exception."""
+        """Test that N/A is returned on Plex API or attribute errors."""
         mock_load.return_value = {'movies': {}, 'library_count': 0}
 
         cache = ConcreteCache('/tmp/cache')
         mock_item = Mock()
         mock_item.media = Mock()
-        mock_item.media.__iter__ = Mock(side_effect=Exception("Error"))
+        mock_item.media.__iter__ = Mock(side_effect=AttributeError("Error"))
 
         result = cache._get_language(mock_item)
 
@@ -630,7 +632,7 @@ class TestBaseCacheBackfillCollectionData:
             },
             'library_count': 2
         }
-        mock_fetch.side_effect = [Exception("Network error"), {'belongs_to_collection': {'id': 1, 'name': 'Collection'}}]
+        mock_fetch.side_effect = [requests.RequestException("Network error"), {'belongs_to_collection': {'id': 1, 'name': 'Collection'}}]
 
         cache = ConcreteCache('/tmp/cache')
         result = cache._backfill_collection_data('api_key')

@@ -327,7 +327,7 @@ class TestCalculateSimilarityScore:
     def test_studio_match_tv(self):
         """Test studio matching for TV shows."""
         content = {"studio": "HBO"}
-        profile = {"studio": {"hbo": 5}}
+        profile = {"studios": {"hbo": 5}}
 
         score, breakdown = calculate_similarity_score(
             content, profile, media_type='tv'

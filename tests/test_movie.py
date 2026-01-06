@@ -44,6 +44,7 @@ class TestMovieCache:
         mock_movie.guids = []
         mock_movie.userRating = None
         mock_movie.audienceRating = 7.5
+        mock_movie.media = []
 
         result = cache._process_item(mock_movie, None)
 
@@ -69,6 +70,7 @@ class TestMovieCache:
         mock_movie.guids = []
         mock_movie.userRating = None
         mock_movie.audienceRating = None
+        mock_movie.media = []
 
         result = cache._process_item(mock_movie, None)
 
@@ -93,6 +95,7 @@ class TestMovieCache:
         mock_movie.guids = []
         mock_movie.userRating = None
         mock_movie.audienceRating = None
+        mock_movie.media = []
 
         result = cache._process_item(mock_movie, None)
 

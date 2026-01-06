@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Project version - single source of truth
-__version__ = "2.6.0"
+__version__ = "2.6.1"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
@@ -21,6 +21,12 @@ DEFAULT_RATING = 5.0                # Default rating when none available
 WEIGHT_SUM_TOLERANCE = 1e-6         # Tolerance for weight sum validation
 DEFAULT_LIMIT_PLEX_RESULTS = 10     # Default recommendation limit
 TOP_POOL_PERCENTAGE = 0.1           # Top 10% for randomization pool
+
+# Media type constants - use these instead of hardcoded strings
+MEDIA_TYPE_MOVIE = 'movie'
+MEDIA_TYPE_TV = 'tv'
+MEDIA_KEY_MOVIES = 'movies'
+MEDIA_KEY_SHOWS = 'shows'
 
 # Recommendation tier percentages (for diversified recommendations)
 # Safe: High-confidence picks similar to user's taste

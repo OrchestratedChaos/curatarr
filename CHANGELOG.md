@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.6.1] - 2026-01-06
+
+### Fixed
+- Fixed NameError when `negative_signals.dropped_shows` disabled (show_completion_data not initialized)
+- Replaced bare `except Exception` handlers with specific exception types throughout codebase
+- Removed unused `used_indices` variable in scoring.py
+- Removed duplicate `flatten_categorized_items` function (consolidated in external_exports.py)
+- Standardized studio counter key to `'studios'` (plural) for consistency with other counter keys
+
+### Added
+- Media type constants (`MEDIA_TYPE_MOVIE`, `MEDIA_TYPE_TV`, `MEDIA_KEY_MOVIES`, `MEDIA_KEY_SHOWS`)
+
 ## [2.6.0] - 2026-01-06
 
 ### Added

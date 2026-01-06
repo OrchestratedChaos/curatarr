@@ -174,7 +174,7 @@ def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = '
     # Check which components have data in user profile
     has_genres = bool(user_profile.get('genres', {}))
     has_directors = bool(user_profile.get('directors', {})) if media_type == 'movie' else False
-    has_studios = bool(user_profile.get('studios', user_profile.get('studio', {}))) if media_type == 'tv' else False
+    has_studios = bool(user_profile.get('studios', {})) if media_type == 'tv' else False
     has_actors = bool(user_profile.get('actors', {}))
     has_languages = bool(user_profile.get('languages', {}))
     has_keywords = bool(user_profile.get('keywords', user_profile.get('tmdb_keywords', {})))
@@ -313,7 +313,7 @@ def calculate_similarity_score(
         user_prefs = {
             'genres': Counter(user_profile.get('genres', {})),
             'directors': Counter(user_profile.get('directors', {})),
-            'studios': Counter(user_profile.get('studios', user_profile.get('studio', {}))),
+            'studios': Counter(user_profile.get('studios', {})),
             'actors': Counter(user_profile.get('actors', {})),
             'languages': Counter(user_profile.get('languages', {})),
             'keywords': Counter(user_profile.get('keywords', user_profile.get('tmdb_keywords', {})))
@@ -686,7 +686,6 @@ def select_tiered_recommendations(
     wildcard_pool = scored_items[diverse_boundary:]
 
     selected = []
-    used_indices = set()
 
     # Select safe picks (top tier, highest scores)
     safe_picks = safe_pool[:min(safe_count, len(safe_pool))]
