@@ -73,10 +73,13 @@ collections:
 # Recommendations for content NOT in your Plex library
 external_recommendations:
   enabled: true
-  movie_limit: 30  # Per user
+  movie_limit: 50  # Per user
   show_limit: 20
-  min_relevance_score: 0.25  # 0.0-1.0, higher = stricter filtering
+  min_relevance_score: 0.65  # 0.0-1.0, minimum profile match to include in output
   auto_open_html: false  # Open watchlist in browser after generation
+  # Discovery iteration settings
+  min_votes: 50  # Minimum TMDB votes for reliability (filters garbage entries)
+  max_iterations: 5  # Max discovery passes before giving up (more = slower but more thorough)
 
 # =============================================================================
 # RECENCY DECAY

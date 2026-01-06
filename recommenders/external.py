@@ -108,7 +108,11 @@ DISCOVER_RESULTS_PER_KEYWORD = 15   # Top N results per keyword search
 
 # Output thresholds - match score is king, rating is just tiebreaker
 OUTPUT_MIN_SCORE = 0.65         # 65%+ match required - this is what matters
-OUTPUT_MIN_VOTES = 200          # Enough votes to be reliable
+OUTPUT_MIN_VOTES = 50           # Filters garbage TMDB entries, profile score is quality signal
+
+# Iterative discovery settings
+MAX_DISCOVERY_ITERATIONS = 5    # How many discovery passes before giving up
+MIN_NEW_ITEMS_PER_ITERATION = 3 # Stop iterating if we find fewer than this
 
 # Legacy aliases for cache filtering (votes only, no rating gate)
 MIN_RATING = 0.0                # Don't filter by rating in cache
@@ -133,25 +137,52 @@ def discover_candidates_by_profile(
     user_profile: Dict,
     library_data: Dict,
     media_type: str = 'movie',
-    max_candidates: int = 500
+    max_candidates: int = 500,
+    iteration: int = 0,
+    exclude_ids: Optional[Set[int]] = None,
+    top_scored_items: Optional[List[Dict]] = None
 ) -> Dict[int, Dict]:
     """
     Discover candidates using TMDB Discover API based on user profile.
     Searches by top genres and keywords for higher quality matches.
+
+    Iteration expansion strategy:
+    - Iteration 0: Top 5 genres, top 10 keywords, page 1
+    - Iteration 1: Page 2, genres 6-10, keywords 11-20
+    - Iteration 2+: Similar-to queries for top scored items
+    - Iteration 3: Page 3, genre combinations
+    - Iteration 4: Keywords 21-40
     """
-    print(f"  Discovering candidates via TMDB Discover API...")
+    if exclude_ids is None:
+        exclude_ids = set()
+    if top_scored_items is None:
+        top_scored_items = []
+
+    # Calculate page and ranges based on iteration
+    page = iteration + 1
+    genre_start = iteration * 5
+    genre_end = genre_start + 5
+    keyword_start = iteration * 10
+    keyword_end = keyword_start + 10
+
+    if iteration == 0:
+        print(f"  Discovering candidates via TMDB Discover API...")
+    else:
+        print(f"  Discovery iteration {iteration + 1}: expanding search...")
 
     candidates = {}  # tmdb_id -> basic info
     media = 'movie' if media_type == 'movie' else 'tv'
 
-    # Get top genres from profile
-    top_genres = list(user_profile['genres'].most_common(10))  # More genres = wider net
+    # Get genres for this iteration's range
+    all_genres = list(user_profile['genres'].most_common(20))
+    top_genres = all_genres[genre_start:genre_end]
     genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == 'movie' else TMDB_TV_GENRE_IDS
 
-    # Get top keywords from profile
-    top_keywords = list(user_profile['keywords'].most_common(10))
+    # Get keywords for this iteration's range
+    all_keywords = list(user_profile['keywords'].most_common(40))
+    top_keywords = all_keywords[keyword_start:keyword_end]
 
-    # Search by top genres
+    # Search by genres for this iteration
     for genre_name, _ in top_genres:
         if len(candidates) >= max_candidates:
             break
@@ -172,7 +203,7 @@ def discover_candidates_by_profile(
                 'vote_average.gte': DISCOVER_MIN_RATING,
                 'vote_count.gte': DISCOVER_MIN_VOTES,
                 'sort_by': 'vote_average.desc',
-                'page': 1
+                'page': page
             }
             response = requests.get(url, params=params, timeout=10)
 
@@ -183,8 +214,8 @@ def discover_candidates_by_profile(
                     title = item.get('title') or item.get('name')
                     year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
 
-                    # Skip if in library or already discovered
-                    if tmdb_id in candidates:
+                    # Skip if already seen, in library, or excluded
+                    if tmdb_id in candidates or tmdb_id in exclude_ids:
                         continue
                     if is_in_library(tmdb_id, title, year, library_data):
                         continue
@@ -200,10 +231,10 @@ def discover_candidates_by_profile(
         except (requests.RequestException, KeyError) as e:
             log_warning(f"Error discovering by genre {genre_name}: {e}")
 
-    print(f"    Found {len(candidates)} candidates from genre search")
+    genre_count = len(candidates)
 
-    # Also search by top keywords using search API
-    for keyword, _ in top_keywords[:DISCOVER_TOP_KEYWORDS]:
+    # Search by keywords for this iteration's range
+    for keyword, _ in top_keywords:
         if len(candidates) >= max_candidates:
             break
 
@@ -225,7 +256,7 @@ def discover_candidates_by_profile(
                         'vote_average.gte': DISCOVER_MIN_RATING,
                         'vote_count.gte': DISCOVER_MIN_VOTES,
                         'sort_by': 'vote_average.desc',
-                        'page': 1
+                        'page': page
                     }
                     response = requests.get(url, params=params, timeout=10)
 
@@ -236,7 +267,7 @@ def discover_candidates_by_profile(
                             title = item.get('title') or item.get('name')
                             year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
 
-                            if tmdb_id in candidates:
+                            if tmdb_id in candidates or tmdb_id in exclude_ids:
                                 continue
                             if is_in_library(tmdb_id, title, year, library_data):
                                 continue
@@ -252,7 +283,25 @@ def discover_candidates_by_profile(
         except (requests.RequestException, KeyError) as e:
             log_warning(f"Error discovering by keyword {keyword}: {e}")
 
-    print(f"    Total candidates after keyword search: {len(candidates)}")
+    keyword_count = len(candidates) - genre_count
+
+    # On iteration 2+, add similar-to queries for top scored items
+    similar_count = 0
+    if iteration >= 2 and top_scored_items:
+        for item in top_scored_items[:5]:  # Top 5 high-scorers
+            similar = fetch_similar_from_tmdb(
+                tmdb_api_key,
+                item['tmdb_id'],
+                media_type,
+                library_data,
+                exclude_ids.union(set(candidates.keys()))
+            )
+            for sim_id, sim_item in similar.items():
+                if sim_id not in candidates and sim_id not in exclude_ids:
+                    candidates[sim_id] = sim_item
+                    similar_count += 1
+
+    print(f"    Iteration {iteration + 1}: {genre_count} from genres, {keyword_count} from keywords, {similar_count} from similar")
     return candidates
 
 
@@ -508,6 +557,74 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
         logger.debug(f"Error fetching watch providers for TMDB {tmdb_id}: {e}")
         return []
 
+
+def fetch_similar_from_tmdb(
+    tmdb_api_key: str,
+    tmdb_id: int,
+    media_type: str,
+    library_data: Dict,
+    exclude_ids: Optional[Set[int]] = None
+) -> Dict[int, Dict]:
+    """
+    Fetch similar content from TMDB's recommendations endpoint.
+    Used in later iterations to find content similar to high-scoring items.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        tmdb_id: TMDB ID of the source item
+        media_type: 'movie' or 'tv'
+        library_data: Dict with tmdb_ids, titles for library filtering
+        exclude_ids: Set of TMDB IDs to skip
+
+    Returns:
+        Dict mapping tmdb_id -> basic item info
+    """
+    if exclude_ids is None:
+        exclude_ids = set()
+
+    candidates = {}
+    media = 'movie' if media_type == 'movie' else 'tv'
+
+    try:
+        url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}/similar"
+        params = {
+            'api_key': tmdb_api_key,
+            'page': 1
+        }
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code == 200:
+            results = response.json().get('results', [])
+            for item in results[:20]:  # Top 20 similar items
+                item_id = item['id']
+                title = item.get('title') or item.get('name')
+                year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
+                vote_count = item.get('vote_count', 0)
+
+                # Skip if already seen, in library, or low votes
+                if item_id in exclude_ids:
+                    continue
+                if item_id in candidates:
+                    continue
+                if vote_count < DISCOVER_MIN_VOTES:
+                    continue
+                if is_in_library(item_id, title, year, library_data):
+                    continue
+
+                candidates[item_id] = {
+                    'tmdb_id': item_id,
+                    'title': title,
+                    'year': year,
+                    'rating': item.get('vote_average', 0),
+                    'vote_count': vote_count
+                }
+
+    except (requests.RequestException, KeyError) as e:
+        logger.debug(f"Error fetching similar for TMDB {tmdb_id}: {e}")
+
+    return candidates
+
+
 def categorize_by_streaming_service(
     recommendations: List[Dict],
     tmdb_api_key: str,
@@ -696,13 +813,15 @@ def find_similar_content_with_profile(
     media_type: str = 'movie',
     limit: int = 50,
     exclude_genres: Optional[List[str]] = None,
-    min_relevance_score: float = 0.25,
+    min_relevance_score: float = 0.65,
     config: Optional[Dict] = None,
     exclude_imdb_ids: Optional[Set[str]] = None
 ) -> List[Dict]:
     """
     Find similar content NOT in library using profile-based scoring.
-    Uses TMDB Discover API + Trakt discovery for candidates + profile-based scoring.
+    Uses iterative TMDB Discover API + Trakt discovery for candidates + profile-based scoring.
+
+    Iterates discovery until we hit the target count or run out of new candidates.
 
     Args:
         tmdb_api_key: TMDB API key
@@ -726,6 +845,11 @@ def find_similar_content_with_profile(
         print(f"{YELLOW}No user profile data found{RESET}")
         return []
 
+    # Get iteration settings from config
+    external_config = config.get('external_recommendations', {}) if config else {}
+    max_iterations = external_config.get('max_iterations', MAX_DISCOVERY_ITERATIONS)
+    min_votes = external_config.get('min_votes', OUTPUT_MIN_VOTES)
+
     # Get weights from config or use defaults
     weights = DEFAULT_WEIGHTS
     if config:
@@ -740,17 +864,13 @@ def find_similar_content_with_profile(
                 'language': config_weights.get('language', 0.05)
             }
 
-    # Use TMDB Discover API to find quality candidates based on profile
-    # This replaces the old approach of crawling recommendations from watched items
-    candidates = discover_candidates_by_profile(
-        tmdb_api_key,
-        user_profile,
-        library_data,
-        media_type,
-        max_candidates=MAX_CANDIDATES
-    )
+    # Track state across iterations
+    quality_recs = []  # Items meeting quality bar
+    seen_ids = set()   # All TMDB IDs we've processed
+    scored_cache = {}  # tmdb_id -> scored item (avoid re-scoring)
 
-    # Add Trakt discovery candidates (trending, popular, recommendations)
+    # Get Trakt candidates once (not per-iteration)
+    trakt_candidates = {}
     if config:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
@@ -764,86 +884,112 @@ def find_similar_content_with_profile(
             exclude_imdb_ids
         )
 
-        # Merge Trakt candidates with TMDB candidates (Trakt items get priority if duplicate)
-        trakt_added = 0
-        for tmdb_id, item in trakt_candidates.items():
-            if tmdb_id not in candidates:
-                candidates[tmdb_id] = item
-                trakt_added += 1
+    # Iterative discovery loop
+    for iteration in range(max_iterations):
+        # Check if we've hit the target
+        if len(quality_recs) >= limit:
+            print(f"  {GREEN}Target of {limit} reached after {iteration} iteration(s){RESET}")
+            break
 
-        if trakt_added > 0:
-            print(f"  Added {trakt_added} candidates from Trakt discovery")
+        # Discover candidates for this iteration
+        candidates = discover_candidates_by_profile(
+            tmdb_api_key,
+            user_profile,
+            library_data,
+            media_type,
+            max_candidates=MAX_CANDIDATES,
+            iteration=iteration,
+            exclude_ids=seen_ids,
+            top_scored_items=quality_recs[:10]  # Pass top items for similar-to queries
+        )
 
-    if not candidates:
-        print(f"{YELLOW}No candidates found{RESET}")
-        return []
+        # On first iteration, also add Trakt candidates
+        if iteration == 0 and trakt_candidates:
+            trakt_added = 0
+            for tmdb_id, item in trakt_candidates.items():
+                if tmdb_id not in candidates and tmdb_id not in seen_ids:
+                    candidates[tmdb_id] = item
+                    trakt_added += 1
+            if trakt_added > 0:
+                print(f"  Added {trakt_added} candidates from Trakt discovery")
 
-    print(f"  {CYAN}Found {len(candidates)} total candidates{RESET}")
+        if not candidates:
+            print(f"  No new candidates found in iteration {iteration + 1}")
+            break
 
-    # Now score each candidate using profile-based similarity
-    scored_recommendations = []
-    candidate_list = list(candidates.keys())
+        # Score new candidates
+        new_quality_this_iteration = 0
+        candidate_list = [cid for cid in candidates.keys() if cid not in seen_ids]
 
-    total_candidates = len(candidate_list)
-    print(f"  Scoring {total_candidates} candidates against user profile...")
-    for i, candidate_id in enumerate(candidate_list, 1):
-        if i % PROGRESS_UPDATE_FREQUENCY == 0 or i == total_candidates:
-            print(f"\r    Scored {i}/{total_candidates} candidates...", end="", flush=True)
+        if candidate_list:
+            total_to_score = len(candidate_list)
+            print(f"  Scoring {total_to_score} new candidates...")
 
-        # Fetch full details from TMDB
-        details = fetch_tmdb_details_for_profile(tmdb_api_key, candidate_id, media_type)
-        if not details:
-            continue
+            for i, candidate_id in enumerate(candidate_list, 1):
+                if i % PROGRESS_UPDATE_FREQUENCY == 0 or i == total_to_score:
+                    print(f"\r    Scored {i}/{total_to_score}...", end="", flush=True)
 
-        # Check excluded genres
-        if exclude_genres:
-            content_genres = [g.lower() for g in details.get('genres', [])]
-            if any(eg.lower() in content_genres for eg in exclude_genres):
-                continue
+                seen_ids.add(candidate_id)
 
-        # Check if on Trakt watchlist (exclude if IMDB ID matches)
-        if exclude_imdb_ids:
-            imdb_id = get_imdb_id(tmdb_api_key, candidate_id, media_type)
-            if imdb_id and imdb_id in exclude_imdb_ids:
-                continue
+                # Fetch full details from TMDB
+                details = fetch_tmdb_details_for_profile(tmdb_api_key, candidate_id, media_type)
+                if not details:
+                    continue
 
-        # Calculate similarity score using shared function
-        # Build content_info in the format expected by calculate_similarity_score
-        content_info = {
-            'genres': details.get('genres', []),
-            'directors': details.get('directors', []),
-            'studios': details.get('studios', []),
-            'cast': details.get('cast', []),
-            'language': details.get('language', ''),
-            'keywords': details.get('keywords', [])
-        }
-        score, _ = calculate_similarity_score(content_info, user_profile, media_type, weights)
+                # Check excluded genres
+                if exclude_genres:
+                    content_genres = [g.lower() for g in details.get('genres', [])]
+                    if any(eg.lower() in content_genres for eg in exclude_genres):
+                        continue
 
-        scored_recommendations.append({
-            'tmdb_id': candidate_id,
-            'title': details['title'],
-            'year': details['year'],
-            'rating': details['rating'],
-            'vote_count': details.get('vote_count', 0),
-            'score': score,
-            'overview': details.get('overview', ''),
-            'genres': details.get('genres', []),
-            'genre_ids': []  # For compatibility with genre balancing
-        })
+                # Check if on Trakt watchlist (exclude if IMDB ID matches)
+                if exclude_imdb_ids:
+                    imdb_id = get_imdb_id(tmdb_api_key, candidate_id, media_type)
+                    if imdb_id and imdb_id in exclude_imdb_ids:
+                        continue
 
-    print()  # newline after progress
+                # Calculate similarity score
+                content_info = {
+                    'genres': details.get('genres', []),
+                    'directors': details.get('directors', []),
+                    'studios': details.get('studios', []),
+                    'cast': details.get('cast', []),
+                    'language': details.get('language', ''),
+                    'keywords': details.get('keywords', [])
+                }
+                score, _ = calculate_similarity_score(content_info, user_profile, media_type, weights)
 
-    # Sort by score (highest first), then by rating as tiebreaker
-    scored_recommendations.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
+                scored_item = {
+                    'tmdb_id': candidate_id,
+                    'title': details['title'],
+                    'year': details['year'],
+                    'rating': details['rating'],
+                    'vote_count': details.get('vote_count', 0),
+                    'score': score,
+                    'overview': details.get('overview', ''),
+                    'genres': details.get('genres', []),
+                    'genre_ids': []
+                }
+                scored_cache[candidate_id] = scored_item
 
-    # Apply output filtering - match score is king, votes just validates it's real
-    quality_recs = [
-        r for r in scored_recommendations
-        if r['score'] >= OUTPUT_MIN_SCORE
-        and r.get('vote_count', 0) >= OUTPUT_MIN_VOTES
-    ]
+                # Check if meets quality bar
+                if score >= OUTPUT_MIN_SCORE and scored_item['vote_count'] >= min_votes:
+                    quality_recs.append(scored_item)
+                    new_quality_this_iteration += 1
 
-    print(f"  {GREEN}{len(quality_recs)} items meet quality bar (>={int(OUTPUT_MIN_SCORE*100)}% match, >={OUTPUT_MIN_VOTES} votes){RESET}")
+            print()  # newline after progress
+
+        # Re-sort quality_recs after adding new items
+        quality_recs.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
+
+        print(f"  {CYAN}Iteration {iteration + 1}: {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}")
+
+        # Stop if diminishing returns
+        if new_quality_this_iteration < MIN_NEW_ITEMS_PER_ITERATION:
+            print(f"  Stopping early: only {new_quality_this_iteration} new items (< {MIN_NEW_ITEMS_PER_ITERATION} threshold)")
+            break
+
+    print(f"  {GREEN}{len(quality_recs)} items meet quality bar (>={int(OUTPUT_MIN_SCORE*100)}% match, >={min_votes} votes){RESET}")
 
     # Take quality items only - no backfill with low-quality
     final_recs = quality_recs[:limit]
@@ -991,9 +1137,9 @@ def process_user(config, plex, username):
 
     # Find new recommendations using profile-based scoring
     external_config = config.get('external_recommendations', {})
-    movie_limit = external_config.get('movie_limit', 30)
+    movie_limit = external_config.get('movie_limit', 50)
     show_limit = external_config.get('show_limit', 20)
-    min_relevance = external_config.get('min_relevance_score', 0.25)
+    min_relevance = external_config.get('min_relevance_score', 0.65)
 
     # Get excluded genres for this user
     exclude_genres = user_prefs.get('exclude_genres', [])
