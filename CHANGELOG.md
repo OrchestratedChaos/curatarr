@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.3.0] - 2026-01-05
+
+### Added
+- **Radarr integration** — Auto-add external movie recommendations to Radarr
+  - Push recommendations directly to Radarr for tracking/downloading
+  - Configurable via `config/radarr.yml` (mirrors Sonarr config style)
+  - Safe defaults: `monitor: false`, `search_for_movie: false` (just adds to library)
+  - Tagging system for easy cleanup (`Curatarr` tag on all added movies)
+  - Setup wizard integration in `run.sh` (Step 8)
+  - Supports user_mode: `mapping`, `per_user`, or `combined`
+  - 28 new unit tests for Radarr client
+
+### Technical
+- New `utils/radarr.py` module with `RadarrClient` class
+- Uses TMDB IDs directly (no conversion needed like Sonarr)
+- Rate limiting with 0.1s delay between API calls
+
 ## [2.2.0] - 2026-01-05
 
 ### Added

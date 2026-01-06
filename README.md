@@ -32,6 +32,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 - **External watchlists** — Content NOT in your library that users would love
 - **Streaming service grouping** — "Available on Netflix" vs "Need to acquire"
 - **Sonarr integration** — Push TV recommendations directly to Sonarr
+- **Radarr integration** — Push movie recommendations directly to Radarr
 - **Auto-cleanup** — Items removed when they appear in your library
 - **Genre balancing** — Matches user viewing habits proportionally
 
@@ -49,41 +50,25 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ### macOS / Linux
 ```bash
-# 1. Clone and enter directory
 git clone https://github.com/OrchestratedChaos/curatarr.git
 cd curatarr
-
-# 2. Edit config.yml with your details (see links below)
-
-# 3. Run it
-./run.sh
+./run.sh    # Setup wizard runs on first launch
 ```
 
 ### Windows (PowerShell)
 ```powershell
-# 1. Clone and enter directory
 git clone https://github.com/OrchestratedChaos/curatarr.git
 cd curatarr
-
-# 2. Edit config.yml with your details (see links below)
-
-# 3. Run it
-.\run.ps1
+.\run.ps1   # Setup wizard runs on first launch
 ```
 
 ### Docker
 ```bash
-# 1. Clone and enter directory
 git clone https://github.com/OrchestratedChaos/curatarr.git
 cd curatarr
-
-# 2. Edit config.yml with your details (see links below)
-
-# 3. Run with Docker Compose
+cp config/config.example.yml config/config.yml
+# Edit config/config.yml with your details
 docker compose up --build
-
-# Or run once and remove container
-docker compose run --rm curatarr
 ```
 
 **Required config:**
@@ -237,6 +222,33 @@ search_missing: false       # Don't search for episodes
 - `mapping` — Only sync users listed in `plex_users`
 - `per_user` — Sync all users separately
 - `combined` — Merge everyone's recommendations
+
+### Radarr Integration (Optional)
+
+Push your external movie recommendations directly to Radarr:
+
+```yaml
+# config/radarr.yml
+enabled: true
+url: http://localhost:7878
+api_key: YOUR_RADARR_API_KEY
+
+# Sync behavior
+auto_sync: true             # Auto-add when external recs finish
+user_mode: mapping          # mapping, per_user, or combined
+plex_users: [john]          # Which users to sync (for mapping mode)
+
+# Import settings
+root_folder: /movies        # Where to store movies
+quality_profile: HD-1080p   # Quality profile name
+tag: Curatarr               # Tag for easy cleanup
+
+# Safe defaults (movies just get added, no downloads)
+monitor: false              # Don't monitor for downloads
+search_for_movie: false     # Don't search for movie
+```
+
+**Setup:** Run `./run.sh` and follow Step 8, or manually create `config/radarr.yml`.
 
 ### External Recommendations: Relevance Score
 

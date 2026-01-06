@@ -1,20 +1,35 @@
 # Curatarr Radarr Configuration
-# Auto-add recommended movies to Radarr
 
-enabled: true
-
-# Radarr connection
+enabled: false
 url: http://localhost:7878
 api_key: YOUR_RADARR_API_KEY
 
-# Import settings
+# --- SYNC BEHAVIOR ---
+# auto_sync: Run automatically when external recs finish
+#   true  = adds movies every time you run Curatarr
+#   false = manual only (you'd call it separately)
+auto_sync: false
+
+# user_mode: Whose recommendations to add
+#   mapping  = only users listed in plex_users (recommended)
+#   per_user = all users separately
+#   combined = merge everyone's recs into one
+user_mode: mapping
+
+# plex_users: Which Plex usernames to sync (for mapping mode)
+# Only YOUR recs go to Radarr - not your family's
+plex_users: []
+
+# --- WHERE TO PUT MOVIES ---
 root_folder: /path/to/movies
 quality_profile: HD-1080p
+minimum_availability: released    # announced, inCinemas, released, preDB
 
-# Tagging
-tag: Curatarr  # Tag added to imported movies
-append_usernames: false  # Add username to tag
+# --- TAGGING ---
+tag: Curatarr            # all added movies get this tag
+append_usernames: false  # if true, tag becomes "Curatarr-Jason"
 
-# Download behavior
-monitor: false  # Monitor for downloads
-search_for_movie: false  # Trigger search immediately
+# --- DOWNLOAD BEHAVIOR ---
+# These are all OFF for safety - movies just get added, nothing downloads
+monitor: false           # don't monitor for downloads
+search_for_movie: false  # don't search for movie immediately

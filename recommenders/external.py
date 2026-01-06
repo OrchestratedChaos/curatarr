@@ -47,6 +47,7 @@ from utils import (
     fetch_tmdb_details_for_profile,
     get_project_root,
     create_sonarr_client, SonarrAPIError,
+    create_radarr_client, RadarrAPIError,
 )
 
 # Import output generation
@@ -1587,6 +1588,219 @@ def export_to_sonarr(config, all_users_data, tmdb_api_key):
         print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
 
 
+def export_to_radarr(config, all_users_data, tmdb_api_key):
+    """
+    Export movie recommendations to Radarr.
+
+    Adds recommended movies to Radarr for tracking/downloading.
+
+    Config options:
+        radarr.enabled: Master switch for Radarr integration
+        radarr.auto_sync: Auto-add on each run (default: false)
+        radarr.user_mode: How to handle multiple Plex users:
+            - mapping: Only export users in plex_users list (recommended)
+            - per_user: All Plex users' recommendations
+            - combined: Merge all users' recommendations
+        radarr.plex_users: List of Plex usernames to export (for mapping mode)
+    """
+    logger.debug("export_to_radarr called")
+    radarr_config = config.get('radarr', {})
+
+    # Check if Radarr is enabled and auto_sync is on
+    if not radarr_config.get('enabled', False):
+        return
+    if not radarr_config.get('auto_sync', False):
+        return
+
+    # Create Radarr client
+    radarr_client = create_radarr_client(config)
+    if not radarr_client:
+        log_warning("Radarr not configured - check config/radarr.yml")
+        return
+
+    # Test connection
+    try:
+        radarr_client.test_connection()
+        print(f"\n{CYAN}=== Exporting to Radarr ==={RESET}")
+        existing_count = len(radarr_client.get_movies())
+        print(f"  Connected to Radarr ({existing_count} existing movies)")
+    except RadarrAPIError as e:
+        log_error(f"Could not connect to Radarr: {e}")
+        return
+
+    user_mode = radarr_config.get('user_mode', 'mapping')
+    plex_users = radarr_config.get('plex_users', [])
+
+    # Safety check: mapping mode requires explicit plex_users configuration
+    if user_mode == 'mapping':
+        invalid_configs = [[], ['YourPlexUsername'], None]
+        if plex_users in invalid_configs or not plex_users:
+            log_warning(
+                "Radarr export: No plex_users configured.\n"
+                "  Edit radarr.yml -> plex_users and add YOUR Plex username.\n"
+                "  Example: plex_users: [\"jason\"]\n"
+                "  This prevents accidentally adding other users' recommendations."
+            )
+            return
+
+    # Filter users based on mode
+    if user_mode == 'mapping':
+        plex_users_lower = [u.lower() for u in plex_users]
+        users_to_export = [
+            u for u in all_users_data
+            if u['username'].lower() in plex_users_lower
+        ]
+        if not users_to_export:
+            log_warning(
+                f"Radarr export: No matching users found. Configured plex_users: {plex_users}\n"
+                "  Check that your Plex username matches exactly."
+            )
+            return
+    else:
+        users_to_export = all_users_data
+
+    # Get Radarr settings from config
+    root_folder = radarr_config.get('root_folder', '/movies')
+    quality_profile_name = radarr_config.get('quality_profile', 'HD-1080p')
+    minimum_availability = radarr_config.get('minimum_availability', 'released')
+    tag_name = radarr_config.get('tag', 'Curatarr')
+    append_usernames = radarr_config.get('append_usernames', False)
+    monitored = radarr_config.get('monitor', False)
+    search_for_movie = radarr_config.get('search_for_movie', False)
+
+    # Get quality profile ID
+    quality_profile_id = radarr_client.get_quality_profile_id(quality_profile_name)
+    if not quality_profile_id:
+        available = [p['name'] for p in radarr_client.get_quality_profiles()]
+        log_error(f"Quality profile '{quality_profile_name}' not found. Available: {available}")
+        return
+
+    # Validate root folder
+    valid_root = radarr_client.get_root_folder_path(root_folder)
+    if not valid_root:
+        available = [f['path'] for f in radarr_client.get_root_folders()]
+        log_error(f"Root folder '{root_folder}' not found. Available: {available}")
+        return
+
+    # Collect all movies to add (handle combined mode)
+    if user_mode == 'combined':
+        all_movie_tmdb_ids = []
+        for user_data in users_to_export:
+            # Collect TMDB IDs directly from movies_categorized
+            for category_movies in user_data['movies_categorized'].values():
+                for movie in category_movies:
+                    tmdb_id = movie.get('tmdb_id')
+                    if tmdb_id:
+                        all_movie_tmdb_ids.append(tmdb_id)
+        # Deduplicate
+        all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
+
+        if not all_movie_tmdb_ids:
+            print_status("  No movie recommendations to add", "info")
+            return
+
+        print(f"  Combined mode: Processing {len(all_movie_tmdb_ids)} movie recommendations...")
+
+        # Get or create tag
+        tag_id = radarr_client.get_or_create_tag(tag_name)
+
+        added = 0
+        skipped = 0
+        failed = 0
+
+        for tmdb_id in all_movie_tmdb_ids:
+            if radarr_client.movie_exists(tmdb_id):
+                skipped += 1
+                continue
+
+            # Look up movie
+            movie_data = radarr_client.lookup_movie(tmdb_id)
+            if not movie_data:
+                logger.debug(f"Could not find movie for TMDB ID: {tmdb_id}")
+                failed += 1
+                continue
+
+            try:
+                radarr_client.add_movie(
+                    tmdb_id=tmdb_id,
+                    title=movie_data['title'],
+                    root_folder_path=valid_root,
+                    quality_profile_id=quality_profile_id,
+                    monitored=monitored,
+                    minimum_availability=minimum_availability,
+                    tag_ids=[tag_id],
+                    search_for_movie=search_for_movie
+                )
+                added += 1
+                print(f"  {GREEN}Added: {movie_data['title']}{RESET}")
+            except RadarrAPIError as e:
+                logger.debug(f"Failed to add {movie_data['title']}: {e}")
+                failed += 1
+
+        print_status(f"  Combined: {added} added, {skipped} already exist, {failed} failed", "success")
+        return
+
+    # Per-user or mapping mode
+    for user_data in users_to_export:
+        display_name = user_data['display_name']
+        movies_categorized = user_data['movies_categorized']
+
+        # Collect TMDB IDs for movies
+        movie_tmdb_ids = []
+        for category_movies in movies_categorized.values():
+            for movie in category_movies:
+                tmdb_id = movie.get('tmdb_id')
+                if tmdb_id:
+                    movie_tmdb_ids.append(tmdb_id)
+        # Deduplicate
+        movie_tmdb_ids = list(dict.fromkeys(movie_tmdb_ids))
+
+        if not movie_tmdb_ids:
+            print_status(f"  {display_name}: No movie recommendations to add", "info")
+            continue
+
+        print(f"  {display_name}: Processing {len(movie_tmdb_ids)} movie recommendations...")
+
+        # Get or create tag (optionally with username)
+        user_tag = f"{tag_name}-{display_name}" if append_usernames else tag_name
+        tag_id = radarr_client.get_or_create_tag(user_tag)
+
+        added = 0
+        skipped = 0
+        failed = 0
+
+        for tmdb_id in movie_tmdb_ids:
+            if radarr_client.movie_exists(tmdb_id):
+                skipped += 1
+                continue
+
+            # Look up movie
+            movie_data = radarr_client.lookup_movie(tmdb_id)
+            if not movie_data:
+                logger.debug(f"Could not find movie for TMDB ID: {tmdb_id}")
+                failed += 1
+                continue
+
+            try:
+                radarr_client.add_movie(
+                    tmdb_id=tmdb_id,
+                    title=movie_data['title'],
+                    root_folder_path=valid_root,
+                    quality_profile_id=quality_profile_id,
+                    monitored=monitored,
+                    minimum_availability=minimum_availability,
+                    tag_ids=[tag_id],
+                    search_for_movie=search_for_movie
+                )
+                added += 1
+                print(f"    {GREEN}Added: {movie_data['title']}{RESET}")
+            except RadarrAPIError as e:
+                logger.debug(f"Failed to add {movie_data['title']}: {e}")
+                failed += 1
+
+        print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
+
+
 def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
     """
     Sync Plex watch history to Trakt.
@@ -1841,6 +2055,7 @@ def main():
         print(f"\n{CYAN}Checking external service exports...{RESET}")
         export_to_trakt(config, all_users_data, tmdb_api_key)
         export_to_sonarr(config, all_users_data, tmdb_api_key)
+        export_to_radarr(config, all_users_data, tmdb_api_key)
 
 
 if __name__ == "__main__":

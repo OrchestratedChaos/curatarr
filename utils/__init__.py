@@ -181,6 +181,13 @@ from .sonarr import (
     create_sonarr_client,
 )
 
+# Radarr utilities
+from .radarr import (
+    RadarrAPIError,
+    RadarrClient,
+    create_radarr_client,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -307,4 +314,8 @@ __all__ = [
     'SonarrAPIError',
     'SonarrClient',
     'create_sonarr_client',
+    # Radarr
+    'RadarrAPIError',
+    'RadarrClient',
+    'create_radarr_client',
 ]
