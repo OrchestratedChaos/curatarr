@@ -46,6 +46,7 @@ from utils import (
     enhance_profile_with_trakt,
     fetch_tmdb_details_for_profile,
     get_project_root,
+    create_sonarr_client, SonarrAPIError,
 )
 
 # Import output generation
@@ -1376,6 +1377,216 @@ def export_to_trakt(config, all_users_data, tmdb_api_key):
             log_error(f"Failed to export {display_name} to Trakt: {e}")
 
 
+def export_to_sonarr(config, all_users_data, tmdb_api_key):
+    """
+    Export TV recommendations to Sonarr.
+
+    Adds recommended shows to Sonarr for tracking/downloading.
+
+    Config options:
+        sonarr.enabled: Master switch for Sonarr integration
+        sonarr.auto_sync: Auto-add on each run (default: false)
+        sonarr.user_mode: How to handle multiple Plex users:
+            - mapping: Only export users in plex_users list (recommended)
+            - per_user: All Plex users' recommendations
+            - combined: Merge all users' recommendations
+        sonarr.plex_users: List of Plex usernames to export (for mapping mode)
+    """
+    logger.debug("export_to_sonarr called")
+    sonarr_config = config.get('sonarr', {})
+
+    # Check if Sonarr is enabled and auto_sync is on
+    if not sonarr_config.get('enabled', False):
+        return
+    if not sonarr_config.get('auto_sync', False):
+        return
+
+    # Create Sonarr client
+    sonarr_client = create_sonarr_client(config)
+    if not sonarr_client:
+        log_warning("Sonarr not configured - check config/sonarr.yml")
+        return
+
+    # Test connection
+    try:
+        sonarr_client.test_connection()
+        print(f"\n{CYAN}=== Exporting to Sonarr ==={RESET}")
+        existing_count = len(sonarr_client.get_series())
+        print(f"  Connected to Sonarr ({existing_count} existing shows)")
+    except SonarrAPIError as e:
+        log_error(f"Could not connect to Sonarr: {e}")
+        return
+
+    user_mode = sonarr_config.get('user_mode', 'mapping')
+    plex_users = sonarr_config.get('plex_users', [])
+
+    # Safety check: mapping mode requires explicit plex_users configuration
+    if user_mode == 'mapping':
+        invalid_configs = [[], ['YourPlexUsername'], None]
+        if plex_users in invalid_configs or not plex_users:
+            log_warning(
+                "Sonarr export: No plex_users configured.\n"
+                "  Edit sonarr.yml -> plex_users and add YOUR Plex username.\n"
+                "  Example: plex_users: [\"jason\"]\n"
+                "  This prevents accidentally adding other users' recommendations."
+            )
+            return
+
+    # Filter users based on mode
+    if user_mode == 'mapping':
+        plex_users_lower = [u.lower() for u in plex_users]
+        users_to_export = [
+            u for u in all_users_data
+            if u['username'].lower() in plex_users_lower
+        ]
+        if not users_to_export:
+            log_warning(
+                f"Sonarr export: No matching users found. Configured plex_users: {plex_users}\n"
+                "  Check that your Plex username matches exactly."
+            )
+            return
+    else:
+        users_to_export = all_users_data
+
+    # Get Sonarr settings from config
+    root_folder = sonarr_config.get('root_folder', '/tv')
+    quality_profile_name = sonarr_config.get('quality_profile', 'HD-1080p')
+    series_type = sonarr_config.get('series_type', 'standard')
+    season_folder = sonarr_config.get('season_folder', True)
+    tag_name = sonarr_config.get('tag', 'Curatarr')
+    append_usernames = sonarr_config.get('append_usernames', False)
+    monitored = sonarr_config.get('monitor', False)
+    monitor_option = sonarr_config.get('monitor_option', 'none')
+    search_missing = sonarr_config.get('search_missing', False)
+
+    # Get quality profile ID
+    quality_profile_id = sonarr_client.get_quality_profile_id(quality_profile_name)
+    if not quality_profile_id:
+        available = [p['name'] for p in sonarr_client.get_quality_profiles()]
+        log_error(f"Quality profile '{quality_profile_name}' not found. Available: {available}")
+        return
+
+    # Validate root folder
+    valid_root = sonarr_client.get_root_folder_path(root_folder)
+    if not valid_root:
+        available = [f['path'] for f in sonarr_client.get_root_folders()]
+        log_error(f"Root folder '{root_folder}' not found. Available: {available}")
+        return
+
+    # Collect all shows to add (handle combined mode)
+    if user_mode == 'combined':
+        all_show_imdb_ids = []
+        for user_data in users_to_export:
+            all_show_imdb_ids.extend(
+                collect_imdb_ids(user_data['shows_categorized'], tmdb_api_key, 'tv')
+            )
+        # Deduplicate
+        all_show_imdb_ids = list(dict.fromkeys(all_show_imdb_ids))
+
+        if not all_show_imdb_ids:
+            print_status("  No TV recommendations to add", "info")
+            return
+
+        print(f"  Combined mode: Processing {len(all_show_imdb_ids)} TV recommendations...")
+
+        # Get or create tag
+        tag_id = sonarr_client.get_or_create_tag(tag_name)
+
+        added = 0
+        skipped = 0
+        failed = 0
+
+        for imdb_id in all_show_imdb_ids:
+            if sonarr_client.series_exists(imdb_id):
+                skipped += 1
+                continue
+
+            # Look up series
+            series_data = sonarr_client.lookup_series(imdb_id)
+            if not series_data:
+                logger.debug(f"Could not find series for IMDB ID: {imdb_id}")
+                failed += 1
+                continue
+
+            try:
+                sonarr_client.add_series(
+                    tvdb_id=series_data['tvdbId'],
+                    title=series_data['title'],
+                    root_folder_path=valid_root,
+                    quality_profile_id=quality_profile_id,
+                    monitored=monitored,
+                    monitor_option=monitor_option,
+                    season_folder=season_folder,
+                    series_type=series_type,
+                    tag_ids=[tag_id],
+                    search_for_missing=search_missing
+                )
+                added += 1
+                print(f"  {GREEN}Added: {series_data['title']}{RESET}")
+            except SonarrAPIError as e:
+                logger.debug(f"Failed to add {series_data['title']}: {e}")
+                failed += 1
+
+        print_status(f"  Combined: {added} added, {skipped} already exist, {failed} failed", "success")
+        return
+
+    # Per-user or mapping mode
+    for user_data in users_to_export:
+        display_name = user_data['display_name']
+        username = user_data['username']
+        shows_categorized = user_data['shows_categorized']
+
+        # Collect IMDB IDs for shows
+        show_imdb_ids = collect_imdb_ids(shows_categorized, tmdb_api_key, 'tv')
+
+        if not show_imdb_ids:
+            print_status(f"  {display_name}: No TV recommendations to add", "info")
+            continue
+
+        print(f"  {display_name}: Processing {len(show_imdb_ids)} TV recommendations...")
+
+        # Get or create tag (optionally with username)
+        user_tag = f"{tag_name}-{display_name}" if append_usernames else tag_name
+        tag_id = sonarr_client.get_or_create_tag(user_tag)
+
+        added = 0
+        skipped = 0
+        failed = 0
+
+        for imdb_id in show_imdb_ids:
+            if sonarr_client.series_exists(imdb_id):
+                skipped += 1
+                continue
+
+            # Look up series
+            series_data = sonarr_client.lookup_series(imdb_id)
+            if not series_data:
+                logger.debug(f"Could not find series for IMDB ID: {imdb_id}")
+                failed += 1
+                continue
+
+            try:
+                sonarr_client.add_series(
+                    tvdb_id=series_data['tvdbId'],
+                    title=series_data['title'],
+                    root_folder_path=valid_root,
+                    quality_profile_id=quality_profile_id,
+                    monitored=monitored,
+                    monitor_option=monitor_option,
+                    season_folder=season_folder,
+                    series_type=series_type,
+                    tag_ids=[tag_id],
+                    search_for_missing=search_missing
+                )
+                added += 1
+                print(f"    {GREEN}Added: {series_data['title']}{RESET}")
+            except SonarrAPIError as e:
+                logger.debug(f"Failed to add {series_data['title']}: {e}")
+                failed += 1
+
+        print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
+
+
 def sync_watch_history_to_trakt(config, tmdb_api_key, users=None):
     """
     Sync Plex watch history to Trakt.
@@ -1624,6 +1835,12 @@ def main():
     if external_config.get('auto_open_html', False) and html_file:
         print_status("Opening watchlist in browser...", "info")
         webbrowser.open(f'file://{html_file}')
+
+    # Export to external services (if configured and auto_sync enabled)
+    if all_users_data:
+        print(f"\n{CYAN}Checking external service exports...{RESET}")
+        export_to_trakt(config, all_users_data, tmdb_api_key)
+        export_to_sonarr(config, all_users_data, tmdb_api_key)
 
 
 if __name__ == "__main__":

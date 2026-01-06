@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.2.0] - 2026-01-05
+
+### Added
+- **Sonarr integration** — Auto-add external TV recommendations to Sonarr
+  - Push recommendations directly to Sonarr for tracking/downloading
+  - Configurable via `config/sonarr.yml` (mirrors Trakt config style)
+  - Safe defaults: `monitor: false`, `search_missing: false` (just adds to library)
+  - Tagging system for easy cleanup (`Curatarr` tag on all added shows)
+  - Setup wizard integration in `run.sh` (Step 7)
+  - Supports user_mode: `mapping`, `per_user`, or `combined`
+  - 27 new unit tests for Sonarr client
+
+### Technical
+- New `utils/sonarr.py` module with `SonarrClient` class
+- ID conversion: TMDB → IMDB → Sonarr lookup → TVDB → add_series
+- Rate limiting with 0.5s delay between API calls
+
 ## [2.1.4] - 2026-01-05
 
 ### Changed

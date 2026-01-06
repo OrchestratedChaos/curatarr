@@ -1,22 +1,37 @@
 # Curatarr Sonarr Configuration
 # Auto-add recommended TV shows to Sonarr
 
-enabled: true
+enabled: false
 
 # Sonarr connection
 url: http://localhost:8989
 api_key: YOUR_SONARR_API_KEY
 
+# Sync behavior
+auto_sync: false  # Auto-add on each run (or use external recs manually)
+
+# Which Plex users' recommendations to sync:
+#   mapping  - Only users in plex_users list (recommended)
+#   per_user - All Plex users' recommendations
+#   combined - Merge all users' recommendations
+user_mode: mapping
+
+# Plex usernames to sync (for mapping mode)
+# Usually just YOUR username - not family members
+plex_users: []
+
 # Import settings
 root_folder: /path/to/tv
 quality_profile: HD-1080p
+language_profile: English  # Sonarr v3 only, ignored in v4
+series_type: standard  # standard, daily, anime
 season_folder: true
 
 # Tagging
-tag: Curatarr  # Tag added to imported shows
-append_usernames: false  # Add username to tag
+tag: Curatarr  # Tag added to imported shows for easy filtering
+append_usernames: false  # Add username to tag (e.g., "Curatarr-Jason")
 
 # Download behavior
 monitor: false  # Monitor for downloads
-monitor_option: none  # none, all, future, missing, pilot
-search_missing: false  # Search for missing episodes
+monitor_option: none  # none, all, future, missing, existing, pilot, firstSeason, lastSeason, latestSeason
+search_missing: false  # Immediately search for missing episodes
