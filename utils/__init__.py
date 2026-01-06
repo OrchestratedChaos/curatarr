@@ -195,6 +195,15 @@ from .mdblist import (
     create_mdblist_client,
 )
 
+# Simkl utilities
+from .simkl import (
+    SimklAuthError,
+    SimklAPIError,
+    SimklClient,
+    create_simkl_client,
+    get_authenticated_simkl_client,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -329,4 +338,10 @@ __all__ = [
     'MDBListAPIError',
     'MDBListClient',
     'create_mdblist_client',
+    # Simkl
+    'SimklAuthError',
+    'SimklAPIError',
+    'SimklClient',
+    'create_simkl_client',
+    'get_authenticated_simkl_client',
 ]
