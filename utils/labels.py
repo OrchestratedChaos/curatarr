@@ -3,11 +3,14 @@ Label management utilities for Curatarr.
 Handles adding, removing, and categorizing Plex labels.
 """
 
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List
 
 from .display import GREEN, RESET, log_info
+
+logger = logging.getLogger('curatarr')
 
 
 def build_label_name(base_label: str, users: List[str], single_user: str = None, append_usernames: bool = True) -> str:
@@ -95,8 +98,8 @@ def categorize_labeled_items(
                 if label_date < stale_threshold:
                     result['stale'].append(item)
                     continue
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Invalid label date format for {label_key}: {label_date_str} ({e})")
 
         # Item is fresh - track date if not already tracked
         result['fresh'].append(item)
