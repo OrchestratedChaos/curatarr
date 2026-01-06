@@ -734,7 +734,7 @@ class TestExportToTraktAutoSync:
         result = export_to_trakt(config, [], 'api_key')
         assert result is None
 
-    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('recommenders.external_exports.get_authenticated_trakt_client')
     def test_skips_when_not_authenticated(self, mock_get_auth_client):
         """Test export skips when client not authenticated."""
         mock_get_auth_client.return_value = None  # Not authenticated
@@ -792,7 +792,7 @@ class TestExportToTraktUserMode:
         result = export_to_trakt(config, [], 'api_key')
         assert result is None
 
-    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('recommenders.external_exports.get_authenticated_trakt_client')
     def test_mapping_mode_filters_users(self, mock_get_auth_client):
         """Test that mapping mode only exports specified users."""
         mock_client = Mock()
@@ -825,7 +825,7 @@ class TestExportToTraktUserMode:
         call_args_list = [str(call) for call in mock_client.sync_list.call_args_list]
         assert not any('Guest' in args for args in call_args_list)
 
-    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('recommenders.external_exports.get_authenticated_trakt_client')
     def test_mapping_mode_case_insensitive(self, mock_get_auth_client):
         """Test that mapping mode matches usernames case-insensitively."""
         mock_client = Mock()
@@ -854,8 +854,8 @@ class TestExportToTraktUserMode:
         export_to_trakt(config, all_users_data, 'api_key')
         # No warning should have been logged about missing users
 
-    @patch('recommenders.external.collect_imdb_ids')
-    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('recommenders.external_exports.collect_imdb_ids')
+    @patch('recommenders.external_exports.get_authenticated_trakt_client')
     def test_combined_mode_merges_all_users(self, mock_get_auth_client, mock_collect_ids):
         """Test that combined mode creates single merged list."""
         mock_client = Mock()
@@ -896,7 +896,7 @@ class TestExportToTraktUserMode:
         # List name should be "Curatarr - Movies" not "Curatarr - User1 - Movies"
         assert 'Curatarr - Movies' == call_args[0][0]
 
-    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('recommenders.external_exports.get_authenticated_trakt_client')
     def test_per_user_mode_exports_all(self, mock_get_auth_client):
         """Test that per_user mode exports all users."""
         mock_client = Mock()

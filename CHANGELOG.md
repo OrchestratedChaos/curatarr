@@ -2,6 +2,19 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.3] - 2026-01-05
+
+### Changed
+- Split `recommenders/external.py` (2,340 lines) into two modules for maintainability
+  - `external.py` (~1,200 lines): Core recommendation engine (discovery, profiles, matching)
+  - `external_exports.py` (~1,000 lines): Export functions (Trakt, Sonarr, Radarr, MDBList, Simkl)
+- Silent exception in `utils/labels.py` now logs debug message instead of silently passing
+
+### Technical
+- No functional changes, improved code organization
+- Export functions moved: `export_to_trakt`, `export_to_sonarr`, `export_to_radarr`, `export_to_mdblist`, `export_to_simkl`, `sync_watch_history_to_trakt`
+- Helper functions moved: `get_imdb_id`, `collect_imdb_ids`, `_sync_items_in_batches`
+
 ## [2.5.2] - 2026-01-05
 
 ### Added
