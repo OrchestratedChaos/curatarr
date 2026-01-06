@@ -35,7 +35,6 @@ from utils import (
     RATING_MULTIPLIERS, GENRE_NORMALIZATION,
     get_plex_account_ids, get_tmdb_config, get_tmdb_keywords,
     fetch_watch_history_with_tmdb,
-    print_user_header, print_user_footer, print_status,
     log_warning, log_error, load_config, clickable_link,
     calculate_rewatch_multiplier, calculate_recency_multiplier,
     calculate_similarity_score, normalize_genre, fuzzy_keyword_match,
@@ -300,7 +299,7 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
         }
 
         watched_count = cache_data.get('watched_count', len(profile['genres']))
-        print(f"  Loaded {media_type} profile from cache: {watched_count} watched, {len(profile['keywords'])} keywords")
+        print(f"  {GREEN}Loaded {media_type} profile from cache: {watched_count} watched, {len(profile['keywords'])} keywords{RESET}")
 
         return profile
 
@@ -721,10 +720,10 @@ def find_similar_content_with_profile(
     """
     if exclude_imdb_ids is None:
         exclude_imdb_ids = set()
-    print(f"Finding external {media_type}s using profile-based scoring...")
+    print(f"{CYAN}Finding external {media_type}s using profile-based scoring...{RESET}")
 
     if not user_profile or not user_profile.get('genres'):
-        print_status("No user profile data found", "warning")
+        print(f"{YELLOW}No user profile data found{RESET}")
         return []
 
     # Get weights from config or use defaults
@@ -776,10 +775,10 @@ def find_similar_content_with_profile(
             print(f"  Added {trakt_added} candidates from Trakt discovery")
 
     if not candidates:
-        print_status("No candidates found", "warning")
+        print(f"{YELLOW}No candidates found{RESET}")
         return []
 
-    print(f"  Found {len(candidates)} total candidates")
+    print(f"  {CYAN}Found {len(candidates)} total candidates{RESET}")
 
     # Now score each candidate using profile-based similarity
     scored_recommendations = []
@@ -844,7 +843,7 @@ def find_similar_content_with_profile(
         and r.get('vote_count', 0) >= OUTPUT_MIN_VOTES
     ]
 
-    print(f"  {len(quality_recs)} items meet quality bar (>={int(OUTPUT_MIN_SCORE*100)}% match, >={OUTPUT_MIN_VOTES} votes)")
+    print(f"  {GREEN}{len(quality_recs)} items meet quality bar (>={int(OUTPUT_MIN_SCORE*100)}% match, >={OUTPUT_MIN_VOTES} votes){RESET}")
 
     # Take quality items only - no backfill with low-quality
     final_recs = quality_recs[:limit]
@@ -911,7 +910,7 @@ def process_user(config, plex, username):
     user_prefs = config['users']['preferences'].get(username, {})
     display_name = user_prefs.get('display_name', username)
 
-    print_user_header(f"{display_name} (external recommendations)")
+    print(f"\n{GREEN}Processing external recommendations for: {display_name}{RESET}")
 
     # Get current library contents
     movie_library = config['plex'].get('movie_library', 'Movies')
@@ -920,7 +919,7 @@ def process_user(config, plex, username):
     library_movies = get_library_items(plex, movie_library, 'movie')
     library_shows = get_library_items(plex, tv_library, 'show')
 
-    print(f"Library has {len(library_movies['titles'])} movies, {len(library_shows['titles'])} TV shows")
+    print(f"{CYAN}Library has {len(library_movies['titles'])} movies, {len(library_shows['titles'])} TV shows{RESET}")
 
     # Load existing cache and ignore list
     movie_cache = load_cache(display_name, 'movies')
@@ -943,7 +942,7 @@ def process_user(config, plex, username):
             print(f"  Removed show from cache: {item.get('title')} (in library)")
 
     if removed_movies or removed_shows:
-        print_status(f"Removed {len(removed_movies)} movies and {len(removed_shows)} shows (now in library)", "success")
+        print(f"{GREEN}Removed {len(removed_movies)} movies and {len(removed_shows)} shows (now in library){RESET}")
 
     # Remove ignored items
     removed_ignored = 0
@@ -957,7 +956,7 @@ def process_user(config, plex, username):
             removed_ignored += 1
 
     if removed_ignored:
-        print_status(f"Removed {removed_ignored} ignored items", "warning")
+        print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
 
     # Load user profiles from cache (FAST) or build from scratch (SLOW)
     # Cache is pre-computed by internal recommenders with proper weighting
@@ -1014,7 +1013,7 @@ def process_user(config, plex, username):
             exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids('movies')
             exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids('shows')
             if exclude_movie_imdb_ids or exclude_show_imdb_ids:
-                print_status(f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist", "info")
+                print(f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist")
 
     new_movies = find_similar_content_with_profile(
         tmdb_api_key,
@@ -1108,14 +1107,14 @@ def process_user(config, plex, username):
     if len(shows_list) < show_limit:
         shows_list.extend(low_shows[:show_limit - len(shows_list)])
 
-    print(f"Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance*100)}% threshold)")
-    print(f"Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance*100)}% threshold)")
+    print(f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance*100)}% threshold){RESET}")
+    print(f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance*100)}% threshold){RESET}")
 
     # Get household streaming services from top-level config
     user_services = config.get('streaming_services', [])
 
     # Categorize by streaming service availability
-    print("Categorizing by streaming service availability...")
+    print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
     movies_categorized = categorize_by_streaming_service(
         movies_list,
         tmdb_api_key,
@@ -1142,8 +1141,8 @@ def process_user(config, plex, username):
                   sum(len(items) for items in shows_categorized['other_services'].values()) + \
                   len(shows_categorized['acquire'])
 
-    print_status(f"Processed: {total_movies} movies, {total_shows} shows", "success")
-    print_user_footer(f"{display_name} (external recommendations)")
+    print(f"{GREEN}Processed: {total_movies} movies, {total_shows} shows{RESET}")
+    print(f"\nExternal recommendation process completed for {display_name}!")
 
     # Return data for combined HTML generation and Trakt sync
     return {
@@ -1156,8 +1155,7 @@ def process_user(config, plex, username):
     }
 
 def main():
-    print(f"\n{CYAN}External Recommendations Generator{RESET}")
-    print("-" * 50)
+    print(f"\n{GREEN}=== External Recommendations Generator ==={RESET}")
 
     # Load config from project root (one level up from recommenders/)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1176,9 +1174,9 @@ def main():
     # Connect to Plex
     try:
         plex = PlexServer(config['plex']['url'], config['plex']['token'])
-        print_status("Connected to Plex", "success")
+        print(f"{GREEN}Connected to Plex{RESET}")
     except Exception as e:
-        print_status(f"Error connecting to Plex: {e}", "error")
+        log_error(f"Error connecting to Plex: {e}")
         sys.exit(1)
 
     # Process each user and collect data for combined HTML
@@ -1189,7 +1187,7 @@ def main():
             if user_data:
                 all_users_data.append(user_data)
         except Exception as e:
-            print_status(f"Error processing {username}: {e}", "error")
+            log_error(f"Error processing {username}: {e}")
             traceback.print_exc()
 
     # Generate combined HTML with all users
@@ -1197,10 +1195,10 @@ def main():
 
     if all_users_data:
         html_file = generate_combined_html(all_users_data, output_dir, tmdb_api_key, get_imdb_id)
-        print_status("Combined watchlist generated!", "success")
+        print(f"{GREEN}Combined watchlist generated!{RESET}")
     else:
         html_file = None
-        print_status("No user data to generate watchlist", "warning")
+        print(f"{YELLOW}No user data to generate watchlist{RESET}")
 
     print(f"Watchlists saved to: {output_dir}")
     if html_file:
@@ -1210,12 +1208,12 @@ def main():
     # Auto-open HTML if enabled
     external_config = config.get('external_recommendations', {})
     if external_config.get('auto_open_html', False) and html_file:
-        print_status("Opening watchlist in browser...", "info")
+        print("Opening watchlist in browser...")
         webbrowser.open(f'file://{html_file}')
 
     # Export to external services (if configured and auto_sync enabled)
     if all_users_data:
-        print(f"\n{CYAN}Checking external service exports...{RESET}")
+        print(f"\n{GREEN}=== Checking External Service Exports ==={RESET}")
         export_to_trakt(config, all_users_data, tmdb_api_key)
         export_to_sonarr(config, all_users_data, tmdb_api_key)
         export_to_radarr(config, all_users_data, tmdb_api_key)

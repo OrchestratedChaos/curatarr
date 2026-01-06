@@ -26,6 +26,26 @@ logger = logging.getLogger('curatarr')
 TRAKT_BATCH_SIZE = 100
 
 
+def flatten_categorized(categorized: Dict) -> List[Dict]:
+    """Flatten categorized items structure into a single list.
+
+    The categorized dict has structure:
+        - user_services: {service_name: [items...]}
+        - other_services: {service_name: [items...]}
+        - acquire: [items...]
+
+    Returns a flat list of all items.
+    """
+    items = []
+    for key, value in categorized.items():
+        if isinstance(value, dict):  # user_services or other_services
+            for service_items in value.values():
+                items.extend(service_items)
+        elif isinstance(value, list):  # acquire
+            items.extend(value)
+    return items
+
+
 def get_imdb_id(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> Optional[str]:
     """Fetch IMDB ID from TMDB external IDs endpoint."""
     try:
@@ -373,12 +393,11 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
     if user_mode == 'combined':
         all_show_tvdb_ids = []
         for user_data in users_to_export:
-            # Collect TVDB IDs directly from shows_categorized
-            for category_shows in user_data['shows_categorized'].values():
-                for show in category_shows:
-                    tvdb_id = show.get('tvdb_id')
-                    if tvdb_id:
-                        all_show_tvdb_ids.append(tvdb_id)
+            # Collect TVDB IDs (flatten nested structure)
+            for show in flatten_categorized(user_data['shows_categorized']):
+                tvdb_id = show.get('tvdb_id')
+                if tvdb_id:
+                    all_show_tvdb_ids.append(tvdb_id)
         # Deduplicate
         all_show_tvdb_ids = list(dict.fromkeys(all_show_tvdb_ids))
 
@@ -433,13 +452,12 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         display_name = user_data['display_name']
         shows_categorized = user_data['shows_categorized']
 
-        # Collect TVDB IDs for shows
+        # Collect TVDB IDs for shows (flatten nested structure)
         show_tvdb_ids = []
-        for category_shows in shows_categorized.values():
-            for show in category_shows:
-                tvdb_id = show.get('tvdb_id')
-                if tvdb_id:
-                    show_tvdb_ids.append(tvdb_id)
+        for show in flatten_categorized(shows_categorized):
+            tvdb_id = show.get('tvdb_id')
+            if tvdb_id:
+                show_tvdb_ids.append(tvdb_id)
         # Deduplicate
         show_tvdb_ids = list(dict.fromkeys(show_tvdb_ids))
 
@@ -588,12 +606,11 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
     if user_mode == 'combined':
         all_movie_tmdb_ids = []
         for user_data in users_to_export:
-            # Collect TMDB IDs directly from movies_categorized
-            for category_movies in user_data['movies_categorized'].values():
-                for movie in category_movies:
-                    tmdb_id = movie.get('tmdb_id')
-                    if tmdb_id:
-                        all_movie_tmdb_ids.append(tmdb_id)
+            # Collect TMDB IDs (flatten nested structure)
+            for movie in flatten_categorized(user_data['movies_categorized']):
+                tmdb_id = movie.get('tmdb_id')
+                if tmdb_id:
+                    all_movie_tmdb_ids.append(tmdb_id)
         # Deduplicate
         all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
 
@@ -647,13 +664,12 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         display_name = user_data['display_name']
         movies_categorized = user_data['movies_categorized']
 
-        # Collect TMDB IDs for movies
+        # Collect TMDB IDs for movies (flatten nested structure)
         movie_tmdb_ids = []
-        for category_movies in movies_categorized.values():
-            for movie in category_movies:
-                tmdb_id = movie.get('tmdb_id')
-                if tmdb_id:
-                    movie_tmdb_ids.append(tmdb_id)
+        for movie in flatten_categorized(movies_categorized):
+            tmdb_id = movie.get('tmdb_id')
+            if tmdb_id:
+                movie_tmdb_ids.append(tmdb_id)
         # Deduplicate
         movie_tmdb_ids = list(dict.fromkeys(movie_tmdb_ids))
 
