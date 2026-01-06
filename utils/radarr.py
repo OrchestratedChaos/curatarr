@@ -100,8 +100,8 @@ class RadarrClient:
                         error_msg = error_data[0].get('errorMessage', error_msg)
                     elif isinstance(error_data, dict):
                         error_msg = error_data.get('message', error_msg)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse error response JSON: {e}")
                 raise RadarrAPIError(f"API error {response.status_code}: {error_msg}")
 
             if response.status_code == 204:

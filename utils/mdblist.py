@@ -96,8 +96,8 @@ class MDBListClient:
                     error_data = response.json()
                     if isinstance(error_data, dict):
                         error_msg = error_data.get('error', error_msg)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to parse error response JSON: {e}")
                 raise MDBListAPIError(f"API error {response.status_code}: {error_msg}")
 
             if response.status_code == 204:

@@ -20,7 +20,7 @@ from utils import (
     calculate_rewatch_multiplier,
     calculate_similarity_score,
     show_progress,
-    extract_genres, extract_ids_from_guids,
+    extract_genres, extract_ids_from_guids, extract_rating,
     adapt_config_for_media_type,
     format_media_output,
     print_similarity_breakdown,
@@ -367,15 +367,9 @@ class PlexTVRecommender(BaseRecommender):
             audience_rating = 0
             tmdb_keywords = []
             
-            if self.show_rating and hasattr(show, 'ratings'):
-                for rating in show.ratings:
-                    if (getattr(rating, 'image', '') == 'imdb://image.rating' and 
-                        getattr(rating, 'type', '') == 'audience'):
-                        try:
-                            audience_rating = float(rating.value)
-                            break
-                        except (ValueError, AttributeError):
-                            pass
+            # Extract rating using shared utility
+            if self.show_rating:
+                audience_rating = extract_rating(show)
                             
             if self.use_tmdb_keywords and self.tmdb_api_key:
                 tmdb_id = self._get_plex_item_tmdb_id(show)

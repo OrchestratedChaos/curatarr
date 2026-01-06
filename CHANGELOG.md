@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.5.1] - 2026-01-05
+
+### Fixed
+- Silent exception handlers now log debug messages instead of silently passing
+  - Affects: `utils/radarr.py`, `utils/sonarr.py`, `utils/mdblist.py`, `utils/trakt.py`
+
+### Changed
+- Rating tier thresholds and multipliers extracted to named constants in `utils/config.py`
+  - `RATING_TIER_5_STAR`, `RATING_TIER_4_STAR`, `RATING_TIER_3_STAR`
+  - `RATING_MULTIPLIER_5_STAR`, `RATING_MULTIPLIER_4_STAR`, etc.
+- Consolidated duplicate rating extraction logic to use `extract_rating()` utility
+- Extracted duplicate Plex account ID resolution to `_resolve_myplex_account_ids()` helper
+
+### Technical
+- Code cleanup based on comprehensive codebase review
+- No functional changes, improved maintainability
+
 ## [2.5.0] - 2026-01-05
 
 ### Added

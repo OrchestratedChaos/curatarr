@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Project version - single source of truth
-__version__ = "2.5.0"
+__version__ = "2.5.1"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
@@ -70,6 +70,18 @@ DEFAULT_NEGATIVE_MULTIPLIERS = {
 
 # Default threshold for negative signals (Plex 0-10 scale)
 DEFAULT_NEGATIVE_THRESHOLD = 3  # Ratings 0-3 become negative signals
+
+# Rating tier thresholds (Plex uses 0-10 scale, Plex UI shows 0-5 stars)
+RATING_TIER_5_STAR = 9.0    # 5 stars: ratings 9-10
+RATING_TIER_4_STAR = 7.0    # 4 stars: ratings 7-8
+RATING_TIER_3_STAR = 5.0    # 3 stars: ratings 5-6
+
+# Rating tier multipliers for preference weighting
+RATING_MULTIPLIER_5_STAR = 1.0     # Strong preference
+RATING_MULTIPLIER_4_STAR = 0.75    # Moderate preference
+RATING_MULTIPLIER_3_STAR = 0.5     # Weak preference
+RATING_MULTIPLIER_2_STAR = 0.25    # Very weak preference
+RATING_MULTIPLIER_UNRATED = 0.6    # Default for unrated content
 
 
 def check_cache_version(cache_path: str, cache_type: str = "cache") -> bool:

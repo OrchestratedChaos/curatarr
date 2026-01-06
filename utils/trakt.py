@@ -898,8 +898,8 @@ def load_trakt_enhance_cache(cache_dir: str) -> Dict:
                         'movie_ids': set(data.get('movie_ids', [])),
                         'show_ids': set(data.get('show_ids', []))
                     }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to load Trakt enhance cache: {e}")
     return {'movie_ids': set(), 'show_ids': set()}
 
 
@@ -920,8 +920,8 @@ def save_trakt_enhance_cache(cache_dir: str, movie_ids: set, show_ids: set):
                 'movie_ids': list(movie_ids),
                 'show_ids': list(show_ids)
             }, f)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to save Trakt enhance cache: {e}")
 
 
 def fetch_tmdb_details_for_profile(tmdb_api_key: str, tmdb_id: int, media_type: str) -> Optional[Dict]:
