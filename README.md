@@ -30,6 +30,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ### For Acquisition (What to Get)
 - **External watchlists** — Content NOT in your library that users would love
+- **Huntarr** — Find missing movies from collections you've started (complete that trilogy!)
 - **Streaming service grouping** — "Available on Netflix" vs "Need to acquire"
 - **Sonarr/Radarr integration** — Push recommendations directly for download
 - **Trakt/Simkl/MDBList export** — Sync to tracking services and list managers
@@ -336,6 +337,28 @@ export:
 
 **Setup:** Run `./run.sh` and follow Step 10, or manually create `config/simkl.yml`.
 
+### Huntarr: Missing Collection Movies
+
+Huntarr scans your Plex library for movies that belong to collections (trilogies, franchises, etc.) and shows you what's missing. Perfect for completing that Star Wars saga or finding the sequel you didn't know existed.
+
+```yaml
+# In config/config.yml
+huntarr: true  # Enabled by default
+```
+
+**Features:**
+- Scans all movies in your library for TMDB collection IDs
+- Shows collection name and how many you own (e.g., "2/3")
+- Displays streaming availability for missing movies
+- Only includes released movies (no "Untitled Sequel" placeholders)
+- Appears as a separate "Huntarr" tab in the HTML watchlist
+
+**Command-line flags:**
+- `--no-huntarr` — Skip Huntarr scan (faster if you only want recommendations)
+- `--huntarr-only` — Run only Huntarr, skip recommendations
+
+**Caching:** Huntarr caches collection data for 7 days to avoid repeated API calls. Cache auto-invalidates when your library changes.
+
 ### External Recommendations: Relevance Score
 
 The `min_relevance_score` setting (0.0-1.0) controls how strictly personal the external watchlist recommendations are:
@@ -400,7 +423,7 @@ curatarr/
 │   ├── external.py          # External watchlist generator
 │   └── base.py              # Shared base classes
 ├── utils/                   # Shared utilities (20 modules)
-├── tests/                   # Unit tests (840+)
+├── tests/                   # Unit tests (960+)
 ├── run.sh                   # Main entry point (macOS/Linux)
 ├── run.ps1                  # Main entry point (Windows)
 ├── Dockerfile               # Docker image definition

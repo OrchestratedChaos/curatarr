@@ -2,6 +2,46 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.7.1] - 2026-01-06
+
+### Fixed
+- Huntarr now filters out unreleased movies (no release date/year)
+  - Only shows movies you can actually acquire
+  - Collection counts only include released movies (e.g., "2/3" not "2/4" when 1 is unreleased)
+  - Bumped Huntarr cache version to invalidate stale data
+
+### Added
+- Expanded test coverage from 61% to 85%
+  - New test files: `test_cli.py`, `test_external_exports.py`, `test_external_output.py`
+  - Added 55+ new tests across CLI utilities, export functions, and Trakt discovery
+- Cache versioning for external recommendations and Trakt discovery caches
+
+## [2.7.0] - 2026-01-06
+
+### Added
+- **Score-sorted display with streaming icons**
+  - Recommendations now displayed in flat tables sorted by match score (highest first)
+  - New "Streaming" column shows colored badges for all available streaming services
+  - User's streaming services highlighted with gold border
+  - Replaces old grouped-by-service layout for cleaner, score-focused view
+- **Huntarr** (enabled by default)
+  - Hunt down missing movies from collections you've started
+  - New "Huntarr" tab on HTML watchlist
+  - Scans Plex library for movies with TMDB collection IDs
+  - Shows collection name, owned count, and streaming availability
+  - Flags: `--no-huntarr` to disable, `--huntarr-only` to run without recommendations
+  - Designed for potential future spinoff as standalone tool
+- **Column sorting**
+  - Click any column header to sort by that column
+  - Supports ascending/descending toggle
+  - Works with text, numbers, percentages, and fractions (e.g., "2/4")
+  - Visual indicators (arrows) show current sort state
+
+### Changed
+- `categorize_by_streaming_service()` now returns `all_items` list with streaming info attached to each item
+- `generate_combined_html()` accepts optional `missing_sequels` parameter
+- User tabs now centered on page with tighter background wrapping
+
 ## [2.6.1] - 2026-01-06
 
 ### Fixed

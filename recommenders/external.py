@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import math
+import time
 import requests
 import traceback
 import urllib3
@@ -539,6 +540,291 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
         return []
 
 
+def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Dict]:
+    """
+    Fetch all movies in a TMDB collection.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        collection_id: TMDB collection ID
+
+    Returns:
+        Dict with collection name and list of movies, or None if failed
+    """
+    try:
+        url = f"https://api.themoviedb.org/3/collection/{collection_id}"
+        params = {'api_key': tmdb_api_key}
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        movies = []
+        for part in data.get('parts', []):
+            movies.append({
+                'tmdb_id': part['id'],
+                'title': part.get('title', ''),
+                'year': (part.get('release_date') or '')[:4],
+                'release_date': part.get('release_date', '')
+            })
+
+        # Sort by release date
+        movies.sort(key=lambda x: x.get('release_date', ''))
+
+        return {
+            'collection_id': collection_id,
+            'collection_name': data.get('name', 'Unknown Collection'),
+            'movies': movies
+        }
+    except (requests.RequestException, KeyError) as e:
+        logger.debug(f"Error fetching collection {collection_id}: {e}")
+        return None
+
+
+HUNTARR_CACHE_VERSION = 2  # v2: Filter out unreleased movies
+EXTERNAL_RECS_CACHE_VERSION = 1
+
+
+def load_huntarr_cache(cache_path: str, stale_days: int = 7) -> Dict:
+    """Load Huntarr cache from disk."""
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                cache = json.load(f)
+                if cache.get('version') == HUNTARR_CACHE_VERSION:
+                    # Check staleness
+                    cached_at = cache.get('cached_at', 0)
+                    age_days = (time.time() - cached_at) / 86400
+                    if age_days < stale_days:
+                        return cache
+    except (json.JSONDecodeError, IOError):
+        pass
+    return {}
+
+
+def save_huntarr_cache(cache_path: str, cache: Dict) -> None:
+    """Save Huntarr cache to disk."""
+    cache['version'] = HUNTARR_CACHE_VERSION
+    cache['cached_at'] = time.time()
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'w') as f:
+            json.dump(cache, f)
+    except IOError as e:
+        log_warning(f"Could not save Huntarr cache: {e}")
+
+
+def find_missing_sequels(
+    tmdb_api_key: str,
+    plex: Any,
+    library_name: str,
+    user_services: List[str],
+    stale_days: int = 7
+) -> List[Dict]:
+    """
+    Find missing movies from collections user has started.
+
+    Scans library for movies with collection IDs, fetches full collections
+    from TMDB, and identifies gaps (movies not in library).
+
+    Args:
+        tmdb_api_key: TMDB API key
+        plex: PlexServer instance
+        library_name: Name of movie library
+        user_services: List of user's streaming services
+        stale_days: Days before cache is considered stale
+
+    Returns:
+        List of missing movie dicts with streaming info
+    """
+    from utils.display import show_progress
+
+    # Cache paths
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cache_path = os.path.join(project_root, 'cache', 'huntarr_cache.json')
+
+    try:
+        library = plex.library.section(library_name)
+        items = library.all()
+    except Exception as e:
+        log_warning(f"Could not access library {library_name}: {e}")
+        return []
+
+    # Build current library state
+    library_tmdb_ids = set()
+    for item in items:
+        for guid in item.guids:
+            if 'tmdb://' in guid.id:
+                try:
+                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    library_tmdb_ids.add(tmdb_id)
+                    break
+                except (ValueError, IndexError):
+                    continue
+
+    # Load cache and check if library changed
+    cache = load_huntarr_cache(cache_path, stale_days)
+    cached_library_ids = set(cache.get('library_tmdb_ids', []))
+
+    if cached_library_ids == library_tmdb_ids and cache.get('missing_sequels'):
+        print(f"{GREEN}  Using cached Huntarr data ({len(cache['missing_sequels'])} missing movies){RESET}")
+        # Update streaming services for current user
+        missing = cache['missing_sequels']
+        for item in missing:
+            item['on_user_services'] = [s for s in item.get('streaming_services', []) if s in user_services]
+        return missing
+
+    total_items = len(items)
+    print(f"{CYAN}  Scanning {total_items} movies for collections...{RESET}")
+
+    # Step 1: Find all movies with collection IDs and track which are owned
+    collection_owned = {}  # collection_id -> set of owned tmdb_ids
+
+    # Use cached movie->collection mapping if available
+    movie_collections = cache.get('movie_collections', {})
+    movies_to_fetch = []
+
+    for i, item in enumerate(items):
+        if i % 50 == 0:
+            show_progress("  Scanning library", i + 1, total_items)
+
+        tmdb_id = None
+        for guid in item.guids:
+            if 'tmdb://' in guid.id:
+                try:
+                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    break
+                except (ValueError, IndexError):
+                    continue
+
+        if not tmdb_id:
+            continue
+
+        # Check cache first
+        tmdb_id_str = str(tmdb_id)
+        if tmdb_id_str in movie_collections:
+            coll_id = movie_collections[tmdb_id_str]
+            if coll_id:
+                if coll_id not in collection_owned:
+                    collection_owned[coll_id] = set()
+                collection_owned[coll_id].add(tmdb_id)
+        else:
+            movies_to_fetch.append(tmdb_id)
+
+    show_progress("  Scanning library", total_items, total_items)
+
+    # Fetch collection IDs for uncached movies
+    if movies_to_fetch:
+        print(f"{CYAN}  Fetching collection data for {len(movies_to_fetch)} new movies...{RESET}")
+        for i, tmdb_id in enumerate(movies_to_fetch):
+            if i % 10 == 0:
+                show_progress("  Fetching collections", i + 1, len(movies_to_fetch))
+
+            try:
+                url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+                params = {'api_key': tmdb_api_key}
+                response = requests.get(url, params=params, timeout=10)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    collection = data.get('belongs_to_collection')
+                    if collection:
+                        coll_id = collection['id']
+                        movie_collections[str(tmdb_id)] = coll_id
+                        if coll_id not in collection_owned:
+                            collection_owned[coll_id] = set()
+                        collection_owned[coll_id].add(tmdb_id)
+                    else:
+                        movie_collections[str(tmdb_id)] = None
+            except (requests.RequestException, KeyError):
+                continue
+
+        show_progress("  Fetching collections", len(movies_to_fetch), len(movies_to_fetch))
+
+    print(f"{GREEN}  Found {len(collection_owned)} collections{RESET}")
+
+    # Step 2: Fetch full collection details and find gaps
+    missing_sequels = []
+    collections_with_gaps = 0
+    total_collections = len(collection_owned)
+
+    # Use cached collection details
+    collection_details_cache = cache.get('collection_details', {})
+
+    print(f"{CYAN}  Checking collections for missing movies...{RESET}")
+
+    for i, (coll_id, owned_ids) in enumerate(collection_owned.items()):
+        if i % 5 == 0:
+            show_progress("  Checking collections", i + 1, total_collections)
+
+        coll_id_str = str(coll_id)
+        if coll_id_str in collection_details_cache:
+            coll_details = collection_details_cache[coll_id_str]
+        else:
+            coll_details = get_collection_details(tmdb_api_key, coll_id)
+            if coll_details:
+                collection_details_cache[coll_id_str] = coll_details
+
+        if not coll_details:
+            continue
+
+        coll_name = coll_details['collection_name']
+        all_movies = coll_details['movies']
+
+        # Filter to only released movies (must have a year)
+        released_movies = [m for m in all_movies if m.get('year')]
+        total_count = len(released_movies)
+
+        # Skip collections with no released movies
+        if total_count == 0:
+            continue
+
+        # Skip if user owns all released movies in collection
+        if all(m['tmdb_id'] in library_tmdb_ids for m in released_movies):
+            continue
+
+        collections_with_gaps += 1
+
+        # Count owned released movies
+        owned_released = sum(1 for m in released_movies if m['tmdb_id'] in library_tmdb_ids)
+
+        # Find missing movies (only released ones)
+        for movie in released_movies:
+            if movie['tmdb_id'] not in library_tmdb_ids:
+                # Get streaming availability
+                providers = get_watch_providers(tmdb_api_key, movie['tmdb_id'], 'movie')
+
+                missing_sequels.append({
+                    'tmdb_id': movie['tmdb_id'],
+                    'title': movie['title'],
+                    'year': movie['year'],
+                    'collection_id': coll_id,
+                    'collection_name': coll_name,
+                    'owned_count': owned_released,
+                    'total_count': total_count,
+                    'streaming_services': providers,
+                    'on_user_services': [s for s in providers if s in user_services],
+                    'release_date': movie.get('release_date', '')
+                })
+
+    show_progress("  Checking collections", total_collections, total_collections)
+
+    # Sort by collection name, then release date within collection
+    missing_sequels.sort(key=lambda x: (x['collection_name'], x.get('release_date', '')))
+
+    # Save cache
+    save_huntarr_cache(cache_path, {
+        'library_tmdb_ids': list(library_tmdb_ids),
+        'movie_collections': movie_collections,
+        'collection_details': collection_details_cache,
+        'missing_sequels': missing_sequels
+    })
+
+    print(f"{GREEN}  Found {len(missing_sequels)} missing movies across {collections_with_gaps} incomplete collections{RESET}")
+    return missing_sequels
+
+
 def fetch_similar_from_tmdb(
     tmdb_api_key: str,
     tmdb_id: int,
@@ -613,22 +899,33 @@ def categorize_by_streaming_service(
     media_type: str = 'movie'
 ) -> Dict:
     """
-    Categorize recommendations by streaming availability
+    Categorize recommendations by streaming availability.
+    Each item gets 'streaming_services' and 'on_user_services' added.
+
     Returns dict: {
         'user_services': {service_name: [items]},
         'other_services': {service_name: [items]},
-        'acquire': [items]
+        'acquire': [items],
+        'all_items': [all items sorted by score with streaming info]
     }
     """
     result = {
         'user_services': {},
         'other_services': {},
-        'acquire': []
+        'acquire': [],
+        'all_items': []
     }
 
     for item in recommendations:
         tmdb_id = item['tmdb_id']
         providers = get_watch_providers(tmdb_api_key, tmdb_id, media_type)
+
+        # Attach streaming info to item
+        item['streaming_services'] = providers
+        item['on_user_services'] = [s for s in providers if s in user_services]
+
+        # Add to all_items for flat display
+        result['all_items'].append(item)
 
         if not providers:
             # Not available on any streaming service
@@ -655,6 +952,9 @@ def categorize_by_streaming_service(
                             result['other_services'][service] = []
                         result['other_services'][service].append(item)
                         break  # Only add to ONE service
+
+    # Sort all_items by score (highest first)
+    result['all_items'].sort(key=lambda x: x.get('score', 0), reverse=True)
 
     return result
 
@@ -1005,15 +1305,24 @@ def load_cache(display_name: str, media_type: str) -> Dict:
     if os.path.exists(cache_file):
         with open(cache_file, 'r') as f:
             cache = json.load(f)
+
+            # Check cache version - invalidate old format
+            cache_version = cache.get('version', 0)
+            if cache_version < EXTERNAL_RECS_CACHE_VERSION:
+                print(f"  {YELLOW}External recs cache outdated (v{cache_version}), rebuilding...{RESET}")
+                return {}
+
+            items = cache.get('items', {})
+
             # Add tmdb_id to items that don't have it (backwards compatibility)
-            for tmdb_id_str, item in cache.items():
+            for tmdb_id_str, item in items.items():
                 if 'tmdb_id' not in item:
                     item['tmdb_id'] = int(tmdb_id_str)
 
             # Filter out items without enough votes (match score filtering happens at output)
             filtered = {}
             removed_count = 0
-            for tmdb_id_str, item in cache.items():
+            for tmdb_id_str, item in items.items():
                 vote_count = item.get('vote_count', 0)  # Missing vote_count = needs re-fetch
                 if vote_count >= MIN_VOTE_COUNT:
                     filtered[tmdb_id_str] = item
@@ -1027,14 +1336,18 @@ def load_cache(display_name: str, media_type: str) -> Dict:
     return {}
 
 def save_cache(display_name: str, media_type: str, cache_data: Dict) -> None:
-    """Save recommendations cache"""
+    """Save recommendations cache with version."""
     cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
     cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
 
+    versioned_cache = {
+        'version': EXTERNAL_RECS_CACHE_VERSION,
+        'items': cache_data
+    }
     with open(cache_file, 'w') as f:
-        json.dump(cache_data, f, indent=2)
+        json.dump(versioned_cache, f, indent=2)
 
 def load_ignore_list(display_name: str) -> Set[str]:
     """Load user's manual ignore list"""
@@ -1339,16 +1652,44 @@ def process_user(config, plex, username):
         'movies_categorized': movies_categorized,
         'shows_categorized': shows_categorized,
         'movie_profile': movie_profile,
-        'show_profile': show_profile
+        'show_profile': show_profile,
+        'user_services': user_services
     }
 
 def main():
-    print(f"\n{GREEN}=== External Recommendations Generator ==={RESET}")
+    import argparse
+    parser = argparse.ArgumentParser(description='External Recommendations Generator')
+    parser.add_argument('--no-huntarr', action='store_true',
+                        help='Disable Huntarr (skip finding missing collection movies)')
+    parser.add_argument('--huntarr-only', action='store_true',
+                        help='Run only Huntarr (skip recommendations, just find missing movies)')
+    args = parser.parse_args()
 
     # Load config from project root (one level up from recommenders/)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(project_root, 'config/config.yml')
     config = load_config(config_path)
+
+    # Huntarr: config sets default, CLI flags override
+    # Config: huntarr: true/false (default: true)
+    # CLI: --no-huntarr disables, --huntarr-only runs only huntarr
+    huntarr_config = config.get('huntarr', True)
+    if args.huntarr_only:
+        run_huntarr = True
+        run_recommendations = False
+    elif args.no_huntarr:
+        run_huntarr = False
+        run_recommendations = True
+    else:
+        run_huntarr = huntarr_config
+        run_recommendations = True
+
+    if args.huntarr_only:
+        print(f"\n{GREEN}=== Huntarr: Missing Collection Finder ==={RESET}")
+    else:
+        print(f"\n{GREEN}=== External Recommendations Generator ==={RESET}")
+        if run_huntarr:
+            print(f"{CYAN}Huntarr enabled{RESET}")
 
     # Get TMDB API key
     tmdb_api_key = get_tmdb_config(config)['api_key']
@@ -1369,52 +1710,65 @@ def main():
 
     # Process each user and collect data for combined HTML
     all_users_data = []
-    for username in users:
-        try:
-            user_data = process_user(config, plex, username)
-            if user_data:
-                all_users_data.append(user_data)
-        except Exception as e:
-            log_error(f"Error processing {username}: {e}")
-            traceback.print_exc()
-
-    # Build shared counts: how many users want each item
     movie_counts = {}  # tmdb_id -> count
     show_counts = {}
-    total_users = len(all_users_data)
+    total_users = 0
 
-    for user_data in all_users_data:
-        # Count movies across all categories
-        for category in ['user_services', 'other_services']:
-            for service_items in user_data.get('movies_categorized', {}).get(category, {}).values():
-                for item in service_items:
-                    tmdb_id = str(item.get('tmdb_id'))
-                    movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
-        for item in user_data.get('movies_categorized', {}).get('acquire', []):
-            tmdb_id = str(item.get('tmdb_id'))
-            movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
-        # Count shows across all categories
-        for category in ['user_services', 'other_services']:
-            for service_items in user_data.get('shows_categorized', {}).get(category, {}).values():
-                for item in service_items:
-                    tmdb_id = str(item.get('tmdb_id'))
-                    show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
-        for item in user_data.get('shows_categorized', {}).get('acquire', []):
-            tmdb_id = str(item.get('tmdb_id'))
-            show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
+    if run_recommendations:
+        for username in users:
+            try:
+                user_data = process_user(config, plex, username)
+                if user_data:
+                    all_users_data.append(user_data)
+            except Exception as e:
+                log_error(f"Error processing {username}: {e}")
+                traceback.print_exc()
+
+        # Build shared counts: how many users want each item
+        total_users = len(all_users_data)
+
+        for user_data in all_users_data:
+            # Count movies across all categories
+            for category in ['user_services', 'other_services']:
+                for service_items in user_data.get('movies_categorized', {}).get(category, {}).values():
+                    for item in service_items:
+                        tmdb_id = str(item.get('tmdb_id'))
+                        movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
+            for item in user_data.get('movies_categorized', {}).get('acquire', []):
+                tmdb_id = str(item.get('tmdb_id'))
+                movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
+            # Count shows across all categories
+            for category in ['user_services', 'other_services']:
+                for service_items in user_data.get('shows_categorized', {}).get(category, {}).values():
+                    for item in service_items:
+                        tmdb_id = str(item.get('tmdb_id'))
+                        show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
+            for item in user_data.get('shows_categorized', {}).get('acquire', []):
+                tmdb_id = str(item.get('tmdb_id'))
+                show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
+
+    # Huntarr: Find missing sequels (on by default, skip with --no-huntarr)
+    missing_sequels = []
+    if run_huntarr:
+        movie_library = config['plex'].get('movie_library', 'Movies')
+        user_services = config.get('streaming_services', [])
+        stale_days = config.get('collections', {}).get('stale_removal_days', 7)
+        print(f"\n{CYAN}=== Huntarr: Finding Missing Collection Movies ==={RESET}")
+        missing_sequels = find_missing_sequels(tmdb_api_key, plex, movie_library, user_services, stale_days)
 
     # Generate combined HTML with all users
     output_dir = os.path.join(project_root, 'recommendations', 'external')
 
-    if all_users_data:
+    if all_users_data or missing_sequels:
         html_file = generate_combined_html(
             all_users_data, output_dir, tmdb_api_key, get_imdb_id,
-            movie_counts=movie_counts, show_counts=show_counts, total_users=total_users
+            movie_counts=movie_counts, show_counts=show_counts, total_users=total_users,
+            missing_sequels=missing_sequels
         )
-        print(f"{GREEN}Combined watchlist generated!{RESET}")
+        print(f"{GREEN}Watchlist generated!{RESET}")
     else:
         html_file = None
-        print(f"{YELLOW}No user data to generate watchlist{RESET}")
+        print(f"{YELLOW}No data to generate watchlist{RESET}")
 
     print(f"Watchlists saved to: {output_dir}")
     if html_file:
@@ -1428,7 +1782,7 @@ def main():
         webbrowser.open(f'file://{html_file}')
 
     # Export to external services (if configured and auto_sync enabled)
-    if all_users_data:
+    if all_users_data and run_recommendations:
         print(f"\n{GREEN}=== Checking External Service Exports ==={RESET}")
         export_to_trakt(config, all_users_data, tmdb_api_key)
         export_to_sonarr(config, all_users_data, tmdb_api_key)

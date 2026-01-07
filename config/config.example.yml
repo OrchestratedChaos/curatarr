@@ -32,6 +32,9 @@ general:
   log_retention_days: 7
   auto_update: true
 
+# Huntarr: Find missing movies from collections you've started
+huntarr: true  # Set to false to disable, or use --no-huntarr flag
+
 # Optional: Logging level
 logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR

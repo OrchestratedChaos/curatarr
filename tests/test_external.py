@@ -24,6 +24,11 @@ from recommenders.external import (
     export_to_trakt,
     SERVICE_DISPLAY_NAMES,
     TMDB_PROVIDERS,
+    get_collection_details,
+    load_huntarr_cache,
+    save_huntarr_cache,
+    HUNTARR_CACHE_VERSION,
+    EXTERNAL_RECS_CACHE_VERSION,
 )
 from utils.trakt import enhance_profile_with_trakt
 from collections import Counter
@@ -219,21 +224,23 @@ class TestGenerateCombinedHtml:
         mock_get_imdb = lambda api_key, tmdb_id, media_type: 'tt1234567'
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            test_movie = {'tmdb_id': 1, 'title': 'Test Movie', 'year': '2023', 'rating': 7.5, 'score': 0.8, 'added_date': datetime.now().isoformat(), 'streaming_services': [], 'on_user_services': []}
             all_users_data = [
                 {
                     'username': 'testuser',
                     'display_name': 'Test User',
+                    'user_services': [],
                     'movies_categorized': {
                         'user_services': {},
                         'other_services': {},
-                        'acquire': [
-                            {'tmdb_id': 1, 'title': 'Test Movie', 'year': '2023', 'rating': 7.5, 'score': 0.8, 'added_date': datetime.now().isoformat()}
-                        ]
+                        'acquire': [test_movie],
+                        'all_items': [test_movie]
                     },
                     'shows_categorized': {
                         'user_services': {},
                         'other_services': {},
-                        'acquire': []
+                        'acquire': [],
+                        'all_items': []
                     }
                 }
             ]
@@ -303,18 +310,19 @@ class TestGenerateCombinedHtml:
         mock_get_imdb = lambda api_key, tmdb_id, media_type: 'tt1234567'
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            test_movie = {'tmdb_id': 1, 'title': 'Movie', 'year': '2023', 'rating': 7.0, 'score': 0.5, 'added_date': datetime.now().isoformat(), 'streaming_services': [], 'on_user_services': []}
             all_users_data = [
                 {
                     'username': 'testuser',
                     'display_name': 'Test',
+                    'user_services': [],
                     'movies_categorized': {
                         'user_services': {},
                         'other_services': {},
-                        'acquire': [
-                            {'tmdb_id': 1, 'title': 'Movie', 'year': '2023', 'rating': 7.0, 'score': 0.5, 'added_date': datetime.now().isoformat()}
-                        ]
+                        'acquire': [test_movie],
+                        'all_items': [test_movie]
                     },
-                    'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []}
+                    'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': [], 'all_items': []}
                 }
             ]
 
@@ -924,3 +932,319 @@ class TestExportToTraktUserMode:
 
         export_to_trakt(config, all_users_data, 'api_key')
         # No error, both users should be processed
+
+
+class TestGetCollectionDetails:
+    """Tests for get_collection_details function"""
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_collection_movies(self, mock_get):
+        """Test successful collection fetch."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'id': 10,
+            'name': 'Star Wars Collection',
+            'parts': [
+                {'id': 11, 'title': 'Star Wars', 'release_date': '1977-05-25'},
+                {'id': 12, 'title': 'Empire Strikes Back', 'release_date': '1980-05-21'},
+            ]
+        }
+        mock_get.return_value = mock_response
+
+        result = get_collection_details('api_key', 10)
+
+        assert result is not None
+        assert result['collection_name'] == 'Star Wars Collection'
+        assert len(result['movies']) == 2
+        assert result['movies'][0]['tmdb_id'] == 11
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_none_on_error(self, mock_get):
+        """Test returns None on API error."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        result = get_collection_details('api_key', 99999)
+
+        assert result is None
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_none_on_exception(self, mock_get):
+        """Test returns None on requests exception."""
+        import requests
+        mock_get.side_effect = requests.RequestException("Network error")
+
+        result = get_collection_details('api_key', 10)
+
+        assert result is None
+
+
+class TestHuntarrCache:
+    """Tests for Huntarr cache functions"""
+
+    def test_load_cache_returns_empty_when_no_file(self):
+        """Test returns empty dict when cache file doesn't exist."""
+        result = load_huntarr_cache('/nonexistent/path/cache.json')
+        assert result == {}
+
+    def test_load_cache_returns_empty_when_stale(self):
+        """Test returns empty dict when cache is stale."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_data = {
+                'version': HUNTARR_CACHE_VERSION,
+                'cached_at': 0,  # Very old timestamp
+                'library_hash': 'abc123',
+                'data': {'12345': {'title': 'Test Movie'}}
+            }
+            json.dump(cache_data, f)
+            cache_path = f.name
+
+        try:
+            result = load_huntarr_cache(cache_path, stale_days=7)
+            assert result == {}  # Should be stale
+        finally:
+            os.unlink(cache_path)
+
+    def test_load_cache_returns_data_when_fresh(self):
+        """Test returns full cache when fresh."""
+        import time
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_data = {
+                'version': HUNTARR_CACHE_VERSION,
+                'cached_at': time.time(),  # Fresh timestamp
+                'library_hash': 'abc123',
+                'data': {'12345': {'title': 'Test Movie', 'collection_id': 100}}
+            }
+            json.dump(cache_data, f)
+            cache_path = f.name
+
+        try:
+            result = load_huntarr_cache(cache_path, stale_days=7)
+            # Returns full cache object when fresh
+            assert 'data' in result
+            assert '12345' in result['data']
+            assert result['data']['12345']['title'] == 'Test Movie'
+        finally:
+            os.unlink(cache_path)
+
+    def test_load_cache_returns_empty_on_version_mismatch(self):
+        """Test returns empty dict when cache version doesn't match."""
+        import time
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_data = {
+                'version': HUNTARR_CACHE_VERSION + 100,  # Wrong version
+                'cached_at': time.time(),
+                'library_hash': 'abc123',
+                'data': {'12345': {'title': 'Test Movie'}}
+            }
+            json.dump(cache_data, f)
+            cache_path = f.name
+
+        try:
+            result = load_huntarr_cache(cache_path, stale_days=7)
+            assert result == {}  # Wrong version = empty
+        finally:
+            os.unlink(cache_path)
+
+    def test_save_cache_creates_file(self):
+        """Test save creates cache file with version and timestamp."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, 'subdir', 'huntarr_cache.json')
+            cache_data = {
+                'library_hash': 'abc',
+                'data': {'1': {'title': 'Movie'}}
+            }
+
+            save_huntarr_cache(cache_path, cache_data)
+
+            assert os.path.exists(cache_path)
+            with open(cache_path) as f:
+                saved = json.load(f)
+            assert saved['data']['1']['title'] == 'Movie'
+            assert saved['version'] == HUNTARR_CACHE_VERSION
+            assert 'cached_at' in saved
+
+    def test_save_cache_overwrites_existing(self):
+        """Test save overwrites existing cache."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump({'old': 'data'}, f)
+            cache_path = f.name
+
+        try:
+            new_cache = {
+                'library_hash': 'new',
+                'data': {'new': {'title': 'New Movie'}}
+            }
+            save_huntarr_cache(cache_path, new_cache)
+
+            with open(cache_path) as f:
+                saved = json.load(f)
+            assert 'new' in saved['data']
+            assert 'old' not in saved
+        finally:
+            os.unlink(cache_path)
+
+
+class TestCategorizeByStreamingServiceAllItems:
+    """Tests for categorize_by_streaming_service with all_items structure"""
+
+    @patch('recommenders.external.get_watch_providers')
+    def test_returns_all_items_list(self, mock_providers):
+        """Test that categorized data includes all_items."""
+        mock_providers.side_effect = [['netflix'], ['hulu']]
+        items = [
+            {'tmdb_id': 1, 'title': 'Movie 1', 'score': 0.8},
+            {'tmdb_id': 2, 'title': 'Movie 2', 'score': 0.7},
+        ]
+        user_services = ['netflix']
+
+        result = categorize_by_streaming_service(items, 'api_key', user_services, 'movie')
+
+        assert 'all_items' in result
+        assert len(result['all_items']) == 2
+
+    @patch('recommenders.external.get_watch_providers')
+    def test_all_items_sorted_by_score(self, mock_providers):
+        """Test all_items are sorted by score descending."""
+        mock_providers.return_value = []
+        items = [
+            {'tmdb_id': 1, 'title': 'Low Score', 'score': 0.5},
+            {'tmdb_id': 2, 'title': 'High Score', 'score': 0.9},
+            {'tmdb_id': 3, 'title': 'Mid Score', 'score': 0.7},
+        ]
+
+        result = categorize_by_streaming_service(items, 'api_key', [], 'movie')
+
+        scores = [item['score'] for item in result['all_items']]
+        assert scores == sorted(scores, reverse=True)
+
+    @patch('recommenders.external.get_watch_providers')
+    def test_items_include_streaming_services_list(self, mock_providers):
+        """Test each item has streaming_services list from API."""
+        mock_providers.return_value = ['netflix', 'hulu']
+        items = [
+            {'tmdb_id': 1, 'title': 'Movie', 'score': 0.8},
+        ]
+
+        result = categorize_by_streaming_service(items, 'api_key', ['netflix'], 'movie')
+
+        item = result['all_items'][0]
+        assert 'streaming_services' in item
+        assert 'netflix' in item['streaming_services']
+        assert 'hulu' in item['streaming_services']
+
+    @patch('recommenders.external.get_watch_providers')
+    def test_items_include_on_user_services(self, mock_providers):
+        """Test each item has on_user_services list."""
+        mock_providers.return_value = ['netflix', 'hulu']
+        items = [
+            {'tmdb_id': 1, 'title': 'Movie', 'score': 0.8},
+        ]
+        user_services = ['netflix']
+
+        result = categorize_by_streaming_service(items, 'api_key', user_services, 'movie')
+
+        item = result['all_items'][0]
+        assert 'on_user_services' in item
+        assert 'netflix' in item['on_user_services']
+        assert 'hulu' not in item['on_user_services']
+
+    @patch('recommenders.external.get_watch_providers')
+    def test_acquire_items_have_no_streaming(self, mock_providers):
+        """Test items with no providers go to acquire list."""
+        mock_providers.return_value = []
+        items = [
+            {'tmdb_id': 1, 'title': 'Rare Movie', 'score': 0.8},
+        ]
+
+        result = categorize_by_streaming_service(items, 'api_key', ['netflix'], 'movie')
+
+        assert len(result['acquire']) == 1
+        assert result['acquire'][0]['title'] == 'Rare Movie'
+
+    @patch('recommenders.external.get_watch_providers')
+    def test_user_service_items_categorized(self, mock_providers):
+        """Test items on user's services go to user_services dict."""
+        mock_providers.return_value = ['netflix']
+        items = [
+            {'tmdb_id': 1, 'title': 'Netflix Movie', 'score': 0.8},
+        ]
+
+        result = categorize_by_streaming_service(items, 'api_key', ['netflix'], 'movie')
+
+        assert 'netflix' in result['user_services']
+        assert len(result['user_services']['netflix']) == 1
+
+
+class TestExternalRecsCacheVersioning:
+    """Tests for external recommendations cache versioning"""
+
+    def test_load_cache_returns_empty_for_old_version(self):
+        """Test returns empty dict when cache has old version."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_data = {
+                'version': 0,  # Old version
+                'items': {'12345': {'title': 'Test Movie', 'tmdb_id': 12345, 'vote_count': 1000}}
+            }
+            json.dump(cache_data, f)
+            cache_path = f.name
+
+        try:
+            # Need to create directory structure expected by load_cache
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Copy file to expected location
+                import shutil
+                cache_dir = os.path.join(tmpdir, 'cache')
+                os.makedirs(cache_dir, exist_ok=True)
+                dest_path = os.path.join(cache_dir, 'external_recs_testuser_movie.json')
+                shutil.copy(cache_path, dest_path)
+
+                # Patch the project root detection
+                with patch('recommenders.external.os.path.dirname') as mock_dirname:
+                    mock_dirname.return_value = tmpdir
+                    result = load_cache('testuser', 'movie')
+                    # Old version should return empty
+                    assert result == {}
+        finally:
+            os.unlink(cache_path)
+
+    def test_save_cache_includes_version(self):
+        """Test save adds version to cache."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Patch the project root detection
+            with patch('recommenders.external.os.path.dirname') as mock_dirname:
+                mock_dirname.return_value = tmpdir
+
+                cache_data = {'12345': {'title': 'Test', 'tmdb_id': 12345}}
+                save_cache('testuser', 'movie', cache_data)
+
+                cache_path = os.path.join(tmpdir, 'cache', 'external_recs_testuser_movie.json')
+                with open(cache_path) as f:
+                    saved = json.load(f)
+
+                assert 'version' in saved
+                assert saved['version'] == EXTERNAL_RECS_CACHE_VERSION
+                assert 'items' in saved
+
+    def test_load_cache_reads_versioned_format(self):
+        """Test load correctly reads new versioned format."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = os.path.join(tmpdir, 'cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_path = os.path.join(cache_dir, 'external_recs_testuser_movie.json')
+
+            cache_data = {
+                'version': EXTERNAL_RECS_CACHE_VERSION,
+                'items': {'12345': {'title': 'Test Movie', 'tmdb_id': 12345, 'vote_count': 1000}}
+            }
+            with open(cache_path, 'w') as f:
+                json.dump(cache_data, f)
+
+            with patch('recommenders.external.os.path.dirname') as mock_dirname:
+                mock_dirname.return_value = tmpdir
+                result = load_cache('testuser', 'movie')
+
+                assert '12345' in result
+                assert result['12345']['title'] == 'Test Movie'
