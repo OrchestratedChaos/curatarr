@@ -227,6 +227,22 @@ except:
 "@ 2>$null
     } catch {}
 
+    # --- Huntarr: Missing Collection Movies ---
+    Write-Yellow "Huntarr: Missing Collection Movies"
+    Write-Host ""
+    Write-Host "Huntarr finds missing movies from collections you've started."
+    Write-Host "Example: You have 2 of 3 John Wick movies - it'll show the missing one."
+    Write-Host ""
+    $enableHuntarr = Read-Host "Enable Huntarr? (Y/n)"
+    if ($enableHuntarr -match "^[Nn]$") {
+        $huntarrEnabled = "false"
+        Write-Yellow "Huntarr disabled (can use --huntarr flag to run manually)"
+    } else {
+        $huntarrEnabled = "true"
+        Write-Green "OK Huntarr enabled"
+    }
+    Write-Host ""
+
     # --- Optional: Trakt Integration ---
     Write-Yellow "Step 6: Trakt Integration (Optional)"
     Write-Host ""
@@ -863,6 +879,9 @@ general:
   plex_only: true
   auto_update: true
   log_retention_days: 7
+
+# Huntarr: Find missing movies from your collections
+huntarr: $huntarrEnabled
 "@
 
     $configContent | Out-File -FilePath "config/config.yml" -Encoding UTF8

@@ -23,6 +23,9 @@ logger = logging.getLogger('curatarr')
 # Cache duration in seconds (6 hours - trending/popular don't change rapidly)
 DISCOVERY_CACHE_TTL = 6 * 60 * 60
 
+# Cache version - bump to invalidate stale cache format
+TRAKT_DISCOVERY_CACHE_VERSION = 1
+
 # Default limits for discovery sources
 DEFAULT_TRENDING_LIMIT = 50
 DEFAULT_POPULAR_LIMIT = 50
@@ -37,10 +40,10 @@ def _get_cache_path(cache_dir: str, source: str, media_type: str) -> str:
 
 def _load_discovery_cache(cache_dir: str, source: str, media_type: str) -> Optional[Dict]:
     """
-    Load discovery cache if it exists and is fresh.
+    Load discovery cache if it exists, is fresh, and has correct version.
 
     Returns:
-        Cache data dict or None if cache is missing/stale
+        Cache data dict or None if cache is missing/stale/outdated
     """
     cache_path = _get_cache_path(cache_dir, source, media_type)
     if not os.path.exists(cache_path):
@@ -49,6 +52,12 @@ def _load_discovery_cache(cache_dir: str, source: str, media_type: str) -> Optio
     try:
         with open(cache_path, 'r', encoding='utf-8') as f:
             cache = json.load(f)
+
+        # Check cache version
+        cache_version = cache.get('version', 0)
+        if cache_version < TRAKT_DISCOVERY_CACHE_VERSION:
+            logger.debug(f"Trakt {source} cache outdated (v{cache_version}), invalidating")
+            return None
 
         # Check if cache is still fresh
         cached_at = cache.get('cached_at', 0)
@@ -63,12 +72,13 @@ def _load_discovery_cache(cache_dir: str, source: str, media_type: str) -> Optio
 
 
 def _save_discovery_cache(cache_dir: str, source: str, media_type: str, items: List[Dict]):
-    """Save discovery results to cache."""
+    """Save discovery results to cache with version."""
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = _get_cache_path(cache_dir, source, media_type)
 
     try:
         cache = {
+            'version': TRAKT_DISCOVERY_CACHE_VERSION,
             'cached_at': time.time(),
             'items': items
         }

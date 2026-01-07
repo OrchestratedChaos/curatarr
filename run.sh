@@ -326,6 +326,22 @@ except Exception as e:
     echo -e "${GREEN}✓ Got it${NC}"
     echo ""
 
+    # --- Huntarr: Missing Collection Movies ---
+    echo -e "${YELLOW}Huntarr: Missing Collection Movies${NC}"
+    echo ""
+    echo "Huntarr finds missing movies from collections you've started."
+    echo "Example: You have 2 of 3 John Wick movies - it'll show the missing one."
+    echo ""
+    read -p "Enable Huntarr? (Y/n): " ENABLE_HUNTARR
+    if [[ "$ENABLE_HUNTARR" =~ ^[Nn]$ ]]; then
+        HUNTARR_ENABLED="false"
+        echo -e "${YELLOW}Huntarr disabled (can use --huntarr flag to run manually)${NC}"
+    else
+        HUNTARR_ENABLED="true"
+        echo -e "${GREEN}✓ Huntarr enabled${NC}"
+    fi
+    echo ""
+
     # --- Optional: Trakt Integration ---
     echo -e "${YELLOW}Step 6: Trakt Integration (Optional)${NC}"
     echo ""
@@ -1067,6 +1083,9 @@ general:
   plex_only: true
   auto_update: true
   log_retention_days: 7
+
+# Huntarr: Find missing movies from your collections
+huntarr: ${HUNTARR_ENABLED}
 CONFIGEOF
 
     echo -e "${GREEN}✓ config/config.yml created!${NC}"

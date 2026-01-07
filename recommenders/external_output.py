@@ -7,6 +7,11 @@ import os
 from datetime import datetime
 from typing import Dict, List
 
+# ANSI color codes
+CYAN = '\033[96m'
+GREEN = '\033[92m'
+RESET = '\033[0m'
+
 # Service display name mappings
 SERVICE_DISPLAY_NAMES = {
     'netflix': 'Netflix',
@@ -23,6 +28,42 @@ SERVICE_DISPLAY_NAMES = {
     'mubi': 'MUBI',
     'shudder': 'Shudder'
 }
+
+# Short display names for icons (space-efficient)
+SERVICE_SHORT_NAMES = {
+    'netflix': 'Netflix',
+    'hulu': 'Hulu',
+    'disney_plus': 'Disney+',
+    'amazon_prime': 'Prime',
+    'paramount_plus': 'P+',
+    'apple_tv_plus': 'Apple',
+    'max': 'Max',
+    'peacock': 'Peacock',
+    'crunchyroll': 'Crunchy',
+    'crackle': 'Crackle',
+    'tubi': 'Tubi',
+    'mubi': 'MUBI',
+    'shudder': 'Shudder'
+}
+
+
+def render_streaming_icons(services: List[str], user_services: List[str]) -> str:
+    """
+    Render HTML streaming service icons/badges.
+    User's services get a gold border highlight.
+    """
+    if not services:
+        return '<span class="streaming-icon acquire">Acquire</span>'
+
+    icons = []
+    for service in services:
+        short_name = SERVICE_SHORT_NAMES.get(service, service.title())
+        css_class = f"streaming-icon {service}"
+        if service in user_services:
+            css_class += " user-service"
+        icons.append(f'<span class="{css_class}">{short_name}</span>')
+
+    return ' '.join(icons)
 
 
 def generate_markdown(
@@ -139,7 +180,8 @@ def generate_combined_html(
     get_imdb_id_func,
     movie_counts: Dict[str, int] = None,
     show_counts: Dict[str, int] = None,
-    total_users: int = 1
+    total_users: int = 1,
+    missing_sequels: List[Dict] = None
 ) -> str:
     """
     Generate single HTML watchlist with tabs for all users.
@@ -153,45 +195,64 @@ def generate_combined_html(
         movie_counts: Dict mapping TMDB ID to count of users wanting the movie
         show_counts: Dict mapping TMDB ID to count of users wanting the show
         total_users: Total number of users for displaying "X/N users"
+        missing_sequels: List of missing sequel items (shared across users)
 
     Returns:
         Path to the generated HTML file
     """
     movie_counts = movie_counts or {}
     show_counts = show_counts or {}
+    missing_sequels = missing_sequels or []
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, 'watchlist.html')
 
     now = datetime.now()
 
-    # Collect all IMDB IDs across all users (to avoid duplicate API calls)
-    print("  Fetching IMDB IDs for export...")
+    # Collect all unique TMDB IDs that need IMDB lookup
     all_imdb_ids = {}  # tmdb_id -> imdb_id
+    pending_lookups = []  # [(tmdb_id, media_type), ...]
 
-    def collect_imdb_ids_from_categorized(categorized, media_type):
-        """Helper to collect IMDB IDs from categorized items."""
-        # Flatten all items from all categories
-        items = []
-        for service_items in categorized.get('user_services', {}).values():
-            items.extend(service_items)
-        for service_items in categorized.get('other_services', {}).values():
-            items.extend(service_items)
-        items.extend(categorized.get('acquire', []))
+    def collect_tmdb_ids_from_categorized(categorized, media_type):
+        """Helper to collect TMDB IDs from categorized items."""
+        items = categorized.get('all_items', [])
+        if not items:
+            for service_items in categorized.get('user_services', {}).values():
+                items.extend(service_items)
+            for service_items in categorized.get('other_services', {}).values():
+                items.extend(service_items)
+            items.extend(categorized.get('acquire', []))
 
-        # Fetch IMDB IDs for items not already cached
         for item in items:
             tmdb_id = item.get('tmdb_id')
-            if tmdb_id and tmdb_id not in all_imdb_ids:
-                imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, media_type)
-                if imdb_id:
-                    all_imdb_ids[tmdb_id] = imdb_id
+            if tmdb_id and tmdb_id not in all_imdb_ids and (tmdb_id, media_type) not in [(p[0], p[1]) for p in pending_lookups]:
+                pending_lookups.append((tmdb_id, media_type))
 
     for user_data in all_users_data:
-        collect_imdb_ids_from_categorized(user_data['movies_categorized'], 'movie')
-        collect_imdb_ids_from_categorized(user_data['shows_categorized'], 'tv')
+        collect_tmdb_ids_from_categorized(user_data['movies_categorized'], 'movie')
+        collect_tmdb_ids_from_categorized(user_data['shows_categorized'], 'tv')
 
-    def render_table(items, media_type, user_id):
-        """Render HTML table for items with checkboxes (unchecked by default)"""
+    # Also collect from missing sequels
+    for item in missing_sequels:
+        tmdb_id = item.get('tmdb_id')
+        if tmdb_id and tmdb_id not in all_imdb_ids and (tmdb_id, 'movie') not in [(p[0], p[1]) for p in pending_lookups]:
+            pending_lookups.append((tmdb_id, 'movie'))
+
+    # Fetch IMDB IDs with progress
+    total_lookups = len(pending_lookups)
+    if total_lookups > 0:
+        print(f"  {CYAN}Fetching IMDB IDs for export ({total_lookups} items)...{RESET}")
+        for i, (tmdb_id, media_type) in enumerate(pending_lookups, 1):
+            if i % 10 == 0 or i == total_lookups:
+                print(f"\r    {CYAN}Progress: {i}/{total_lookups}{RESET}", end="", flush=True)
+            imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, media_type)
+            if imdb_id:
+                all_imdb_ids[tmdb_id] = imdb_id
+        print(f"\r    {GREEN}Fetched {len(all_imdb_ids)} IMDB IDs{RESET}          ")
+    else:
+        print(f"  {GREEN}No IMDB lookups needed{RESET}")
+
+    def render_table_flat(items, media_type, user_id, user_services):
+        """Render HTML table with streaming icons column (score-sorted)"""
         rows = []
         counts = movie_counts if media_type == 'movie' else show_counts
         for item in items:
@@ -201,6 +262,9 @@ def generate_combined_html(
             # Show shared count if more than one user
             user_count = counts.get(str(tmdb_id), 1)
             shared_badge = f'<span class="shared-badge" title="{user_count} of {total_users} users want this">{user_count}/{total_users}</span>' if total_users > 1 else ''
+            # Render streaming icons
+            streaming_services = item.get('streaming_services', [])
+            streaming_html = render_streaming_icons(streaming_services, user_services)
             rows.append(f'''
                 <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="{media_type}" data-user="{user_id}">
                     <td><input type="checkbox" class="select-item"></td>
@@ -208,23 +272,32 @@ def generate_combined_html(
                     <td>{item['year']}</td>
                     <td>{item['rating']:.1f}</td>
                     <td>{item['score']:.0%}</td>
+                    <td><div class="streaming-icons">{streaming_html}</div></td>
                     <td>{days_listed}</td>
                 </tr>''')
         return '\n'.join(rows)
 
-    def render_service_section(service, items, media_type, user_id):
-        """Render a service section with table"""
-        service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
-        return f'''
-            <h4>{service_display} ({len(items)} {media_type}s)</h4>
-            <table>
-                <thead>
-                    <tr><th><input type="checkbox" class="select-all-table"></th><th>Title</th><th>Year</th><th>Rating</th><th>Score</th><th>Days</th></tr>
-                </thead>
-                <tbody>
-                    {render_table(items, media_type, user_id)}
-                </tbody>
-            </table>'''
+    def render_sequels_table(items, user_services):
+        """Render HTML table for missing sequels"""
+        rows = []
+        for item in items:
+            tmdb_id = item.get('tmdb_id', '')
+            imdb_id = all_imdb_ids.get(tmdb_id, '')
+            collection_name = item.get('collection_name', 'Unknown')
+            owned = item.get('owned_count', 0)
+            total = item.get('total_count', 0)
+            streaming_services = item.get('streaming_services', [])
+            streaming_html = render_streaming_icons(streaming_services, user_services)
+            rows.append(f'''
+                <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="huntarr">
+                    <td><input type="checkbox" class="select-item"></td>
+                    <td>{item['title']}</td>
+                    <td>{item.get('year', '')}</td>
+                    <td>{collection_name}</td>
+                    <td>{owned}/{total}</td>
+                    <td><div class="streaming-icons">{streaming_html}</div></td>
+                </tr>''')
+        return '\n'.join(rows)
 
     # Build tabs HTML
     tabs_html = ""
@@ -235,70 +308,66 @@ def generate_combined_html(
         user_id = user_data['username'].lower().replace(' ', '_')
         movies_cat = user_data['movies_categorized']
         shows_cat = user_data['shows_categorized']
+        user_services = user_data.get('user_services', [])
         is_active = "active" if i == 0 else ""
 
         # Tab button
         tabs_html += f'<button class="tab-btn {is_active}" data-user="{user_id}">{display_name}</button>\n'
 
-        # Panel content
+        # Panel content - use flat all_items sorted by score
         panel_content = ""
 
-        # Movies section
-        if any([movies_cat['user_services'], movies_cat['other_services'], movies_cat['acquire']]):
-            panel_content += "<h2>Movies to Watch</h2>"
+        # Movies section - flat table sorted by score
+        all_movies = movies_cat.get('all_items', [])
+        if all_movies:
+            panel_content += f"<h2>Movies to Watch ({len(all_movies)})</h2>"
+            panel_content += f'''
+                <table>
+                    <thead>
+                        <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Rating</th><th class="sortable desc">Score</th><th class="sortable">Streaming</th><th class="sortable">Days</th></tr>
+                    </thead>
+                    <tbody>
+                        {render_table_flat(all_movies, 'movie', user_id, user_services)}
+                    </tbody>
+                </table>'''
 
-            if movies_cat['user_services']:
-                panel_content += "<h3>Available on Your Services</h3>"
-                for service, items in sorted(movies_cat['user_services'].items(), key=lambda x: -len(x[1])):
-                    panel_content += render_service_section(service, items, 'movie', user_id)
-
-            if movies_cat['other_services']:
-                panel_content += "<h3>Available on Other Services</h3>"
-                for service, items in sorted(movies_cat['other_services'].items(), key=lambda x: -len(x[1])):
-                    panel_content += render_service_section(service, items, 'movie', user_id)
-
-            if movies_cat['acquire']:
-                panel_content += f"<h3>Need to Acquire ({len(movies_cat['acquire'])} movies)</h3>"
-                panel_content += f'''
-                    <table>
-                        <thead>
-                            <tr><th><input type="checkbox" class="select-all-table"></th><th>Title</th><th>Year</th><th>Rating</th><th>Score</th><th>Days</th></tr>
-                        </thead>
-                        <tbody>
-                            {render_table(movies_cat['acquire'], 'movie', user_id)}
-                        </tbody>
-                    </table>'''
-
-        # Shows section
-        if any([shows_cat['user_services'], shows_cat['other_services'], shows_cat['acquire']]):
-            panel_content += "<h2>TV Shows to Watch</h2>"
-
-            if shows_cat['user_services']:
-                panel_content += "<h3>Available on Your Services</h3>"
-                for service, items in sorted(shows_cat['user_services'].items(), key=lambda x: -len(x[1])):
-                    panel_content += render_service_section(service, items, 'show', user_id)
-
-            if shows_cat['other_services']:
-                panel_content += "<h3>Available on Other Services</h3>"
-                for service, items in sorted(shows_cat['other_services'].items(), key=lambda x: -len(x[1])):
-                    panel_content += render_service_section(service, items, 'show', user_id)
-
-            if shows_cat['acquire']:
-                panel_content += f"<h3>Need to Acquire ({len(shows_cat['acquire'])} shows)</h3>"
-                panel_content += f'''
-                    <table>
-                        <thead>
-                            <tr><th><input type="checkbox" class="select-all-table"></th><th>Title</th><th>Year</th><th>Rating</th><th>Score</th><th>Days</th></tr>
-                        </thead>
-                        <tbody>
-                            {render_table(shows_cat['acquire'], 'show', user_id)}
-                        </tbody>
-                    </table>'''
+        # Shows section - flat table sorted by score
+        all_shows = shows_cat.get('all_items', [])
+        if all_shows:
+            panel_content += f"<h2>TV Shows to Watch ({len(all_shows)})</h2>"
+            panel_content += f'''
+                <table>
+                    <thead>
+                        <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Rating</th><th class="sortable desc">Score</th><th class="sortable">Streaming</th><th class="sortable">Days</th></tr>
+                    </thead>
+                    <tbody>
+                        {render_table_flat(all_shows, 'show', user_id, user_services)}
+                    </tbody>
+                </table>'''
 
         if not panel_content:
             panel_content = "<p>No recommendations available for this user.</p>"
 
         panels_html += f'<div class="tab-panel {is_active}" data-user="{user_id}">{panel_content}</div>\n'
+
+    # Add Missing Sequels tab if there are any
+    if missing_sequels:
+        # Get user_services from first user for highlighting (shared tab)
+        first_user_services = all_users_data[0].get('user_services', []) if all_users_data else []
+
+        tabs_html += f'<button class="tab-btn" data-user="huntarr">Huntarr</button>\n'
+        sequels_content = f"<h2>Huntarr ({len(missing_sequels)})</h2>"
+        sequels_content += "<p class=\"subtitle\">Hunt down missing movies from collections you've started.</p>"
+        sequels_content += f'''
+            <table>
+                <thead>
+                    <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Collection</th><th class="sortable">Owned</th><th class="sortable">Streaming</th></tr>
+                </thead>
+                <tbody>
+                    {render_sequels_table(missing_sequels, first_user_services)}
+                </tbody>
+            </table>'''
+        panels_html += f'<div class="tab-panel" data-user="huntarr">{sequels_content}</div>\n'
 
     html_content = _generate_html_template(tabs_html, panels_html, now)
 
@@ -607,13 +676,18 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
                 inset 0 1px 0 rgba(255,255,255,0.25);
         }}
 
-        .tabs {{
+        .tabs-wrapper {{
             display: flex;
-            gap: 8px;
+            justify-content: center;
             margin-bottom: 35px;
+        }}
+        .tabs {{
+            display: inline-flex;
+            gap: 8px;
             flex-wrap: wrap;
+            justify-content: center;
             background: linear-gradient(180deg, #0a0a0a 0%, #0f0f0f 100%);
-            padding: 10px;
+            padding: 12px 20px;
             border-radius: 16px;
             box-shadow:
                 inset 0 2px 10px rgba(0,0,0,0.6),
@@ -680,6 +754,32 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             letter-spacing: 1.5px;
             font-weight: 600;
         }}
+        th.sortable {{
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s ease;
+            white-space: nowrap;
+        }}
+        th.sortable:hover {{
+            color: #ffd700;
+        }}
+        th.sortable::after {{
+            content: ' \\25B2\\25BC';
+            opacity: 0.3;
+            font-size: 0.6em;
+            margin-left: 4px;
+            vertical-align: middle;
+        }}
+        th.sortable.asc::after {{
+            content: ' \\25B2';
+            opacity: 1;
+            font-size: 0.7em;
+        }}
+        th.sortable.desc::after {{
+            content: ' \\25BC';
+            opacity: 1;
+            font-size: 0.7em;
+        }}
         th:first-child {{ border-radius: 16px 0 0 0; }}
         th:last-child {{ border-radius: 0 16px 0 0; }}
         tr {{
@@ -713,6 +813,41 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             vertical-align: middle;
             box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }}
+
+        /* Streaming service icons */
+        .streaming-icons {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 3px;
+            max-width: 200px;
+        }}
+        .streaming-icon {{
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            white-space: nowrap;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }}
+        .streaming-icon.user-service {{
+            border: 2px solid #d4af37;
+            box-shadow: 0 0 6px rgba(212, 175, 55, 0.4);
+        }}
+        .streaming-icon.netflix {{ background: #e50914; color: #fff; }}
+        .streaming-icon.hulu {{ background: #1ce783; color: #000; }}
+        .streaming-icon.disney_plus {{ background: #113ccf; color: #fff; }}
+        .streaming-icon.amazon_prime {{ background: #00a8e1; color: #fff; }}
+        .streaming-icon.paramount_plus {{ background: #0064ff; color: #fff; }}
+        .streaming-icon.apple_tv_plus {{ background: #000; color: #fff; }}
+        .streaming-icon.max {{ background: #002be7; color: #fff; }}
+        .streaming-icon.peacock {{ background: #000; color: #fff; }}
+        .streaming-icon.crunchyroll {{ background: #f47521; color: #fff; }}
+        .streaming-icon.crackle {{ background: #f36f21; color: #fff; }}
+        .streaming-icon.tubi {{ background: #fa382f; color: #fff; }}
+        .streaming-icon.mubi {{ background: #0b0c0f; color: #fff; }}
+        .streaming-icon.shudder {{ background: #000; color: #fff; }}
+        .streaming-icon.acquire {{ background: #444; color: #aaa; font-style: italic; }}
 
         .instructions {{
             background: linear-gradient(180deg, #181818 0%, #121212 100%);
@@ -783,8 +918,10 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             <button class="export-btn trakt" onclick="exportTrakt()">Export for Trakt (<span id="total-count">0</span>)</button>
         </div>
 
-        <div class="tabs">
-            {tabs_html}
+        <div class="tabs-wrapper">
+            <div class="tabs">
+                {tabs_html}
+            </div>
         </div>
 
         {panels_html}
@@ -922,6 +1059,96 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }}
+
+        // Column sorting
+        function sortTable(th, colIndex) {{
+            const table = th.closest('table');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+
+            // Determine sort direction
+            const isAsc = th.classList.contains('asc');
+            const isDesc = th.classList.contains('desc');
+
+            // Clear all sort classes in this table
+            table.querySelectorAll('th.sortable').forEach(header => {{
+                header.classList.remove('asc', 'desc');
+            }});
+
+            // Set new sort direction
+            let direction;
+            if (!isAsc && !isDesc) {{
+                direction = 'desc'; // Default to descending (highest first)
+            }} else if (isDesc) {{
+                direction = 'asc';
+            }} else {{
+                direction = 'desc';
+            }}
+            th.classList.add(direction);
+
+            // Sort rows
+            rows.sort((a, b) => {{
+                const aCell = a.cells[colIndex];
+                const bCell = b.cells[colIndex];
+
+                // Handle streaming icons column (sort by service name)
+                const aIcons = aCell.querySelectorAll('.streaming-icon');
+                const bIcons = bCell.querySelectorAll('.streaming-icon');
+                if (aIcons.length > 0 || bIcons.length > 0) {{
+                    // Get first service name (or "zzz" for Acquire to sort last)
+                    const aFirst = aCell.querySelector('.streaming-icon')?.textContent?.trim() || '';
+                    const bFirst = bCell.querySelector('.streaming-icon')?.textContent?.trim() || '';
+                    const aName = aFirst === 'Acquire' ? 'zzz' : aFirst;
+                    const bName = bFirst === 'Acquire' ? 'zzz' : bFirst;
+                    return direction === 'asc' ? aName.localeCompare(bName) : bName.localeCompare(aName);
+                }}
+
+                // Get text, excluding badge content for title column
+                let aVal = aCell.childNodes[0]?.textContent?.trim() || aCell.textContent.trim();
+                let bVal = bCell.childNodes[0]?.textContent?.trim() || bCell.textContent.trim();
+
+                // Remove any trailing badge text (like "2/3")
+                aVal = aVal.replace(/\\s+\\d+\\/\\d+$/, '').trim();
+                bVal = bVal.replace(/\\s+\\d+\\/\\d+$/, '').trim();
+
+                // Handle percentages (Score column)
+                if (aVal.endsWith('%') && bVal.endsWith('%')) {{
+                    return direction === 'asc'
+                        ? parseFloat(aVal) - parseFloat(bVal)
+                        : parseFloat(bVal) - parseFloat(aVal);
+                }}
+
+                // Handle fractions like "2/4" (Owned column)
+                if (aVal.match(/^\\d+\\/\\d+$/) && bVal.match(/^\\d+\\/\\d+$/)) {{
+                    const aNum = parseFloat(aVal.split('/')[0]);
+                    const bNum = parseFloat(bVal.split('/')[0]);
+                    return direction === 'asc' ? aNum - bNum : bNum - aNum;
+                }}
+
+                // Handle plain numbers (Year, Rating, Days)
+                const aNum = parseFloat(aVal);
+                const bNum = parseFloat(bVal);
+                if (!isNaN(aNum) && !isNaN(bNum)) {{
+                    return direction === 'asc' ? aNum - bNum : bNum - aNum;
+                }}
+
+                // Text comparison (Title, Collection)
+                return direction === 'asc'
+                    ? aVal.localeCompare(bVal)
+                    : bVal.localeCompare(aVal);
+            }});
+
+            // Reattach sorted rows
+            rows.forEach(row => tbody.appendChild(row));
+        }}
+
+        // Initialize sortable headers
+        document.querySelectorAll('th.sortable').forEach(th => {{
+            th.addEventListener('click', function() {{
+                const colIndex = Array.from(this.parentNode.children).indexOf(this);
+                sortTable(this, colIndex);
+            }});
+        }});
 
         // Initialize counts on load
         updateCounts();
