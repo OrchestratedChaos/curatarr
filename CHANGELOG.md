@@ -2,6 +2,13 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.7.3] - 2026-01-07
+
+### Changed
+- Expanded test coverage from 84% to 85% (1003 tests)
+- CI now enforces 85% minimum coverage (up from 80%)
+- Added comprehensive tests for CLI utilities and config migration
+
 ## [2.7.2] - 2026-01-07
 
 ### Fixed
