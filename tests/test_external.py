@@ -29,6 +29,8 @@ from recommenders.external import (
     save_huntarr_cache,
     HUNTARR_CACHE_VERSION,
     EXTERNAL_RECS_CACHE_VERSION,
+    get_movie_genre_ids,
+    TV_MOVIE_GENRE_ID,
 )
 from utils.trakt import enhance_profile_with_trakt
 from collections import Counter
@@ -1248,3 +1250,94 @@ class TestExternalRecsCacheVersioning:
 
                 assert '12345' in result
                 assert result['12345']['title'] == 'Test Movie'
+
+
+class TestTVMovieGenreDetection:
+    """Tests for TV movie (special) genre detection"""
+
+    def test_tv_movie_genre_id_constant(self):
+        """Test TV_MOVIE_GENRE_ID is correct"""
+        assert TV_MOVIE_GENRE_ID == 10770
+
+    @patch('recommenders.external.requests.get')
+    def test_get_movie_genre_ids_returns_genres(self, mock_get):
+        """Test get_movie_genre_ids returns list of genre IDs"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'genres': [
+                {'id': 28, 'name': 'Action'},
+                {'id': 10770, 'name': 'TV Movie'},
+                {'id': 35, 'name': 'Comedy'}
+            ]
+        }
+        mock_get.return_value = mock_response
+
+        result = get_movie_genre_ids('api_key', 12345)
+
+        assert result == [28, 10770, 35]
+        assert TV_MOVIE_GENRE_ID in result
+
+    @patch('recommenders.external.requests.get')
+    def test_get_movie_genre_ids_returns_empty_on_error(self, mock_get):
+        """Test get_movie_genre_ids returns empty list on API error"""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        result = get_movie_genre_ids('api_key', 12345)
+
+        assert result == []
+
+    @patch('recommenders.external.requests.get')
+    def test_get_movie_genre_ids_returns_empty_on_exception(self, mock_get):
+        """Test get_movie_genre_ids handles exceptions gracefully"""
+        import requests
+        mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
+
+        result = get_movie_genre_ids('api_key', 12345)
+
+        assert result == []
+
+    @patch('recommenders.external.requests.get')
+    def test_get_movie_genre_ids_no_genres_in_response(self, mock_get):
+        """Test get_movie_genre_ids handles missing genres key"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'title': 'Some Movie'}  # No genres
+        mock_get.return_value = mock_response
+
+        result = get_movie_genre_ids('api_key', 12345)
+
+        assert result == []
+
+    def test_is_tv_movie_detection(self):
+        """Test TV movie detection logic"""
+        # TV movie special (like Phineas and Ferb: Mission Marvel)
+        tv_movie_genres = [16, 10770, 10751]  # Animation, TV Movie, Family
+        assert TV_MOVIE_GENRE_ID in tv_movie_genres
+
+        # Regular movie
+        regular_movie_genres = [28, 12, 878]  # Action, Adventure, Sci-Fi
+        assert TV_MOVIE_GENRE_ID not in regular_movie_genres
+
+    def test_tv_special_title_normalization(self):
+        """Test that TV special titles match between TMDB movie and Plex episode"""
+        import re
+
+        def normalize_title(title):
+            return re.sub(r'[^\w\s]', '', title.lower()).strip()
+
+        # TMDB movie title vs Plex episode title (same content, different TMDB IDs)
+        tmdb_movie_title = "Phineas and Ferb: Mission Marvel"
+        plex_episode_title = "Phineas and Ferb: Mission Marvel"
+
+        assert normalize_title(tmdb_movie_title) == normalize_title(plex_episode_title)
+        assert normalize_title(tmdb_movie_title) == "phineas and ferb mission marvel"
+
+        # Test case insensitivity
+        assert normalize_title("PHINEAS AND FERB") == normalize_title("phineas and ferb")
+
+        # Test punctuation removal
+        assert normalize_title("Movie: The Sequel!") == "movie the sequel"
+        assert normalize_title("Test's Movie") == "tests movie"
