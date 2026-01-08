@@ -755,7 +755,8 @@ class BaseRecommender(ABC):
                 try:
                     score, _ = self._calculate_similarity_from_cache(item_info)
                     all_candidates[item_id] = (item, score)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Scoring failed for item {item_id}: {e}")
                     all_candidates[item_id] = (item, 0.0)
 
         for rec in selected_items:

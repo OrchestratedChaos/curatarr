@@ -13,7 +13,7 @@ import logging
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
-import math
+import re
 import time
 import requests
 import traceback
@@ -32,14 +32,14 @@ logger = logging.getLogger('curatarr')
 
 # Import shared utilities - same as internal recommenders
 from utils import (
-    RED, GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS, GENRE_NORMALIZATION,
+    GREEN, YELLOW, CYAN, RESET,
+    RATING_MULTIPLIERS,
+    TMDB_REQUEST_TIMEOUT, TMDB_TV_MOVIE_GENRE_ID,
     get_plex_account_ids, get_tmdb_config, get_tmdb_keywords,
     fetch_watch_history_with_tmdb,
     log_warning, log_error, load_config, clickable_link,
     calculate_rewatch_multiplier, calculate_recency_multiplier,
-    calculate_similarity_score, normalize_genre, fuzzy_keyword_match,
-    load_imdb_tmdb_cache, save_imdb_tmdb_cache, get_tmdb_id_from_imdb,
+    calculate_similarity_score, normalize_genre, get_tmdb_id_from_imdb,
     load_trakt_enhance_cache, save_trakt_enhance_cache,
     get_trakt_discovery_candidates,
     enhance_profile_with_trakt,
@@ -206,7 +206,7 @@ def discover_candidates_by_profile(
                 'sort_by': 'vote_average.desc',
                 'page': page
             }
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
             if response.status_code == 200:
                 results = response.json().get('results', [])
@@ -242,7 +242,7 @@ def discover_candidates_by_profile(
         try:
             # Search for keyword ID first
             url = "https://api.themoviedb.org/3/search/keyword"
-            response = requests.get(url, params={'api_key': tmdb_api_key, 'query': keyword}, timeout=10)
+            response = requests.get(url, params={'api_key': tmdb_api_key, 'query': keyword}, timeout=TMDB_REQUEST_TIMEOUT)
 
             if response.status_code == 200:
                 kw_results = response.json().get('results', [])
@@ -259,7 +259,7 @@ def discover_candidates_by_profile(
                         'sort_by': 'vote_average.desc',
                         'page': page
                     }
-                    response = requests.get(url, params=params, timeout=10)
+                    response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
                     if response.status_code == 200:
                         results = response.json().get('results', [])
@@ -514,7 +514,7 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
     try:
         url = f"https://api.themoviedb.org/3/{'movie' if media_type == 'movie' else 'tv'}/{tmdb_id}/watch/providers"
         params = {'api_key': tmdb_api_key}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code != 200:
             return []
@@ -554,7 +554,7 @@ def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Di
     try:
         url = f"https://api.themoviedb.org/3/collection/{collection_id}"
         params = {'api_key': tmdb_api_key}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code != 200:
             return None
@@ -582,8 +582,8 @@ def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Di
         return None
 
 
-# TMDB genre ID for TV Movies (specials that are categorized as movies)
-TV_MOVIE_GENRE_ID = 10770
+# Alias for backwards compatibility with tests
+TV_MOVIE_GENRE_ID = TMDB_TV_MOVIE_GENRE_ID
 
 
 def get_movie_genre_ids(tmdb_api_key: str, tmdb_id: int) -> List[int]:
@@ -600,12 +600,12 @@ def get_movie_genre_ids(tmdb_api_key: str, tmdb_id: int) -> List[int]:
     try:
         url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
         params = {'api_key': tmdb_api_key}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
         if response.status_code == 200:
             data = response.json()
             return [g['id'] for g in data.get('genres', [])]
-    except (requests.RequestException, KeyError):
-        pass
+    except (requests.RequestException, KeyError) as e:
+        logger.debug(f"Failed to fetch genres for TMDB ID {tmdb_id}: {e}")
     return []
 
 
@@ -625,8 +625,8 @@ def load_huntarr_cache(cache_path: str, stale_days: int = 7) -> Dict:
                     age_days = (time.time() - cached_at) / 86400
                     if age_days < stale_days:
                         return cache
-    except (json.JSONDecodeError, IOError):
-        pass
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"Could not load Huntarr cache: {e}")
     return {}
 
 
@@ -754,7 +754,7 @@ def find_missing_sequels(
             try:
                 url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
                 params = {'api_key': tmdb_api_key}
-                response = requests.get(url, params=params, timeout=10)
+                response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -767,7 +767,8 @@ def find_missing_sequels(
                         collection_owned[coll_id].add(tmdb_id)
                     else:
                         movie_collections[str(tmdb_id)] = None
-            except (requests.RequestException, KeyError):
+            except (requests.RequestException, KeyError) as e:
+                logger.debug(f"Failed to fetch collection for TMDB ID {tmdb_id}: {e}")
                 continue
 
         show_progress("  Fetching collections", len(movies_to_fetch), len(movies_to_fetch))
@@ -858,7 +859,6 @@ def find_missing_sequels(
         # Build lookup maps: normalized title -> TMDB movie ID
         def normalize_title(title: str) -> str:
             """Normalize title for comparison (lowercase, strip punctuation)"""
-            import re
             return re.sub(r'[^\w\s]', '', title.lower()).strip()
 
         tv_movie_titles = {normalize_title(m['title']): m['tmdb_id'] for m in tv_movies}
@@ -940,7 +940,7 @@ def fetch_similar_from_tmdb(
             'api_key': tmdb_api_key,
             'page': 1
         }
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code == 200:
             results = response.json().get('results', [])
