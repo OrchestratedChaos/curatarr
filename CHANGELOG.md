@@ -2,6 +2,21 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.7.4] - 2026-01-07
+
+### Changed
+- Code cleanup and audit improvements
+  - Added debug logging to silent exception handlers for better troubleshooting
+  - Extracted magic numbers to named constants in `utils/config.py`
+  - Moved deferred imports to module level for cleaner code
+  - Removed unused imports from production code
+
+### Added
+- New constants in `utils/config.py`:
+  - `TMDB_REQUEST_TIMEOUT`, `SONARR_REQUEST_TIMEOUT`, `RADARR_REQUEST_TIMEOUT`
+  - `COLLECTION_BONUS_BASE`, `COLLECTION_BONUS_LOG_FACTOR`, `COLLECTION_BONUS_CAP`
+  - `TMDB_TV_MOVIE_GENRE_ID`
+
 ## [2.7.3] - 2026-01-07
 
 ### Changed

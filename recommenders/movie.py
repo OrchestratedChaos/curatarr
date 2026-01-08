@@ -11,9 +11,10 @@ from typing import Dict, Set, Optional, Tuple
 
 # Import shared utilities
 from utils import (
-    RED, GREEN, YELLOW, CYAN, RESET,
+    RED, GREEN, RESET,
     TOP_CAST_COUNT,
     DEFAULT_NEGATIVE_THRESHOLD,
+    COLLECTION_BONUS_BASE, COLLECTION_BONUS_LOG_FACTOR, COLLECTION_BONUS_CAP,
     RATING_TIER_5_STAR,
     RATING_TIER_4_STAR,
     RATING_TIER_3_STAR,
@@ -494,8 +495,8 @@ class PlexMovieRecommender(BaseRecommender):
             # User has watched other movies in this collection - apply bonus
             collection_count = user_collections[collection_id]
             # Logarithmic bonus: 1 movie = 5%, 2 = 7.5%, 4 = 10%, etc.
-            bonus = 0.05 * (1 + math.log2(max(1, collection_count)) * 0.5)
-            bonus = min(bonus, 0.15)  # Cap at 15% bonus
+            bonus = COLLECTION_BONUS_BASE * (1 + math.log2(max(1, collection_count)) * COLLECTION_BONUS_LOG_FACTOR)
+            bonus = min(bonus, COLLECTION_BONUS_CAP)
             score = min(1.0, score * (1 + bonus))
             breakdown['collection_bonus'] = round(bonus, 3)
             breakdown['details']['collection'] = f"{movie_info.get('collection_name', 'Unknown')} (watched: {collection_count:.1f}, bonus: {round(bonus * 100, 1)}%)"

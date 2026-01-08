@@ -5,6 +5,7 @@ Handles OAuth device authentication, token management, and API requests.
 
 import json
 import os
+import sys
 import time
 import logging
 import requests
@@ -1027,7 +1028,6 @@ def enhance_profile_with_trakt(
     """
     # Import here to avoid circular imports
     from .tmdb import load_imdb_tmdb_cache, save_imdb_tmdb_cache, get_tmdb_id_from_imdb
-    import sys
 
     trakt_config = config.get('trakt', {})
     import_config = trakt_config.get('import', {})

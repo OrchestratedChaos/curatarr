@@ -15,7 +15,7 @@ from plexapi.myplex import MyPlexAccount
 
 from .config import __version__
 from .display import (
-    CYAN, GREEN, RED, RESET,
+    CYAN, GREEN, RESET,
     TeeLogger,
     log_error, log_warning,
     setup_logging,
