@@ -582,7 +582,34 @@ def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Di
         return None
 
 
-HUNTARR_CACHE_VERSION = 2  # v2: Filter out unreleased movies
+# TMDB genre ID for TV Movies (specials that are categorized as movies)
+TV_MOVIE_GENRE_ID = 10770
+
+
+def get_movie_genre_ids(tmdb_api_key: str, tmdb_id: int) -> List[int]:
+    """
+    Fetch genre IDs for a movie from TMDB.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        tmdb_id: TMDB movie ID
+
+    Returns:
+        List of genre IDs, empty list on error
+    """
+    try:
+        url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+        params = {'api_key': tmdb_api_key}
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return [g['id'] for g in data.get('genres', [])]
+    except (requests.RequestException, KeyError):
+        pass
+    return []
+
+
+HUNTARR_CACHE_VERSION = 3  # v3: Added TV movie detection for specials
 EXTERNAL_RECS_CACHE_VERSION = 1
 
 
@@ -619,6 +646,7 @@ def find_missing_sequels(
     tmdb_api_key: str,
     plex: Any,
     library_name: str,
+    tv_library_name: str,
     user_services: List[str],
     stale_days: int = 7
 ) -> List[Dict]:
@@ -626,12 +654,14 @@ def find_missing_sequels(
     Find missing movies from collections user has started.
 
     Scans library for movies with collection IDs, fetches full collections
-    from TMDB, and identifies gaps (movies not in library).
+    from TMDB, and identifies gaps (movies not in library). Also checks
+    TV library for TV movie specials that might be stored as episodes.
 
     Args:
         tmdb_api_key: TMDB API key
         plex: PlexServer instance
         library_name: Name of movie library
+        tv_library_name: Name of TV library (for checking TV specials)
         user_services: List of user's streaming services
         stale_days: Days before cache is considered stale
 
@@ -795,6 +825,10 @@ def find_missing_sequels(
                 # Get streaming availability
                 providers = get_watch_providers(tmdb_api_key, movie['tmdb_id'], 'movie')
 
+                # Check if this is a TV movie (special) - genre ID 10770
+                genres = get_movie_genre_ids(tmdb_api_key, movie['tmdb_id'])
+                is_tv_movie = TV_MOVIE_GENRE_ID in genres
+
                 missing_sequels.append({
                     'tmdb_id': movie['tmdb_id'],
                     'title': movie['title'],
@@ -805,13 +839,61 @@ def find_missing_sequels(
                     'total_count': total_count,
                     'streaming_services': providers,
                     'on_user_services': [s for s in providers if s in user_services],
-                    'release_date': movie.get('release_date', '')
+                    'release_date': movie.get('release_date', ''),
+                    'is_tv_movie': is_tv_movie
                 })
 
     show_progress("  Checking collections", total_collections, total_collections)
 
     # Sort by collection name, then release date within collection
     missing_sequels.sort(key=lambda x: (x['collection_name'], x.get('release_date', '')))
+
+    # For TV movies (specials), also check TV library - they might be stored as episodes
+    # Note: TMDB often has TV specials as both "movies" and "TV episodes" with different IDs
+    # So we use title matching in addition to ID matching
+    tv_movies = [m for m in missing_sequels if m.get('is_tv_movie')]
+    if tv_movies and tv_library_name:
+        print(f"{CYAN}  Checking {len(tv_movies)} TV specials against TV library...{RESET}")
+
+        # Build lookup maps: normalized title -> TMDB movie ID
+        def normalize_title(title: str) -> str:
+            """Normalize title for comparison (lowercase, strip punctuation)"""
+            import re
+            return re.sub(r'[^\w\s]', '', title.lower()).strip()
+
+        tv_movie_titles = {normalize_title(m['title']): m['tmdb_id'] for m in tv_movies}
+        tv_movie_ids = {m['tmdb_id'] for m in tv_movies}
+        found_tmdb_ids = set()
+
+        try:
+            tv_library = plex.library.section(tv_library_name)
+            for show in tv_library.all():
+                for episode in show.episodes():
+                    # Check by TMDB ID (rare but possible)
+                    for guid in episode.guids:
+                        if 'tmdb://' in guid.id:
+                            try:
+                                tmdb_id = int(guid.id.split('tmdb://')[1])
+                                if tmdb_id in tv_movie_ids:
+                                    found_tmdb_ids.add(tmdb_id)
+                            except (ValueError, IndexError):
+                                pass
+
+                    # Check by title match (more reliable for TV specials)
+                    ep_title_norm = normalize_title(episode.title)
+                    if ep_title_norm in tv_movie_titles:
+                        found_tmdb_ids.add(tv_movie_titles[ep_title_norm])
+        except Exception as e:
+            log_warning(f"Could not scan TV library for specials: {e}")
+
+        # Remove TV movies found in TV library
+        if found_tmdb_ids:
+            before_count = len(missing_sequels)
+            missing_sequels = [m for m in missing_sequels
+                               if not (m.get('is_tv_movie') and m['tmdb_id'] in found_tmdb_ids)]
+            removed = before_count - len(missing_sequels)
+            if removed > 0:
+                print(f"{GREEN}  Removed {removed} TV specials found in TV library{RESET}")
 
     # Save cache
     save_huntarr_cache(cache_path, {
@@ -1751,10 +1833,11 @@ def main():
     missing_sequels = []
     if run_huntarr:
         movie_library = config['plex'].get('movie_library', 'Movies')
+        tv_library = config['plex'].get('tv_library', 'TV Shows')
         user_services = config.get('streaming_services', [])
         stale_days = config.get('collections', {}).get('stale_removal_days', 7)
         print(f"\n{CYAN}=== Huntarr: Finding Missing Collection Movies ==={RESET}")
-        missing_sequels = find_missing_sequels(tmdb_api_key, plex, movie_library, user_services, stale_days)
+        missing_sequels = find_missing_sequels(tmdb_api_key, plex, movie_library, tv_library, user_services, stale_days)
 
     # Generate combined HTML with all users
     output_dir = os.path.join(project_root, 'recommendations', 'external')

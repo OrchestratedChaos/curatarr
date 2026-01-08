@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.7.2] - 2026-01-07
+
+### Fixed
+- Huntarr now detects TV specials stored in TV library
+  - TV movies (TMDB genre 10770) like "Phineas and Ferb: Mission Marvel" checked against TV library
+  - Uses title matching since TMDB often has separate movie/episode IDs for the same content
+  - Prevents showing TV specials as "missing" when they exist as episodes
+  - "TV Special" badge displayed on remaining TV movie items in Huntarr list
+
+### Changed
+- Bumped Huntarr cache version to v3 (forces rebuild to include `is_tv_movie` flag)
+
 ## [2.7.1] - 2026-01-06
 
 ### Fixed
