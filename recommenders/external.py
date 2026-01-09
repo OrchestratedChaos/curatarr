@@ -609,8 +609,13 @@ def get_movie_genre_ids(tmdb_api_key: str, tmdb_id: int) -> List[int]:
     return []
 
 
-HUNTARR_CACHE_VERSION = 3  # v3: Added TV movie detection for specials
+# Huntarr cache versions
+SEQUEL_HUNTARR_CACHE_VERSION = 3  # v3: Added TV movie detection for specials
+HORIZON_HUNTARR_CACHE_VERSION = 1  # v1: Initial horizon huntarr
 EXTERNAL_RECS_CACHE_VERSION = 1
+
+# Backwards compatibility alias
+HUNTARR_CACHE_VERSION = SEQUEL_HUNTARR_CACHE_VERSION
 
 
 def load_huntarr_cache(cache_path: str, stale_days: int = 7) -> Dict:
@@ -698,7 +703,7 @@ def find_missing_sequels(
     cached_library_ids = set(cache.get('library_tmdb_ids', []))
 
     if cached_library_ids == library_tmdb_ids and cache.get('missing_sequels'):
-        print(f"{GREEN}  Using cached Huntarr data ({len(cache['missing_sequels'])} missing movies){RESET}")
+        print(f"{GREEN}  Using cached Sequel Huntarr data ({len(cache['missing_sequels'])} missing movies){RESET}")
         # Update streaming services for current user
         missing = cache['missing_sequels']
         for item in missing:
@@ -905,6 +910,258 @@ def find_missing_sequels(
 
     print(f"{GREEN}  Found {len(missing_sequels)} missing movies across {collections_with_gaps} incomplete collections{RESET}")
     return missing_sequels
+
+
+def get_movie_status(tmdb_api_key: str, tmdb_id: int) -> Tuple[str, str]:
+    """
+    Fetch status and release date for a movie from TMDB.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        tmdb_id: TMDB movie ID
+
+    Returns:
+        Tuple of (status, release_date). Status values: Rumored, Planned,
+        In Production, Post Production, Released, Canceled
+    """
+    try:
+        url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+        params = {'api_key': tmdb_api_key}
+        response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('status', 'Unknown'), data.get('release_date', '')
+    except (requests.RequestException, KeyError) as e:
+        logger.debug(f"Failed to fetch status for TMDB ID {tmdb_id}: {e}")
+    return 'Unknown', ''
+
+
+def load_horizon_cache(cache_path: str, stale_days: int = 7) -> Dict:
+    """Load Horizon Huntarr cache from disk."""
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                cache = json.load(f)
+                if cache.get('version') == HORIZON_HUNTARR_CACHE_VERSION:
+                    cached_at = cache.get('cached_at', 0)
+                    age_days = (time.time() - cached_at) / 86400
+                    if age_days < stale_days:
+                        return cache
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"Could not load Horizon Huntarr cache: {e}")
+    return {}
+
+
+def save_horizon_cache(cache_path: str, cache: Dict) -> None:
+    """Save Horizon Huntarr cache to disk."""
+    cache['version'] = HORIZON_HUNTARR_CACHE_VERSION
+    cache['cached_at'] = time.time()
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'w') as f:
+            json.dump(cache, f)
+    except IOError as e:
+        log_warning(f"Could not save Horizon Huntarr cache: {e}")
+
+
+def find_horizon_movies(
+    tmdb_api_key: str,
+    plex: Any,
+    library_name: str,
+    stale_days: int = 7
+) -> List[Dict]:
+    """
+    Find upcoming/unreleased movies from collections user owns.
+
+    Scans library for movies with collection IDs, fetches full collections
+    from TMDB, and identifies movies that are not yet released.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        plex: PlexServer instance
+        library_name: Name of movie library
+        stale_days: Days before cache is considered stale
+
+    Returns:
+        List of upcoming movie dicts with status info
+    """
+    from utils.display import show_progress
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cache_path = os.path.join(project_root, 'cache', 'horizon_huntarr_cache.json')
+    sequel_cache_path = os.path.join(project_root, 'cache', 'huntarr_cache.json')
+
+    try:
+        library = plex.library.section(library_name)
+        items = library.all()
+    except Exception as e:
+        log_warning(f"Could not access library {library_name}: {e}")
+        return []
+
+    # Build current library state
+    library_tmdb_ids = set()
+    for item in items:
+        for guid in item.guids:
+            if 'tmdb://' in guid.id:
+                try:
+                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    library_tmdb_ids.add(tmdb_id)
+                    break
+                except (ValueError, IndexError):
+                    continue
+
+    # Load horizon cache
+    cache = load_horizon_cache(cache_path, stale_days)
+    cached_library_ids = set(cache.get('library_tmdb_ids', []))
+
+    if cached_library_ids == library_tmdb_ids and cache.get('horizon_movies'):
+        print(f"{GREEN}  Using cached Horizon Huntarr data ({len(cache['horizon_movies'])} upcoming movies){RESET}")
+        return cache['horizon_movies']
+
+    # Try to reuse sequel huntarr's collection data
+    sequel_cache = load_huntarr_cache(sequel_cache_path, stale_days)
+    movie_collections = sequel_cache.get('movie_collections', {})
+    collection_details_cache = sequel_cache.get('collection_details', {})
+
+    # If no sequel cache, we need to build collection data
+    if not movie_collections:
+        total_items = len(items)
+        print(f"{CYAN}  Scanning {total_items} movies for collections...{RESET}")
+
+        collection_owned = {}
+
+        for i, item in enumerate(items):
+            if i % 50 == 0:
+                show_progress("  Scanning library", i + 1, total_items)
+
+            tmdb_id = None
+            for guid in item.guids:
+                if 'tmdb://' in guid.id:
+                    try:
+                        tmdb_id = int(guid.id.split('tmdb://')[1])
+                        break
+                    except (ValueError, IndexError):
+                        continue
+
+            if not tmdb_id:
+                continue
+
+            tmdb_id_str = str(tmdb_id)
+            if tmdb_id_str in movie_collections:
+                coll_id = movie_collections[tmdb_id_str]
+                if coll_id:
+                    if coll_id not in collection_owned:
+                        collection_owned[coll_id] = set()
+                    collection_owned[coll_id].add(tmdb_id)
+            else:
+                # Fetch collection ID
+                try:
+                    url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+                    params = {'api_key': tmdb_api_key}
+                    response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        collection = data.get('belongs_to_collection')
+                        if collection:
+                            coll_id = collection['id']
+                            movie_collections[tmdb_id_str] = coll_id
+                            if coll_id not in collection_owned:
+                                collection_owned[coll_id] = set()
+                            collection_owned[coll_id].add(tmdb_id)
+                        else:
+                            movie_collections[tmdb_id_str] = None
+                except (requests.RequestException, KeyError):
+                    continue
+
+        show_progress("  Scanning library", total_items, total_items)
+    else:
+        # Build collection_owned from cached data
+        collection_owned = {}
+        for tmdb_id_str, coll_id in movie_collections.items():
+            if coll_id and int(tmdb_id_str) in library_tmdb_ids:
+                if coll_id not in collection_owned:
+                    collection_owned[coll_id] = set()
+                collection_owned[coll_id].add(int(tmdb_id_str))
+
+    print(f"{GREEN}  Found {len(collection_owned)} collections to check for upcoming movies{RESET}")
+
+    # Find upcoming movies from collections
+    horizon_movies = []
+    today = datetime.now().strftime('%Y-%m-%d')
+    total_collections = len(collection_owned)
+
+    print(f"{CYAN}  Checking collections for upcoming releases...{RESET}")
+
+    for i, (coll_id, owned_ids) in enumerate(collection_owned.items()):
+        if i % 5 == 0:
+            show_progress("  Checking collections", i + 1, total_collections)
+
+        coll_id_str = str(coll_id)
+        if coll_id_str in collection_details_cache:
+            coll_details = collection_details_cache[coll_id_str]
+        else:
+            coll_details = get_collection_details(tmdb_api_key, coll_id)
+            if coll_details:
+                collection_details_cache[coll_id_str] = coll_details
+
+        if not coll_details:
+            continue
+
+        coll_name = coll_details['collection_name']
+        all_movies = coll_details['movies']
+
+        # Find movies that are unreleased (no year OR future release date)
+        for movie in all_movies:
+            release_date = movie.get('release_date', '')
+            year = movie.get('year', '')
+
+            # Skip if already in library
+            if movie['tmdb_id'] in library_tmdb_ids:
+                continue
+
+            # Check if unreleased: no release date OR future release date
+            is_unreleased = not year or (release_date and release_date > today)
+
+            if is_unreleased:
+                # Get current status from TMDB
+                status, current_release_date = get_movie_status(tmdb_api_key, movie['tmdb_id'])
+
+                # Skip canceled movies
+                if status == 'Canceled':
+                    continue
+
+                # Skip if status shows it's already released
+                if status == 'Released':
+                    continue
+
+                horizon_movies.append({
+                    'tmdb_id': movie['tmdb_id'],
+                    'title': movie['title'],
+                    'collection_id': coll_id,
+                    'collection_name': coll_name,
+                    'release_date': current_release_date or 'TBA',
+                    'status': status
+                })
+
+    show_progress("  Checking collections", total_collections, total_collections)
+
+    # Sort by collection name, then status priority, then release date
+    status_order = {'Post Production': 0, 'In Production': 1, 'Planned': 2, 'Rumored': 3, 'Unknown': 4}
+    horizon_movies.sort(key=lambda x: (
+        x['collection_name'],
+        status_order.get(x['status'], 5),
+        x.get('release_date', 'ZZZ')
+    ))
+
+    # Save cache
+    save_horizon_cache(cache_path, {
+        'library_tmdb_ids': list(library_tmdb_ids),
+        'horizon_movies': horizon_movies
+    })
+
+    print(f"{GREEN}  Found {len(horizon_movies)} upcoming movies from owned collections{RESET}")
+    return horizon_movies
 
 
 def fetch_similar_from_tmdb(
@@ -1741,10 +1998,8 @@ def process_user(config, plex, username):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='External Recommendations Generator')
-    parser.add_argument('--no-huntarr', action='store_true',
-                        help='Disable Huntarr (skip finding missing collection movies)')
     parser.add_argument('--huntarr-only', action='store_true',
-                        help='Run only Huntarr (skip recommendations, just find missing movies)')
+                        help='Run only Huntarr features (skip recommendations)')
     args = parser.parse_args()
 
     # Load config from project root (one level up from recommenders/)
@@ -1752,26 +2007,22 @@ def main():
     config_path = os.path.join(project_root, 'config/config.yml')
     config = load_config(config_path)
 
-    # Huntarr: config sets default, CLI flags override
-    # Config: huntarr: true/false (default: true)
-    # CLI: --no-huntarr disables, --huntarr-only runs only huntarr
-    huntarr_config = config.get('huntarr', True)
-    if args.huntarr_only:
-        run_huntarr = True
-        run_recommendations = False
-    elif args.no_huntarr:
-        run_huntarr = False
-        run_recommendations = True
-    else:
-        run_huntarr = huntarr_config
-        run_recommendations = True
+    # Huntarr: config controls which features are enabled
+    # huntarr.sequel_huntarr: true/false (default: true) - missing collection movies
+    # huntarr.horizon_huntarr: true/false (default: true) - upcoming unreleased movies
+    huntarr_config = config.get('huntarr', {})
+    run_sequel_huntarr = huntarr_config.get('sequel_huntarr', True)
+    run_horizon_huntarr = huntarr_config.get('horizon_huntarr', True)
+    run_recommendations = not args.huntarr_only
 
     if args.huntarr_only:
-        print(f"\n{GREEN}=== Huntarr: Missing Collection Finder ==={RESET}")
+        print(f"\n{GREEN}=== Huntarr: Collection Movie Finder ==={RESET}")
     else:
         print(f"\n{GREEN}=== External Recommendations Generator ==={RESET}")
-        if run_huntarr:
-            print(f"{CYAN}Huntarr enabled{RESET}")
+        if run_sequel_huntarr:
+            print(f"{CYAN}Sequel Huntarr enabled{RESET}")
+        if run_horizon_huntarr:
+            print(f"{CYAN}Horizon Huntarr enabled{RESET}")
 
     # Get TMDB API key
     tmdb_api_key = get_tmdb_config(config)['api_key']
@@ -1829,24 +2080,30 @@ def main():
                 tmdb_id = str(item.get('tmdb_id'))
                 show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
 
-    # Huntarr: Find missing sequels (on by default, skip with --no-huntarr)
+    # Huntarr: Find missing sequels and upcoming movies
     missing_sequels = []
-    if run_huntarr:
-        movie_library = config['plex'].get('movie_library', 'Movies')
-        tv_library = config['plex'].get('tv_library', 'TV Shows')
-        user_services = config.get('streaming_services', [])
-        stale_days = config.get('collections', {}).get('stale_removal_days', 7)
-        print(f"\n{CYAN}=== Huntarr: Finding Missing Collection Movies ==={RESET}")
+    horizon_movies = []
+    movie_library = config['plex'].get('movie_library', 'Movies')
+    tv_library = config['plex'].get('tv_library', 'TV Shows')
+    user_services = config.get('streaming_services', [])
+    stale_days = config.get('collections', {}).get('stale_removal_days', 7)
+
+    if run_sequel_huntarr:
+        print(f"\n{CYAN}=== Sequel Huntarr: Finding Missing Collection Movies ==={RESET}")
         missing_sequels = find_missing_sequels(tmdb_api_key, plex, movie_library, tv_library, user_services, stale_days)
+
+    if run_horizon_huntarr:
+        print(f"\n{CYAN}=== Horizon Huntarr: Finding Upcoming Collection Movies ==={RESET}")
+        horizon_movies = find_horizon_movies(tmdb_api_key, plex, movie_library, stale_days)
 
     # Generate combined HTML with all users
     output_dir = os.path.join(project_root, 'recommendations', 'external')
 
-    if all_users_data or missing_sequels:
+    if all_users_data or missing_sequels or horizon_movies:
         html_file = generate_combined_html(
             all_users_data, output_dir, tmdb_api_key, get_imdb_id,
             movie_counts=movie_counts, show_counts=show_counts, total_users=total_users,
-            missing_sequels=missing_sequels
+            missing_sequels=missing_sequels, horizon_movies=horizon_movies
         )
         print(f"{GREEN}Watchlist generated!{RESET}")
     else:

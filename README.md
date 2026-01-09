@@ -30,7 +30,8 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ### For Acquisition (What to Get)
 - **External watchlists** — Content NOT in your library that users would love
-- **Huntarr** — Find missing movies from collections you've started (complete that trilogy!)
+- **Sequel Huntarr** — Find missing movies from collections you've started (complete that trilogy!)
+- **Horizon Huntarr** — Track upcoming unreleased movies from franchises you own
 - **Streaming service grouping** — "Available on Netflix" vs "Need to acquire"
 - **Sonarr/Radarr integration** — Push recommendations directly for download
 - **Trakt/Simkl/MDBList export** — Sync to tracking services and list managers
@@ -337,27 +338,35 @@ export:
 
 **Setup:** Run `./run.sh` and follow Step 10, or manually create `config/simkl.yml`.
 
-### Huntarr: Missing Collection Movies
+### Huntarr: Collection Movie Finder
 
-Huntarr scans your Plex library for movies that belong to collections (trilogies, franchises, etc.) and shows you what's missing. Perfect for completing that Star Wars saga or finding the sequel you didn't know existed.
+Huntarr scans your Plex library for movies that belong to collections (trilogies, franchises, etc.) and helps you track what's missing and what's coming.
 
 ```yaml
 # In config/config.yml
-huntarr: true  # Enabled by default
+huntarr:
+  sequel_huntarr: true    # Find missing movies from collections you've started
+  horizon_huntarr: true   # Track upcoming unreleased movies from collections you own
 ```
 
-**Features:**
+**Sequel Huntarr** — Missing collection movies:
 - Scans all movies in your library for TMDB collection IDs
 - Shows collection name and how many you own (e.g., "2/3")
 - Displays streaming availability for missing movies
-- Only includes released movies (no "Untitled Sequel" placeholders)
-- Appears as a separate "Huntarr" tab in the HTML watchlist
+- Only includes released movies (no placeholders)
 
-**Command-line flags:**
-- `--no-huntarr` — Skip Huntarr scan (faster if you only want recommendations)
-- `--huntarr-only` — Run only Huntarr, skip recommendations
+**Horizon Huntarr** — Upcoming releases:
+- Finds unreleased movies from franchises you own
+- Shows production status (Post Production, In Production, Planned, Rumored)
+- Displays expected release date (or TBA)
+- Perfect for tracking that next Marvel or Star Wars film
 
-**Caching:** Huntarr caches collection data for 7 days to avoid repeated API calls. Cache auto-invalidates when your library changes.
+**Both features appear as separate tabs in the HTML watchlist, centered below user tabs.**
+
+**Command-line flag:**
+- `--huntarr-only` — Run only Huntarr features, skip recommendations (`./run.sh --huntarr-only`)
+
+**Caching:** Collection data cached for 7 days. IMDB IDs cached permanently. Cache auto-invalidates when your library changes.
 
 ### External Recommendations: Relevance Score
 

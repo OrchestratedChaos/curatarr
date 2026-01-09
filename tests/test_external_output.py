@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from recommenders.external_output import (
     render_streaming_icons,
     generate_combined_html,
+    generate_markdown,
     SERVICE_SHORT_NAMES,
 )
 
@@ -118,14 +119,15 @@ class TestGenerateCombinedHtml:
             assert 'TestUser' in html
             assert 'Movie 1' in html
 
-    def test_includes_huntarr_tab_when_data_provided(self):
+    def test_includes_sequel_huntarr_tab_when_data_provided(self):
         all_users_data = [{
             'username': 'testuser',
             'display_name': 'TestUser',
             'movies_categorized': {'all_items': [], 'user_services': {},
                                    'other_services': {}, 'acquire': []},
             'shows_categorized': {'all_items': [], 'user_services': {},
-                                  'other_services': {}, 'acquire': []}
+                                  'other_services': {}, 'acquire': []},
+            'user_services': []
         }]
         missing_sequels = [
             {'title': 'Sequel Movie', 'year': '2024', 'collection_name': 'Test Collection',
@@ -141,9 +143,37 @@ class TestGenerateCombinedHtml:
 
             with open(result) as f:
                 html = f.read()
-            assert 'Huntarr' in html
+            assert 'Sequel Huntarr' in html
             assert 'Sequel Movie' in html
             assert 'Test Collection' in html
+
+    def test_includes_horizon_huntarr_tab_when_data_provided(self):
+        all_users_data = [{
+            'username': 'testuser',
+            'display_name': 'TestUser',
+            'movies_categorized': {'all_items': [], 'user_services': {},
+                                   'other_services': {}, 'acquire': []},
+            'shows_categorized': {'all_items': [], 'user_services': {},
+                                  'other_services': {}, 'acquire': []},
+            'user_services': []
+        }]
+        horizon_movies = [
+            {'title': 'Future Movie', 'collection_name': 'Future Collection',
+             'tmdb_id': 789, 'release_date': '2026-06-15', 'status': 'In Production'}
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                all_users_data, tmpdir, 'api_key', self._mock_get_imdb_id,
+                horizon_movies=horizon_movies
+            )
+
+            with open(result) as f:
+                html = f.read()
+            assert 'Horizon Huntarr' in html
+            assert 'Future Movie' in html
+            assert 'Future Collection' in html
+            assert 'In Production' in html
 
     def test_empty_user_data_generates_valid_html(self):
         all_users_data = []
@@ -156,6 +186,29 @@ class TestGenerateCombinedHtml:
             with open(result) as f:
                 html = f.read()
             assert '<!DOCTYPE html>' in html
+
+    def test_huntarr_only_mode_activates_first_tab(self):
+        """When no user data, first huntarr tab should be active."""
+        all_users_data = []
+        missing_sequels = [
+            {'title': 'Sequel Movie', 'year': '2024', 'collection_name': 'Test Collection',
+             'owned_count': 2, 'total_count': 3, 'tmdb_id': 456,
+             'streaming_services': [], 'on_user_services': []}
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                all_users_data, tmpdir, 'api_key', self._mock_get_imdb_id,
+                missing_sequels=missing_sequels
+            )
+
+            with open(result) as f:
+                html = f.read()
+            # First huntarr tab should be active
+            assert 'tab-btn active' in html
+            assert 'data-user="sequel-huntarr"' in html
+            # Panel should also be active
+            assert 'tab-panel active' in html
 
     def test_html_includes_sortable_columns(self):
         all_users_data = [{
@@ -205,6 +258,139 @@ class TestGenerateCombinedHtml:
             assert '.streaming-icon' in html
             assert '.streaming-icon.netflix' in html
             assert '.streaming-icon.user-service' in html
+
+    def test_html_includes_tv_shows_section(self):
+        """Test that TV shows are rendered in the HTML output."""
+        all_users_data = [{
+            'username': 'user1',
+            'display_name': 'User1',
+            'movies_categorized': {'all_items': [], 'user_services': {},
+                                   'other_services': {}, 'acquire': []},
+            'shows_categorized': {
+                'all_items': [
+                    {'title': 'Breaking Bad', 'year': '2008', 'rating': 9.5, 'score': 0.95,
+                     'tmdb_id': 1396, 'streaming_services': ['netflix'],
+                     'on_user_services': ['netflix'], 'added_date': '2024-01-01T00:00:00'}
+                ],
+                'user_services': {}, 'other_services': {}, 'acquire': []
+            }
+        }]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                all_users_data, tmpdir, 'api_key', self._mock_get_imdb_id
+            )
+
+            with open(result) as f:
+                html = f.read()
+            assert 'TV Shows to Watch' in html
+            assert 'Breaking Bad' in html
+
+    def test_handles_items_without_tmdb_id(self):
+        """Test that items without tmdb_id are handled gracefully."""
+        all_users_data = [{
+            'username': 'user1',
+            'display_name': 'User1',
+            'movies_categorized': {
+                'all_items': [
+                    {'title': 'Movie With ID', 'year': '2024', 'rating': 7.0, 'score': 0.70,
+                     'tmdb_id': 123, 'streaming_services': [], 'on_user_services': [],
+                     'added_date': '2024-01-01T00:00:00'},
+                    {'title': 'Movie Without ID', 'year': '2024', 'rating': 6.0, 'score': 0.60,
+                     'streaming_services': [], 'on_user_services': [],
+                     'added_date': '2024-01-01T00:00:00'}
+                ],
+                'user_services': {}, 'other_services': {}, 'acquire': []
+            },
+            'shows_categorized': {'all_items': [], 'user_services': {},
+                                  'other_services': {}, 'acquire': []}
+        }]
+        missing_sequels = [
+            {'title': 'Sequel Without ID', 'year': '2024', 'collection_name': 'Test',
+             'owned_count': 1, 'total_count': 2, 'streaming_services': [], 'on_user_services': []}
+        ]
+        horizon_movies = [
+            {'title': 'Future Without ID', 'collection_name': 'Future',
+             'release_date': '2026-12-15', 'status': 'Planned'}
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                all_users_data, tmpdir, 'api_key', self._mock_get_imdb_id,
+                missing_sequels=missing_sequels, horizon_movies=horizon_movies
+            )
+            assert os.path.exists(result)
+
+
+class TestGenerateMarkdown:
+    """Tests for generate_markdown function"""
+
+    def test_generates_markdown_file(self):
+        """Test that markdown file is created with correct structure."""
+        movies_categorized = {
+            'user_services': {
+                'netflix': [
+                    {'title': 'Movie A', 'year': '2024', 'rating': 8.0, 'score': 0.80,
+                     'added_date': '2024-01-01T00:00:00'}
+                ]
+            },
+            'other_services': {
+                'hulu': [
+                    {'title': 'Movie B', 'year': '2023', 'rating': 7.5, 'score': 0.75,
+                     'added_date': '2024-01-01T00:00:00'}
+                ]
+            },
+            'acquire': [
+                {'title': 'Movie C', 'year': '2022', 'rating': 7.0, 'score': 0.70,
+                 'added_date': '2024-01-01T00:00:00'}
+            ]
+        }
+        shows_categorized = {
+            'user_services': {
+                'netflix': [
+                    {'title': 'Show A', 'year': '2024', 'rating': 9.0, 'score': 0.90,
+                     'added_date': '2024-01-01T00:00:00'}
+                ]
+            },
+            'other_services': {},
+            'acquire': []
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_markdown(
+                'testuser', 'TestUser', movies_categorized, shows_categorized, tmpdir
+            )
+
+            assert os.path.exists(result)
+            with open(result) as f:
+                content = f.read()
+
+            assert '# Watchlist for TestUser' in content
+            assert 'Movies to Watch' in content
+            assert 'TV Shows to Watch' in content
+            assert 'Movie A' in content
+            assert 'Movie B' in content
+            assert 'Movie C' in content
+            assert 'Show A' in content
+            assert 'Available on Your Services' in content
+            assert 'Available on Other Services' in content
+            assert 'Acquire' in content
+
+    def test_empty_categories_skipped(self):
+        """Test that empty categories don't appear in output."""
+        movies_categorized = {'user_services': {}, 'other_services': {}, 'acquire': []}
+        shows_categorized = {'user_services': {}, 'other_services': {}, 'acquire': []}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_markdown(
+                'emptyuser', 'EmptyUser', movies_categorized, shows_categorized, tmpdir
+            )
+
+            with open(result) as f:
+                content = f.read()
+
+            assert 'Movies to Watch' not in content
+            assert 'TV Shows to Watch' not in content
 
 
 class TestHtmlSorting:

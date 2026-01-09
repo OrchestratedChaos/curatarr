@@ -27,7 +27,11 @@ from recommenders.external import (
     get_collection_details,
     load_huntarr_cache,
     save_huntarr_cache,
+    load_horizon_cache,
+    save_horizon_cache,
+    get_movie_status,
     HUNTARR_CACHE_VERSION,
+    HORIZON_HUNTARR_CACHE_VERSION,
     EXTERNAL_RECS_CACHE_VERSION,
     get_movie_genre_ids,
     TV_MOVIE_GENRE_ID,
@@ -1087,6 +1091,100 @@ class TestHuntarrCache:
             assert 'old' not in saved
         finally:
             os.unlink(cache_path)
+
+
+class TestHorizonHuntarrCache:
+    """Tests for Horizon Huntarr cache functions"""
+
+    def test_load_horizon_cache_returns_empty_when_no_file(self):
+        """Test returns empty dict when cache file doesn't exist."""
+        result = load_horizon_cache('/nonexistent/path/cache.json')
+        assert result == {}
+
+    def test_load_horizon_cache_returns_empty_when_stale(self):
+        """Test returns empty dict when cache is stale."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_data = {
+                'version': HORIZON_HUNTARR_CACHE_VERSION,
+                'cached_at': 0,  # Very old timestamp
+                'library_tmdb_ids': [123, 456],
+                'horizon_movies': [{'title': 'Future Movie'}]
+            }
+            json.dump(cache_data, f)
+            cache_path = f.name
+
+        try:
+            result = load_horizon_cache(cache_path, stale_days=7)
+            assert result == {}  # Should be stale
+        finally:
+            os.unlink(cache_path)
+
+    def test_load_horizon_cache_returns_data_when_fresh(self):
+        """Test returns full cache when fresh."""
+        import time
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_data = {
+                'version': HORIZON_HUNTARR_CACHE_VERSION,
+                'cached_at': time.time(),  # Fresh timestamp
+                'library_tmdb_ids': [123, 456],
+                'horizon_movies': [{'title': 'Future Movie', 'status': 'In Production'}]
+            }
+            json.dump(cache_data, f)
+            cache_path = f.name
+
+        try:
+            result = load_horizon_cache(cache_path, stale_days=7)
+            assert 'horizon_movies' in result
+            assert result['horizon_movies'][0]['title'] == 'Future Movie'
+        finally:
+            os.unlink(cache_path)
+
+    def test_save_horizon_cache_creates_file(self):
+        """Test save creates cache file with version and timestamp."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, 'horizon_cache.json')
+            cache_data = {
+                'library_tmdb_ids': [123],
+                'horizon_movies': [{'title': 'Future Movie'}]
+            }
+
+            save_horizon_cache(cache_path, cache_data)
+
+            assert os.path.exists(cache_path)
+            with open(cache_path) as f:
+                saved = json.load(f)
+            assert saved['horizon_movies'][0]['title'] == 'Future Movie'
+            assert saved['version'] == HORIZON_HUNTARR_CACHE_VERSION
+            assert 'cached_at' in saved
+
+
+class TestGetMovieStatus:
+    """Tests for get_movie_status function"""
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_status_and_release_date(self, mock_get):
+        """Test returns status and release date from TMDB."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'status': 'In Production',
+            'release_date': '2026-06-15'
+        }
+        mock_get.return_value = mock_response
+
+        status, release_date = get_movie_status('api_key', 12345)
+        assert status == 'In Production'
+        assert release_date == '2026-06-15'
+
+    @patch('recommenders.external.requests.get')
+    def test_returns_unknown_on_api_error(self, mock_get):
+        """Test returns Unknown on API error."""
+        import requests as req
+        mock_get.side_effect = req.RequestException("API Error")
+
+        status, release_date = get_movie_status('api_key', 12345)
+        assert status == 'Unknown'
+        assert release_date == ''
 
 
 class TestCategorizeByStreamingServiceAllItems:

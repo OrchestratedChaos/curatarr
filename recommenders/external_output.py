@@ -3,9 +3,31 @@ Output generation for external recommendations.
 Generates markdown watchlists and combined HTML views.
 """
 
+import json
 import os
 from datetime import datetime
 from typing import Dict, List
+
+
+def _load_imdb_cache(cache_path: str) -> Dict[str, str]:
+    """Load IMDB ID cache from disk. IDs are permanent so no staleness check."""
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        pass
+    return {}
+
+
+def _save_imdb_cache(cache_path: str, cache: Dict[str, str]) -> None:
+    """Save IMDB ID cache to disk."""
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'w') as f:
+            json.dump(cache, f)
+    except IOError:
+        pass
 
 # ANSI color codes
 CYAN = '\033[96m'
@@ -181,7 +203,8 @@ def generate_combined_html(
     movie_counts: Dict[str, int] = None,
     show_counts: Dict[str, int] = None,
     total_users: int = 1,
-    missing_sequels: List[Dict] = None
+    missing_sequels: List[Dict] = None,
+    horizon_movies: List[Dict] = None
 ) -> str:
     """
     Generate single HTML watchlist with tabs for all users.
@@ -195,7 +218,8 @@ def generate_combined_html(
         movie_counts: Dict mapping TMDB ID to count of users wanting the movie
         show_counts: Dict mapping TMDB ID to count of users wanting the show
         total_users: Total number of users for displaying "X/N users"
-        missing_sequels: List of missing sequel items (shared across users)
+        missing_sequels: List of missing sequel items from Sequel Huntarr
+        horizon_movies: List of upcoming movie items from Horizon Huntarr
 
     Returns:
         Path to the generated HTML file
@@ -203,10 +227,16 @@ def generate_combined_html(
     movie_counts = movie_counts or {}
     show_counts = show_counts or {}
     missing_sequels = missing_sequels or []
+    horizon_movies = horizon_movies or []
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, 'watchlist.html')
 
     now = datetime.now()
+
+    # Load IMDB ID cache (IDs are permanent, no staleness needed)
+    cache_dir = os.path.dirname(output_dir)
+    imdb_cache_path = os.path.join(cache_dir, 'cache', 'imdb_ids_cache.json')
+    imdb_cache = _load_imdb_cache(imdb_cache_path)
 
     # Collect all unique TMDB IDs that need IMDB lookup
     all_imdb_ids = {}  # tmdb_id -> imdb_id
@@ -224,32 +254,59 @@ def generate_combined_html(
 
         for item in items:
             tmdb_id = item.get('tmdb_id')
-            if tmdb_id and tmdb_id not in all_imdb_ids and (tmdb_id, media_type) not in [(p[0], p[1]) for p in pending_lookups]:
+            if not tmdb_id:
+                continue
+            # Check cache first
+            cache_key = f"{tmdb_id}_{media_type}"
+            if cache_key in imdb_cache:
+                all_imdb_ids[tmdb_id] = imdb_cache[cache_key]
+            elif tmdb_id not in all_imdb_ids and (tmdb_id, media_type) not in [(p[0], p[1]) for p in pending_lookups]:
                 pending_lookups.append((tmdb_id, media_type))
 
     for user_data in all_users_data:
         collect_tmdb_ids_from_categorized(user_data['movies_categorized'], 'movie')
         collect_tmdb_ids_from_categorized(user_data['shows_categorized'], 'tv')
 
-    # Also collect from missing sequels
+    # Also collect from missing sequels (Sequel Huntarr)
     for item in missing_sequels:
         tmdb_id = item.get('tmdb_id')
-        if tmdb_id and tmdb_id not in all_imdb_ids and (tmdb_id, 'movie') not in [(p[0], p[1]) for p in pending_lookups]:
+        if not tmdb_id:
+            continue
+        cache_key = f"{tmdb_id}_movie"
+        if cache_key in imdb_cache:
+            all_imdb_ids[tmdb_id] = imdb_cache[cache_key]
+        elif tmdb_id not in all_imdb_ids and (tmdb_id, 'movie') not in [(p[0], p[1]) for p in pending_lookups]:
             pending_lookups.append((tmdb_id, 'movie'))
 
-    # Fetch IMDB IDs with progress
+    # Also collect from horizon movies (Horizon Huntarr)
+    for item in horizon_movies:
+        tmdb_id = item.get('tmdb_id')
+        if not tmdb_id:
+            continue
+        cache_key = f"{tmdb_id}_movie"
+        if cache_key in imdb_cache:
+            all_imdb_ids[tmdb_id] = imdb_cache[cache_key]
+        elif tmdb_id not in all_imdb_ids and (tmdb_id, 'movie') not in [(p[0], p[1]) for p in pending_lookups]:
+            pending_lookups.append((tmdb_id, 'movie'))
+
+    # Fetch IMDB IDs for items not in cache
     total_lookups = len(pending_lookups)
+    new_lookups = 0
     if total_lookups > 0:
-        print(f"  {CYAN}Fetching IMDB IDs for export ({total_lookups} items)...{RESET}")
+        print(f"  {CYAN}Fetching IMDB IDs for export ({total_lookups} new, {len(all_imdb_ids)} cached)...{RESET}")
         for i, (tmdb_id, media_type) in enumerate(pending_lookups, 1):
             if i % 10 == 0 or i == total_lookups:
                 print(f"\r    {CYAN}Progress: {i}/{total_lookups}{RESET}", end="", flush=True)
             imdb_id = get_imdb_id_func(tmdb_api_key, tmdb_id, media_type)
             if imdb_id:
                 all_imdb_ids[tmdb_id] = imdb_id
-        print(f"\r    {GREEN}Fetched {len(all_imdb_ids)} IMDB IDs{RESET}          ")
+                imdb_cache[f"{tmdb_id}_{media_type}"] = imdb_id
+                new_lookups += 1
+        print(f"\r    {GREEN}Fetched {new_lookups} new IMDB IDs ({len(all_imdb_ids)} total){RESET}          ")
+        # Save updated cache
+        _save_imdb_cache(imdb_cache_path, imdb_cache)
     else:
-        print(f"  {GREEN}No IMDB lookups needed{RESET}")
+        print(f"  {GREEN}All {len(all_imdb_ids)} IMDB IDs from cache{RESET}")
 
     def render_table_flat(items, media_type, user_id, user_services):
         """Render HTML table with streaming icons column (score-sorted)"""
@@ -278,7 +335,7 @@ def generate_combined_html(
         return '\n'.join(rows)
 
     def render_sequels_table(items, user_services):
-        """Render HTML table for missing sequels"""
+        """Render HTML table for missing sequels (Sequel Huntarr)"""
         rows = []
         for item in items:
             tmdb_id = item.get('tmdb_id', '')
@@ -291,13 +348,34 @@ def generate_combined_html(
             # Add TV Special badge if this is a TV movie
             tv_badge = '<span class="tv-special-badge">TV Special</span>' if item.get('is_tv_movie') else ''
             rows.append(f'''
-                <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="huntarr">
+                <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="sequel-huntarr">
                     <td><input type="checkbox" class="select-item"></td>
                     <td>{item['title']} {tv_badge}</td>
                     <td>{item.get('year', '')}</td>
                     <td>{collection_name}</td>
                     <td>{owned}/{total}</td>
                     <td><div class="streaming-icons">{streaming_html}</div></td>
+                </tr>''')
+        return '\n'.join(rows)
+
+    def render_horizon_table(items):
+        """Render HTML table for upcoming movies (Horizon Huntarr)"""
+        rows = []
+        for item in items:
+            tmdb_id = item.get('tmdb_id', '')
+            imdb_id = all_imdb_ids.get(tmdb_id, '')
+            collection_name = item.get('collection_name', 'Unknown')
+            release_date = item.get('release_date', 'TBA')
+            status = item.get('status', 'Unknown')
+            # Status badge styling
+            status_class = status.lower().replace(' ', '-')
+            rows.append(f'''
+                <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="horizon-huntarr">
+                    <td><input type="checkbox" class="select-item"></td>
+                    <td>{item['title']}</td>
+                    <td>{collection_name}</td>
+                    <td>{release_date}</td>
+                    <td><span class="status-badge {status_class}">{status}</span></td>
                 </tr>''')
         return '\n'.join(rows)
 
@@ -352,14 +430,20 @@ def generate_combined_html(
 
         panels_html += f'<div class="tab-panel {is_active}" data-user="{user_id}">{panel_content}</div>\n'
 
-    # Add Missing Sequels tab if there are any
-    if missing_sequels:
-        # Get user_services from first user for highlighting (shared tab)
-        first_user_services = all_users_data[0].get('user_services', []) if all_users_data else []
+    # Build Huntarr tabs (separate row below user tabs)
+    huntarr_tabs_html = ""
+    first_user_services = all_users_data[0].get('user_services', []) if all_users_data else []
+    has_user_tabs = bool(all_users_data)
+    first_huntarr_tab = True  # Track if this is the first huntarr tab (for active state)
 
-        tabs_html += f'<button class="tab-btn" data-user="huntarr">Huntarr</button>\n'
-        sequels_content = f"<h2>Huntarr ({len(missing_sequels)})</h2>"
-        sequels_content += "<p class=\"subtitle\">Hunt down missing movies from collections you've started.</p>"
+    # Sequel Huntarr tab
+    if missing_sequels:
+        # Make first huntarr tab active if no user tabs
+        is_active = "active" if not has_user_tabs and first_huntarr_tab else ""
+        first_huntarr_tab = False
+        huntarr_tabs_html += f'<button class="tab-btn {is_active}" data-user="sequel-huntarr">Sequel Huntarr</button>\n'
+        sequels_content = f"<h2>Sequel Huntarr ({len(missing_sequels)})</h2>"
+        sequels_content += "<p class=\"subtitle\">Missing movies from collections you've started.</p>"
         sequels_content += f'''
             <table>
                 <thead>
@@ -369,9 +453,28 @@ def generate_combined_html(
                     {render_sequels_table(missing_sequels, first_user_services)}
                 </tbody>
             </table>'''
-        panels_html += f'<div class="tab-panel" data-user="huntarr">{sequels_content}</div>\n'
+        panels_html += f'<div class="tab-panel {is_active}" data-user="sequel-huntarr">{sequels_content}</div>\n'
 
-    html_content = _generate_html_template(tabs_html, panels_html, now)
+    # Horizon Huntarr tab
+    if horizon_movies:
+        # Make first huntarr tab active if no user tabs (and sequel wasn't first)
+        is_active = "active" if not has_user_tabs and first_huntarr_tab else ""
+        first_huntarr_tab = False
+        huntarr_tabs_html += f'<button class="tab-btn {is_active}" data-user="horizon-huntarr">Horizon Huntarr</button>\n'
+        horizon_content = f"<h2>Horizon Huntarr ({len(horizon_movies)})</h2>"
+        horizon_content += "<p class=\"subtitle\">Upcoming unreleased movies from collections you own.</p>"
+        horizon_content += f'''
+            <table>
+                <thead>
+                    <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Collection</th><th class="sortable">Release Date</th><th class="sortable">Status</th></tr>
+                </thead>
+                <tbody>
+                    {render_horizon_table(horizon_movies)}
+                </tbody>
+            </table>'''
+        panels_html += f'<div class="tab-panel {is_active}" data-user="horizon-huntarr">{horizon_content}</div>\n'
+
+    html_content = _generate_html_template(tabs_html, panels_html, now, huntarr_tabs_html)
 
     with open(output_file, 'w') as f:
         f.write(html_content)
@@ -379,8 +482,21 @@ def generate_combined_html(
     return output_file
 
 
-def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> str:
+def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, huntarr_tabs_html: str = "") -> str:
     """Generate the full HTML template with CSS and JavaScript."""
+    # If no user tabs but huntarr tabs exist, put huntarr tabs in the main tabs row
+    # Otherwise, huntarr tabs go in their own row below user tabs
+    if not tabs_html.strip() and huntarr_tabs_html:
+        tabs_html = huntarr_tabs_html
+        huntarr_tabs_row = ""
+    elif huntarr_tabs_html:
+        huntarr_tabs_row = f'''
+            <div class="huntarr-tabs">
+                {huntarr_tabs_html}
+            </div>'''
+    else:
+        huntarr_tabs_row = ""
+
     return f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -680,8 +796,10 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
 
         .tabs-wrapper {{
             display: flex;
-            justify-content: center;
+            flex-direction: column;
+            align-items: center;
             margin-bottom: 35px;
+            gap: 12px;
         }}
         .tabs {{
             display: inline-flex;
@@ -694,6 +812,18 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             box-shadow:
                 inset 0 2px 10px rgba(0,0,0,0.6),
                 0 4px 15px rgba(0,0,0,0.3);
+        }}
+        .huntarr-tabs {{
+            display: inline-flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: center;
+            background: linear-gradient(180deg, #0a0808 0%, #0c0808 100%);
+            padding: 10px 16px;
+            border-radius: 12px;
+            box-shadow:
+                inset 0 2px 8px rgba(0,0,0,0.5),
+                0 3px 12px rgba(0,0,0,0.2);
         }}
         .tab-btn {{
             background: linear-gradient(180deg, #1c1c1c 0%, #151515 100%);
@@ -828,6 +958,38 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }}
 
+        /* Status badges for Horizon Huntarr */
+        .status-badge {{
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }}
+        .status-badge.post-production {{
+            background: linear-gradient(135deg, #059669, #10b981);
+            color: #fff;
+        }}
+        .status-badge.in-production {{
+            background: linear-gradient(135deg, #0284c7, #0ea5e9);
+            color: #fff;
+        }}
+        .status-badge.planned {{
+            background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+            color: #fff;
+        }}
+        .status-badge.rumored {{
+            background: linear-gradient(135deg, #475569, #64748b);
+            color: #fff;
+        }}
+        .status-badge.unknown {{
+            background: linear-gradient(135deg, #374151, #4b5563);
+            color: #9ca3af;
+        }}
+
         /* Streaming service icons */
         .streaming-icons {{
             display: flex;
@@ -936,6 +1098,7 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime) -> 
             <div class="tabs">
                 {tabs_html}
             </div>
+            {huntarr_tabs_row}
         </div>
 
         {panels_html}

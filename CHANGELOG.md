@@ -2,6 +2,27 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.0] - 2026-01-08
+
+### Added
+- **Sequel Huntarr**: Rebranded Huntarr - finds missing movies from collections you've started
+- **Horizon Huntarr**: New feature - finds upcoming unreleased movies from collections you own
+  - Shows release date and production status (Post Production, In Production, Planned, Rumored)
+  - Color-coded status badges in HTML output
+  - Separate cache for horizon data
+- Huntarr tabs now displayed in dedicated row below user tabs (centered)
+- New config structure for huntarr features:
+  ```yaml
+  huntarr:
+    sequel_huntarr: true
+    horizon_huntarr: true
+  ```
+
+### Changed
+- Old log removal now logs at INFO level instead of WARNING (expected behavior)
+- Removed `--no-huntarr` CLI flag (use config to enable/disable features)
+- IMDB IDs now cached permanently (no more re-fetching 700+ IDs on every run)
+
 ## [2.7.6] - 2026-01-09
 
 ### Changed

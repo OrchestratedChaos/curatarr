@@ -7,10 +7,14 @@ set -e  # Exit on error
 
 # Parse arguments
 DEBUG_FLAG=""
+HUNTARR_ONLY=""
 for arg in "$@"; do
     case $arg in
         --debug)
             DEBUG_FLAG="--debug"
+            ;;
+        --huntarr-only)
+            HUNTARR_ONLY="--huntarr-only"
             ;;
     esac
 done
@@ -1424,37 +1428,45 @@ main() {
     # Step 6: Create logs directory
     mkdir -p logs
 
-    # Step 7: Run recommendations
-    echo -e "${CYAN}=== Running Recommendations ===${NC}"
-    echo ""
+    # Step 7: Run recommendations (skip if --huntarr-only)
+    if [ -z "$HUNTARR_ONLY" ]; then
+        echo -e "${CYAN}=== Running Recommendations ===${NC}"
+        echo ""
 
-    echo -e "${YELLOW}Step 1/2: Movie recommendations...${NC}"
-    if python3 recommenders/movie.py $DEBUG_FLAG; then
-        echo -e "${GREEN}✓ Movie recommendations complete${NC}"
-    else
-        echo -e "${RED}❌ Movie recommendations failed${NC}"
-        exit 1
+        echo -e "${YELLOW}Step 1/2: Movie recommendations...${NC}"
+        if python3 recommenders/movie.py $DEBUG_FLAG; then
+            echo -e "${GREEN}✓ Movie recommendations complete${NC}"
+        else
+            echo -e "${RED}❌ Movie recommendations failed${NC}"
+            exit 1
+        fi
+        echo ""
+
+        echo -e "${YELLOW}Step 2/2: TV recommendations...${NC}"
+        if python3 recommenders/tv.py $DEBUG_FLAG; then
+            echo -e "${GREEN}✓ TV recommendations complete${NC}"
+        else
+            echo -e "${RED}❌ TV recommendations failed${NC}"
+            exit 1
+        fi
+        echo ""
     fi
-    echo ""
 
-    echo -e "${YELLOW}Step 2/2: TV recommendations...${NC}"
-    if python3 recommenders/tv.py $DEBUG_FLAG; then
-        echo -e "${GREEN}✓ TV recommendations complete${NC}"
-    else
-        echo -e "${RED}❌ TV recommendations failed${NC}"
-        exit 1
-    fi
-    echo ""
-
-    # Step 7: Generate external recommendations (watchlist)
-    # Check tuning.yml for external_recommendations setting, default to enabled
+    # Generate external recommendations (watchlist) or huntarr-only
     EXT_CHECK="true"
     if [ -f "config/tuning.yml" ] && grep -A 2 "external_recommendations:" config/tuning.yml | grep -q "enabled: false" 2>/dev/null; then
-        EXT_CHECK="false"
+        # Still run if huntarr-only even if external_recommendations disabled
+        if [ -z "$HUNTARR_ONLY" ]; then
+            EXT_CHECK="false"
+        fi
     fi
     if [ "$EXT_CHECK" = "true" ]; then
-        echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
-        if python3 recommenders/external.py; then
+        if [ -n "$HUNTARR_ONLY" ]; then
+            echo -e "${CYAN}=== Running Huntarr Only ===${NC}"
+        else
+            echo -e "${CYAN}=== Generating External Watchlists ===${NC}"
+        fi
+        if python3 recommenders/external.py $HUNTARR_ONLY; then
             echo -e "${GREEN}✓ External watchlists generated${NC}"
         else
             echo -e "${YELLOW}⚠ External watchlist generation failed (non-fatal)${NC}"
