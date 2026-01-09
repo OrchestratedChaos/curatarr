@@ -330,19 +330,35 @@ except Exception as e:
     echo -e "${GREEN}✓ Got it${NC}"
     echo ""
 
-    # --- Huntarr: Missing Collection Movies ---
-    echo -e "${YELLOW}Huntarr: Missing Collection Movies${NC}"
+    # --- Sequel Huntarr: Missing Collection Movies ---
+    echo -e "${YELLOW}Sequel Huntarr: Missing Collection Movies${NC}"
     echo ""
-    echo "Huntarr finds missing movies from collections you've started."
+    echo "Finds missing movies from collections you've started."
     echo "Example: You have 2 of 3 John Wick movies - it'll show the missing one."
     echo ""
-    read -p "Enable Huntarr? (Y/n): " ENABLE_HUNTARR
-    if [[ "$ENABLE_HUNTARR" =~ ^[Nn]$ ]]; then
-        HUNTARR_ENABLED="false"
-        echo -e "${YELLOW}Huntarr disabled (can use --huntarr flag to run manually)${NC}"
+    read -p "Enable Sequel Huntarr? (Y/n): " ENABLE_SEQUEL_HUNTARR
+    if [[ "$ENABLE_SEQUEL_HUNTARR" =~ ^[Nn]$ ]]; then
+        SEQUEL_HUNTARR_ENABLED="false"
+        echo -e "${YELLOW}Sequel Huntarr disabled${NC}"
     else
-        HUNTARR_ENABLED="true"
-        echo -e "${GREEN}✓ Huntarr enabled${NC}"
+        SEQUEL_HUNTARR_ENABLED="true"
+        echo -e "${GREEN}✓ Sequel Huntarr enabled${NC}"
+    fi
+    echo ""
+
+    # --- Horizon Huntarr: Upcoming Collection Movies ---
+    echo -e "${YELLOW}Horizon Huntarr: Upcoming Collection Movies${NC}"
+    echo ""
+    echo "Finds upcoming unreleased movies from collections you own."
+    echo "Example: Shows when the next Mission Impossible is coming out."
+    echo ""
+    read -p "Enable Horizon Huntarr? (Y/n): " ENABLE_HORIZON_HUNTARR
+    if [[ "$ENABLE_HORIZON_HUNTARR" =~ ^[Nn]$ ]]; then
+        HORIZON_HUNTARR_ENABLED="false"
+        echo -e "${YELLOW}Horizon Huntarr disabled${NC}"
+    else
+        HORIZON_HUNTARR_ENABLED="true"
+        echo -e "${GREEN}✓ Horizon Huntarr enabled${NC}"
     fi
     echo ""
 
@@ -1088,8 +1104,10 @@ general:
   auto_update: true
   log_retention_days: 7
 
-# Huntarr: Find missing movies from your collections
-huntarr: ${HUNTARR_ENABLED}
+# Huntarr: Collection movie discovery
+huntarr:
+  sequel_huntarr: ${SEQUEL_HUNTARR_ENABLED}    # Find missing movies from collections you've started
+  horizon_huntarr: ${HORIZON_HUNTARR_ENABLED}  # Find upcoming unreleased movies from your collections
 CONFIGEOF
 
     echo -e "${GREEN}✓ config/config.yml created!${NC}"

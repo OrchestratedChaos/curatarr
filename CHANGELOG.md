@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.3] - 2026-01-09
+
+### Changed
+- Setup wizard now asks about Sequel Huntarr and Horizon Huntarr separately
+- Config uses new nested `huntarr:` structure with `sequel_huntarr` and `horizon_huntarr` options
+
 ## [2.8.2] - 2026-01-09
 
 ### Changed
