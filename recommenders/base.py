@@ -29,7 +29,7 @@ from utils import (
     WEIGHT_SUM_TOLERANCE,
     PLEX_REQUEST_TIMEOUT,
     TIER_SAFE_PERCENT, TIER_DIVERSE_PERCENT, TIER_WILDCARD_PERCENT,
-    GREEN, YELLOW, CYAN, RESET,
+    GREEN, YELLOW, CYAN, RED, RESET,
     load_config,
     init_plex,
     get_configured_users,
@@ -797,10 +797,15 @@ class BaseRecommender(ABC):
         print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
         return [plex_item for item_id, (plex_item, score) in top_candidates]
 
-    def _sync_plex_collection(self, section, label_name: str, final_items: List) -> None:
-        """Create/update Plex collection with final recommendations."""
+    def _sync_plex_collection(self, section, label_name: str, final_items: List) -> bool:
+        """Create/update Plex collection with final recommendations.
+
+        Returns:
+            True if collection was created/updated, False otherwise.
+        """
         if not final_items:
-            return
+            print(f"{YELLOW}No items to add to collection{RESET}")
+            return False
 
         username = label_name.replace('Recommended_', '')
         if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
@@ -810,15 +815,26 @@ class BaseRecommender(ABC):
 
         emoji = "🎬" if self.media_type == 'movie' else "📺"
         collection_name = f"{emoji} {display_name} - Recommendation"
-        update_plex_collection(section, collection_name, final_items, logger)
-        cleanup_old_collections(section, collection_name, username, emoji, logger)
+        success = update_plex_collection(section, collection_name, final_items, logger)
+        if success:
+            cleanup_old_collections(section, collection_name, username, emoji, logger)
+        return success
 
-    def manage_plex_labels(self, recommended_items: List[Dict]) -> None:
-        """Manage Plex labels and collections for recommendations."""
+    def manage_plex_labels(self, recommended_items: List[Dict]) -> bool:
+        """Manage Plex labels and collections for recommendations.
+
+        Returns:
+            True if collection was created/updated, False otherwise.
+        """
         if not self.config.get('collections', {}).get('add_label'):
-            return
+            print(f"{YELLOW}Skipping collection creation (add_label is disabled in config){RESET}")
+            return False
 
         recommended_items = recommended_items or []
+
+        if not recommended_items:
+            print(f"{YELLOW}No recommendations generated - collection not created{RESET}")
+            return False
 
         if self.confirm_operations and recommended_items:
             selected_items = self._user_select_recommendations(recommended_items, "label in Plex")
@@ -842,6 +858,10 @@ class BaseRecommender(ABC):
                     print(f"  - {item}")
                 if len(skipped) > 5:
                     print(f"  ... and {len(skipped) - 5} more")
+
+            if not items_found and skipped:
+                print(f"{RED}No recommendations found in your Plex library - collection not created{RESET}")
+                return False
 
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
@@ -868,11 +888,12 @@ class BaseRecommender(ABC):
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
 
             # Sync to Plex collection
-            self._sync_plex_collection(section, label_name, final_items)
+            return self._sync_plex_collection(section, label_name, final_items)
 
         except (plexapi.exceptions.PlexApiException, AttributeError, KeyError) as e:
             log_error(f"Error managing Plex labels: {e}")
             print(traceback.format_exc())
+            return False
 
     def _user_select_recommendations(self, recommended_items: List[Dict], operation_label: str) -> List[Dict]:
         """Prompt user to select recommendations - delegates to utility."""
