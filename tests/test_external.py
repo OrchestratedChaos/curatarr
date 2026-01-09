@@ -103,7 +103,7 @@ class TestGetWatchProviders:
     """Tests for get_watch_providers function"""
 
     @patch('recommenders.external.requests.get')
-    def test_returns_providers_list(self, mock_get):
+    def test_returns_providers_dict(self, mock_get):
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -112,6 +112,12 @@ class TestGetWatchProviders:
                     'flatrate': [
                         {'provider_id': 8, 'provider_name': 'Netflix'},
                         {'provider_id': 337, 'provider_name': 'Disney Plus'}
+                    ],
+                    'rent': [
+                        {'provider_id': 2, 'provider_name': 'Apple TV'}
+                    ],
+                    'buy': [
+                        {'provider_id': 3, 'provider_name': 'Google Play'}
                     ]
                 }
             }
@@ -120,8 +126,10 @@ class TestGetWatchProviders:
 
         result = get_watch_providers('api_key', 12345, 'movie')
 
-        assert 'netflix' in result
-        assert 'disney_plus' in result
+        assert 'netflix' in result['streaming']
+        assert 'disney_plus' in result['streaming']
+        assert 'Apple TV' in result['rent']
+        assert 'Google Play' in result['buy']
 
     @patch('recommenders.external.requests.get')
     def test_returns_empty_on_no_us_providers(self, mock_get):
@@ -136,7 +144,7 @@ class TestGetWatchProviders:
 
         result = get_watch_providers('api_key', 12345, 'movie')
 
-        assert result == []
+        assert result == {'streaming': [], 'rent': [], 'buy': []}
 
     @patch('recommenders.external.requests.get')
     def test_returns_empty_on_error(self, mock_get):
@@ -146,7 +154,7 @@ class TestGetWatchProviders:
 
         result = get_watch_providers('api_key', 12345, 'movie')
 
-        assert result == []
+        assert result == {'streaming': [], 'rent': [], 'buy': []}
 
 
 class TestCategorizeByStreamingService:
@@ -154,7 +162,7 @@ class TestCategorizeByStreamingService:
 
     @patch('recommenders.external.get_watch_providers')
     def test_categorizes_by_user_services(self, mock_providers):
-        mock_providers.return_value = ['netflix']
+        mock_providers.return_value = {'streaming': ['netflix'], 'rent': [], 'buy': []}
 
         recommendations = [
             {'tmdb_id': 1, 'title': 'Movie 1', 'year': '2023', 'rating': 7.5, 'score': 0.8, 'added_date': datetime.now().isoformat()}
@@ -168,7 +176,7 @@ class TestCategorizeByStreamingService:
 
     @patch('recommenders.external.get_watch_providers')
     def test_categorizes_to_acquire(self, mock_providers):
-        mock_providers.return_value = []  # Not on any service
+        mock_providers.return_value = {'streaming': [], 'rent': [], 'buy': []}
 
         recommendations = [
             {'tmdb_id': 1, 'title': 'Movie 1', 'year': '2023', 'rating': 7.5, 'score': 0.8, 'added_date': datetime.now().isoformat()}
@@ -180,7 +188,7 @@ class TestCategorizeByStreamingService:
 
     @patch('recommenders.external.get_watch_providers')
     def test_categorizes_other_services(self, mock_providers):
-        mock_providers.return_value = ['disney_plus']
+        mock_providers.return_value = {'streaming': ['disney_plus'], 'rent': [], 'buy': []}
 
         recommendations = [
             {'tmdb_id': 1, 'title': 'Movie 1', 'year': '2023', 'rating': 7.5, 'score': 0.8, 'added_date': datetime.now().isoformat()}
@@ -1193,7 +1201,10 @@ class TestCategorizeByStreamingServiceAllItems:
     @patch('recommenders.external.get_watch_providers')
     def test_returns_all_items_list(self, mock_providers):
         """Test that categorized data includes all_items."""
-        mock_providers.side_effect = [['netflix'], ['hulu']]
+        mock_providers.side_effect = [
+            {'streaming': ['netflix'], 'rent': [], 'buy': []},
+            {'streaming': ['hulu'], 'rent': [], 'buy': []}
+        ]
         items = [
             {'tmdb_id': 1, 'title': 'Movie 1', 'score': 0.8},
             {'tmdb_id': 2, 'title': 'Movie 2', 'score': 0.7},
@@ -1208,7 +1219,7 @@ class TestCategorizeByStreamingServiceAllItems:
     @patch('recommenders.external.get_watch_providers')
     def test_all_items_sorted_by_score(self, mock_providers):
         """Test all_items are sorted by score descending."""
-        mock_providers.return_value = []
+        mock_providers.return_value = {'streaming': [], 'rent': [], 'buy': []}
         items = [
             {'tmdb_id': 1, 'title': 'Low Score', 'score': 0.5},
             {'tmdb_id': 2, 'title': 'High Score', 'score': 0.9},
@@ -1223,7 +1234,7 @@ class TestCategorizeByStreamingServiceAllItems:
     @patch('recommenders.external.get_watch_providers')
     def test_items_include_streaming_services_list(self, mock_providers):
         """Test each item has streaming_services list from API."""
-        mock_providers.return_value = ['netflix', 'hulu']
+        mock_providers.return_value = {'streaming': ['netflix', 'hulu'], 'rent': [], 'buy': []}
         items = [
             {'tmdb_id': 1, 'title': 'Movie', 'score': 0.8},
         ]
@@ -1238,7 +1249,7 @@ class TestCategorizeByStreamingServiceAllItems:
     @patch('recommenders.external.get_watch_providers')
     def test_items_include_on_user_services(self, mock_providers):
         """Test each item has on_user_services list."""
-        mock_providers.return_value = ['netflix', 'hulu']
+        mock_providers.return_value = {'streaming': ['netflix', 'hulu'], 'rent': [], 'buy': []}
         items = [
             {'tmdb_id': 1, 'title': 'Movie', 'score': 0.8},
         ]
@@ -1254,7 +1265,7 @@ class TestCategorizeByStreamingServiceAllItems:
     @patch('recommenders.external.get_watch_providers')
     def test_acquire_items_have_no_streaming(self, mock_providers):
         """Test items with no providers go to acquire list."""
-        mock_providers.return_value = []
+        mock_providers.return_value = {'streaming': [], 'rent': [], 'buy': []}
         items = [
             {'tmdb_id': 1, 'title': 'Rare Movie', 'score': 0.8},
         ]
@@ -1267,7 +1278,7 @@ class TestCategorizeByStreamingServiceAllItems:
     @patch('recommenders.external.get_watch_providers')
     def test_user_service_items_categorized(self, mock_providers):
         """Test items on user's services go to user_services dict."""
-        mock_providers.return_value = ['netflix']
+        mock_providers.return_value = {'streaming': ['netflix'], 'rent': [], 'buy': []}
         items = [
             {'tmdb_id': 1, 'title': 'Netflix Movie', 'score': 0.8},
         ]

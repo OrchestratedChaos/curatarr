@@ -77,8 +77,8 @@ TMDB_TV_GENRES = {
     10768: 'War & Politics', 37: 'Western'
 }
 
-# TMDB Watch Provider ID mappings (US region)
-TMDB_PROVIDERS = {
+# TMDB Watch Provider ID mappings (US region) - subscription streaming
+TMDB_STREAMING_PROVIDERS = {
     8: 'netflix',
     15: 'hulu',
     337: 'disney_plus',
@@ -94,6 +94,21 @@ TMDB_PROVIDERS = {
     207: 'mubi',
     619: 'shudder'
 }
+
+# TMDB Watch Provider ID mappings - rental/purchase services
+TMDB_RENTAL_PROVIDERS = {
+    2: 'Apple TV',
+    3: 'Google Play',
+    7: 'Vudu',
+    10: 'Amazon',
+    68: 'Microsoft',
+    192: 'YouTube',
+    358: 'DIRECTV',
+    486: 'Spectrum',
+}
+
+# Backwards compatibility alias
+TMDB_PROVIDERS = TMDB_STREAMING_PROVIDERS
 
 # Reverse TMDB genre mappings (name to ID) for Discover API
 TMDB_MOVIE_GENRE_IDS = {v.lower(): k for k, v in TMDB_MOVIE_GENRES.items()}
@@ -506,38 +521,46 @@ def get_library_items(plex: Any, library_name: str, media_type: str = 'movie') -
         return {'tmdb_ids': set(), 'tvdb_ids': set(), 'titles': set()}
 
 
-def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> List[str]:
+def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> Dict[str, List[str]]:
     """
-    Get streaming providers for a TMDB item (US region)
-    Returns list of service names (e.g., ['netflix', 'hulu'])
+    Get watch providers for a TMDB item (US region).
+
+    Returns dict with:
+        - streaming: subscription services (Netflix, Hulu, etc.)
+        - rent: rental providers (iTunes, Amazon, etc.)
+        - buy: purchase providers
     """
+    empty_result = {'streaming': [], 'rent': [], 'buy': []}
     try:
         url = f"https://api.themoviedb.org/3/{'movie' if media_type == 'movie' else 'tv'}/{tmdb_id}/watch/providers"
         params = {'api_key': tmdb_api_key}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code != 200:
-            return []
+            return empty_result
 
         data = response.json()
-
-        # Get US providers (flatrate = subscription streaming)
         us_providers = data.get('results', {}).get('US', {})
-        flatrate_providers = us_providers.get('flatrate', [])
 
-        # Map provider IDs to service names
-        services = []
-        for provider in flatrate_providers:
-            provider_id = provider.get('provider_id')
-            if provider_id in TMDB_PROVIDERS:
-                service_name = TMDB_PROVIDERS[provider_id]
-                if service_name not in services:  # Avoid duplicates
-                    services.append(service_name)
+        def extract_providers(provider_list, provider_map):
+            """Extract provider names from TMDB provider list."""
+            services = []
+            for provider in provider_list:
+                provider_id = provider.get('provider_id')
+                if provider_id in provider_map:
+                    service_name = provider_map[provider_id]
+                    if service_name not in services:
+                        services.append(service_name)
+            return services
 
-        return services
+        return {
+            'streaming': extract_providers(us_providers.get('flatrate', []), TMDB_STREAMING_PROVIDERS),
+            'rent': extract_providers(us_providers.get('rent', []), TMDB_RENTAL_PROVIDERS),
+            'buy': extract_providers(us_providers.get('buy', []), TMDB_RENTAL_PROVIDERS),
+        }
     except Exception as e:
         logger.debug(f"Error fetching watch providers for TMDB {tmdb_id}: {e}")
-        return []
+        return empty_result
 
 
 def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Dict]:
@@ -610,7 +633,7 @@ def get_movie_genre_ids(tmdb_api_key: str, tmdb_id: int) -> List[int]:
 
 
 # Huntarr cache versions
-SEQUEL_HUNTARR_CACHE_VERSION = 3  # v3: Added TV movie detection for specials
+SEQUEL_HUNTARR_CACHE_VERSION = 4  # v4: Added rent_services and buy_services
 HORIZON_HUNTARR_CACHE_VERSION = 1  # v1: Initial horizon huntarr
 EXTERNAL_RECS_CACHE_VERSION = 1
 
@@ -828,8 +851,9 @@ def find_missing_sequels(
         # Find missing movies (only released ones)
         for movie in released_movies:
             if movie['tmdb_id'] not in library_tmdb_ids:
-                # Get streaming availability
+                # Get streaming/rent/buy availability
                 providers = get_watch_providers(tmdb_api_key, movie['tmdb_id'], 'movie')
+                streaming = providers.get('streaming', [])
 
                 # Check if this is a TV movie (special) - genre ID 10770
                 genres = get_movie_genre_ids(tmdb_api_key, movie['tmdb_id'])
@@ -843,8 +867,10 @@ def find_missing_sequels(
                     'collection_name': coll_name,
                     'owned_count': owned_released,
                     'total_count': total_count,
-                    'streaming_services': providers,
-                    'on_user_services': [s for s in providers if s in user_services],
+                    'streaming_services': streaming,
+                    'rent_services': providers.get('rent', []),
+                    'buy_services': providers.get('buy', []),
+                    'on_user_services': [s for s in streaming if s in user_services],
                     'release_date': movie.get('release_date', ''),
                     'is_tv_movie': is_tv_movie
                 })
@@ -872,7 +898,11 @@ def find_missing_sequels(
 
         try:
             tv_library = plex.library.section(tv_library_name)
-            for show in tv_library.all():
+            all_shows = tv_library.all()
+            total_shows = len(all_shows)
+            for i, show in enumerate(all_shows):
+                if i % 20 == 0:
+                    show_progress("  Scanning TV library", i + 1, total_shows)
                 for episode in show.episodes():
                     # Check by TMDB ID (rare but possible)
                     for guid in episode.guids:
@@ -888,6 +918,7 @@ def find_missing_sequels(
                     ep_title_norm = normalize_title(episode.title)
                     if ep_title_norm in tv_movie_titles:
                         found_tmdb_ids.add(tv_movie_titles[ep_title_norm])
+            show_progress("  Scanning TV library", total_shows, total_shows)
         except Exception as e:
             log_warning(f"Could not scan TV library for specials: {e}")
 
@@ -1239,7 +1270,7 @@ def categorize_by_streaming_service(
 ) -> Dict:
     """
     Categorize recommendations by streaming availability.
-    Each item gets 'streaming_services' and 'on_user_services' added.
+    Each item gets streaming_services, rent_services, buy_services, and on_user_services added.
 
     Returns dict: {
         'user_services': {service_name: [items]},
@@ -1260,14 +1291,17 @@ def categorize_by_streaming_service(
         providers = get_watch_providers(tmdb_api_key, tmdb_id, media_type)
 
         # Attach streaming info to item
-        item['streaming_services'] = providers
-        item['on_user_services'] = [s for s in providers if s in user_services]
+        streaming = providers.get('streaming', [])
+        item['streaming_services'] = streaming
+        item['rent_services'] = providers.get('rent', [])
+        item['buy_services'] = providers.get('buy', [])
+        item['on_user_services'] = [s for s in streaming if s in user_services]
 
         # Add to all_items for flat display
         result['all_items'].append(item)
 
-        if not providers:
-            # Not available on any streaming service
+        if not streaming:
+            # Not available on any subscription streaming service
             result['acquire'].append(item)
         else:
             # Check which services have it - add to FIRST matching service only
@@ -1275,7 +1309,7 @@ def categorize_by_streaming_service(
             placed = False
 
             # First try user's services
-            for service in providers:
+            for service in streaming:
                 if service in user_services:
                     if service not in result['user_services']:
                         result['user_services'][service] = []
@@ -1285,7 +1319,7 @@ def categorize_by_streaming_service(
 
             # If not on user's services, add to first other service
             if not placed:
-                for service in providers:
+                for service in streaming:
                     if service not in user_services:
                         if service not in result['other_services']:
                             result['other_services'][service] = []
