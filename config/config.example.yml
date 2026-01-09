@@ -32,8 +32,10 @@ general:
   log_retention_days: 7
   auto_update: true
 
-# Huntarr: Find missing movies from collections you've started
-huntarr: true  # Set to false to disable, or use --no-huntarr flag
+# Huntarr: Find missing/upcoming movies from collections
+huntarr:
+  sequel_huntarr: true    # Missing movies from collections you've started
+  horizon_huntarr: true   # Upcoming unreleased movies from collections you own
 
 # Optional: Logging level
 logging:

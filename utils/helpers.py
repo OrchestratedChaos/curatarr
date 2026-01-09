@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Dict
 
-from .display import log_warning
+from .display import log_info, log_warning
 
 
 @lru_cache(maxsize=1)
@@ -118,7 +118,7 @@ def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
                 file_mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
                 if file_mtime < cutoff_time:
                     os.remove(filepath)
-                    log_warning(f"Removed old log: {filename} (age: {(datetime.now() - file_mtime).days} days)")
+                    log_info(f"Removed old log: {filename} (age: {(datetime.now() - file_mtime).days} days)")
             except Exception as e:
                 log_warning(f"Failed to remove old log {filename}: {e}")
 
