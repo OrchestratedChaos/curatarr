@@ -1175,10 +1175,11 @@ function Main {
 
     Write-Host ""
     Write-Green "==============================================="
-    Write-Green "           All Done!"
+    Write-Green "           Curatarr Finished"
     Write-Green "==============================================="
     Write-Host ""
-    Write-Host "Your recommendations are ready!"
+    Write-Host "Check above for any warnings about collection creation."
+    Write-Host "If collections were created, they will appear in your Plex library."
 
     # Show link to external watchlist HTML if it exists
     $watchlistFile = Join-Path $ScriptRoot "recommendations\external\watchlist.html"
@@ -1187,9 +1188,6 @@ function Main {
         Write-Host "View external watchlist: " -NoNewline
         Write-Cyan "file:///$($watchlistFile -replace '\\', '/')"
     }
-
-    Write-Host ""
-    Write-Host "Check your Plex library for updated collections."
     Write-Host ""
 }
 

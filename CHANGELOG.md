@@ -2,6 +2,21 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.7.5] - 2026-01-08
+
+### Fixed
+- Collection creation now provides clear feedback instead of silently failing
+  - Shows warning when `add_label` is disabled in config
+  - Shows warning when no recommendations are generated
+  - Shows error when no recommended items exist in Plex library
+  - Shows warning when no items to add to collection
+  - Exception errors now return proper failure status
+
+### Changed
+- Final message updated from "Your recommendations are ready!" to more accurate
+  "Curatarr Finished" with guidance to check above for warnings
+- `manage_plex_labels()` and `_sync_plex_collection()` now return boolean success status
+
 ## [2.7.4] - 2026-01-07
 
 ### Changed

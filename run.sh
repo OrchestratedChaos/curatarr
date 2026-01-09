@@ -1469,10 +1469,11 @@ main() {
 
     echo ""
     echo -e "${GREEN}===============================================${NC}"
-    echo -e "${GREEN}           All Done!${NC}"
+    echo -e "${GREEN}           Curatarr Finished${NC}"
     echo -e "${GREEN}===============================================${NC}"
     echo ""
-    echo "Your recommendations are ready!"
+    echo "Check above for any warnings about collection creation."
+    echo "If collections were created, they will appear in your Plex library."
 
     # Show link to external watchlist HTML if it exists
     local watchlist_file="$SCRIPT_DIR/recommendations/external/watchlist.html"
@@ -1480,9 +1481,6 @@ main() {
         echo ""
         echo -e "View external watchlist: ${CYAN}file://$watchlist_file${NC}"
     fi
-
-    echo ""
-    echo "Check your Plex library for updated collections."
     echo ""
 }
 
