@@ -411,3 +411,173 @@ def user_select_recommendations(recommendations: List[Dict], operation_label: st
             selected.append(recommendations[idx - 1])
 
     return selected
+
+
+def smart_open_html(file_path: str) -> bool:
+    """
+    Smart browser opening that reuses existing tabs when possible.
+
+    Behavior:
+    - If the page is already open: bring browser to focus and refresh
+    - If not open: open in default browser (new tab in existing window, or new window)
+
+    Args:
+        file_path: Absolute path to the HTML file
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import platform
+    import subprocess
+    import webbrowser
+
+    file_url = f"file://{file_path}"
+    system = platform.system()
+
+    try:
+        if system == "Darwin":
+            return _open_html_macos(file_path, file_url)
+        elif system == "Windows":
+            return _open_html_windows(file_url)
+        else:
+            # Linux and others - fall back to webbrowser
+            return _open_html_linux(file_url)
+    except Exception as e:
+        log_warning(f"Smart browser open failed: {e}, falling back to default")
+        webbrowser.open(file_url)
+        return True
+
+
+def _open_html_macos(file_path: str, file_url: str) -> bool:
+    """Handle browser opening on macOS using AppleScript."""
+    import subprocess
+    import webbrowser
+
+    # Try Chrome first, then Safari
+    for browser, script in [
+        ("Google Chrome", _get_chrome_applescript(file_url)),
+        ("Safari", _get_safari_applescript(file_url)),
+    ]:
+        try:
+            # Check if browser is running
+            check_running = subprocess.run(
+                ["osascript", "-e", f'tell application "System Events" to (name of processes) contains "{browser}"'],
+                capture_output=True, text=True, timeout=5
+            )
+            if "true" in check_running.stdout.lower():
+                # Browser is running, use AppleScript to find/refresh or open tab
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    print(f"Opened in {browser}")
+                    return True
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+            continue
+
+    # No browser running or AppleScript failed - use system default
+    subprocess.run(["open", file_url], check=True, timeout=10)
+    print("Opened in default browser")
+    return True
+
+
+def _get_chrome_applescript(file_url: str) -> str:
+    """Generate AppleScript for Chrome: find existing tab or open new one."""
+    return f'''
+    tell application "Google Chrome"
+        set found to false
+        set targetURL to "{file_url}"
+
+        repeat with w in windows
+            set tabIndex to 0
+            repeat with t in tabs of w
+                set tabIndex to tabIndex + 1
+                if URL of t starts with "file://" and URL of t contains "watchlist.html" then
+                    set found to true
+                    set active tab index of w to tabIndex
+                    set index of w to 1
+                    tell t to reload
+                    activate
+                    exit repeat
+                end if
+            end repeat
+            if found then exit repeat
+        end repeat
+
+        if not found then
+            if (count of windows) > 0 then
+                tell front window to make new tab with properties {{URL:targetURL}}
+            else
+                make new window
+                set URL of active tab of front window to targetURL
+            end if
+            activate
+        end if
+    end tell
+    '''
+
+
+def _get_safari_applescript(file_url: str) -> str:
+    """Generate AppleScript for Safari: find existing tab or open new one."""
+    return f'''
+    tell application "Safari"
+        set found to false
+        set targetURL to "{file_url}"
+
+        repeat with w in windows
+            set tabIndex to 0
+            repeat with t in tabs of w
+                set tabIndex to tabIndex + 1
+                if URL of t starts with "file://" and URL of t contains "watchlist.html" then
+                    set found to true
+                    set current tab of w to t
+                    set index of w to 1
+                    tell t to do JavaScript "location.reload()"
+                    activate
+                    exit repeat
+                end if
+            end repeat
+            if found then exit repeat
+        end repeat
+
+        if not found then
+            if (count of windows) > 0 then
+                tell front window to make new tab with properties {{URL:targetURL}}
+            else
+                make new document with properties {{URL:targetURL}}
+            end if
+            activate
+        end if
+    end tell
+    '''
+
+
+def _open_html_windows(file_url: str) -> bool:
+    """Handle browser opening on Windows."""
+    import subprocess
+    import webbrowser
+
+    # Try to use PowerShell to check for existing browser windows
+    # For now, just use the default browser - Windows doesn't have easy tab reuse
+    try:
+        subprocess.run(["start", "", file_url], shell=True, check=True, timeout=10)
+        print("Opened in default browser")
+        return True
+    except subprocess.SubprocessError:
+        webbrowser.open(file_url)
+        return True
+
+
+def _open_html_linux(file_url: str) -> bool:
+    """Handle browser opening on Linux."""
+    import subprocess
+    import webbrowser
+
+    try:
+        subprocess.run(["xdg-open", file_url], check=True, timeout=10)
+        print("Opened in default browser")
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError):
+        webbrowser.open(file_url)
+        return True

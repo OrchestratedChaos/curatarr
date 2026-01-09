@@ -2,6 +2,15 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.7.6] - 2026-01-09
+
+### Changed
+- Smart HTML browser opening with tab reuse
+  - On macOS: Detects if watchlist is already open in Chrome/Safari, brings to focus and refreshes
+  - Opens in new tab of existing browser window when possible
+  - Falls back to system default browser if no browser is running
+  - Cross-platform support for macOS, Windows, and Linux
+
 ## [2.7.5] - 2026-01-08
 
 ### Fixed

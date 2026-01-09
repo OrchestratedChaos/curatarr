@@ -6,7 +6,6 @@ Creates per-user markdown watchlists that update daily and auto-remove acquired 
 
 import os
 import sys
-import webbrowser
 import logging
 
 # Add project root to path for imports
@@ -46,6 +45,7 @@ from utils import (
     fetch_tmdb_details_for_profile,
     get_project_root,
     get_authenticated_trakt_client,
+    smart_open_html,
 )
 
 # Import output generation
@@ -1861,8 +1861,7 @@ def main():
     # Auto-open HTML if enabled
     external_config = config.get('external_recommendations', {})
     if external_config.get('auto_open_html', False) and html_file:
-        print("Opening watchlist in browser...")
-        webbrowser.open(f'file://{html_file}')
+        smart_open_html(html_file)
 
     # Export to external services (if configured and auto_sync enabled)
     if all_users_data and run_recommendations:

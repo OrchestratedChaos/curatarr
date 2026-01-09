@@ -73,6 +73,7 @@ from .display import (
     format_media_output,
     print_similarity_breakdown,
     user_select_recommendations,
+    smart_open_html,
 )
 
 # TMDB utilities
@@ -270,6 +271,7 @@ __all__ = [
     'format_media_output',
     'print_similarity_breakdown',
     'user_select_recommendations',
+    'smart_open_html',
     # TMDB
     'LANGUAGE_CODES',
     'get_full_language_name',
