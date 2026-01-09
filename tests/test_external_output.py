@@ -67,6 +67,42 @@ class TestRenderStreamingIcons:
         # Unknown services should use title case
         assert 'Unknown_Service' in result or 'unknown_service' in result
 
+    def test_shows_rent_badge_when_no_streaming(self):
+        """When no streaming but rent available, show rent badge."""
+        result = render_streaming_icons([], [], rent_services=['Apple TV', 'Amazon'])
+        assert 'Rent:' in result
+        assert 'Apple TV' in result
+        assert 'streaming-icon rent' in result
+        assert 'Acquire' not in result
+
+    def test_shows_buy_badge_when_no_streaming_or_rent(self):
+        """When no streaming or rent but buy available, show buy badge."""
+        result = render_streaming_icons([], [], rent_services=[], buy_services=['Google Play'])
+        assert 'Buy:' in result
+        assert 'Google Play' in result
+        assert 'streaming-icon buy' in result
+        assert 'Acquire' not in result
+
+    def test_rent_takes_priority_over_buy(self):
+        """Rent badge shown even if buy also available."""
+        result = render_streaming_icons([], [], rent_services=['Apple TV'], buy_services=['Google Play'])
+        assert 'Rent:' in result
+        assert 'Buy:' not in result
+
+    def test_streaming_takes_priority_over_rent(self):
+        """Streaming badges shown even if rent available."""
+        result = render_streaming_icons(['netflix'], [], rent_services=['Apple TV'])
+        assert 'netflix' in result
+        assert 'Rent:' not in result
+
+    def test_rent_badge_limits_display_shows_all_in_tooltip(self):
+        """Rent badge shows 2 providers in display, all in tooltip."""
+        result = render_streaming_icons([], [], rent_services=['A', 'B', 'C', 'D', 'E'])
+        # Display shows first 2 + count
+        assert 'Rent: A, B +3' in result
+        # Tooltip shows all
+        assert 'title="Available: A, B, C, D, E"' in result
+
 
 class TestServiceShortNames:
     """Tests for SERVICE_SHORT_NAMES constant"""

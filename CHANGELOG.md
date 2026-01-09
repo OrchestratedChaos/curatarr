@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.2] - 2026-01-09
+
+### Changed
+- Rent badges now use Blockbuster-inspired colors (blue background, yellow text)
+- Increased badge font size from 9px to 12px for better readability
+- Rent/buy badges show "+X more" indicator with tooltip showing all providers on hover
+- Added progress indicator when scanning TV library for specials
+
+## [2.8.1] - 2026-01-08
+
+### Added
+- **Rental/Purchase availability**: Movies not on streaming now show rent/buy options
+  - Amber "Rent: Provider, Provider" badge when available for rental
+  - Blue "Buy: Provider, Provider" badge when only purchasable
+  - "Acquire" badge only shown when not available digitally anywhere
+  - Supports: Apple TV, Amazon, Google Play, Vudu, YouTube, Microsoft, DIRECTV, Spectrum
+
 ## [2.8.0] - 2026-01-08
 
 ### Added

@@ -69,23 +69,42 @@ SERVICE_SHORT_NAMES = {
 }
 
 
-def render_streaming_icons(services: List[str], user_services: List[str]) -> str:
+def render_streaming_icons(
+    services: List[str],
+    user_services: List[str],
+    rent_services: List[str] = None,
+    buy_services: List[str] = None
+) -> str:
     """
     Render HTML streaming service icons/badges.
     User's services get a gold border highlight.
+    If no streaming, shows rent/buy options or Acquire.
     """
-    if not services:
-        return '<span class="streaming-icon acquire">Acquire</span>'
+    # If streaming services available, show them
+    if services:
+        icons = []
+        for service in services:
+            short_name = SERVICE_SHORT_NAMES.get(service, service.title())
+            css_class = f"streaming-icon {service}"
+            if service in user_services:
+                css_class += " user-service"
+            icons.append(f'<span class="{css_class}">{short_name}</span>')
+        return ' '.join(icons)
 
-    icons = []
-    for service in services:
-        short_name = SERVICE_SHORT_NAMES.get(service, service.title())
-        css_class = f"streaming-icon {service}"
-        if service in user_services:
-            css_class += " user-service"
-        icons.append(f'<span class="{css_class}">{short_name}</span>')
+    # No streaming - check rent/buy availability
+    if rent_services:
+        display = ', '.join(rent_services[:2])  # Show first 2
+        all_providers = ', '.join(rent_services)  # Tooltip shows all
+        more = f" +{len(rent_services) - 2}" if len(rent_services) > 2 else ""
+        return f'<span class="streaming-icon rent" title="Available: {all_providers}">Rent: {display}{more}</span>'
 
-    return ' '.join(icons)
+    if buy_services:
+        display = ', '.join(buy_services[:2])
+        all_providers = ', '.join(buy_services)
+        more = f" +{len(buy_services) - 2}" if len(buy_services) > 2 else ""
+        return f'<span class="streaming-icon buy" title="Available: {all_providers}">Buy: {display}{more}</span>'
+
+    return '<span class="streaming-icon acquire">Acquire</span>'
 
 
 def generate_markdown(
@@ -319,9 +338,11 @@ def generate_combined_html(
             # Show shared count if more than one user
             user_count = counts.get(str(tmdb_id), 1)
             shared_badge = f'<span class="shared-badge" title="{user_count} of {total_users} users want this">{user_count}/{total_users}</span>' if total_users > 1 else ''
-            # Render streaming icons
+            # Render streaming icons (with rent/buy fallback)
             streaming_services = item.get('streaming_services', [])
-            streaming_html = render_streaming_icons(streaming_services, user_services)
+            rent_services = item.get('rent_services', [])
+            buy_services = item.get('buy_services', [])
+            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services)
             rows.append(f'''
                 <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="{media_type}" data-user="{user_id}">
                     <td><input type="checkbox" class="select-item"></td>
@@ -344,7 +365,9 @@ def generate_combined_html(
             owned = item.get('owned_count', 0)
             total = item.get('total_count', 0)
             streaming_services = item.get('streaming_services', [])
-            streaming_html = render_streaming_icons(streaming_services, user_services)
+            rent_services = item.get('rent_services', [])
+            buy_services = item.get('buy_services', [])
+            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services)
             # Add TV Special badge if this is a TV movie
             tv_badge = '<span class="tv-special-badge">TV Special</span>' if item.get('is_tv_movie') else ''
             rows.append(f'''
@@ -995,16 +1018,19 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             display: flex;
             flex-wrap: wrap;
             gap: 3px;
-            max-width: 200px;
+            max-width: 280px;
         }}
         .streaming-icon {{
             display: inline-block;
-            padding: 2px 6px;
+            padding: 3px 8px;
             border-radius: 4px;
-            font-size: 9px;
+            font-size: 12px;
             font-weight: 600;
             white-space: nowrap;
             box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }}
         .streaming-icon.user-service {{
             border: 2px solid #d4af37;
@@ -1024,6 +1050,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         .streaming-icon.mubi {{ background: #0b0c0f; color: #fff; }}
         .streaming-icon.shudder {{ background: #000; color: #fff; }}
         .streaming-icon.acquire {{ background: #444; color: #aaa; font-style: italic; }}
+        .streaming-icon.rent {{ background: linear-gradient(135deg, #004B93, #0066CC); color: #FFD700; font-weight: 600; }}
+        .streaming-icon.buy {{ background: linear-gradient(135deg, #2563eb, #3b82f6); color: #fff; }}
 
         .instructions {{
             background: linear-gradient(180deg, #181818 0%, #121212 100%);
