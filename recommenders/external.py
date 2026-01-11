@@ -38,7 +38,8 @@ from utils import (
     fetch_watch_history_with_tmdb,
     log_warning, log_error, load_config, clickable_link,
     calculate_rewatch_multiplier, calculate_recency_multiplier,
-    calculate_similarity_score, normalize_genre, get_tmdb_id_from_imdb,
+    calculate_similarity_score, normalize_genre, normalize_user_profile,
+    get_tmdb_id_from_imdb,
     load_trakt_enhance_cache, save_trakt_enhance_cache,
     get_trakt_discovery_candidates,
     enhance_profile_with_trakt,
@@ -115,9 +116,9 @@ TMDB_MOVIE_GENRE_IDS = {v.lower(): k for k, v in TMDB_MOVIE_GENRES.items()}
 TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
 
 # Discovery thresholds - cast a wide net to find candidates
-DISCOVER_MIN_RATING = 5.0       # Low bar - just filter out garbage
-DISCOVER_MIN_VOTES = 50         # Enough to know it's a real film
-MAX_CANDIDATES = 1500           # Bigger pool = more chances for great matches
+DISCOVER_MIN_RATING = 6.0       # Filter low-quality content (was 5.0)
+DISCOVER_MIN_VOTES = 100        # Require more validation (was 50)
+MAX_CANDIDATES = 1000           # Sufficient pool size (was 1500)
 DISCOVER_RESULTS_PER_GENRE = 40     # Top N results per genre search
 DISCOVER_TOP_KEYWORDS = 10          # Number of top keywords to search
 DISCOVER_RESULTS_PER_KEYWORD = 15   # Top N results per keyword search
@@ -128,8 +129,8 @@ OUTPUT_MIN_VOTES = 50           # Filters garbage TMDB entries, profile score is
 
 # Iterative discovery settings
 MAX_DISCOVERY_ITERATIONS = 5    # How many discovery passes before giving up
-THRESHOLD_FLOOR = 0.25          # Minimum threshold for last-ditch iteration
-THIN_PROFILE_THRESHOLD = 40     # Less than 40 items = use genre-popular fallback
+THRESHOLD_FLOOR = 0.40          # Minimum threshold for last-ditch iteration (was 0.25, too low)
+THIN_PROFILE_THRESHOLD = 40     # Less than 40 items = use reduced iterations
 
 # Legacy aliases for cache filtering (votes only, no rating gate)
 MIN_RATING = 0.0                # Don't filter by rating in cache
@@ -147,6 +148,13 @@ DEFAULT_WEIGHTS = {
     'keyword': 0.50,   # Primary driver - most specific signal
     'language': 0.0    # Disabled - data unreliable
 }
+
+# Watch provider cache (streaming availability changes infrequently)
+WATCH_PROVIDER_CACHE_TTL = 7 * 24 * 3600  # 7 days in seconds
+_watch_provider_cache: Dict[Tuple[int, str], Tuple[float, Dict]] = {}  # (tmdb_id, media_type) -> (timestamp, providers)
+
+# Keyword ID cache (keyword names rarely change IDs)
+_keyword_id_cache: Dict[str, Optional[int]] = {}  # keyword_name -> keyword_id (None if not found)
 
 
 def discover_candidates_by_profile(
@@ -256,46 +264,55 @@ def discover_candidates_by_profile(
             break
 
         try:
-            # Search for keyword ID first
-            url = "https://api.themoviedb.org/3/search/keyword"
-            response = requests.get(url, params={'api_key': tmdb_api_key, 'query': keyword}, timeout=TMDB_REQUEST_TIMEOUT)
+            # Check keyword ID cache first
+            keyword_lower = keyword.lower()
+            if keyword_lower in _keyword_id_cache:
+                kw_id = _keyword_id_cache[keyword_lower]
+            else:
+                # Search for keyword ID
+                url = "https://api.themoviedb.org/3/search/keyword"
+                response = requests.get(url, params={'api_key': tmdb_api_key, 'query': keyword}, timeout=TMDB_REQUEST_TIMEOUT)
 
-            if response.status_code == 200:
-                kw_results = response.json().get('results', [])
-                if kw_results:
-                    kw_id = kw_results[0]['id']
+                kw_id = None
+                if response.status_code == 200:
+                    kw_results = response.json().get('results', [])
+                    if kw_results:
+                        kw_id = kw_results[0]['id']
+                # Cache result (including None for not found)
+                _keyword_id_cache[keyword_lower] = kw_id
 
-                    # Discover by keyword
-                    url = f"https://api.themoviedb.org/3/discover/{media}"
-                    params = {
-                        'api_key': tmdb_api_key,
-                        'with_keywords': kw_id,
-                        'vote_average.gte': DISCOVER_MIN_RATING,
-                        'vote_count.gte': DISCOVER_MIN_VOTES,
-                        'sort_by': 'vote_average.desc',
-                        'page': page
-                    }
-                    response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
+            if kw_id:
+                # Discover by keyword
+                url = f"https://api.themoviedb.org/3/discover/{media}"
+                params = {
+                    'api_key': tmdb_api_key,
+                    'with_keywords': kw_id,
+                    'vote_average.gte': DISCOVER_MIN_RATING,
+                    'vote_count.gte': DISCOVER_MIN_VOTES,
+                    'sort_by': 'vote_average.desc',
+                    'page': page
+                }
+                response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
-                    if response.status_code == 200:
-                        results = response.json().get('results', [])
-                        for item in results[:DISCOVER_RESULTS_PER_KEYWORD]:
-                            tmdb_id = item['id']
-                            title = item.get('title') or item.get('name')
-                            year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
+                if response.status_code == 200:
+                    results = response.json().get('results', [])
+                    for item in results[:DISCOVER_RESULTS_PER_KEYWORD]:
+                        tmdb_id = item['id']
+                        title = item.get('title') or item.get('name')
+                        year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
 
-                            if tmdb_id in candidates or tmdb_id in exclude_ids:
-                                continue
-                            if is_in_library(tmdb_id, title, year, library_data):
-                                continue
+                        if tmdb_id in candidates or tmdb_id in exclude_ids:
+                            continue
+                        if is_in_library(tmdb_id, title, year, library_data):
+                            continue
 
-                            candidates[tmdb_id] = {
-                                'tmdb_id': tmdb_id,
-                                'title': title,
-                                'year': year,
-                                'rating': item.get('vote_average', 0),
-                                'vote_count': item.get('vote_count', 0)
-                            }
+                        candidates[tmdb_id] = {
+                            'tmdb_id': tmdb_id,
+                            'title': title,
+                            'year': year,
+                            'rating': item.get('vote_average', 0),
+                            'vote_count': item.get('vote_count', 0)
+                        }
 
         except (requests.RequestException, KeyError) as e:
             log_warning(f"Error discovering by keyword {keyword}: {e}")
@@ -617,6 +634,7 @@ def get_library_items(plex: Any, library_name: str, media_type: str = 'movie') -
 def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> Dict[str, List[str]]:
     """
     Get watch providers for a TMDB item (US region).
+    Results are cached for 7 days since streaming availability changes infrequently.
 
     Returns dict with:
         - streaming: subscription services (Netflix, Hulu, etc.)
@@ -624,6 +642,14 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
         - buy: purchase providers
     """
     empty_result = {'streaming': [], 'rent': [], 'buy': []}
+
+    # Check cache first
+    cache_key = (tmdb_id, media_type)
+    if cache_key in _watch_provider_cache:
+        cached_time, cached_result = _watch_provider_cache[cache_key]
+        if time.time() - cached_time < WATCH_PROVIDER_CACHE_TTL:
+            return cached_result
+
     try:
         url = f"https://api.themoviedb.org/3/{'movie' if media_type == 'movie' else 'tv'}/{tmdb_id}/watch/providers"
         params = {'api_key': tmdb_api_key}
@@ -646,11 +672,14 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
                         services.append(service_name)
             return services
 
-        return {
+        result = {
             'streaming': extract_providers(us_providers.get('flatrate', []), TMDB_STREAMING_PROVIDERS),
             'rent': extract_providers(us_providers.get('rent', []), TMDB_RENTAL_PROVIDERS),
             'buy': extract_providers(us_providers.get('buy', []), TMDB_RENTAL_PROVIDERS),
         }
+        # Cache successful result
+        _watch_provider_cache[cache_key] = (time.time(), result)
+        return result
     except Exception as e:
         logger.debug(f"Error fetching watch providers for TMDB {tmdb_id}: {e}")
         return empty_result
@@ -682,7 +711,8 @@ def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Di
                 'tmdb_id': part['id'],
                 'title': part.get('title', ''),
                 'year': (part.get('release_date') or '')[:4],
-                'release_date': part.get('release_date', '')
+                'release_date': part.get('release_date', ''),
+                'genre_ids': part.get('genre_ids', [])  # Include genres to avoid extra API call
             })
 
         # Sort by release date
@@ -949,8 +979,8 @@ def find_missing_sequels(
                 streaming = providers.get('streaming', [])
 
                 # Check if this is a TV movie (special) - genre ID 10770
-                genres = get_movie_genre_ids(tmdb_api_key, movie['tmdb_id'])
-                is_tv_movie = TV_MOVIE_GENRE_ID in genres
+                # Use genre_ids from collection details to avoid extra API call
+                is_tv_movie = TV_MOVIE_GENRE_ID in movie.get('genre_ids', [])
 
                 missing_sequels.append({
                     'tmdb_id': movie['tmdb_id'],
@@ -1550,7 +1580,7 @@ def balance_genres_proportionally(
 
 def is_in_library(tmdb_id: Optional[int], title: Optional[str], year: Optional[str], library_data: Dict) -> bool:
     """Check if item is in library by TMDB ID or title+year"""
-    # Check TMDB ID first
+    # Check TMDB ID first (fast O(1) lookup)
     if tmdb_id and tmdb_id in library_data.get('tmdb_ids', set()):
         return True
 
@@ -1561,10 +1591,12 @@ def is_in_library(tmdb_id: Optional[int], title: Optional[str], year: Optional[s
         # Check exact match
         if (title_lower, year_int) in library_data.get('titles', set()):
             return True
-        # Check without year (some shows don't have year in Plex)
-        for lib_title, lib_year in library_data.get('titles', set()):
-            if lib_title == title_lower:
-                return True
+        # Check without year - use pre-built title set if available (O(1) vs O(N))
+        if '_title_set' not in library_data:
+            # Build title-only set once and cache it
+            library_data['_title_set'] = {t for t, y in library_data.get('titles', set())}
+        if title_lower in library_data['_title_set']:
+            return True
 
     return False
 
@@ -1611,6 +1643,9 @@ def find_similar_content_with_profile(
         print(f"{YELLOW}No user profile data found{RESET}")
         return []
 
+    # Pre-normalize profile once for efficient scoring (avoids rebuilding lowercase dicts per item)
+    normalize_user_profile(user_profile)
+
     # Get iteration settings from config (can be overridden by parameter)
     external_config = config.get('external_recommendations', {}) if config else {}
     if max_iterations is None:
@@ -1631,13 +1666,11 @@ def find_similar_content_with_profile(
                 'language': config_weights.get('language', 0.05)
             }
 
-    # Check for thin profile - use fast genre-popular fallback instead of iterations
+    # Check for thin profile - reduce iterations instead of skipping personalization entirely
     if is_thin_profile(user_profile):
         profile_size = sum(user_profile.get('genres', Counter()).values())
-        print(f"  {CYAN}Thin profile detected ({profile_size} items) - using genre-popular fallback{RESET}")
-        top_genres = [g for g, _ in user_profile['genres'].most_common(5)]
-        print(f"  Top genres: {', '.join(top_genres)}")
-        return discover_popular_by_genre(tmdb_api_key, top_genres, library_data, media_type, limit)
+        print(f"  {CYAN}Thin profile detected ({profile_size} items) - using reduced iterations{RESET}")
+        max_iterations = min(max_iterations, 2)  # Quick discovery pass, not zero
 
     # Track state across iterations
     quality_recs = []  # Items meeting quality bar
@@ -1667,15 +1700,15 @@ def find_similar_content_with_profile(
             print(f"  {GREEN}Target of {limit} reached after {iteration} iteration(s){RESET}")
             break
 
-        # Progressive threshold relaxation: drop 10% each iteration after iter 2, floor at iter 5
+        # Progressive threshold relaxation: drop 5% each iteration after iter 2 (slower than before)
         if iteration < 2:
             iteration_threshold = min_relevance_score
         elif iteration == max_iterations - 1:  # Last iteration - drop to floor
             iteration_threshold = THRESHOLD_FLOOR
         else:
-            # Iterations 2, 3, etc: drop 10% each
+            # Iterations 2, 3, etc: drop 5% each (was 10%, too aggressive)
             drops = iteration - 1
-            iteration_threshold = max(min_relevance_score - (drops * 0.10), THRESHOLD_FLOOR)
+            iteration_threshold = max(min_relevance_score - (drops * 0.05), THRESHOLD_FLOOR)
 
         # Discover candidates for this iteration
         candidates = discover_candidates_by_profile(
@@ -1764,6 +1797,19 @@ def find_similar_content_with_profile(
                     new_quality_this_iteration += 1
 
             print()  # newline after progress
+
+        # Re-check previously scored items that may now pass the relaxed threshold
+        if iteration >= 2:
+            quality_rec_ids = {r['tmdb_id'] for r in quality_recs}
+            rechecked = 0
+            for tmdb_id, scored_item in scored_cache.items():
+                if tmdb_id not in quality_rec_ids:
+                    if scored_item['score'] >= iteration_threshold and scored_item['vote_count'] >= min_votes:
+                        quality_recs.append(scored_item)
+                        new_quality_this_iteration += 1
+                        rechecked += 1
+            if rechecked > 0:
+                logger.debug(f"Re-check found {rechecked} items now meeting threshold")
 
         # Re-sort quality_recs after adding new items
         quality_recs.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
