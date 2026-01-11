@@ -306,7 +306,8 @@ class BaseCache(ABC):
             'rating': None,
             'vote_count': None,
             'collection_id': None,
-            'collection_name': None
+            'collection_name': None,
+            'production_company_ids': []  # For TV franchise detection
         }
 
         # Extract IDs from GUIDs
@@ -337,6 +338,16 @@ class BaseCache(ABC):
                     if collection:
                         result['collection_id'] = collection.get('id')
                         result['collection_name'] = collection.get('name')
+
+            # Get production companies for TV (for franchise/spinoff bonus)
+            elif self.media_type == 'tv':
+                detail_data = fetch_tmdb_with_retry(
+                    f"https://api.themoviedb.org/3/tv/{result['tmdb_id']}",
+                    {'api_key': tmdb_api_key}
+                )
+                if detail_data:
+                    production_companies = detail_data.get('production_companies', [])
+                    result['production_company_ids'] = [pc['id'] for pc in production_companies]
 
         # Update recommender caches if available
         if self.recommender and result['tmdb_id']:
