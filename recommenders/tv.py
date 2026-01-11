@@ -13,6 +13,10 @@ from typing import Dict, Set, Optional, Tuple
 from utils import (
     RED, GREEN, YELLOW, RESET,
     TOP_CAST_COUNT,
+    RATING_TIER_5_STAR, RATING_TIER_4_STAR, RATING_TIER_3_STAR,
+    RATING_MULTIPLIER_5_STAR, RATING_MULTIPLIER_4_STAR,
+    RATING_MULTIPLIER_3_STAR, RATING_MULTIPLIER_2_STAR, RATING_MULTIPLIER_UNRATED,
+    DEFAULT_NEGATIVE_THRESHOLD, get_negative_multiplier,
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
     fetch_show_completion_data, identify_dropped_shows,
@@ -199,6 +203,45 @@ class PlexTVRecommender(BaseRecommender):
         # Use shared utility function
         return get_watched_show_count(self.config, users_to_check)
 
+    def _calculate_rating_multiplier(self, user_rating):
+        """Calculate rating multiplier based on user's star rating (0-10 scale in Plex)
+
+        With negative signals enabled, low ratings (0-3) return negative multipliers
+        to penalize similar content instead of weakly preferring it.
+
+        Rating scale (negative signals enabled):
+        - 9-10 (5 stars): 1.0x weight - love it, strong preference
+        - 7-8 (4 stars): 0.75x weight - like it, moderate preference
+        - 5-6 (3 stars): 0.5x weight - neutral, weak preference
+        - 4 (2 stars): 0.25x weight - dislike, very weak preference
+        - 0-3 (1-1.5 stars): NEGATIVE weight - hate it, penalize similar content
+        - None/0 (unrated): 0.6x weight - default, slightly lower than neutral
+        """
+        if not user_rating or user_rating == 0:
+            return RATING_MULTIPLIER_UNRATED
+
+        rating_int = int(round(user_rating))
+
+        # Check if negative signals are enabled
+        ns_config = self.config.get('negative_signals', {})
+        bad_ratings_config = ns_config.get('bad_ratings', {})
+        ns_enabled = ns_config.get('enabled', True) and bad_ratings_config.get('enabled', True)
+        threshold = bad_ratings_config.get('threshold', DEFAULT_NEGATIVE_THRESHOLD)
+
+        # Return negative multiplier for low ratings if enabled
+        if ns_enabled and rating_int <= threshold:
+            return get_negative_multiplier(rating_int)
+
+        # Positive multipliers for higher ratings
+        if user_rating >= RATING_TIER_5_STAR:
+            return RATING_MULTIPLIER_5_STAR
+        elif user_rating >= RATING_TIER_4_STAR:
+            return RATING_MULTIPLIER_4_STAR
+        elif user_rating >= RATING_TIER_3_STAR:
+            return RATING_MULTIPLIER_3_STAR
+        else:
+            return RATING_MULTIPLIER_2_STAR
+
     def _get_plex_account_ids(self):
         """Get Plex account IDs for configured users with flexible name matching"""
         # Determine which users to process
@@ -247,24 +290,31 @@ class PlexTVRecommender(BaseRecommender):
                         data = show_completion_data[show_id]
                         logger.debug(f"Dropped: {data.get('title')} ({data['watched_episodes']}/{data['total_episodes']} eps, {data['completion_percent']:.0f}%)")
 
-        # Build rewatch data for shows (normalize by episode count)
+        # Build rewatch data and user ratings for shows
         # Each show gets base weight of 1.0 regardless of episode count
         # Only apply rewatch bonus if user actually rewatched episodes
         show_rewatch_counts = {}
+        user_ratings = {}  # Store user ratings for each show
         try:
             for show in shows_section.all():
                 show_id = int(show.ratingKey)
-                if show_id in watched_ids and hasattr(show, 'viewCount') and show.viewCount:
-                    view_count = int(show.viewCount)
-                    # Get watched episode count from completion data
-                    watched_eps = 1
-                    if show_id in show_completion_data:
-                        watched_eps = max(1, show_completion_data[show_id].get('watched_episodes', 1))
-                    # Calculate actual show rewatches (viewCount / watched_episodes)
-                    # If > 1, user rewatched some episodes
-                    show_rewatch_counts[show_id] = max(1, view_count // watched_eps)
+                if show_id in watched_ids:
+                    # Get rewatch count
+                    if hasattr(show, 'viewCount') and show.viewCount:
+                        view_count = int(show.viewCount)
+                        # Get watched episode count from completion data
+                        watched_eps = 1
+                        if show_id in show_completion_data:
+                            watched_eps = max(1, show_completion_data[show_id].get('watched_episodes', 1))
+                        # Calculate actual show rewatches (viewCount / watched_episodes)
+                        # If > 1, user rewatched some episodes
+                        show_rewatch_counts[show_id] = max(1, view_count // watched_eps)
+
+                    # Get user rating if available
+                    if hasattr(show, 'userRating') and show.userRating:
+                        user_ratings[show_id] = float(show.userRating)
         except Exception as e:
-            logger.debug(f"Error getting rewatch counts for shows: {e}")
+            logger.debug(f"Error getting rewatch counts/ratings for shows: {e}")
 
         # Process show metadata from cache - exclude dropped shows from positive signals
         # Each show weighted equally (1.0 base) regardless of episode count
@@ -284,8 +334,11 @@ class PlexTVRecommender(BaseRecommender):
                 # Base weight 1.0 per show, with rewatch bonus only if actually rewatched
                 rewatch_multiplier = calculate_rewatch_multiplier(show_rewatch_counts.get(show_id, 1))
 
-                # Combined weight: recency * rewatch
-                weight = recency_multiplier * rewatch_multiplier
+                # Calculate rating multiplier based on user's star rating
+                rating_multiplier = self._calculate_rating_multiplier(user_ratings.get(show_id))
+
+                # Combined weight: recency * rewatch * rating
+                weight = recency_multiplier * rewatch_multiplier * rating_multiplier
                 process_counters_from_cache(show_info, counters, media_type='tv', weight=weight)
 
                 if tmdb_id := show_info.get('tmdb_id'):

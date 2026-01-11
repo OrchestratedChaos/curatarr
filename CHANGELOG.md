@@ -2,6 +2,15 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.7] - 2026-01-10
+
+### Added
+- **TV rating multiplier**: TV recommender now weights shows by user ratings like movies (5-star shows boost similar content, low ratings penalize similar content)
+- **Trakt source prioritization**: When same title appears in multiple Trakt sources, keeps highest quality source (recommendations > anticipated > popular > trending)
+
+### Performance Improvements
+- **Pre-computed TF-IDF thresholds**: Genre and keyword thresholds calculated once per profile instead of per-item
+
 ## [2.8.6] - 2026-01-10
 
 ### Added

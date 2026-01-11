@@ -380,6 +380,17 @@ def discover_from_trakt(
     return results
 
 
+# Source tier priorities: higher number = higher quality source
+# Recommendations are personalized, so they're highest priority
+# Trending is lowest as it's just current hype
+SOURCE_TIER_PRIORITY = {
+    'recommendations': 4,  # Personalized based on user ratings
+    'anticipated': 3,      # Upcoming with buzz
+    'popular': 2,          # All-time popular
+    'trending': 1,         # Currently popular (fleeting)
+}
+
+
 def get_trakt_discovery_candidates(
     config: Dict,
     media_type: str,
@@ -393,6 +404,9 @@ def get_trakt_discovery_candidates(
     Converts Trakt discovery items into the candidate format expected by
     the external recommender's scoring pipeline.
 
+    When the same tmdb_id appears in multiple sources, keeps the higher
+    tier entry (recommendations > anticipated > popular > trending).
+
     Args:
         config: Full application config
         media_type: 'movie' or 'tv'
@@ -401,7 +415,7 @@ def get_trakt_discovery_candidates(
         exclude_imdb_ids: IMDB IDs to exclude (e.g., Trakt watchlist)
 
     Returns:
-        Dict mapping tmdb_id -> {tmdb_id, title, year, source, ...}
+        Dict mapping tmdb_id -> {tmdb_id, title, year, source, source_tier, ...}
     """
     discovery = discover_from_trakt(
         config,
@@ -413,18 +427,27 @@ def get_trakt_discovery_candidates(
 
     candidates = {}
 
-    # Process each source with source attribution
+    # Process each source with source attribution and tier priority
     for source, items in discovery.items():
+        source_tier = SOURCE_TIER_PRIORITY.get(source, 0)
+
         for item in items:
             tmdb_id = item.get('tmdb_id')
-            if not tmdb_id or tmdb_id in candidates:
+            if not tmdb_id:
                 continue
+
+            # If already have this candidate, only replace if new source is higher tier
+            if tmdb_id in candidates:
+                existing_tier = candidates[tmdb_id].get('source_tier', 0)
+                if source_tier <= existing_tier:
+                    continue
 
             candidates[tmdb_id] = {
                 'tmdb_id': tmdb_id,
                 'title': item.get('title'),
                 'year': item.get('year'),
                 'source': f'trakt_{source}',
+                'source_tier': source_tier,
                 'watchers': item.get('watchers'),
                 'list_count': item.get('list_count'),
             }
