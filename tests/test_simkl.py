@@ -208,6 +208,16 @@ class TestSimklClientMakeRequest:
         assert result == {"ok": True}
         assert mock_request.call_count == 2
 
+    @patch('utils.simkl.requests.request')
+    def test_generic_request_exception(self, mock_request):
+        """Test generic RequestException raises SimklAPIError."""
+        mock_request.side_effect = requests.exceptions.RequestException("Something broke")
+
+        client = SimklClient("id")
+
+        with pytest.raises(SimklAPIError, match="request failed"):
+            client._make_request("GET", "/test", authenticated=False)
+
 
 class TestSimklClientPinAuth:
     """Tests for PIN authentication flow."""
@@ -344,6 +354,20 @@ class TestSimklClientWatchHistory:
 
         assert len(result) == 1
         assert result[0]["title"] == "Anime 1"
+
+    @patch.object(SimklClient, 'get_all_items')
+    def test_get_watched_shows(self, mock_all_items):
+        """Test getting watched TV shows."""
+        mock_all_items.return_value = {
+            "shows": [{"title": "Show 1"}, {"title": "Show 2"}],
+            "movies": []
+        }
+
+        client = SimklClient("id", access_token="token")
+        result = client.get_watched_shows()
+
+        assert len(result) == 2
+        assert result[0]["title"] == "Show 1"
 
     @patch.object(SimklClient, '_make_request')
     def test_add_to_history(self, mock_request):

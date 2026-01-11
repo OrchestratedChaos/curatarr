@@ -164,6 +164,80 @@ class TestTeeLogger:
         finally:
             sys.stdout = original_stdout
 
+    def test_write_with_buffer(self):
+        """Test write() when stdout has buffer attribute."""
+        mock_logfile = StringIO()
+        tee = TeeLogger(mock_logfile)
+
+        # Create mock buffer
+        mock_buffer = Mock()
+        mock_buffer.write = Mock()
+        tee.stdout_buffer = mock_buffer
+
+        tee.write("Hello")
+
+        mock_buffer.write.assert_called_once()
+        assert "Hello" in mock_logfile.getvalue()
+
+    def test_write_without_buffer(self):
+        """Test write() when stdout has no buffer."""
+        mock_logfile = StringIO()
+        original_stdout = sys.stdout
+
+        # Create mock stdout without buffer
+        mock_stdout = Mock(spec=['write', 'flush'])
+
+        try:
+            sys.stdout = mock_stdout
+            tee = TeeLogger(mock_logfile)
+            tee.write("Test")
+            # Should write to both stdout and logfile
+            assert "Test" in mock_logfile.getvalue()
+        finally:
+            sys.stdout = original_stdout
+
+    def test_write_unicode_encode_error(self):
+        """Test write() handles UnicodeEncodeError gracefully."""
+        mock_logfile = StringIO()
+        tee = TeeLogger(mock_logfile)
+
+        # Create mock buffer that raises once, then succeeds
+        mock_buffer = Mock()
+        mock_buffer.write = Mock(side_effect=[
+            UnicodeEncodeError('ascii', 'test', 0, 1, 'test'),  # First call fails
+            None  # Second call succeeds (fallback)
+        ])
+        tee.stdout_buffer = mock_buffer
+
+        # Should not raise, falls back to safe encoding
+        tee.write("Hello \u2603")  # snowman character
+        # Logfile should still get content
+        assert mock_logfile.getvalue() != ""
+        # Buffer write called twice (initial + fallback)
+        assert mock_buffer.write.call_count == 2
+
+    def test_flush_without_buffer(self):
+        """Test flush() when stdout has no buffer."""
+        mock_logfile = Mock()
+        mock_logfile.flush = Mock()
+        original_stdout = sys.stdout
+        original_sys_stdout = sys.__stdout__
+
+        # Create mock stdout without buffer
+        mock_stdout = Mock(spec=['write', 'flush'])
+        mock_sys_stdout = Mock()
+        mock_sys_stdout.flush = Mock()
+
+        try:
+            sys.stdout = mock_stdout
+            sys.__stdout__ = mock_sys_stdout
+            tee = TeeLogger(mock_logfile)
+            tee.flush()
+            mock_logfile.flush.assert_called_once()
+        finally:
+            sys.stdout = original_stdout
+            sys.__stdout__ = original_sys_stdout
+
 
 class TestSetupLogging:
     """Tests for setup_logging() function."""

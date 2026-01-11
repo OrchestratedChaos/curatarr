@@ -118,6 +118,58 @@ class TestRadarrClientMakeRequest:
         with pytest.raises(RadarrAPIError, match="Could not connect"):
             client._make_request("GET", "system/status")
 
+    @patch('utils.api_client.requests.request')
+    def test_generic_request_exception_raises_error(self, mock_request):
+        """Test generic RequestException raises RadarrAPIError."""
+        mock_request.side_effect = requests.exceptions.RequestException("Something broke")
+
+        client = RadarrClient("http://localhost:7878", "key")
+
+        with pytest.raises(RadarrAPIError, match="Request failed"):
+            client._make_request("GET", "system/status")
+
+    @patch('utils.api_client.requests.request')
+    def test_error_response_parsing_list(self, mock_request):
+        """Test error parsing with list response (Radarr/Sonarr style)."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.text = "Raw error"
+        mock_response.json.return_value = [{"errorMessage": "Movie already exists"}]
+        mock_request.return_value = mock_response
+
+        client = RadarrClient("http://localhost:7878", "key")
+
+        with pytest.raises(RadarrAPIError, match="Movie already exists"):
+            client._make_request("POST", "movie")
+
+    @patch('utils.api_client.requests.request')
+    def test_error_response_parsing_dict(self, mock_request):
+        """Test error parsing with dict response."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.text = "Raw error"
+        mock_response.json.return_value = {"message": "Invalid input"}
+        mock_request.return_value = mock_response
+
+        client = RadarrClient("http://localhost:7878", "key")
+
+        with pytest.raises(RadarrAPIError, match="Invalid input"):
+            client._make_request("POST", "movie")
+
+    @patch('utils.api_client.requests.request')
+    def test_error_response_parsing_invalid_json(self, mock_request):
+        """Test error parsing falls back to raw text on invalid JSON."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.text = "Server error text"
+        mock_response.json.side_effect = ValueError("Invalid JSON")
+        mock_request.return_value = mock_response
+
+        client = RadarrClient("http://localhost:7878", "key")
+
+        with pytest.raises(RadarrAPIError, match="Server error text"):
+            client._make_request("POST", "movie")
+
 
 class TestRadarrClientTestConnection:
     """Tests for test_connection method."""

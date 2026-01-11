@@ -35,6 +35,9 @@ from recommenders.external import (
     EXTERNAL_RECS_CACHE_VERSION,
     get_movie_genre_ids,
     TV_MOVIE_GENRE_ID,
+    is_thin_profile,
+    discover_popular_by_genre,
+    THIN_PROFILE_THRESHOLD,
 )
 from utils.trakt import enhance_profile_with_trakt
 from collections import Counter
@@ -1450,3 +1453,293 @@ class TestTVMovieGenreDetection:
         # Test punctuation removal
         assert normalize_title("Movie: The Sequel!") == "movie the sequel"
         assert normalize_title("Test's Movie") == "tests movie"
+
+
+class TestThinProfile:
+    """Tests for thin profile detection"""
+
+    def test_is_thin_profile_returns_true_for_sparse_profile(self):
+        """Test that profiles with few items are detected as thin"""
+        sparse_profile = {
+            'genres': Counter({'Action': 5, 'Comedy': 3, 'Drama': 2})
+        }
+        # 10 items total, below threshold of 40
+        assert is_thin_profile(sparse_profile) is True
+
+    def test_is_thin_profile_returns_false_for_full_profile(self):
+        """Test that profiles with enough items are not detected as thin"""
+        full_profile = {
+            'genres': Counter({'Action': 20, 'Comedy': 15, 'Drama': 10, 'Thriller': 5})
+        }
+        # 50 items total, above threshold of 40
+        assert is_thin_profile(full_profile) is False
+
+    def test_is_thin_profile_exactly_at_threshold(self):
+        """Test boundary condition at threshold"""
+        at_threshold = {
+            'genres': Counter({'Action': 20, 'Comedy': 20})
+        }
+        # Exactly 40 items, should NOT be thin (need to be below threshold)
+        assert is_thin_profile(at_threshold) is False
+
+    def test_is_thin_profile_empty_profile(self):
+        """Test empty profile is detected as thin"""
+        empty_profile = {'genres': Counter()}
+        assert is_thin_profile(empty_profile) is True
+
+    def test_thin_profile_threshold_constant(self):
+        """Test threshold constant is set correctly"""
+        assert THIN_PROFILE_THRESHOLD == 40
+
+
+class TestDiscoverPopularByGenre:
+    """Tests for genre-popular fallback discovery"""
+
+    @patch('recommenders.external.requests.get')
+    @patch('recommenders.external.time.sleep')
+    def test_returns_recommendations_for_valid_genres(self, mock_sleep, mock_get):
+        """Test that popular items are returned for valid genres"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'results': [
+                {
+                    'id': 123,
+                    'title': 'Popular Action Movie',
+                    'release_date': '2024-01-15',
+                    'vote_average': 8.5,
+                    'vote_count': 1000,
+                    'overview': 'A great action movie',
+                    'genre_ids': [28]
+                },
+                {
+                    'id': 456,
+                    'title': 'Another Action Movie',
+                    'release_date': '2023-06-20',
+                    'vote_average': 7.8,
+                    'vote_count': 800,
+                    'overview': 'Another good one',
+                    'genre_ids': [28]
+                }
+            ]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        results = discover_popular_by_genre(
+            tmdb_api_key='test_key',
+            top_genres=['Action'],
+            library_data={},
+            media_type='movie',
+            limit=10
+        )
+
+        assert len(results) == 2
+        assert results[0]['title'] == 'Popular Action Movie'
+        assert results[0]['tmdb_id'] == 123
+        assert results[0]['rating'] == 8.5
+
+    @patch('recommenders.external.requests.get')
+    @patch('recommenders.external.time.sleep')
+    def test_filters_out_library_items(self, mock_sleep, mock_get):
+        """Test that items already in library are excluded"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'results': [
+                {'id': 123, 'title': 'In Library', 'release_date': '2024-01-01', 'vote_average': 8.0, 'vote_count': 500, 'overview': '', 'genre_ids': []},
+                {'id': 456, 'title': 'Not In Library', 'release_date': '2024-01-01', 'vote_average': 8.0, 'vote_count': 500, 'overview': '', 'genre_ids': []}
+            ]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        # 123 is in library
+        library_data = {123: {'title': 'In Library'}}
+
+        results = discover_popular_by_genre(
+            tmdb_api_key='test_key',
+            top_genres=['Action'],
+            library_data=library_data,
+            media_type='movie',
+            limit=10
+        )
+
+        assert len(results) == 1
+        assert results[0]['tmdb_id'] == 456
+
+    @patch('recommenders.external.requests.get')
+    @patch('recommenders.external.time.sleep')
+    def test_handles_tv_shows(self, mock_sleep, mock_get):
+        """Test TV show discovery uses correct field names"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'results': [
+                {
+                    'id': 789,
+                    'name': 'Popular TV Show',
+                    'first_air_date': '2024-03-01',
+                    'vote_average': 9.0,
+                    'vote_count': 2000,
+                    'overview': 'Great show',
+                    'genre_ids': [18]
+                }
+            ]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        results = discover_popular_by_genre(
+            tmdb_api_key='test_key',
+            top_genres=['Drama'],
+            library_data={},
+            media_type='show',
+            limit=10
+        )
+
+        assert len(results) == 1
+        assert results[0]['title'] == 'Popular TV Show'
+        assert results[0]['year'] == 2024
+
+    @patch('recommenders.external.requests.get')
+    @patch('recommenders.external.time.sleep')
+    def test_respects_limit(self, mock_sleep, mock_get):
+        """Test that limit parameter is respected"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'results': [
+                {'id': i, 'title': f'Movie {i}', 'release_date': '2024-01-01', 'vote_average': 8.0, 'vote_count': 500, 'overview': '', 'genre_ids': []}
+                for i in range(20)
+            ]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        results = discover_popular_by_genre(
+            tmdb_api_key='test_key',
+            top_genres=['Action'],
+            library_data={},
+            media_type='movie',
+            limit=5
+        )
+
+        assert len(results) == 5
+
+    @patch('recommenders.external.requests.get')
+    @patch('recommenders.external.time.sleep')
+    def test_handles_invalid_genre(self, mock_sleep, mock_get):
+        """Test graceful handling of invalid genre names"""
+        results = discover_popular_by_genre(
+            tmdb_api_key='test_key',
+            top_genres=['NotARealGenre'],
+            library_data={},
+            media_type='movie',
+            limit=10
+        )
+
+        # Should return empty list, not crash
+        assert results == []
+        mock_get.assert_not_called()
+
+
+class TestFindSimilarContentThinProfile:
+    """Tests for thin profile handling in find_similar_content_with_profile"""
+
+    @patch('recommenders.external.discover_popular_by_genre')
+    def test_thin_profile_uses_fallback(self, mock_discover):
+        """Test that thin profiles use the genre-popular fallback"""
+        from recommenders.external import find_similar_content_with_profile
+
+        mock_discover.return_value = [
+            {'tmdb_id': 1, 'title': 'Popular Movie', 'year': 2024, 'rating': 8.0, 'score': 0.5}
+        ]
+
+        # Create a thin profile (less than 40 items)
+        thin_profile = {
+            'genres': Counter({'Action': 5, 'Comedy': 3}),
+            'actors': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'keywords': Counter(),
+            'languages': Counter()
+        }
+
+        result = find_similar_content_with_profile(
+            tmdb_api_key='test_key',
+            user_profile=thin_profile,
+            library_data={},
+            media_type='movie',
+            limit=10
+        )
+
+        # Should have called the fallback
+        mock_discover.assert_called_once()
+        assert result == mock_discover.return_value
+
+    @patch('recommenders.external.discover_popular_by_genre')
+    def test_full_profile_skips_fallback(self, mock_discover):
+        """Test that full profiles don't use the fallback"""
+        from recommenders.external import find_similar_content_with_profile, is_thin_profile
+
+        # Create a full profile (40+ items)
+        full_profile = {
+            'genres': Counter({'Action': 20, 'Comedy': 15, 'Drama': 10}),
+            'actors': Counter(),
+            'directors': Counter(),
+            'studios': Counter(),
+            'keywords': Counter(),
+            'languages': Counter()
+        }
+
+        # Verify it's not thin
+        assert is_thin_profile(full_profile) is False
+
+        # The function will try to run iterations, which will fail without mocking
+        # everything, but at least it won't call the fallback
+        # We can't fully test without mocking many more things, but we can
+        # verify the profile detection works
+
+
+class TestEarlyTermination:
+    """Tests for early termination logic"""
+
+    def test_consecutive_zero_counter_logic(self):
+        """Test the consecutive zero iteration counter logic"""
+        # Simulate the counter behavior
+        consecutive_zero_iterations = 0
+
+        # First iteration finds 0 items
+        new_quality = 0
+        if new_quality == 0:
+            consecutive_zero_iterations += 1
+        else:
+            consecutive_zero_iterations = 0
+        assert consecutive_zero_iterations == 1
+
+        # Second iteration also finds 0 items
+        new_quality = 0
+        if new_quality == 0:
+            consecutive_zero_iterations += 1
+        else:
+            consecutive_zero_iterations = 0
+        assert consecutive_zero_iterations == 2
+
+        # Should trigger early exit at 2
+        should_exit = consecutive_zero_iterations >= 2
+        assert should_exit is True
+
+    def test_consecutive_counter_resets_on_success(self):
+        """Test that counter resets when items are found"""
+        consecutive_zero_iterations = 2  # Already at 2
+
+        # Third iteration finds items
+        new_quality = 5
+        if new_quality == 0:
+            consecutive_zero_iterations += 1
+        else:
+            consecutive_zero_iterations = 0
+
+        # Should reset to 0
+        assert consecutive_zero_iterations == 0

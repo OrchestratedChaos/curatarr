@@ -6,6 +6,7 @@ import pytest
 import os
 import tempfile
 from datetime import datetime, timedelta
+from unittest.mock import patch
 from utils.helpers import normalize_title, map_path, cleanup_old_logs, compute_profile_hash, TITLE_SUFFIXES_TO_STRIP
 
 
@@ -236,6 +237,26 @@ class TestCleanupOldLogs:
 
             # .txt file should still exist (not a .log file)
             assert os.path.exists(txt_path)
+
+    @patch('utils.helpers.os.remove')
+    def test_handles_file_remove_error(self, mock_remove):
+        """Test that file removal errors are handled gracefully."""
+        mock_remove.side_effect = PermissionError("Access denied")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "old.log")
+            with open(log_path, 'w') as f:
+                f.write("old log")
+
+            # Set file modification time to 10 days ago
+            old_time = (datetime.now() - timedelta(days=10)).timestamp()
+            os.utime(log_path, (old_time, old_time))
+
+            # Should not raise - error is handled gracefully
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            # File still exists since removal failed
+            assert os.path.exists(log_path)
 
     def test_handles_nonexistent_directory(self):
         """Test handling of nonexistent directory."""
