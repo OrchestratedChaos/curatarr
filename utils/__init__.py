@@ -42,6 +42,7 @@ from .config import (
     COLLECTION_BONUS_LOG_FACTOR,
     COLLECTION_BONUS_CAP,
     TMDB_TV_MOVIE_GENRE_ID,
+    TMDB_ANIMATION_GENRE_ID,
     check_cache_version,
     get_config_section,
     get_tmdb_config,

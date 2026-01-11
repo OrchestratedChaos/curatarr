@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Project version - single source of truth
-__version__ = "2.8.7"
+__version__ = "2.8.8"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 3  # v3: Added negative signals and dropped show tracking
@@ -102,6 +102,9 @@ COLLECTION_BONUS_CAP = 0.15           # Maximum 15% bonus
 
 # TMDB genre ID for TV movies (used to identify specials)
 TMDB_TV_MOVIE_GENRE_ID = 10770
+
+# TMDB genre ID for Animation
+TMDB_ANIMATION_GENRE_ID = 16
 
 
 def check_cache_version(cache_path: str, cache_type: str = "cache") -> bool:

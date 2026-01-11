@@ -368,12 +368,16 @@ def generate_combined_html(
             rent_services = item.get('rent_services', [])
             buy_services = item.get('buy_services', [])
             streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services)
-            # Add TV Special badge if this is a TV movie
-            tv_badge = '<span class="tv-special-badge">TV Special</span>' if item.get('is_tv_movie') else ''
+            # Add badges for TV Special and Animated
+            badges = ''
+            if item.get('is_animated'):
+                badges += '<span class="animated-badge">Animated</span>'
+            if item.get('is_tv_movie'):
+                badges += '<span class="tv-special-badge">TV Special</span>'
             rows.append(f'''
                 <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="sequel-huntarr">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{item['title']} {tv_badge}</td>
+                    <td>{item['title']} {badges}</td>
                     <td>{item.get('year', '')}</td>
                     <td>{collection_name}</td>
                     <td>{owned}/{total}</td>
@@ -971,6 +975,18 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         .tv-special-badge {{
             display: inline-block;
             background: linear-gradient(135deg, #6b46c1, #805ad5);
+            color: #fff;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 8px;
+            vertical-align: middle;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }}
+        .animated-badge {{
+            display: inline-block;
+            background: linear-gradient(135deg, #0891b2, #06b6d4);
             color: #fff;
             font-size: 10px;
             font-weight: 600;
