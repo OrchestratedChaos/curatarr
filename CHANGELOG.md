@@ -2,6 +2,25 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.4] - 2026-01-10
+
+### Added
+- **Filter bar for HTML watchlist**: Art Deco styled filter controls
+  - Text search: Filter by title
+  - Rating filter: Set minimum rating threshold
+  - Year range: Filter by release year (from/to)
+  - Days listed: Filter by maximum days on watchlist
+  - Streaming service filter: Multi-select dropdown with brand colors for each service
+  - "My Services" option to show only items on subscribed services
+  - Rent/Acquire filters for non-streaming content
+  - Art Deco styling: gold pinstripe, film strip motifs, beveled inputs, corner accents
+- Filters apply across all tabs and affect export counts
+
+### Changed
+- **TV special scanning is now much faster**: Uses Plex search instead of iterating all episodes
+- **Thin profile fast path**: Users with <40 items get genre-popular fallback (skips slow iterations)
+- **Early termination**: Stop iterating after 2 consecutive iterations with no new matches
+
 ## [2.8.3] - 2026-01-09
 
 ### Changed
