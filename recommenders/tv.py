@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
+import math
 import re
 import traceback
 from typing import Dict, Set, Optional, Tuple
@@ -13,6 +14,7 @@ from typing import Dict, Set, Optional, Tuple
 from utils import (
     RED, GREEN, YELLOW, RESET,
     TOP_CAST_COUNT,
+    COLLECTION_BONUS_BASE, COLLECTION_BONUS_LOG_FACTOR, COLLECTION_BONUS_CAP,
     RATING_TIER_5_STAR, RATING_TIER_4_STAR, RATING_TIER_3_STAR,
     RATING_MULTIPLIER_5_STAR, RATING_MULTIPLIER_4_STAR,
     RATING_MULTIPLIER_3_STAR, RATING_MULTIPLIER_2_STAR, RATING_MULTIPLIER_UNRATED,
@@ -75,7 +77,8 @@ class ShowCache(BaseCache):
             'language': self._get_language(show),
             'tmdb_keywords': tmdb_data['keywords'],
             'tmdb_id': tmdb_data['tmdb_id'],
-            'imdb_id': tmdb_data['imdb_id']
+            'imdb_id': tmdb_data['imdb_id'],
+            'production_company_ids': tmdb_data.get('production_company_ids', [])
         }
 
 class PlexTVRecommender(BaseRecommender):
@@ -322,6 +325,9 @@ class PlexTVRecommender(BaseRecommender):
         print(f"")
         print(f"Processing {len(normal_watched)} watched shows with recency decay (excluding {len(dropped_show_ids)} dropped):")
 
+        # Track production companies for franchise/spinoff bonus
+        production_companies = {}  # production_company_id -> weighted count
+
         for i, show_id in enumerate(normal_watched, 1):
             show_progress("Processing", i, len(normal_watched))
 
@@ -343,6 +349,10 @@ class PlexTVRecommender(BaseRecommender):
 
                 if tmdb_id := show_info.get('tmdb_id'):
                     counters['tmdb_ids'].add(tmdb_id)
+
+                # Track production companies with weight for franchise bonus
+                for pc_id in show_info.get('production_company_ids', []):
+                    production_companies[pc_id] = production_companies.get(pc_id, 0) + weight
             else:
                 not_found_count += 1
 
@@ -364,6 +374,9 @@ class PlexTVRecommender(BaseRecommender):
                         counters['tmdb_ids'].add(tmdb_id)
 
         logger.debug(f"Watched shows not in cache: {not_found_count}, TMDB IDs collected: {len(counters['tmdb_ids'])}")
+
+        # Store production companies for franchise/spinoff bonus during scoring
+        counters['production_companies'] = production_companies
 
         return counters
 
@@ -501,7 +514,7 @@ class PlexTVRecommender(BaseRecommender):
         }
 
         # Use shared scoring function
-        return calculate_similarity_score(
+        score, breakdown = calculate_similarity_score(
             content_info=content_info,
             user_profile=user_profile,
             media_type='tv',
@@ -509,6 +522,29 @@ class PlexTVRecommender(BaseRecommender):
             normalize_counters=self.normalize_counters,
             use_fuzzy_keywords=self.use_tmdb_keywords
         )
+
+        # Apply franchise/spinoff bonus based on shared production companies
+        show_pc_ids = show_info.get('production_company_ids', [])
+        user_production_companies = self.watched_data.get('production_companies', {})
+        if show_pc_ids and user_production_companies:
+            # Find max weight from any shared production company
+            max_pc_weight = 0
+            matching_pc_count = 0
+            for pc_id in show_pc_ids:
+                if pc_id in user_production_companies:
+                    max_pc_weight = max(max_pc_weight, user_production_companies[pc_id])
+                    matching_pc_count += 1
+
+            if max_pc_weight > 0:
+                # Apply bonus similar to movie collection bonus
+                # Logarithmic bonus based on how many shows from this production company
+                bonus = COLLECTION_BONUS_BASE * (1 + math.log2(max(1, max_pc_weight)) * COLLECTION_BONUS_LOG_FACTOR)
+                bonus = min(bonus, COLLECTION_BONUS_CAP)
+                score = min(1.0, score * (1 + bonus))
+                breakdown['franchise_bonus'] = round(bonus, 3)
+                breakdown['details']['franchise'] = f"Shared production company (weight: {max_pc_weight:.1f}, bonus: {round(bonus * 100, 1)}%)"
+
+        return score, breakdown
 
     def _print_similarity_breakdown(self, show_info: Dict, score: float, breakdown: Dict):
         """Print detailed breakdown of similarity score calculation"""

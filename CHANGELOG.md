@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.9] - 2026-01-10
+
+### Added
+- **TV franchise/spinoff bonus**: TV shows from production companies you've watched get a bonus (similar to movie collection bonus). Helps recommend Star Trek spinoffs if you watch Star Trek, NCIS spinoffs if you watch NCIS, etc.
+
 ## [2.8.8] - 2026-01-10
 
 ### Added
