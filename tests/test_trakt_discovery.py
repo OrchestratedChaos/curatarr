@@ -444,9 +444,10 @@ class TestGetTraktDiscoveryCandidates:
             library_tmdb_ids=set()
         )
 
-        # Should only have one entry, from first source (trending)
+        # Should only have one entry, from higher-tier source (popular > trending)
         assert len(result) == 1
-        assert result[123]['source'] == 'trakt_trending'
+        assert result[123]['source'] == 'trakt_popular'
+        assert result[123]['source_tier'] == 2  # Popular tier
 
 
 class TestDiscoveryCacheVersioning:

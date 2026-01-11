@@ -19,16 +19,19 @@ from utils.config import (
     POPULARITY_DAMPENING_CAP,
 )
 
-def normalize_user_profile(user_prefs: Dict) -> Dict:
+def normalize_user_profile(user_prefs: Dict, tfidf_penalty_threshold: float = 0.15) -> Dict:
     """
-    Pre-normalize user profile by creating lowercase key versions of all preference dicts.
+    Pre-normalize user profile by creating lowercase key versions of all preference dicts
+    and pre-computing TF-IDF thresholds.
     Call this once before scoring multiple items to avoid rebuilding these dicts per item.
 
     Args:
         user_prefs: User preference dict with 'directors', 'actors', 'keywords', etc.
+        tfidf_penalty_threshold: Threshold percentage for TF-IDF penalties (default 15%)
 
     Returns:
         Same dict with added '_lower' suffixed keys containing lowercase versions
+        and pre-computed threshold values
     """
     # Only normalize if not already done
     if '_normalized' in user_prefs:
@@ -44,6 +47,29 @@ def normalize_user_profile(user_prefs: Dict) -> Dict:
 
     # Initialize fuzzy keyword match cache (populated lazily during scoring)
     user_prefs['_fuzzy_cache'] = {}
+
+    # Pre-compute max counts for normalization and TF-IDF
+    def max_positive(d):
+        if not d:
+            return 1
+        positive_vals = [v for v in d.values() if v > 0]
+        return max(positive_vals) if positive_vals else 1
+
+    max_counts = {
+        'genres': max_positive(user_prefs.get('genres', {})),
+        'directors': max_positive(user_prefs.get('directors', {})),
+        'studios': max_positive(user_prefs.get('studios', {})),
+        'actors': max_positive(user_prefs.get('actors', {})),
+        'languages': max_positive(user_prefs.get('languages', {})),
+        'keywords': max_positive(user_prefs.get('keywords', user_prefs.get('tmdb_keywords', {})))
+    }
+    user_prefs['_max_counts'] = max_counts
+
+    # Pre-compute TF-IDF thresholds
+    user_prefs['_tfidf_thresholds'] = {
+        'genres': max_counts['genres'] * tfidf_penalty_threshold,
+        'keywords': max_counts['keywords'] * tfidf_penalty_threshold
+    }
 
     user_prefs['_normalized'] = True
     return user_prefs
@@ -364,19 +390,23 @@ def calculate_similarity_score(
             'keywords': Counter(user_profile.get('keywords', user_profile.get('tmdb_keywords', {})))
         }
 
-        # Calculate max counts using only positive values (for proper normalization)
-        def max_positive(counter):
-            positive_vals = [v for v in counter.values() if v > 0]
-            return max(positive_vals) if positive_vals else 1
+        # Use pre-computed max counts if available (from normalize_user_profile)
+        # Otherwise calculate them (for backwards compatibility)
+        if '_max_counts' in user_profile:
+            max_counts = user_profile['_max_counts']
+        else:
+            def max_positive(counter):
+                positive_vals = [v for v in counter.values() if v > 0]
+                return max(positive_vals) if positive_vals else 1
 
-        max_counts = {
-            'genres': max_positive(user_prefs['genres']),
-            'directors': max_positive(user_prefs['directors']),
-            'studios': max_positive(user_prefs['studios']),
-            'actors': max_positive(user_prefs['actors']),
-            'languages': max_positive(user_prefs['languages']),
-            'keywords': max_positive(user_prefs['keywords'])
-        }
+            max_counts = {
+                'genres': max_positive(user_prefs['genres']),
+                'directors': max_positive(user_prefs['directors']),
+                'studios': max_positive(user_prefs['studios']),
+                'actors': max_positive(user_prefs['actors']),
+                'languages': max_positive(user_prefs['languages']),
+                'keywords': max_positive(user_prefs['keywords'])
+            }
 
         # Track penalties from negative signals
         total_penalty = 0.0
@@ -396,8 +426,13 @@ def calculate_similarity_score(
         if content_genres:
             genre_scores = []
             genre_penalty = 0.0
-            # Calculate threshold for TF-IDF penalty
-            tfidf_threshold_count = max_genre_count * tfidf_penalty_threshold if use_tfidf else 0
+            # Use pre-computed threshold if available, otherwise calculate
+            if use_tfidf:
+                tfidf_threshold_count = user_profile.get('_tfidf_thresholds', {}).get(
+                    'genres', max_genre_count * tfidf_penalty_threshold
+                )
+            else:
+                tfidf_threshold_count = 0
 
             for genre in content_genres:
                 norm_genre = normalize_genre(genre)
@@ -581,8 +616,13 @@ def calculate_similarity_score(
             keyword_penalty = 0.0
             # Use pre-normalized if available, otherwise build inline
             user_keywords_lower = user_prefs.get('keywords_lower') or {k.lower(): v for k, v in user_prefs['keywords'].items()}
-            # Calculate threshold for TF-IDF penalty
-            tfidf_kw_threshold = max_counts['keywords'] * tfidf_penalty_threshold if use_tfidf else 0
+            # Use pre-computed threshold if available, otherwise calculate
+            if use_tfidf:
+                tfidf_kw_threshold = user_profile.get('_tfidf_thresholds', {}).get(
+                    'keywords', max_counts['keywords'] * tfidf_penalty_threshold
+                )
+            else:
+                tfidf_kw_threshold = 0
 
             for kw in content_keywords:
                 kw_lower = kw.lower() if isinstance(kw, str) else kw
