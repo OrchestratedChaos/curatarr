@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.8] - 2026-01-10
+
+### Added
+- **Animated badge in Sequel Huntarr**: Movies with Animation genre now show cyan `[Animated]` badge to distinguish animated remakes/sequels from live action
+
 ## [2.8.7] - 2026-01-10
 
 ### Added

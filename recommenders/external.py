@@ -33,7 +33,7 @@ logger = logging.getLogger('curatarr')
 from utils import (
     GREEN, YELLOW, CYAN, RESET,
     RATING_MULTIPLIERS,
-    TMDB_REQUEST_TIMEOUT, TMDB_TV_MOVIE_GENRE_ID,
+    TMDB_REQUEST_TIMEOUT, TMDB_TV_MOVIE_GENRE_ID, TMDB_ANIMATION_GENRE_ID,
     get_plex_account_ids, get_tmdb_config, get_tmdb_keywords,
     fetch_watch_history_with_tmdb,
     log_warning, log_error, load_config, clickable_link,
@@ -980,7 +980,9 @@ def find_missing_sequels(
 
                 # Check if this is a TV movie (special) - genre ID 10770
                 # Use genre_ids from collection details to avoid extra API call
-                is_tv_movie = TV_MOVIE_GENRE_ID in movie.get('genre_ids', [])
+                genre_ids = movie.get('genre_ids', [])
+                is_tv_movie = TV_MOVIE_GENRE_ID in genre_ids
+                is_animated = TMDB_ANIMATION_GENRE_ID in genre_ids
 
                 missing_sequels.append({
                     'tmdb_id': movie['tmdb_id'],
@@ -995,7 +997,8 @@ def find_missing_sequels(
                     'buy_services': providers.get('buy', []),
                     'on_user_services': [s for s in streaming if s in user_services],
                     'release_date': movie.get('release_date', ''),
-                    'is_tv_movie': is_tv_movie
+                    'is_tv_movie': is_tv_movie,
+                    'is_animated': is_animated
                 })
 
     show_progress("  Checking collections", total_collections, total_collections)
