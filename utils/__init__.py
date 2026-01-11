@@ -110,6 +110,7 @@ from .labels import (
 from .scoring import (
     GENRE_NORMALIZATION,
     normalize_genre,
+    normalize_user_profile,
     fuzzy_keyword_match,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
@@ -292,6 +293,7 @@ __all__ = [
     # Scoring
     'GENRE_NORMALIZATION',
     'normalize_genre',
+    'normalize_user_profile',
     'fuzzy_keyword_match',
     'calculate_recency_multiplier',
     'calculate_rewatch_multiplier',

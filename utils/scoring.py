@@ -19,6 +19,33 @@ from utils.config import (
     POPULARITY_DAMPENING_CAP,
 )
 
+def normalize_user_profile(user_prefs: Dict) -> Dict:
+    """
+    Pre-normalize user profile by creating lowercase key versions of all preference dicts.
+    Call this once before scoring multiple items to avoid rebuilding these dicts per item.
+
+    Args:
+        user_prefs: User preference dict with 'directors', 'actors', 'keywords', etc.
+
+    Returns:
+        Same dict with added '_lower' suffixed keys containing lowercase versions
+    """
+    # Only normalize if not already done
+    if '_normalized' in user_prefs:
+        return user_prefs
+
+    # Create lowercase versions of all string-keyed preference dicts
+    for key in ['directors', 'actors', 'keywords', 'studios', 'languages']:
+        if key in user_prefs and isinstance(user_prefs[key], (dict, Counter)):
+            user_prefs[f'{key}_lower'] = {
+                k.lower() if isinstance(k, str) else k: v
+                for k, v in user_prefs[key].items()
+            }
+
+    user_prefs['_normalized'] = True
+    return user_prefs
+
+
 # Genre normalization: Map various genre names to standard lowercase names
 GENRE_NORMALIZATION = {
     'sci-fi': 'science fiction',
@@ -408,7 +435,8 @@ def calculate_similarity_score(
         if media_type == 'movie':
             content_directors = content_info.get('directors', [])
             if content_directors:
-                user_directors_lower = {k.lower(): v for k, v in user_prefs['directors'].items()}
+                # Use pre-normalized if available, otherwise build inline
+                user_directors_lower = user_prefs.get('directors_lower') or {k.lower(): v for k, v in user_prefs['directors'].items()}
                 director_scores = []
                 director_penalty = 0.0
                 for director in content_directors:
@@ -477,7 +505,8 @@ def calculate_similarity_score(
         # --- Actor Score ---
         content_cast = content_info.get('cast', [])
         if content_cast:
-            user_actors_lower = {k.lower(): v for k, v in user_prefs['actors'].items()}
+            # Use pre-normalized if available, otherwise build inline
+            user_actors_lower = user_prefs.get('actors_lower') or {k.lower(): v for k, v in user_prefs['actors'].items()}
             actor_scores = []
             actor_penalty = 0.0
             matched_actors = 0
@@ -532,7 +561,8 @@ def calculate_similarity_score(
         if content_keywords:
             keyword_scores = []
             keyword_penalty = 0.0
-            user_keywords_lower = {k.lower(): v for k, v in user_prefs['keywords'].items()}
+            # Use pre-normalized if available, otherwise build inline
+            user_keywords_lower = user_prefs.get('keywords_lower') or {k.lower(): v for k, v in user_prefs['keywords'].items()}
             # Calculate threshold for TF-IDF penalty
             tfidf_kw_threshold = max_counts['keywords'] * tfidf_penalty_threshold if use_tfidf else 0
 

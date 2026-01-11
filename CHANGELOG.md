@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.5] - 2026-01-10
+
+### Performance Improvements
+- **Watch provider caching**: Results cached for 7 days to reduce TMDB API calls
+- **Keyword ID caching**: Keyword lookups cached to avoid redundant API searches
+- **Pre-normalized user profiles**: Lowercase key lookups built once instead of per-item
+- **Optimized is_in_library()**: O(1) title set lookup instead of O(N) loop
+- **Include genres in collection details**: Eliminates extra API call per huntarr movie
+- **Reuse scored_cache**: Previously scored items re-evaluated when thresholds relax
+
+### Changed
+- **Thin profiles use reduced iterations**: Instead of skipping to generic popular content, thin profiles now run 2 quick personalized iterations
+- **Slower threshold relaxation**: Drops 5% per iteration (was 10%) for better match quality
+- **Higher threshold floor**: Minimum threshold is now 40% (was 25%)
+- **Tuned discovery thresholds**: `DISCOVER_MIN_RATING` 6.0 (was 5.0), `DISCOVER_MIN_VOTES` 100 (was 50), `MAX_CANDIDATES` 1000 (was 1500)
+
 ## [2.8.4] - 2026-01-10
 
 ### Added
