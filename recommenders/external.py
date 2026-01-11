@@ -129,6 +129,7 @@ OUTPUT_MIN_VOTES = 50           # Filters garbage TMDB entries, profile score is
 # Iterative discovery settings
 MAX_DISCOVERY_ITERATIONS = 5    # How many discovery passes before giving up
 THRESHOLD_FLOOR = 0.25          # Minimum threshold for last-ditch iteration
+THIN_PROFILE_THRESHOLD = 40     # Less than 40 items = use genre-popular fallback
 
 # Legacy aliases for cache filtering (votes only, no rating gate)
 MIN_RATING = 0.0                # Don't filter by rating in cache
@@ -319,6 +320,98 @@ def discover_candidates_by_profile(
 
     print(f"    Iteration {iteration + 1}: {genre_count} from genres, {keyword_count} from keywords, {similar_count} from similar")
     return candidates
+
+
+def is_thin_profile(user_profile: Dict) -> bool:
+    """Check if profile has too few items for reliable matching."""
+    total_items = sum(user_profile.get('genres', Counter()).values())
+    return total_items < THIN_PROFILE_THRESHOLD
+
+
+def discover_popular_by_genre(
+    tmdb_api_key: str,
+    top_genres: List[str],
+    library_data: Dict,
+    media_type: str = 'movie',
+    limit: int = 50
+) -> List[Dict]:
+    """
+    Fallback discovery for thin profiles - fetch popular content by genre.
+    Much faster than profile-based scoring since we skip detailed matching.
+
+    Args:
+        tmdb_api_key: TMDB API key
+        top_genres: List of genre names from user's sparse profile
+        library_data: Existing library to filter out
+        media_type: 'movie' or 'show'
+        limit: Max items to return
+
+    Returns:
+        List of recommendation dicts
+    """
+    media = 'movie' if media_type == 'movie' else 'tv'
+    genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == 'movie' else TMDB_TV_GENRE_IDS
+    library_ids = set(library_data.keys()) if library_data else set()
+
+    recommendations = []
+    seen_ids = set()
+
+    # Fetch popular content for each genre
+    for genre_name in top_genres:
+        if len(recommendations) >= limit:
+            break
+
+        genre_id = genre_id_map.get(genre_name.lower())
+        if not genre_id:
+            continue
+
+        try:
+            # Use TMDB Discover sorted by vote_average (quality) with minimum votes
+            url = f"https://api.themoviedb.org/3/discover/{media}"
+            params = {
+                'api_key': tmdb_api_key,
+                'with_genres': genre_id,
+                'sort_by': 'vote_average.desc',
+                'vote_count.gte': 500,  # Ensure popular, well-rated
+                'vote_average.gte': 7.0,
+                'page': 1
+            }
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            for item in data.get('results', []):
+                tmdb_id = item.get('id')
+                if not tmdb_id or tmdb_id in seen_ids or tmdb_id in library_ids:
+                    continue
+
+                seen_ids.add(tmdb_id)
+                title = item.get('title') if media_type == 'movie' else item.get('name')
+                year_str = item.get('release_date' if media_type == 'movie' else 'first_air_date', '')
+                year = int(year_str[:4]) if year_str and len(year_str) >= 4 else 0
+
+                recommendations.append({
+                    'tmdb_id': tmdb_id,
+                    'title': title,
+                    'year': year,
+                    'rating': item.get('vote_average', 0),
+                    'vote_count': item.get('vote_count', 0),
+                    'score': 0.5,  # Neutral score for popularity-based recs
+                    'overview': item.get('overview', ''),
+                    'genres': [genre_name],
+                    'genre_ids': item.get('genre_ids', [])
+                })
+
+                if len(recommendations) >= limit:
+                    break
+
+            time.sleep(TMDB_RATE_LIMIT_DELAY)
+        except Exception as e:
+            log_warning(f"Genre discover failed for {genre_name}: {e}")
+            continue
+
+    print(f"  {GREEN}Found {len(recommendations)} popular items in user's genres{RESET}")
+    return recommendations[:limit]
 
 
 def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 'movie') -> Optional[Dict]:
@@ -892,33 +985,44 @@ def find_missing_sequels(
             """Normalize title for comparison (lowercase, strip punctuation)"""
             return re.sub(r'[^\w\s]', '', title.lower()).strip()
 
-        tv_movie_titles = {normalize_title(m['title']): m['tmdb_id'] for m in tv_movies}
         tv_movie_ids = {m['tmdb_id'] for m in tv_movies}
         found_tmdb_ids = set()
 
         try:
             tv_library = plex.library.section(tv_library_name)
-            all_shows = tv_library.all()
-            total_shows = len(all_shows)
-            for i, show in enumerate(all_shows):
-                if i % 20 == 0:
-                    show_progress("  Scanning TV library", i + 1, total_shows)
-                for episode in show.episodes():
-                    # Check by TMDB ID (rare but possible)
-                    for guid in episode.guids:
-                        if 'tmdb://' in guid.id:
-                            try:
-                                tmdb_id = int(guid.id.split('tmdb://')[1])
-                                if tmdb_id in tv_movie_ids:
-                                    found_tmdb_ids.add(tmdb_id)
-                            except (ValueError, IndexError):
-                                pass
 
-                    # Check by title match (more reliable for TV specials)
-                    ep_title_norm = normalize_title(episode.title)
-                    if ep_title_norm in tv_movie_titles:
-                        found_tmdb_ids.add(tv_movie_titles[ep_title_norm])
-            show_progress("  Scanning TV library", total_shows, total_shows)
+            # Use Plex search for each TV special title - much faster than scanning all episodes
+            for i, tv_movie in enumerate(tv_movies):
+                if i % 5 == 0:
+                    show_progress("  Searching TV library", i + 1, len(tv_movies))
+
+                title = tv_movie['title']
+                title_norm = normalize_title(title)
+
+                # Search for episodes matching the title
+                try:
+                    # Extract key words for search (first few significant words)
+                    search_term = ' '.join(title.split()[:3])
+                    results = tv_library.search(search_term, libtype='episode')
+
+                    for episode in results:
+                        # Check by TMDB ID
+                        for guid in episode.guids:
+                            if 'tmdb://' in guid.id:
+                                try:
+                                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                                    if tmdb_id in tv_movie_ids:
+                                        found_tmdb_ids.add(tmdb_id)
+                                except (ValueError, IndexError):
+                                    pass
+
+                        # Check by normalized title match
+                        if normalize_title(episode.title) == title_norm:
+                            found_tmdb_ids.add(tv_movie['tmdb_id'])
+                except Exception:
+                    pass  # Search failed for this title, continue
+
+            show_progress("  Searching TV library", len(tv_movies), len(tv_movies))
         except Exception as e:
             log_warning(f"Could not scan TV library for specials: {e}")
 
@@ -1527,10 +1631,19 @@ def find_similar_content_with_profile(
                 'language': config_weights.get('language', 0.05)
             }
 
+    # Check for thin profile - use fast genre-popular fallback instead of iterations
+    if is_thin_profile(user_profile):
+        profile_size = sum(user_profile.get('genres', Counter()).values())
+        print(f"  {CYAN}Thin profile detected ({profile_size} items) - using genre-popular fallback{RESET}")
+        top_genres = [g for g, _ in user_profile['genres'].most_common(5)]
+        print(f"  Top genres: {', '.join(top_genres)}")
+        return discover_popular_by_genre(tmdb_api_key, top_genres, library_data, media_type, limit)
+
     # Track state across iterations
     quality_recs = []  # Items meeting quality bar
     seen_ids = set(exclude_cached_ids or set())  # Include cached IDs to skip
     scored_cache = {}  # tmdb_id -> scored item (avoid re-scoring)
+    consecutive_zero_iterations = 0  # Track for early termination
 
     # Get Trakt candidates once (not per-iteration)
     trakt_candidates = {}
@@ -1656,6 +1769,15 @@ def find_similar_content_with_profile(
         quality_recs.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
 
         print(f"  {CYAN}Iteration {iteration + 1} ({iteration_threshold:.0%} threshold): {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}")
+
+        # Early termination check
+        if new_quality_this_iteration == 0:
+            consecutive_zero_iterations += 1
+            if consecutive_zero_iterations >= 2:
+                print(f"  {CYAN}Early exit: 2 consecutive iterations with no new matches{RESET}")
+                break
+        else:
+            consecutive_zero_iterations = 0  # Reset on success
 
     print(f"  {GREEN}{len(quality_recs)} items meet quality bar (>={min_votes} votes){RESET}")
 

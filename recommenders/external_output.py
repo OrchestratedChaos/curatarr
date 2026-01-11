@@ -1104,6 +1104,323 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         .footer a:hover {{
             color: #d4af37;
         }}
+
+        /* Filter bar - Art Deco Cinema style */
+        .filter-bar {{
+            display: flex;
+            gap: 20px;
+            align-items: flex-end;
+            justify-content: center;
+            background: linear-gradient(180deg, #1a1714 0%, #141210 100%);
+            padding: 22px 35px 18px;
+            border-radius: 6px;
+            margin-bottom: 30px;
+            border: 2px solid #3d3428;
+            box-shadow:
+                0 10px 40px rgba(0,0,0,0.5),
+                inset 0 1px 0 rgba(212, 175, 55, 0.15),
+                inset 0 -1px 0 rgba(0,0,0,0.3);
+            position: relative;
+        }}
+        /* Top gold pinstripe */
+        .filter-bar::before {{
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: 30px;
+            right: 30px;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, #b8960c 15%, #d4af37 35%, #f0d060 50%, #d4af37 65%, #b8960c 85%, transparent);
+            border-radius: 0 0 2px 2px;
+        }}
+        /* Film strip sprocket holes - left */
+        .filter-bar::after {{
+            content: '';
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 6px;
+            height: 60%;
+            background: repeating-linear-gradient(
+                180deg,
+                transparent 0px,
+                transparent 4px,
+                #2a2520 4px,
+                #2a2520 10px,
+                transparent 10px,
+                transparent 14px
+            );
+            opacity: 0.6;
+        }}
+        .filter-group {{
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }}
+        .filter-group label {{
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: #d4af37;
+            font-weight: 600;
+            font-variant: small-caps;
+        }}
+        .filter-group input[type="text"],
+        .filter-group input[type="number"] {{
+            background: linear-gradient(180deg, #0c0b09 0%, #100f0d 100%);
+            border: 1px solid #4a4030;
+            border-top-color: #2a2520;
+            border-left-color: #2a2520;
+            color: #e8dcc8;
+            padding: 10px 12px;
+            border-radius: 3px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            width: 75px;
+            transition: all 0.2s ease;
+            box-shadow:
+                inset 1px 1px 3px rgba(0,0,0,0.5),
+                0 1px 0 rgba(212, 175, 55, 0.1);
+        }}
+        .filter-group input[type="text"] {{
+            width: 140px;
+        }}
+        .filter-group input:focus {{
+            outline: none;
+            border-color: #d4af37;
+            box-shadow:
+                inset 1px 1px 3px rgba(0,0,0,0.5),
+                0 0 8px rgba(212, 175, 55, 0.4);
+        }}
+        .filter-group input::placeholder {{
+            color: #5a5040;
+            font-style: italic;
+            font-size: 12px;
+        }}
+        /* Year inputs side by side */
+        .year-inputs {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .year-inputs input {{
+            width: 65px;
+        }}
+        .year-separator {{
+            color: #5a5040;
+            font-size: 14px;
+        }}
+        .streaming-filter {{
+            position: relative;
+        }}
+        .streaming-dropdown {{
+            position: relative;
+        }}
+        .dropdown-toggle {{
+            background: linear-gradient(180deg, #0c0b09 0%, #100f0d 100%);
+            border: 1px solid #4a4030;
+            border-top-color: #2a2520;
+            border-left-color: #2a2520;
+            color: #e8dcc8;
+            padding: 10px 12px;
+            border-radius: 3px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            cursor: pointer;
+            min-width: 135px;
+            text-align: left;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s ease;
+            box-shadow:
+                inset 1px 1px 3px rgba(0,0,0,0.5),
+                0 1px 0 rgba(212, 175, 55, 0.1);
+        }}
+        .dropdown-toggle:hover {{
+            border-color: #5a4a30;
+        }}
+        .dropdown-toggle .arrow {{
+            font-size: 10px;
+            color: #d4af37;
+        }}
+        .dropdown-menu {{
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: -20px;
+            width: 180px;
+            background: linear-gradient(180deg, #1c1a16 0%, #14120f 100%);
+            border: 2px solid #3d3428;
+            border-radius: 4px;
+            margin-top: 6px;
+            padding: 8px 6px;
+            z-index: 1000;
+            max-height: 320px;
+            overflow-y: auto;
+            box-shadow:
+                0 15px 45px rgba(0,0,0,0.7),
+                inset 0 1px 0 rgba(212, 175, 55, 0.1);
+        }}
+        /* Art deco corner accents on dropdown */
+        .dropdown-menu::before {{
+            content: '';
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: 12px;
+            height: 12px;
+            border-left: 2px solid #d4af37;
+            border-top: 2px solid #d4af37;
+        }}
+        .dropdown-menu::after {{
+            content: '';
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 12px;
+            height: 12px;
+            border-right: 2px solid #d4af37;
+            border-top: 2px solid #d4af37;
+        }}
+        .dropdown-menu.show {{
+            display: block;
+            animation: dropIn 0.2s ease;
+        }}
+        @keyframes dropIn {{
+            from {{ opacity: 0; transform: translateY(-8px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .dropdown-menu label {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            margin: 2px 0;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            border-radius: 3px;
+            text-transform: none;
+            letter-spacing: 0;
+            font-variant: normal;
+            transition: all 0.15s ease;
+            border: 1px solid transparent;
+        }}
+        /* Service-specific colors */
+        .dropdown-menu label[data-service="user-service"] {{
+            color: #ffd700;
+            background: linear-gradient(90deg, rgba(212, 175, 55, 0.1) 0%, transparent 100%);
+            border-left: 3px solid #d4af37;
+        }}
+        .dropdown-menu label[data-service="netflix"] {{
+            color: #ff6b6b;
+            background: linear-gradient(90deg, rgba(229, 9, 20, 0.15) 0%, transparent 100%);
+            border-left: 3px solid #e50914;
+        }}
+        .dropdown-menu label[data-service="hulu"] {{
+            color: #6ee7a0;
+            background: linear-gradient(90deg, rgba(28, 231, 131, 0.12) 0%, transparent 100%);
+            border-left: 3px solid #1ce783;
+        }}
+        .dropdown-menu label[data-service="disney_plus"] {{
+            color: #7da0e0;
+            background: linear-gradient(90deg, rgba(17, 60, 207, 0.15) 0%, transparent 100%);
+            border-left: 3px solid #113ccf;
+        }}
+        .dropdown-menu label[data-service="amazon_prime"] {{
+            color: #6dcff6;
+            background: linear-gradient(90deg, rgba(0, 168, 225, 0.12) 0%, transparent 100%);
+            border-left: 3px solid #00a8e1;
+        }}
+        .dropdown-menu label[data-service="max"] {{
+            color: #8080ff;
+            background: linear-gradient(90deg, rgba(0, 43, 231, 0.15) 0%, transparent 100%);
+            border-left: 3px solid #002be7;
+        }}
+        .dropdown-menu label[data-service="paramount_plus"] {{
+            color: #6699ff;
+            background: linear-gradient(90deg, rgba(0, 100, 255, 0.12) 0%, transparent 100%);
+            border-left: 3px solid #0064ff;
+        }}
+        .dropdown-menu label[data-service="apple_tv_plus"] {{
+            color: #e0e0e0;
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0%, transparent 100%);
+            border-left: 3px solid #888;
+        }}
+        .dropdown-menu label[data-service="peacock"] {{
+            color: #e0e0e0;
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.06) 0%, transparent 100%);
+            border-left: 3px solid #666;
+        }}
+        .dropdown-menu label[data-service="crunchyroll"] {{
+            color: #ffa060;
+            background: linear-gradient(90deg, rgba(244, 117, 33, 0.12) 0%, transparent 100%);
+            border-left: 3px solid #f47521;
+        }}
+        .dropdown-menu label[data-service="tubi"] {{
+            color: #ff7070;
+            background: linear-gradient(90deg, rgba(250, 56, 47, 0.12) 0%, transparent 100%);
+            border-left: 3px solid #fa382f;
+        }}
+        .dropdown-menu label[data-service="rent"] {{
+            color: #ffd700;
+            background: linear-gradient(90deg, rgba(0, 75, 147, 0.2) 0%, transparent 100%);
+            border-left: 3px solid #004B93;
+        }}
+        .dropdown-menu label[data-service="acquire"] {{
+            color: #999;
+            background: linear-gradient(90deg, rgba(100, 100, 100, 0.1) 0%, transparent 100%);
+            border-left: 3px solid #555;
+        }}
+        .dropdown-menu label:hover {{
+            border: 1px solid rgba(212, 175, 55, 0.4);
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,0.1),
+                0 2px 8px rgba(0,0,0,0.3);
+            transform: translateX(2px);
+        }}
+        .dropdown-menu label:has(input:checked) {{
+            border: 1px solid rgba(212, 175, 55, 0.6);
+            box-shadow:
+                inset 0 2px 4px rgba(0,0,0,0.4),
+                inset 0 -1px 0 rgba(255,255,255,0.1),
+                0 0 10px rgba(212, 175, 55, 0.2);
+        }}
+        .dropdown-menu input[type="checkbox"] {{
+            width: 14px;
+            height: 14px;
+            accent-color: #d4af37;
+            cursor: pointer;
+        }}
+        .clear-filters-btn {{
+            background: linear-gradient(180deg, #a01010 0%, #8b0000 40%, #6a0000 100%);
+            color: #ffd700;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.2s ease;
+            box-shadow:
+                0 3px 10px rgba(139, 0, 0, 0.4),
+                inset 0 1px 0 rgba(255,255,255,0.1),
+                inset 0 -1px 0 rgba(0,0,0,0.2);
+        }}
+        .clear-filters-btn:hover {{
+            transform: translateY(-1px);
+            box-shadow:
+                0 5px 15px rgba(139, 0, 0, 0.5),
+                inset 0 1px 0 rgba(255,255,255,0.15);
+        }}
+        tr.filtered-out {{
+            display: none;
+        }}
     </style>
 </head>
 <body>
@@ -1120,6 +1437,53 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             <button class="export-btn" onclick="exportRadarr()">Export to Radarr (<span id="movie-count">0</span>)</button>
             <button class="export-btn sonarr" onclick="exportSonarr()">Export to Sonarr (<span id="show-count">0</span>)</button>
             <button class="export-btn trakt" onclick="exportTrakt()">Export for Trakt (<span id="total-count">0</span>)</button>
+        </div>
+
+        <div class="filter-bar">
+            <div class="filter-group">
+                <label>Search</label>
+                <input type="text" id="filter-search" placeholder="Title..." oninput="applyFilters()">
+            </div>
+            <div class="filter-group">
+                <label>Rating</label>
+                <input type="number" id="filter-rating-min" placeholder="Min" min="0" max="10" step="0.1" oninput="applyFilters()">
+            </div>
+            <div class="filter-group filter-group-year">
+                <label>Year</label>
+                <div class="year-inputs">
+                    <input type="number" id="filter-year-min" placeholder="From" min="1900" max="2030" oninput="applyFilters()">
+                    <span class="year-separator">–</span>
+                    <input type="number" id="filter-year-max" placeholder="To" min="1900" max="2030" oninput="applyFilters()">
+                </div>
+            </div>
+            <div class="filter-group">
+                <label>Days Listed</label>
+                <input type="number" id="filter-days-max" placeholder="Max" min="0" oninput="applyFilters()">
+            </div>
+            <div class="filter-group streaming-filter">
+                <label>Streaming</label>
+                <div class="streaming-dropdown" id="streaming-dropdown">
+                    <button type="button" class="dropdown-toggle" onclick="toggleStreamingDropdown()">
+                        All Services <span class="arrow">&#9662;</span>
+                    </button>
+                    <div class="dropdown-menu" id="streaming-menu">
+                        <label data-service="user-service"><input type="checkbox" value="user-service" onchange="applyFilters()"> My Services</label>
+                        <label data-service="netflix"><input type="checkbox" value="netflix" onchange="applyFilters()"> Netflix</label>
+                        <label data-service="hulu"><input type="checkbox" value="hulu" onchange="applyFilters()"> Hulu</label>
+                        <label data-service="disney_plus"><input type="checkbox" value="disney_plus" onchange="applyFilters()"> Disney+</label>
+                        <label data-service="amazon_prime"><input type="checkbox" value="amazon_prime" onchange="applyFilters()"> Prime</label>
+                        <label data-service="max"><input type="checkbox" value="max" onchange="applyFilters()"> Max</label>
+                        <label data-service="paramount_plus"><input type="checkbox" value="paramount_plus" onchange="applyFilters()"> Paramount+</label>
+                        <label data-service="apple_tv_plus"><input type="checkbox" value="apple_tv_plus" onchange="applyFilters()"> Apple TV+</label>
+                        <label data-service="peacock"><input type="checkbox" value="peacock" onchange="applyFilters()"> Peacock</label>
+                        <label data-service="crunchyroll"><input type="checkbox" value="crunchyroll" onchange="applyFilters()"> Crunchyroll</label>
+                        <label data-service="tubi"><input type="checkbox" value="tubi" onchange="applyFilters()"> Tubi</label>
+                        <label data-service="rent"><input type="checkbox" value="rent" onchange="applyFilters()"> Rent</label>
+                        <label data-service="acquire"><input type="checkbox" value="acquire" onchange="applyFilters()"> Acquire</label>
+                    </div>
+                </div>
+            </div>
+            <button class="clear-filters-btn" onclick="clearFilters()">Clear</button>
         </div>
 
         <div class="tabs-wrapper">
@@ -1181,17 +1545,17 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         }});
 
         function updateCounts() {{
-            // Count ALL selected items across ALL users
-            const movieCount = document.querySelectorAll('tr[data-type="movie"] .select-item:checked').length;
-            const showCount = document.querySelectorAll('tr[data-type="show"] .select-item:checked').length;
+            // Count ALL selected items across ALL users (excluding filtered-out rows)
+            const movieCount = document.querySelectorAll('tr[data-type="movie"]:not(.filtered-out) .select-item:checked').length;
+            const showCount = document.querySelectorAll('tr[data-type="show"]:not(.filtered-out) .select-item:checked').length;
             document.getElementById('movie-count').textContent = movieCount;
             document.getElementById('show-count').textContent = showCount;
             document.getElementById('total-count').textContent = movieCount + showCount;
         }}
 
         function exportRadarr() {{
-            // Export from ALL users
-            const rows = document.querySelectorAll('tr[data-type="movie"]');
+            // Export from ALL users (excluding filtered-out rows)
+            const rows = document.querySelectorAll('tr[data-type="movie"]:not(.filtered-out)');
             const imdbIds = [];
             rows.forEach(row => {{
                 const checkbox = row.querySelector('.select-item');
@@ -1211,8 +1575,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         }}
 
         function exportSonarr() {{
-            // Export from ALL users
-            const rows = document.querySelectorAll('tr[data-type="show"]');
+            // Export from ALL users (excluding filtered-out rows)
+            const rows = document.querySelectorAll('tr[data-type="show"]:not(.filtered-out)');
             const imdbIds = [];
             rows.forEach(row => {{
                 const checkbox = row.querySelector('.select-item');
@@ -1232,8 +1596,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         }}
 
         function exportTrakt() {{
-            // Export ALL selected items (movies + shows) for Trakt import
-            const allRows = document.querySelectorAll('tr[data-imdb]');
+            // Export ALL selected items (movies + shows) for Trakt import (excluding filtered-out rows)
+            const allRows = document.querySelectorAll('tr[data-imdb]:not(.filtered-out)');
             const imdbIds = [];
             allRows.forEach(row => {{
                 const checkbox = row.querySelector('.select-item');
@@ -1357,6 +1721,155 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
 
         // Initialize counts on load
         updateCounts();
+
+        // Streaming dropdown toggle
+        function toggleStreamingDropdown() {{
+            const menu = document.getElementById('streaming-menu');
+            menu.classList.toggle('show');
+        }}
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {{
+            const dropdown = document.getElementById('streaming-dropdown');
+            if (!dropdown.contains(e.target)) {{
+                document.getElementById('streaming-menu').classList.remove('show');
+            }}
+        }});
+
+        // Update dropdown button text based on selections
+        function updateStreamingButtonText() {{
+            const checkboxes = document.querySelectorAll('#streaming-menu input[type="checkbox"]:checked');
+            const button = document.querySelector('.dropdown-toggle');
+            if (checkboxes.length === 0) {{
+                button.innerHTML = 'All Services <span class="arrow">&#9662;</span>';
+            }} else if (checkboxes.length === 1) {{
+                const label = checkboxes[0].parentNode.textContent.trim();
+                button.innerHTML = label + ' <span class="arrow">&#9662;</span>';
+            }} else {{
+                button.innerHTML = checkboxes.length + ' selected <span class="arrow">&#9662;</span>';
+            }}
+        }}
+
+        // Main filter function
+        function applyFilters() {{
+            const searchTerm = document.getElementById('filter-search').value.toLowerCase().trim();
+            const ratingMin = parseFloat(document.getElementById('filter-rating-min').value) || 0;
+            const yearMin = parseInt(document.getElementById('filter-year-min').value) || 0;
+            const yearMax = parseInt(document.getElementById('filter-year-max').value) || 9999;
+            const daysMax = parseInt(document.getElementById('filter-days-max').value) || Infinity;
+
+            // Get selected streaming services
+            const streamingCheckboxes = document.querySelectorAll('#streaming-menu input[type="checkbox"]:checked');
+            const selectedServices = Array.from(streamingCheckboxes).map(cb => cb.value);
+
+            updateStreamingButtonText();
+
+            // Filter rows in all tables
+            document.querySelectorAll('tbody tr').forEach(row => {{
+                let show = true;
+
+                // Get cell values - handle different table structures
+                const cells = row.querySelectorAll('td');
+                if (cells.length < 3) return; // Skip malformed rows
+
+                // Title is in cell 1 (after checkbox)
+                const titleCell = cells[1];
+                const title = titleCell?.textContent?.toLowerCase() || '';
+
+                // Find year, rating, days cells - they contain just numbers
+                let year = 0, rating = 0, days = 0;
+                let streamingCell = null;
+
+                cells.forEach((cell, idx) => {{
+                    if (idx === 0) return; // Skip checkbox
+                    const text = cell.textContent.trim();
+
+                    // Check if it's a streaming icons cell
+                    if (cell.querySelector('.streaming-icons') || cell.querySelector('.streaming-icon')) {{
+                        streamingCell = cell;
+                        return;
+                    }}
+
+                    // Year: 4-digit number between 1900-2030
+                    if (/^\\d{{4}}$/.test(text) && parseInt(text) >= 1900 && parseInt(text) <= 2030) {{
+                        year = parseInt(text);
+                    }}
+                    // Rating: decimal between 0-10
+                    else if (/^\\d+\\.\\d$/.test(text) && parseFloat(text) <= 10) {{
+                        rating = parseFloat(text);
+                    }}
+                    // Days: plain integer (last numeric column)
+                    else if (/^\\d+$/.test(text) && parseInt(text) < 10000) {{
+                        days = parseInt(text);
+                    }}
+                }});
+
+                // Search filter
+                if (searchTerm && !title.includes(searchTerm)) {{
+                    show = false;
+                }}
+
+                // Rating filter
+                if (rating < ratingMin) {{
+                    show = false;
+                }}
+
+                // Year filter
+                if (year > 0 && (year < yearMin || year > yearMax)) {{
+                    show = false;
+                }}
+
+                // Days filter
+                if (days > daysMax) {{
+                    show = false;
+                }}
+
+                // Streaming service filter
+                if (selectedServices.length > 0 && streamingCell) {{
+                    const icons = streamingCell.querySelectorAll('.streaming-icon');
+                    let hasMatch = false;
+
+                    icons.forEach(icon => {{
+                        const classes = Array.from(icon.classList);
+                        // Check for "user-service" class match
+                        if (selectedServices.includes('user-service') && classes.includes('user-service')) {{
+                            hasMatch = true;
+                        }}
+                        // Check for specific service match
+                        selectedServices.forEach(service => {{
+                            if (service !== 'user-service' && classes.includes(service)) {{
+                                hasMatch = true;
+                            }}
+                        }});
+                    }});
+
+                    if (!hasMatch) {{
+                        show = false;
+                    }}
+                }}
+
+                // Apply visibility
+                row.classList.toggle('filtered-out', !show);
+            }});
+
+            updateCounts();
+        }}
+
+        // Clear all filters
+        function clearFilters() {{
+            document.getElementById('filter-search').value = '';
+            document.getElementById('filter-rating-min').value = '';
+            document.getElementById('filter-year-min').value = '';
+            document.getElementById('filter-year-max').value = '';
+            document.getElementById('filter-days-max').value = '';
+
+            document.querySelectorAll('#streaming-menu input[type="checkbox"]').forEach(cb => {{
+                cb.checked = false;
+            }});
+
+            updateStreamingButtonText();
+            applyFilters();
+        }}
     </script>
 </body>
 </html>'''
