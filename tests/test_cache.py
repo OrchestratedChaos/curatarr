@@ -165,6 +165,21 @@ class TestLoadMediaCache:
         finally:
             os.unlink(cache_path)
 
+    def test_load_corrupted_cache_returns_empty(self):
+        """Test loading corrupted cache file returns empty cache."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write("this is not valid json {{{")
+            cache_path = f.name
+
+        try:
+            result = load_media_cache(cache_path, media_key='movies')
+
+            # Should return empty cache structure
+            assert result["movies"] == {}
+            assert result["library_count"] == 0
+        finally:
+            os.unlink(cache_path)
+
 
 class TestSaveMediaCache:
     """Tests for save_media_cache() function."""

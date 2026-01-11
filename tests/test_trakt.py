@@ -350,6 +350,50 @@ class TestCreateTraktClient:
         assert result.access_token == "token"
 
 
+class TestRevokeToken:
+    """Tests for revoke_token method."""
+
+    def test_revoke_no_token(self):
+        """Test revoke returns True when no token to revoke."""
+        client = TraktClient("id", "secret")
+        result = client.revoke_token()
+        assert result is True
+
+    @patch('utils.trakt.requests.post')
+    def test_revoke_success(self, mock_post):
+        """Test successful token revocation."""
+        mock_post.return_value = Mock(status_code=200)
+
+        client = TraktClient("id", "secret", access_token="token", refresh_token="refresh")
+        result = client.revoke_token()
+
+        assert result is True
+        assert client.access_token is None
+        assert client.refresh_token is None
+        mock_post.assert_called_once()
+
+    @patch('utils.trakt.requests.post')
+    def test_revoke_failure(self, mock_post):
+        """Test token revocation failure."""
+        mock_post.return_value = Mock(status_code=500)
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.revoke_token()
+
+        assert result is False
+
+    @patch('utils.trakt.requests.post')
+    def test_revoke_request_exception(self, mock_post):
+        """Test revoke handles request exception."""
+        import requests
+        mock_post.side_effect = requests.RequestException("Network error")
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.revoke_token()
+
+        assert result is False
+
+
 class TestTraktClientUserInfo:
     """Tests for user info methods."""
 
@@ -521,12 +565,101 @@ class TestTraktClientListManagement:
 
         assert result == {"added": {"movies": 0, "shows": 0}}
 
+    @patch('utils.trakt.requests.request')
+    def test_add_to_list_no_username(self, mock_request):
+        """Test add_to_list raises error when no username."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {}}  # No username
+        mock_request.return_value = settings
+
+        client = TraktClient("id", "secret", access_token="token")
+        with pytest.raises(TraktAuthError):
+            client.add_to_list("my-list", movies=[{"ids": {"imdb": "tt123"}}])
+
+    @patch('utils.trakt.requests.request')
+    def test_remove_from_list_no_username(self, mock_request):
+        """Test remove_from_list raises error when no username."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {}}  # No username
+        mock_request.return_value = settings
+
+        client = TraktClient("id", "secret", access_token="token")
+        with pytest.raises(TraktAuthError):
+            client.remove_from_list("my-list", movies=[{"ids": {"imdb": "tt123"}}])
+
     def test_remove_from_list_empty(self):
         """Test removing empty lists returns immediately."""
         client = TraktClient("id", "secret", access_token="token")
         result = client.remove_from_list("my-list")
 
         assert result == {"deleted": {"movies": 0, "shows": 0}}
+
+    @patch('utils.trakt.requests.request')
+    def test_delete_list_success(self, mock_request):
+        """Test successful list deletion."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        delete_resp = Mock(status_code=204)
+        delete_resp.json.return_value = None
+
+        mock_request.side_effect = [settings, delete_resp]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.delete_list("my-list")
+
+        assert result is True
+
+    @patch('utils.trakt.requests.request')
+    def test_delete_list_no_username(self, mock_request):
+        """Test delete list fails when no username."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {}}  # No username
+
+        mock_request.return_value = settings
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.delete_list("my-list")
+
+        assert result is False
+
+    @patch('utils.trakt.requests.request')
+    def test_delete_list_api_error(self, mock_request):
+        """Test delete list handles API error."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        error_resp = Mock(status_code=404, text="Not found")
+
+        mock_request.side_effect = [settings, error_resp]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.delete_list("nonexistent")
+
+        assert result is False
+
+    @patch('utils.trakt.requests.request')
+    def test_get_or_create_finds_by_name(self, mock_request):
+        """Test get_or_create_list finds list by name when slug lookup fails."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        # First lookup by slug fails
+        not_found = Mock(status_code=404, text="Not found")
+
+        # get_lists returns list with matching name
+        lists_resp = Mock(status_code=200)
+        lists_resp.json.return_value = [
+            {"name": "My List", "ids": {"slug": "different-slug"}}
+        ]
+
+        mock_request.side_effect = [settings, not_found, settings, lists_resp]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_or_create_list("My List")
+
+        assert result is not None
+        assert result["name"] == "My List"
 
 
 class TestTraktClientSyncList:
@@ -735,11 +868,92 @@ class TestTraktClientImport:
         result = client.get_watched_movies()
         assert result == []
 
+    @patch('utils.trakt.requests.request')
+    def test_get_watched_movies_api_error(self, mock_request):
+        """Test get_watched_movies returns empty on API error."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        error = Mock(status_code=500, text="Server error")
+
+        mock_request.side_effect = [settings, error]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watched_movies()
+        assert result == []
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watched_shows_api_error(self, mock_request):
+        """Test get_watched_shows returns empty on API error."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        error = Mock(status_code=500, text="Server error")
+
+        mock_request.side_effect = [settings, error]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watched_shows()
+        assert result == []
+
     def test_get_watchlist_no_auth(self):
         """Test get_watchlist returns empty when not authenticated."""
         client = TraktClient("id", "secret")
         result = client.get_watchlist()
         assert result == []
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watchlist_api_error(self, mock_request):
+        """Test get_watchlist returns empty on API error."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+        error = Mock(status_code=500, text="Server error")
+        mock_request.side_effect = [settings, error]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watchlist()
+        assert result == []
+
+    @patch('utils.trakt.requests.request')
+    def test_get_ratings_api_error(self, mock_request):
+        """Test get_ratings returns empty on API error."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+        error = Mock(status_code=500, text="Server error")
+        mock_request.side_effect = [settings, error]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_ratings()
+        assert result == []
+
+    def test_get_ratings_no_auth(self):
+        """Test get_ratings returns empty when not authenticated."""
+        client = TraktClient("id", "secret")
+        result = client.get_ratings()
+        assert result == []
+
+    def test_add_to_history_empty(self):
+        """Test add_to_history returns early when no data."""
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.add_to_history()
+        assert result == {"added": {"movies": 0, "episodes": 0}}
+
+    @patch('utils.trakt.requests.request')
+    def test_get_watch_history_imdb_ids_shows(self, mock_request):
+        """Test get_watch_history_imdb_ids for shows."""
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+        shows = Mock(status_code=200)
+        shows.json.return_value = [
+            {"show": {"ids": {"imdb": "tt111"}}},
+            {"show": {"ids": {"imdb": "tt222"}}},
+            {"show": {"ids": {}}}  # Missing IMDB
+        ]
+        mock_request.side_effect = [settings, shows]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_watch_history_imdb_ids(media_type='shows')
+        assert result == {"tt111", "tt222"}
 
 
 class TestLoadTraktEnhanceCache:
