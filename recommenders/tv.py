@@ -17,7 +17,7 @@ from utils import (
     fetch_plex_watch_history_shows,
     fetch_show_completion_data, identify_dropped_shows,
     log_warning, log_error,
-    calculate_rewatch_multiplier,
+    calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score,
     show_progress,
     extract_genres, extract_ids_from_guids, extract_rating,
@@ -223,8 +223,10 @@ class PlexTVRecommender(BaseRecommender):
             log_error(f"No valid users found!")
             return counters
 
-        # Use shared utility to fetch watch history
-        watched_ids = fetch_plex_watch_history_shows(self.config, account_ids, shows_section)
+        # Use shared utility to fetch watch history with timestamps for recency decay
+        watched_ids, show_timestamps = fetch_plex_watch_history_shows(
+            self.config, account_ids, shows_section, return_timestamps=True
+        )
 
         # Store watched show IDs
         self.watched_ids.update(watched_ids)
@@ -268,16 +270,23 @@ class PlexTVRecommender(BaseRecommender):
         # Each show weighted equally (1.0 base) regardless of episode count
         normal_watched = watched_ids - dropped_show_ids
         print(f"")
-        print(f"Processing {len(normal_watched)} watched shows (excluding {len(dropped_show_ids)} dropped):")
+        print(f"Processing {len(normal_watched)} watched shows with recency decay (excluding {len(dropped_show_ids)} dropped):")
 
         for i, show_id in enumerate(normal_watched, 1):
             show_progress("Processing", i, len(normal_watched))
 
             show_info = self.show_cache.cache['shows'].get(str(show_id))
             if show_info:
+                # Calculate recency multiplier based on last episode watched
+                viewed_at = show_timestamps.get(show_id)
+                recency_multiplier = calculate_recency_multiplier(viewed_at, self.config.get('recency_decay', {})) if viewed_at else 1.0
+
                 # Base weight 1.0 per show, with rewatch bonus only if actually rewatched
                 rewatch_multiplier = calculate_rewatch_multiplier(show_rewatch_counts.get(show_id, 1))
-                process_counters_from_cache(show_info, counters, media_type='tv', weight=rewatch_multiplier)
+
+                # Combined weight: recency * rewatch
+                weight = recency_multiplier * rewatch_multiplier
+                process_counters_from_cache(show_info, counters, media_type='tv', weight=weight)
 
                 if tmdb_id := show_info.get('tmdb_id'):
                     counters['tmdb_ids'].add(tmdb_id)

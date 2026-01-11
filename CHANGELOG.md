@@ -2,6 +2,14 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.6] - 2026-01-10
+
+### Added
+- **TV recency decay**: TV recommender now applies recency weighting like movies (recently watched shows weighted higher)
+
+### Performance Improvements
+- **Memoized fuzzy keyword matching**: Fuzzy match results cached per profile to avoid O(n²) repeated lookups
+
 ## [2.8.5] - 2026-01-10
 
 ### Performance Improvements
