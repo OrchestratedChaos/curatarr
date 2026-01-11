@@ -42,6 +42,9 @@ def normalize_user_profile(user_prefs: Dict) -> Dict:
                 for k, v in user_prefs[key].items()
             }
 
+    # Initialize fuzzy keyword match cache (populated lazily during scoring)
+    user_prefs['_fuzzy_cache'] = {}
+
     user_prefs['_normalized'] = True
     return user_prefs
 
@@ -82,13 +85,18 @@ def normalize_genre(genre_name: str) -> str:
     return mapped.lower() if mapped else lower
 
 
-def fuzzy_keyword_match(keyword: str, user_keywords: Dict[str, int]) -> Tuple[float, Optional[str]]:
+def fuzzy_keyword_match(
+    keyword: str,
+    user_keywords: Dict[str, int],
+    cache: Optional[Dict[str, Tuple[float, Optional[str]]]] = None
+) -> Tuple[float, Optional[str]]:
     """
     Check if keyword fuzzy-matches any user keyword.
 
     Args:
         keyword: Keyword to match
         user_keywords: Dict of user's keyword preferences with counts
+        cache: Optional dict to cache results (pass user_prefs['_fuzzy_cache'])
 
     Returns:
         Tuple of (match_score, matched_keyword) based on best partial match
@@ -98,9 +106,16 @@ def fuzzy_keyword_match(keyword: str, user_keywords: Dict[str, int]) -> Tuple[fl
 
     keyword_lower = keyword.lower()
 
+    # Check cache first (same keyword always matches same user keyword for a given profile)
+    if cache is not None and keyword_lower in cache:
+        return cache[keyword_lower]
+
     # Check for exact match first
     if keyword_lower in user_keywords:
-        return user_keywords[keyword_lower], keyword_lower
+        result = (user_keywords[keyword_lower], keyword_lower)
+        if cache is not None:
+            cache[keyword_lower] = result
+        return result
 
     # Check for partial matches (keyword contains or is contained by user keyword)
     best_score = 0
@@ -123,7 +138,10 @@ def fuzzy_keyword_match(keyword: str, user_keywords: Dict[str, int]) -> Tuple[fl
                 best_score = match_score
                 best_match = user_kw
 
-    return best_score, best_match
+    result = (best_score, best_match)
+    if cache is not None:
+        cache[keyword_lower] = result
+    return result
 
 
 def calculate_recency_multiplier(viewed_at, recency_config: dict) -> float:
@@ -572,7 +590,8 @@ def calculate_similarity_score(
                 if count == 0:
                     count = user_keywords_lower.get(kw_lower, 0)
                 if count == 0 and use_fuzzy_keywords:
-                    fuzzy_count, matched_kw = fuzzy_keyword_match(kw, user_keywords_lower)
+                    fuzzy_cache = user_prefs.get('_fuzzy_cache')
+                    fuzzy_count, matched_kw = fuzzy_keyword_match(kw, user_keywords_lower, fuzzy_cache)
                     count = fuzzy_count
                 if count > 0:
                     # TF-IDF: if keyword is rare in user's profile, apply penalty

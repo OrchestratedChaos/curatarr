@@ -283,7 +283,12 @@ def fetch_plex_watch_history_movies(config: Dict, account_ids: List[str], movies
         return [], {}
 
 
-def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_section: Any = None) -> Set[int]:
+def fetch_plex_watch_history_shows(
+    config: Dict,
+    account_ids: List[str],
+    tv_section: Any = None,
+    return_timestamps: bool = False
+) -> Set[int]:
     """
     Fetch TV show watch history for specified account IDs using direct Plex API.
 
@@ -291,14 +296,16 @@ def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_sect
         config: Configuration dict with plex URL and token
         account_ids: List of account ID strings
         tv_section: PlexAPI TV library section
+        return_timestamps: If True, returns (set, dict) where dict maps show_id -> latest viewedAt
 
     Returns:
-        Set of watched show IDs (rating keys)
+        Set of watched show IDs (rating keys), or tuple (set, dict) if return_timestamps=True
     """
     print(f"")
     print(f"{GREEN}Fetching Plex watch history for {len(account_ids)} user(s)...{RESET}")
 
     watched_show_ids = set()
+    show_timestamps = {}  # show_id -> latest viewedAt timestamp
 
     for account_id in account_ids:
         print(f"")
@@ -325,8 +332,17 @@ def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_sect
                     grandparent_key_path = video.get('grandparentKey')
                     if grandparent_key_path:
                         grandparent_key = grandparent_key_path.split('/')[-1]
-                        watched_show_ids.add(int(grandparent_key))
+                        show_id = int(grandparent_key)
+                        watched_show_ids.add(show_id)
                         episode_count += 1
+
+                        # Track latest viewedAt per show for recency decay
+                        if return_timestamps:
+                            viewed_at_str = video.get('viewedAt')
+                            if viewed_at_str:
+                                viewed_at = int(viewed_at_str)
+                                if show_id not in show_timestamps or viewed_at > show_timestamps[show_id]:
+                                    show_timestamps[show_id] = viewed_at
 
             print(f"Fetched {episode_count} watched episodes from {len(watched_show_ids)} shows")
 
@@ -334,6 +350,8 @@ def fetch_plex_watch_history_shows(config: Dict, account_ids: List[str], tv_sect
             log_error(f"Error fetching Plex history: {e}")
             continue
 
+    if return_timestamps:
+        return watched_show_ids, show_timestamps
     return watched_show_ids
 
 
