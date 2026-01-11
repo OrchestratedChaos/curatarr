@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.10] - 2026-01-10
+
+### Changed
+- **Bump cache version to 4**: Auto-invalidates old TV show caches to pick up new `production_company_ids` field for franchise bonus
+
 ## [2.8.9] - 2026-01-10
 
 ### Added
