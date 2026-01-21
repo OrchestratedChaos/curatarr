@@ -214,10 +214,9 @@ class TestAdaptConfigForMediaType:
         assert result['limit_results'] == 100
 
     def test_collection_settings_inherited(self):
-        config = {'collections': {'add_label': False, 'stale_removal_days': 14}}
+        config = {'collections': {'add_label': False}}
         result = adapt_config_for_media_type(config, 'movies')
         assert result['add_label'] is False
-        assert result['stale_removal_days'] == 14
 
 
 class TestNegativeSignalsConstants:

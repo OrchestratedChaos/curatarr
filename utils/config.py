@@ -9,7 +9,7 @@ import yaml
 from typing import Dict
 
 # Project version - single source of truth
-__version__ = "2.8.10"
+__version__ = "2.8.12"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -19,7 +19,7 @@ TOP_CAST_COUNT = 3                  # Number of top actors to consider
 TMDB_RATE_LIMIT_DELAY = 0.5         # Seconds between TMDB API calls
 DEFAULT_RATING = 5.0                # Default rating when none available
 WEIGHT_SUM_TOLERANCE = 1e-6         # Tolerance for weight sum validation
-DEFAULT_LIMIT_PLEX_RESULTS = 10     # Default recommendation limit
+DEFAULT_LIMIT_PLEX_RESULTS = 100    # Default candidate pool (2x collection target for better selection)
 TOP_POOL_PERCENTAGE = 0.1           # Top 10% for randomization pool
 
 # Media type constants - use these instead of hardcoded strings
@@ -459,7 +459,6 @@ def adapt_config_for_media_type(root_config: Dict, media_type: str = 'movies') -
     # Collection settings
     collections = root_config.get('collections', {})
     config['add_label'] = collections.get('add_label', True)
-    config['stale_removal_days'] = collections.get('stale_removal_days', 7)
 
     # Negative signals configuration
     config['negative_signals'] = get_negative_signals_config(root_config)

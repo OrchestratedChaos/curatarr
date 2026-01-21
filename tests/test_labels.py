@@ -182,12 +182,15 @@ class TestCategorizeLabeledItems:
 
         assert item in result['excluded']
 
-    def test_categorizes_stale_items(self):
-        """Test that stale items are correctly categorized."""
+    def test_old_items_stay_fresh_no_staleness(self):
+        """Test that old items stay fresh - staleness no longer removes items.
+
+        Score-based eviction in _update_labels_by_rank handles rotation instead.
+        """
         item = self._create_mock_item(999)
         watched_ids = set()
 
-        # Set label date to 10 days ago
+        # Set label date to 10 days ago - should NOT matter anymore
         old_date = (datetime.now() - timedelta(days=10)).isoformat()
         label_dates = {'999_Recommended': old_date}
 
@@ -195,7 +198,9 @@ class TestCategorizeLabeledItems:
             [item], watched_ids, [], 'Recommended', label_dates, stale_days=7
         )
 
-        assert item in result['stale']
+        # Old items stay fresh - stale list is always empty now
+        assert item in result['fresh']
+        assert result['stale'] == []
 
     def test_fresh_item_gets_date_tracked(self):
         """Test that fresh items get their label date tracked."""

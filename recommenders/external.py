@@ -116,20 +116,20 @@ TMDB_MOVIE_GENRE_IDS = {v.lower(): k for k, v in TMDB_MOVIE_GENRES.items()}
 TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
 
 # Discovery thresholds - cast a wide net to find candidates
-DISCOVER_MIN_RATING = 6.0       # Filter low-quality content (was 5.0)
-DISCOVER_MIN_VOTES = 100        # Require more validation (was 50)
-MAX_CANDIDATES = 1000           # Sufficient pool size (was 1500)
-DISCOVER_RESULTS_PER_GENRE = 40     # Top N results per genre search
+DISCOVER_MIN_RATING = 5.5       # Cast wider net, quality filtering happens during scoring
+DISCOVER_MIN_VOTES = 50         # Lower barrier for candidates, OUTPUT_MIN_VOTES filters final list
+MAX_CANDIDATES = 1500           # Larger pool for users with big libraries
+DISCOVER_RESULTS_PER_GENRE = 60     # Top N results per genre search (more to offset library filtering)
 DISCOVER_TOP_KEYWORDS = 10          # Number of top keywords to search
-DISCOVER_RESULTS_PER_KEYWORD = 15   # Top N results per keyword search
+DISCOVER_RESULTS_PER_KEYWORD = 25   # Top N results per keyword search
 
 # Output thresholds - match score is king, rating is just tiebreaker
 OUTPUT_MIN_SCORE = 0.65         # 65%+ match required - this is what matters
 OUTPUT_MIN_VOTES = 50           # Filters garbage TMDB entries, profile score is quality signal
 
 # Iterative discovery settings
-MAX_DISCOVERY_ITERATIONS = 5    # How many discovery passes before giving up
-THRESHOLD_FLOOR = 0.40          # Minimum threshold for last-ditch iteration (was 0.25, too low)
+MAX_DISCOVERY_ITERATIONS = 8    # How many discovery passes before giving up
+THRESHOLD_FLOOR = 0.35          # Minimum threshold for last-ditch iteration
 THIN_PROFILE_THRESHOLD = 40     # Less than 40 items = use reduced iterations
 
 # Legacy aliases for cache filtering (votes only, no rating gate)
@@ -165,7 +165,8 @@ def discover_candidates_by_profile(
     max_candidates: int = 500,
     iteration: int = 0,
     exclude_ids: Optional[Set[int]] = None,
-    top_scored_items: Optional[List[Dict]] = None
+    top_scored_items: Optional[List[Dict]] = None,
+    language_filter: Optional[str] = None
 ) -> Dict[int, Dict]:
     """
     Discover candidates using TMDB Discover API based on user profile.
@@ -230,6 +231,8 @@ def discover_candidates_by_profile(
                 'sort_by': 'vote_average.desc',
                 'page': page
             }
+            if language_filter:
+                params['with_original_language'] = language_filter
             response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
             if response.status_code == 200:
@@ -292,6 +295,8 @@ def discover_candidates_by_profile(
                     'sort_by': 'vote_average.desc',
                     'page': page
                 }
+                if language_filter:
+                    params['with_original_language'] = language_filter
                 response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
                 if response.status_code == 200:
@@ -350,7 +355,8 @@ def discover_popular_by_genre(
     top_genres: List[str],
     library_data: Dict,
     media_type: str = 'movie',
-    limit: int = 50
+    limit: int = 50,
+    language_filter: Optional[str] = None
 ) -> List[Dict]:
     """
     Fallback discovery for thin profiles - fetch popular content by genre.
@@ -362,6 +368,7 @@ def discover_popular_by_genre(
         library_data: Existing library to filter out
         media_type: 'movie' or 'show'
         limit: Max items to return
+        language_filter: ISO 639-1 language code (e.g., 'en') to filter by
 
     Returns:
         List of recommendation dicts
@@ -393,6 +400,8 @@ def discover_popular_by_genre(
                 'vote_average.gte': 7.0,
                 'page': 1
             }
+            if language_filter:
+                params['with_original_language'] = language_filter
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
@@ -1050,8 +1059,17 @@ def find_missing_sequels(
                                     pass
 
                         # Check by normalized title match
-                        if normalize_title(episode.title) == title_norm:
+                        ep_title_norm = normalize_title(episode.title)
+                        if ep_title_norm == title_norm:
                             found_tmdb_ids.add(tv_movie['tmdb_id'])
+                        # Also check show name + episode title (e.g., "Phineas and Ferb" + "Mission Marvel")
+                        elif hasattr(episode, 'grandparentTitle'):
+                            combined_norm = normalize_title(f"{episode.grandparentTitle} {episode.title}")
+                            if combined_norm == title_norm:
+                                found_tmdb_ids.add(tv_movie['tmdb_id'])
+                            # Also check if episode title is a suffix of movie title
+                            elif title_norm.endswith(ep_title_norm) and len(ep_title_norm) > 5:
+                                found_tmdb_ids.add(tv_movie['tmdb_id'])
                 except Exception:
                     pass  # Search failed for this title, continue
 
@@ -1309,7 +1327,8 @@ def find_horizon_movies(
                     'collection_id': coll_id,
                     'collection_name': coll_name,
                     'release_date': current_release_date or 'TBA',
-                    'status': status
+                    'status': status,
+                    'genre_ids': movie.get('genre_ids', [])
                 })
 
     show_progress("  Checking collections", total_collections, total_collections)
@@ -1654,6 +1673,7 @@ def find_similar_content_with_profile(
     if max_iterations is None:
         max_iterations = external_config.get('max_iterations', MAX_DISCOVERY_ITERATIONS)
     min_votes = external_config.get('min_votes', OUTPUT_MIN_VOTES)
+    language_filter = external_config.get('language')  # ISO 639-1 code like 'en'
 
     # Get weights from config or use defaults
     weights = DEFAULT_WEIGHTS
@@ -1674,6 +1694,10 @@ def find_similar_content_with_profile(
         profile_size = sum(user_profile.get('genres', Counter()).values())
         print(f"  {CYAN}Thin profile detected ({profile_size} items) - using reduced iterations{RESET}")
         max_iterations = min(max_iterations, 2)  # Quick discovery pass, not zero
+
+    # Show language filter status
+    if language_filter:
+        print(f"  {CYAN}Language filter: {language_filter.upper()} only{RESET}")
 
     # Track state across iterations
     quality_recs = []  # Items meeting quality bar
@@ -1722,7 +1746,8 @@ def find_similar_content_with_profile(
             max_candidates=MAX_CANDIDATES,
             iteration=iteration,
             exclude_ids=seen_ids,
-            top_scored_items=quality_recs[:10]  # Pass top items for similar-to queries
+            top_scored_items=quality_recs[:10],  # Pass top items for similar-to queries
+            language_filter=language_filter
         )
 
         # On first iteration, also add Trakt candidates
@@ -1790,9 +1815,14 @@ def find_similar_content_with_profile(
                     'score': score,
                     'overview': details.get('overview', ''),
                     'genres': details.get('genres', []),
-                    'genre_ids': []
+                    'genre_ids': [],
+                    'original_language': details.get('original_language', '')
                 }
                 scored_cache[candidate_id] = scored_item
+
+                # Skip if language filter is set and doesn't match
+                if language_filter and details.get('original_language', '') != language_filter:
+                    continue
 
                 # Check if meets quality bar (threshold relaxes in later iterations)
                 if score >= iteration_threshold and scored_item['vote_count'] >= min_votes:
@@ -1819,11 +1849,13 @@ def find_similar_content_with_profile(
 
         print(f"  {CYAN}Iteration {iteration + 1} ({iteration_threshold:.0%} threshold): {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}")
 
-        # Early termination check
+        # Early termination check - only if we're close to target
         if new_quality_this_iteration == 0:
             consecutive_zero_iterations += 1
-            if consecutive_zero_iterations >= 2:
-                print(f"  {CYAN}Early exit: 2 consecutive iterations with no new matches{RESET}")
+            # Only early exit if we're at least 80% to target
+            progress_pct = len(quality_recs) / limit if limit > 0 else 1.0
+            if consecutive_zero_iterations >= 2 and progress_pct >= 0.8:
+                print(f"  {CYAN}Early exit: 2 consecutive iterations with no new matches ({len(quality_recs)}/{limit}){RESET}")
                 break
         else:
             consecutive_zero_iterations = 0  # Reset on success
@@ -1924,6 +1956,28 @@ def process_user(config, plex, username):
     show_cache = load_cache(display_name, 'shows')
     ignore_list = load_ignore_list(display_name)
 
+    # Get language filter from config
+    external_config = config.get('external_recommendations', {})
+    language_filter = external_config.get('language')
+
+    # Filter cached items by language if filter is set
+    # Items without language info are also filtered (old cache entries)
+    if language_filter:
+        filtered_movies = 0
+        for tmdb_id, item in list(movie_cache.items()):
+            item_lang = item.get('original_language', '')
+            if item_lang != language_filter:  # No language or wrong language = filtered
+                del movie_cache[tmdb_id]
+                filtered_movies += 1
+        filtered_shows = 0
+        for tmdb_id, item in list(show_cache.items()):
+            item_lang = item.get('original_language', '')
+            if item_lang != language_filter:  # No language or wrong language = filtered
+                del show_cache[tmdb_id]
+                filtered_shows += 1
+        if filtered_movies or filtered_shows:
+            print(f"{CYAN}Filtered {filtered_movies} movies and {filtered_shows} shows (not {language_filter.upper()}){RESET}")
+
     # Remove acquired items from cache (now in library) - check TMDB IDs AND titles
     removed_movies = []
     for tmdb_id, item in list(movie_cache.items()):
@@ -1955,28 +2009,6 @@ def process_user(config, plex, username):
 
     if removed_ignored:
         print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
-
-    # Remove stale items (on list too long without being acquired)
-    stale_days = config.get('collections', {}).get('stale_removal_days', 7)
-    now = datetime.now()
-    stale_removed = 0
-
-    for tmdb_id, item in list(movie_cache.items()):
-        if 'added_date' in item:
-            added = datetime.fromisoformat(item['added_date'])
-            if (now - added).days > stale_days:
-                del movie_cache[tmdb_id]
-                stale_removed += 1
-
-    for tmdb_id, item in list(show_cache.items()):
-        if 'added_date' in item:
-            added = datetime.fromisoformat(item['added_date'])
-            if (now - added).days > stale_days:
-                del show_cache[tmdb_id]
-                stale_removed += 1
-
-    if stale_removed:
-        print(f"{YELLOW}Removed {stale_removed} stale items (>{stale_days} days on list){RESET}")
 
     # Load user profiles from cache (FAST) or build from scratch (SLOW)
     # Cache is pre-computed by internal recommenders with proper weighting
@@ -2104,6 +2136,7 @@ def process_user(config, plex, username):
                 'rating': movie['rating'],
                 'vote_count': movie.get('vote_count', 0),
                 'score': movie['score'],
+                'original_language': movie.get('original_language', ''),
                 'added_date': datetime.now().isoformat()
             }
 
@@ -2126,8 +2159,33 @@ def process_user(config, plex, username):
                 'rating': show['rating'],
                 'vote_count': show.get('vote_count', 0),
                 'score': show['score'],
+                'original_language': show.get('original_language', ''),
                 'added_date': datetime.now().isoformat()
             }
+
+    # Trim caches to limit - keep highest scored items, remove lowest
+    # This replaces time-based staleness: better recs push out worse ones
+    trimmed_movies = 0
+    trimmed_shows = 0
+
+    if len(movie_cache) > movie_limit:
+        sorted_movies = sorted(movie_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        keep_ids = {tmdb_id for tmdb_id, _ in sorted_movies[:movie_limit]}
+        for tmdb_id in list(movie_cache.keys()):
+            if tmdb_id not in keep_ids:
+                del movie_cache[tmdb_id]
+                trimmed_movies += 1
+
+    if len(show_cache) > show_limit:
+        sorted_shows = sorted(show_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        keep_ids = {tmdb_id for tmdb_id, _ in sorted_shows[:show_limit]}
+        for tmdb_id in list(show_cache.keys()):
+            if tmdb_id not in keep_ids:
+                del show_cache[tmdb_id]
+                trimmed_shows += 1
+
+    if trimmed_movies or trimmed_shows:
+        print(f"{YELLOW}Trimmed cache: {trimmed_movies} movies, {trimmed_shows} shows (replaced by better recs){RESET}")
 
     # Save updated caches
     save_cache(display_name, 'movies', movie_cache)

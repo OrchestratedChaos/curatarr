@@ -187,7 +187,7 @@ recency_decay:
   days_91_180: 0.50           # 3-6 months: 50%
 
 collections:
-  stale_removal_days: 7       # Rotate unwatched recommendations
+  stale_removal_days: 7       # Rotate unwatched Plex collection labels
 
 external_recommendations:
   min_relevance_score: 0.25   # See note below

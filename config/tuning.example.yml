@@ -65,7 +65,6 @@ collections:
   label_name: Recommended
   append_usernames: true  # Include username in collection name
   remove_previous_recommendations: false
-  stale_removal_days: 7  # Remove unwatched recs after N days
 
 # =============================================================================
 # EXTERNAL RECOMMENDATIONS
@@ -80,6 +79,10 @@ external_recommendations:
   # Discovery iteration settings
   min_votes: 50  # Minimum TMDB votes for reliability (filters garbage entries)
   max_iterations: 5  # Max discovery passes before giving up (more = slower but more thorough)
+  # Language filter - only recommend content in this language (ISO 639-1 code)
+  # Examples: "en" (English), "es" (Spanish), "ja" (Japanese), "ko" (Korean)
+  # Set to null or omit to disable language filtering
+  language: null
 
 # =============================================================================
 # RECENCY DECAY
