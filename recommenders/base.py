@@ -414,7 +414,10 @@ class BaseRecommender(ABC):
 
         # Load display options
         self.confirm_operations = general_config.get('confirm_operations', False)
-        self.limit_plex_results = general_config.get('limit_plex_results', DEFAULT_LIMIT_PLEX_RESULTS)
+        # Generate 2x the collection target to ensure best items compete with existing labeled
+        # Collection target is 50 movies / 20 TV, so generate 100 / 40 candidates
+        default_limit = 100 if self.media_type == 'movie' else 40
+        self.limit_plex_results = general_config.get('limit_plex_results', default_limit)
         self.randomize_recommendations = general_config.get('randomize_recommendations', True)
         self.normalize_counters = general_config.get('normalize_counters', True)
         self.show_summary = general_config.get('show_summary', False)
@@ -651,6 +654,8 @@ class BaseRecommender(ABC):
                 quality_filtered_count += 1
                 continue
 
+            # Store ratingKey in item for later matching
+            item_info['plex_rating_key'] = int(str(item_id))
             unwatched_items.append(item_info)
 
         if excluded_count > 0:
@@ -723,13 +728,34 @@ class BaseRecommender(ABC):
         """Find Plex items matching recommendations."""
         items_found = []
         skipped = []
-        for rec in selected_items:
-            plex_item = self._find_plex_item(section, rec)
+        total = len(selected_items)
+        print(f"Finding {total} recommendations in Plex library...")
+
+        for i, rec in enumerate(selected_items, 1):
+            if i % 20 == 0 or i == total:
+                print(f"\r  Locating items: {i}/{total}...", end="", flush=True)
+
+            plex_item = None
+
+            # Try direct fetch by ratingKey first (reliable)
+            rating_key = rec.get('plex_rating_key')
+            if rating_key:
+                try:
+                    plex_item = self.plex.fetchItem(int(rating_key))
+                except Exception:
+                    pass  # Fall back to search
+
+            # Fallback to fuzzy search
+            if not plex_item:
+                plex_item = self._find_plex_item(section, rec)
+
             if plex_item:
                 plex_item.reload()
                 items_found.append(plex_item)
             else:
                 skipped.append(f"{rec['title']} ({rec.get('year', 'N/A')})")
+
+        print()  # newline after progress
         return items_found, skipped
 
     def _remove_outdated_labels(self, section, label_name: str, stale_days: int) -> List:
@@ -743,13 +769,11 @@ class BaseRecommender(ABC):
             label_name, self.label_dates, stale_days
         )
 
-        print(f"{GREEN}Keeping {len(categories['fresh'])} fresh unwatched recommendations{RESET}")
+        print(f"{GREEN}Keeping {len(categories['fresh'])} unwatched recommendations{RESET}")
         print(f"{YELLOW}Removing {len(categories['watched'])} watched {self.media_key} from recommendations{RESET}")
-        print(f"{YELLOW}Removing {len(categories['stale'])} stale recommendations (unwatched > {stale_days} days){RESET}")
         print(f"{YELLOW}Removing {len(categories['excluded'])} {self.media_key} with excluded genres{RESET}")
 
         remove_labels_from_items(categories['watched'], label_name, self.label_dates, "watched")
-        remove_labels_from_items(categories['stale'], label_name, self.label_dates, "stale")
         remove_labels_from_items(categories['excluded'], label_name, self.label_dates, "excluded genre")
 
         return categories['fresh']
@@ -759,7 +783,11 @@ class BaseRecommender(ABC):
         all_candidates = {}
         media_cache = self._get_media_cache()
 
-        for item in unwatched_labeled:
+        total_labeled = len(unwatched_labeled)
+        if total_labeled > 0:
+            print(f"  Scoring {total_labeled} existing labeled items...", end="", flush=True)
+
+        for i, item in enumerate(unwatched_labeled, 1):
             item_id = int(item.ratingKey)
             item_info = media_cache.cache[self.media_key].get(str(item_id))
             if item_info:
@@ -769,12 +797,29 @@ class BaseRecommender(ABC):
                 except Exception as e:
                     logger.debug(f"Scoring failed for item {item_id}: {e}")
                     all_candidates[item_id] = (item, 0.0)
+            else:
+                # Item labeled but not in cache - still include as candidate with 0 score
+                logger.debug(f"Item {item_id} ({item.title}) not in cache, adding with score 0")
+                all_candidates[item_id] = (item, 0.0)
+
+        if total_labeled > 0:
+            print(" done")
+
+        # Build lookup by ratingKey for fast matching
+        items_found_by_key = {int(m.ratingKey): m for m in items_found}
 
         for rec in selected_items:
-            plex_item = next(
-                (m for m in items_found if m.title == rec['title'] and m.year == rec.get('year')),
-                None
-            )
+            # Match by ratingKey (reliable) instead of title+year (can mismatch with fuzzy search)
+            rec_key = rec.get('plex_rating_key')
+            plex_item = items_found_by_key.get(rec_key) if rec_key else None
+
+            # Fallback to title+year match for backwards compatibility
+            if not plex_item:
+                plex_item = next(
+                    (m for m in items_found if m.title == rec['title'] and m.year == rec.get('year')),
+                    None
+                )
+
             if plex_item:
                 item_id = int(plex_item.ratingKey)
                 is_watched = item_id in self.watched_ids or getattr(plex_item, 'isPlayed', False)

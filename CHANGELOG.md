@@ -2,6 +2,40 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.12] - 2026-01-20
+
+### Fixed
+- **Recommendation limit was 10 instead of 50**: Default `limit_plex_results` was 10, causing only 10 recommendations to be generated even though collection target was 50. Now generates 2x candidates (100 movies, 40 TV) so more items compete for collection spots
+- **Collection items not being added**: Fixed bug where fuzzy title matching found Plex items but exact title+year re-matching failed, causing recommendations to silently not be added to collections. Now matches by Plex ratingKey for reliability
+- **Direct Plex item fetch**: Now uses `plex.fetchItem(ratingKey)` instead of fuzzy search when ratingKey is available, avoiding potential wrong-item matches
+- **Labeled items missing from cache**: Items labeled in Plex but missing from cache are now included as candidates with score 0 instead of being silently skipped
+
+### Improved
+- **Progress output during collection update**: Added progress indicators when locating Plex items and scoring candidates to show activity during long-running operations
+
+### Changed
+- **Plex collections no longer decay over time**: Removed time-based staleness removal from internal Plex recommendation collections. Items now stay in your collection until replaced by higher-scoring recommendations or watched. Score-based eviction ensures the best recs stay
+- **External recommendations no longer decay over time**: Same change for external watchlist recommendations - items persist until replaced by better-scored alternatives or acquired/ignored
+- **More aggressive discovery**: Increased max iterations (5→8), wider candidate pool (1000→1500), more results per genre/keyword search. Users with large libraries should now get fuller recommendation lists
+- **Smarter early termination**: Discovery no longer gives up after 2 dry iterations unless already at 80% of target. Keeps trying when far below quota
+- **Lowered discovery thresholds**: Rating 6.0→5.5, votes 100→50, threshold floor 40%→35%. Wider initial net, quality filtering still happens during scoring
+
+### Removed
+- **`stale_removal_days` no longer removes recommendations**: This config option is now deprecated. Items rotate based on score, not age
+
+## [2.8.11] - 2026-01-11
+
+### Added
+- **Language filter for recommendations**: New `language` option in `external_recommendations` config filters recommendations to only include content originally in that language (e.g., `language: en` for English only). Filters both new discoveries and existing cached items
+- **Clickable streaming badges**: Streaming service badges now link to JustWatch search for the title
+- **Animated badge on all recommendations**: Extended the `[Animated]` badge to Movies, TV Shows, and Horizon Huntarr tabs (was previously only on Sequel Huntarr)
+
+### Fixed
+- **TV special matching**: Improved detection of TV specials in your library by also checking show name + episode title combinations (fixes "Phineas and Ferb: Mission Marvel" style specials)
+
+### Changed
+- **Consolidated setup wizard**: Removed duplicate wizard code from run.sh, now delegates to setup.sh (reduces run.sh by ~1100 lines)
+
 ## [2.8.10] - 2026-01-10
 
 ### Changed

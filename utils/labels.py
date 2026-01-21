@@ -5,7 +5,7 @@ Handles adding, removing, and categorizing Plex labels.
 
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List
 
 from .display import GREEN, RESET, log_info
@@ -48,7 +48,10 @@ def categorize_labeled_items(
     stale_days: int = 7
 ) -> Dict[str, List]:
     """
-    Categorize labeled items into watched, stale, excluded, and fresh.
+    Categorize labeled items into watched, excluded, and fresh.
+
+    Note: Staleness is no longer used - items stay until replaced by higher-scoring
+    recommendations via score-based eviction in _update_labels_by_rank.
 
     Args:
         labeled_items: List of Plex items with the label
@@ -56,20 +59,18 @@ def categorize_labeled_items(
         excluded_genres: List of genres to exclude
         label_name: Name of the label
         label_dates: Dictionary tracking when labels were added
-        stale_days: Number of days before an unwatched item is considered stale
+        stale_days: Deprecated, kept for API compatibility
 
     Returns:
         Dictionary with keys: 'fresh', 'watched', 'stale', 'excluded'
     """
-    stale_threshold = datetime.now() - timedelta(days=stale_days)
-
     # Convert to list to allow multiple iterations (MediaContainer is single-use)
     labeled_items = list(labeled_items)
 
     result = {
         'fresh': [],
         'watched': [],
-        'stale': [],
+        'stale': [],  # Always empty now - score-based eviction handles rotation
         'excluded': []
     }
 
@@ -90,16 +91,8 @@ def categorize_labeled_items(
             result['watched'].append(item)
             continue
 
-        # Check if stale
+        # Track label date if not already tracked (for reference, not staleness)
         label_date_str = label_dates.get(label_key)
-        if label_date_str:
-            try:
-                label_date = datetime.fromisoformat(label_date_str)
-                if label_date < stale_threshold:
-                    result['stale'].append(item)
-                    continue
-            except (ValueError, TypeError) as e:
-                logger.debug(f"Invalid label date format for {label_key}: {label_date_str} ({e})")
 
         # Item is fresh - track date if not already tracked
         result['fresh'].append(item)
