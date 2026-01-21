@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.13] - 2026-01-20
+
+### Added
+- **Clickable streaming badges**: Streaming service badges now link to JustWatch search for the title
+- **Animated badge on all recommendations**: Extended the `[Animated]` badge to Movies, TV Shows, and Horizon Huntarr tabs (was previously only on Sequel Huntarr)
+
+### Changed
+- **Consolidated setup wizard**: Removed duplicate wizard code from run.sh, now delegates to setup.sh (reduces run.sh by ~1100 lines)
+
+### Internal
+- Added `original_language` field to Trakt TMDB details fetch (prep for language filtering)
+
 ## [2.8.12] - 2026-01-20
 
 ### Fixed
@@ -22,19 +34,6 @@ All notable changes to Curatarr will be documented in this file.
 
 ### Removed
 - **`stale_removal_days` no longer removes recommendations**: This config option is now deprecated. Items rotate based on score, not age
-
-## [2.8.11] - 2026-01-11
-
-### Added
-- **Language filter for recommendations**: New `language` option in `external_recommendations` config filters recommendations to only include content originally in that language (e.g., `language: en` for English only). Filters both new discoveries and existing cached items
-- **Clickable streaming badges**: Streaming service badges now link to JustWatch search for the title
-- **Animated badge on all recommendations**: Extended the `[Animated]` badge to Movies, TV Shows, and Horizon Huntarr tabs (was previously only on Sequel Huntarr)
-
-### Fixed
-- **TV special matching**: Improved detection of TV specials in your library by also checking show name + episode title combinations (fixes "Phineas and Ferb: Mission Marvel" style specials)
-
-### Changed
-- **Consolidated setup wizard**: Removed duplicate wizard code from run.sh, now delegates to setup.sh (reduces run.sh by ~1100 lines)
 
 ## [2.8.10] - 2026-01-10
 

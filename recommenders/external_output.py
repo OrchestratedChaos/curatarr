@@ -7,6 +7,9 @@ import json
 import os
 from datetime import datetime
 from typing import Dict, List
+from urllib.parse import quote_plus
+
+from utils.config import TMDB_ANIMATION_GENRE_ID
 
 
 def _load_imdb_cache(cache_path: str) -> Dict[str, str]:
@@ -68,18 +71,26 @@ SERVICE_SHORT_NAMES = {
     'shudder': 'Shudder'
 }
 
+# JustWatch search URL - universal streaming search that works for all services
+JUSTWATCH_SEARCH_URL = 'https://www.justwatch.com/us/search?q={title}'
+
 
 def render_streaming_icons(
     services: List[str],
     user_services: List[str],
     rent_services: List[str] = None,
-    buy_services: List[str] = None
+    buy_services: List[str] = None,
+    title: str = None
 ) -> str:
     """
-    Render HTML streaming service icons/badges.
+    Render HTML streaming service icons/badges with optional search links.
     User's services get a gold border highlight.
     If no streaming, shows rent/buy options or Acquire.
+    When title is provided, badges link to JustWatch search.
     """
+    encoded_title = quote_plus(title) if title else None
+    justwatch_url = JUSTWATCH_SEARCH_URL.replace('{title}', encoded_title) if encoded_title else None
+
     # If streaming services available, show them
     if services:
         icons = []
@@ -88,7 +99,11 @@ def render_streaming_icons(
             css_class = f"streaming-icon {service}"
             if service in user_services:
                 css_class += " user-service"
-            icons.append(f'<span class="{css_class}">{short_name}</span>')
+            # Wrap in link to JustWatch if we have a title
+            if justwatch_url:
+                icons.append(f'<a href="{justwatch_url}" target="_blank" class="streaming-link"><span class="{css_class}">{short_name}</span></a>')
+            else:
+                icons.append(f'<span class="{css_class}">{short_name}</span>')
         return ' '.join(icons)
 
     # No streaming - check rent/buy availability
@@ -342,11 +357,14 @@ def generate_combined_html(
             streaming_services = item.get('streaming_services', [])
             rent_services = item.get('rent_services', [])
             buy_services = item.get('buy_services', [])
-            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services)
+            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services, item['title'])
+            # Add animated badge if applicable
+            genre_ids = item.get('genre_ids', [])
+            animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ''
             rows.append(f'''
                 <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="{media_type}" data-user="{user_id}">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{item['title']} {shared_badge}</td>
+                    <td>{item['title']} {animated_badge}{shared_badge}</td>
                     <td>{item['year']}</td>
                     <td>{item['rating']:.1f}</td>
                     <td>{item['score']:.0%}</td>
@@ -367,7 +385,7 @@ def generate_combined_html(
             streaming_services = item.get('streaming_services', [])
             rent_services = item.get('rent_services', [])
             buy_services = item.get('buy_services', [])
-            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services)
+            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services, item['title'])
             # Add badges for TV Special and Animated
             badges = ''
             if item.get('is_animated'):
@@ -396,10 +414,13 @@ def generate_combined_html(
             status = item.get('status', 'Unknown')
             # Status badge styling
             status_class = status.lower().replace(' ', '-')
+            # Add animated badge if applicable
+            genre_ids = item.get('genre_ids', [])
+            animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ''
             rows.append(f'''
                 <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="horizon-huntarr">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{item['title']}</td>
+                    <td>{item['title']} {animated_badge}</td>
                     <td>{collection_name}</td>
                     <td>{release_date}</td>
                     <td><span class="status-badge {status_class}">{status}</span></td>
@@ -1047,6 +1068,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             max-width: 260px;
             overflow: hidden;
             text-overflow: ellipsis;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            cursor: pointer;
         }}
         .streaming-icon.user-service {{
             border: 2px solid #d4af37;
@@ -1068,6 +1091,14 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         .streaming-icon.acquire {{ background: #444; color: #aaa; font-style: italic; }}
         .streaming-icon.rent {{ background: linear-gradient(135deg, #004B93, #0066CC); color: #FFD700; font-weight: 600; }}
         .streaming-icon.buy {{ background: linear-gradient(135deg, #2563eb, #3b82f6); color: #fff; }}
+
+        .streaming-link {{
+            text-decoration: none;
+        }}
+        .streaming-link:hover .streaming-icon {{
+            transform: scale(1.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        }}
 
         .instructions {{
             background: linear-gradient(180deg, #181818 0%, #121212 100%);

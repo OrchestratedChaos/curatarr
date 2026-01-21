@@ -965,6 +965,7 @@ def fetch_tmdb_details_for_profile(tmdb_api_key: str, tmdb_id: int, media_type: 
             'vote_count': data.get('vote_count', 0),
             'overview': data.get('overview', ''),
             'genres': [g['name'] for g in data.get('genres', [])],
+            'original_language': data.get('original_language', ''),
             'cast': [],
             'keywords': [],
             'directors': [],
