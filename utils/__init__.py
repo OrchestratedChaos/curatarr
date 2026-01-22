@@ -162,6 +162,10 @@ from .plex import (
     get_configured_users,
     get_current_users,
     get_excluded_genres_for_user,
+    get_max_rating_for_user,
+    is_rating_allowed,
+    MOVIE_RATING_HIERARCHY,
+    TV_RATING_HIERARCHY,
     get_user_specific_connection,
     find_plex_movie,
     extract_genres,
@@ -169,6 +173,7 @@ from .plex import (
     extract_rating,
     get_library_imdb_ids,
     get_plex_user_ids,
+    apply_user_label_restrictions,
 )
 
 # Trakt utilities
@@ -331,6 +336,10 @@ __all__ = [
     'get_configured_users',
     'get_current_users',
     'get_excluded_genres_for_user',
+    'get_max_rating_for_user',
+    'is_rating_allowed',
+    'MOVIE_RATING_HIERARCHY',
+    'TV_RATING_HIERARCHY',
     'get_user_specific_connection',
     'find_plex_movie',
     'extract_genres',

@@ -65,6 +65,10 @@ collections:
   label_name: Recommended
   append_usernames: true  # Include username in collection name
   remove_previous_recommendations: false
+  # Private collections - each user only sees their own recommendations
+  # Uses Plex label restrictions (only works on Library tab, not Home)
+  # Note: Server admin always sees all collections (Plex limitation)
+  private_collections: true
 
 # =============================================================================
 # EXTERNAL RECOMMENDATIONS
@@ -126,3 +130,20 @@ negative_signals:
     min_episodes_watched: 2  # Must watch N episodes to count
     max_completion_percent: 25  # Consider dropped if < 25% watched
     penalty_multiplier: -0.4
+
+# =============================================================================
+# USER PREFERENCES
+# =============================================================================
+# Per-user settings (display_name, exclude_genres, max_rating)
+# These override global settings for specific users
+users:
+  preferences:
+    # jasonsmith523:
+    #   display_name: Jason
+    #   # no max_rating = no filtering
+    # homehouse165:
+    #   display_name: Home
+    #   max_rating: PG-13  # filters out R, NC-17
+    # kid_account:
+    #   display_name: Kid
+    #   max_rating: PG  # only G and PG content

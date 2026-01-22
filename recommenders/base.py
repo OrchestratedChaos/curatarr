@@ -47,6 +47,8 @@ from utils import (
     log_error,
     select_tiered_recommendations,
     get_excluded_genres_for_user,
+    get_max_rating_for_user,
+    is_rating_allowed,
     show_progress,
     create_empty_counters,
     process_counters_from_cache,
@@ -58,6 +60,7 @@ from utils import (
     update_plex_collection,
     cleanup_old_collections,
     get_library_imdb_ids,
+    apply_user_label_restrictions,
     get_authenticated_trakt_client,
     load_imdb_tmdb_cache,
     save_imdb_tmdb_cache,
@@ -830,6 +833,35 @@ class BaseRecommender(ABC):
 
         return all_candidates
 
+    def _filter_candidates_by_rating(self, all_candidates: Dict, max_rating: Optional[str]) -> Dict:
+        """Filter candidates by content rating.
+
+        Args:
+            all_candidates: Dict of item_id -> (plex_item, score)
+            max_rating: Maximum allowed content rating (e.g., 'PG-13', 'TV-14') or None for no filtering
+
+        Returns:
+            Filtered dict of item_id -> (plex_item, score)
+        """
+        if not max_rating:
+            return all_candidates
+
+        filtered = {}
+        filtered_count = 0
+
+        for item_id, (plex_item, score) in all_candidates.items():
+            content_rating = getattr(plex_item, 'contentRating', None)
+            if is_rating_allowed(content_rating, max_rating, self.media_type):
+                filtered[item_id] = (plex_item, score)
+            else:
+                filtered_count += 1
+                logger.debug(f"Filtered {plex_item.title} ({content_rating}) - exceeds max rating {max_rating}")
+
+        if filtered_count > 0:
+            print(f"{YELLOW}Filtered {filtered_count} {self.media_key} exceeding max rating {max_rating}{RESET}")
+
+        return filtered
+
     def _update_labels_by_rank(self, all_candidates: Dict, unwatched_labeled: List, label_name: str, target_count: int) -> List:
         """Update labels to keep only top-scoring items, return final collection."""
         sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
@@ -871,7 +903,7 @@ class BaseRecommender(ABC):
 
         emoji = "🎬" if self.media_type == 'movie' else "📺"
         collection_name = f"{emoji} {display_name} - Recommendation"
-        success = update_plex_collection(section, collection_name, final_items, logger)
+        success = update_plex_collection(section, collection_name, final_items, logger, label_name=label_name)
         if success:
             cleanup_old_collections(section, collection_name, username, emoji, logger)
         return success
@@ -935,6 +967,12 @@ class BaseRecommender(ABC):
 
             all_candidates = self._build_scored_candidates(unwatched_labeled, selected_items, items_found)
 
+            # Filter by content rating if user has max_rating preference
+            username = self.single_user or (users[0] if users else None)
+            max_rating = get_max_rating_for_user(self.user_preferences, username)
+            if max_rating:
+                all_candidates = self._filter_candidates_by_rating(all_candidates, max_rating)
+
             # Update labels to keep top items
             final_items = self._update_labels_by_rank(all_candidates, unwatched_labeled, label_name, target_count)
 
@@ -944,7 +982,23 @@ class BaseRecommender(ABC):
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
 
             # Sync to Plex collection
-            return self._sync_plex_collection(section, label_name, final_items)
+            success = self._sync_plex_collection(section, label_name, final_items)
+
+            # Apply user label restrictions if private_collections is enabled (default: true)
+            # Note: Only works for shared friends, not Plex Home managed users
+            if success and self.config.get('collections', {}).get('private_collections', True):
+                # Build dict of all user labels for exclude-based restrictions
+                # Each user's label excludes them from seeing other users' recommendations
+                all_user_labels = {}
+                users = self.users['plex_users'] or self.users['managed_users']
+
+                for username in users:
+                    user_label = build_label_name(base_label, users, username, append_usernames)
+                    all_user_labels[username] = user_label
+
+                apply_user_label_restrictions(self.config, all_user_labels)
+
+            return success
 
         except (plexapi.exceptions.PlexApiException, AttributeError, KeyError) as e:
             log_error(f"Error managing Plex labels: {e}")

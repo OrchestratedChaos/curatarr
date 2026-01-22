@@ -22,6 +22,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ### For Your Library (What to Watch)
 - **Per-user recommendations** — Each user gets their own curated collection
+- **Private by default** — Users only see their own recommendations, not others'
 - **Smart scoring** — Weights keywords, genres, cast, and directors
 - **Recency bias** — Recent watches influence recommendations more
 - **Rewatch detection** — Content you love gets weighted higher
@@ -163,7 +164,13 @@ users:
     kids:
       display_name: Kids
       exclude_genres: [horror, thriller, war]
+      max_rating: PG  # Only G and PG content (movies: G < PG < PG-13 < R < NC-17)
 ```
+
+**Content Rating Filter:**
+- Movies: `G`, `PG`, `PG-13`, `R`, `NC-17` (from least to most restrictive)
+- TV: `TV-Y`, `TV-Y7`, `TV-G`, `TV-PG`, `TV-14`, `TV-MA` (from least to most restrictive)
+- Recommendations above the user's `max_rating` are filtered out
 
 ### General Settings
 ```yaml
@@ -484,7 +491,7 @@ No. Only adds labels to Plex metadata.
 At least 5 for meaningful recommendations.
 
 **Q: Can users see each other's recommendations?**
-Collections are visible to all, but each is personalized and clearly labeled.
+No! By default, private collections are enabled—each user only sees their own recommendations, not other users'. The admin/server owner sees all (Plex limitation). Disable with `private_collections: false` in tuning.yml if you want shared visibility.
 
 **Q: What about new users with no history?**
 They're skipped until they have enough watch history.

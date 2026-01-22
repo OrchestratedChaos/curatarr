@@ -14,7 +14,7 @@ tmdb:
 
 # Users and Preferences
 users:
-  list: user1, user2, user3  # Plex usernames (comma-separated)
+  list: user1, user2, kids  # Plex usernames (comma-separated)
   preferences:
     user1:
       display_name: User One
@@ -25,6 +25,15 @@ users:
         - disney_plus
     user2:
       display_name: User Two
+      max_rating: PG-13  # Filter out R and NC-17 movies
+    kids:
+      display_name: Kids
+      exclude_genres:
+        - horror
+        - thriller
+      max_rating: PG  # Only G and PG content
+      # Content ratings: Movies (G < PG < PG-13 < R < NC-17)
+      #                  TV (TV-Y < TV-Y7 < TV-G < TV-PG < TV-14 < TV-MA)
 
 # General Settings
 general:

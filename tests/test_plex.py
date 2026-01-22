@@ -13,7 +13,8 @@ from utils.plex import (
     get_current_users,
     get_excluded_genres_for_user,
     find_plex_movie,
-    get_library_imdb_ids
+    get_library_imdb_ids,
+    apply_user_label_restrictions
 )
 
 
@@ -1780,3 +1781,330 @@ class TestUpdatePlexCollectionSort:
 
         assert result is True
         mock_logger.warning.assert_called_once()
+
+
+class TestApplyUserLabelRestrictions:
+    """Tests for apply_user_label_restrictions() function."""
+
+    @patch('utils.plex.requests.put')
+    @patch('utils.plex.requests.get')
+    @patch('utils.plex.MyPlexAccount')
+    def test_applies_exclude_restrictions_to_users(self, mock_account_class, mock_get, mock_put):
+        """Test that exclude restrictions are applied to each user."""
+        from utils.plex import apply_user_label_restrictions
+
+        # Setup mock account
+        mock_account = Mock()
+        mock_account.username = 'AdminUser'
+        mock_account_class.return_value = mock_account
+
+        # Setup mock GET response for users list (XML)
+        mock_get_response = Mock()
+        mock_get_response.content = b'''<MediaContainer>
+            <User id="123" title="Jason" username="jason"/>
+            <User id="456" title="Sarah" username="sarah"/>
+        </MediaContainer>'''
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
+
+        # Setup mock PUT response
+        mock_put_response = Mock()
+        mock_put_response.raise_for_status = Mock()
+        mock_put.return_value = mock_put_response
+
+        config = {
+            'plex': {
+                'token': 'test_token',
+                'server_name': 'MyServer'
+            }
+        }
+
+        all_user_labels = {
+            'Jason': 'Recommended_Jason',
+            'Sarah': 'Recommended_Sarah'
+        }
+
+        result = apply_user_label_restrictions(config, all_user_labels)
+
+        assert result is True
+        # Should be called twice (once for each non-admin user)
+        assert mock_put.call_count == 2
+
+    @patch('utils.plex.requests.put')
+    @patch('utils.plex.requests.get')
+    @patch('utils.plex.MyPlexAccount')
+    def test_skips_admin_user(self, mock_account_class, mock_get, mock_put):
+        """Test that admin user is skipped (can't have restrictions)."""
+        from utils.plex import apply_user_label_restrictions
+
+        mock_account = Mock()
+        mock_account.username = 'AdminUser'
+        mock_account_class.return_value = mock_account
+
+        mock_get_response = Mock()
+        mock_get_response.content = b'''<MediaContainer>
+            <User id="123" title="OtherUser" username="otheruser"/>
+        </MediaContainer>'''
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
+
+        mock_put_response = Mock()
+        mock_put_response.raise_for_status = Mock()
+        mock_put.return_value = mock_put_response
+
+        config = {
+            'plex': {
+                'token': 'test_token'
+            }
+        }
+
+        all_user_labels = {
+            'AdminUser': 'Recommended_AdminUser',
+            'OtherUser': 'Recommended_OtherUser'
+        }
+
+        result = apply_user_label_restrictions(config, all_user_labels)
+
+        assert result is True
+        # Should only be called once (for OtherUser, not AdminUser)
+        mock_put.assert_called_once()
+
+    @patch('utils.plex.requests.put')
+    @patch('utils.plex.requests.get')
+    @patch('utils.plex.MyPlexAccount')
+    def test_returns_false_for_unknown_user(self, mock_account_class, mock_get, mock_put):
+        """Test that unknown users result in partial failure."""
+        from utils.plex import apply_user_label_restrictions
+
+        mock_account = Mock()
+        mock_account.username = 'AdminUser'
+        mock_account_class.return_value = mock_account
+
+        mock_get_response = Mock()
+        mock_get_response.content = b'''<MediaContainer>
+            <User id="123" title="KnownUser" username="knownuser"/>
+        </MediaContainer>'''
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
+
+        mock_put_response = Mock()
+        mock_put_response.raise_for_status = Mock()
+        mock_put.return_value = mock_put_response
+
+        config = {
+            'plex': {
+                'token': 'test_token'
+            }
+        }
+
+        all_user_labels = {
+            'KnownUser': 'Recommended_KnownUser',
+            'UnknownUser': 'Recommended_UnknownUser'
+        }
+
+        result = apply_user_label_restrictions(config, all_user_labels)
+
+        # Returns False because one user wasn't found
+        assert result is False
+        # But should still apply restrictions for KnownUser
+        mock_put.assert_called_once()
+
+    @patch('utils.plex.MyPlexAccount')
+    def test_handles_plex_api_error(self, mock_account_class):
+        """Test that PlexApiException is handled gracefully."""
+        from utils.plex import apply_user_label_restrictions
+
+        mock_account_class.side_effect = plexapi.exceptions.PlexApiException("Auth failed")
+
+        config = {
+            'plex': {
+                'token': 'test_token'
+            }
+        }
+
+        # Need multiple users to trigger API call (single user returns early)
+        all_user_labels = {
+            'TestUser': 'Recommended_TestUser',
+            'OtherUser': 'Recommended_OtherUser'
+        }
+
+        result = apply_user_label_restrictions(config, all_user_labels)
+
+        assert result is False
+
+    @patch('utils.plex.MyPlexAccount')
+    def test_returns_true_for_single_user(self, mock_account_class):
+        """Test that single user returns True (nothing to hide)."""
+        from utils.plex import apply_user_label_restrictions
+
+        config = {
+            'plex': {
+                'token': 'test_token'
+            }
+        }
+
+        # Only one user - no restrictions needed
+        all_user_labels = {'Jason': 'Recommended_Jason'}
+
+        result = apply_user_label_restrictions(config, all_user_labels)
+
+        assert result is True
+        # MyPlexAccount should not even be instantiated
+        mock_account_class.assert_not_called()
+
+    @patch('utils.plex.MyPlexAccount')
+    def test_returns_true_for_empty_labels(self, mock_account_class):
+        """Test that empty labels dict returns True."""
+        from utils.plex import apply_user_label_restrictions
+
+        config = {
+            'plex': {
+                'token': 'test_token'
+            }
+        }
+
+        result = apply_user_label_restrictions(config, {})
+
+        assert result is True
+        mock_account_class.assert_not_called()
+
+    @patch('utils.plex.requests.put')
+    @patch('utils.plex.requests.get')
+    @patch('utils.plex.MyPlexAccount')
+    def test_case_insensitive_username_match(self, mock_account_class, mock_get, mock_put):
+        """Test that username matching is case insensitive."""
+        from utils.plex import apply_user_label_restrictions
+
+        mock_account = Mock()
+        mock_account.username = 'AdminUser'
+        mock_account_class.return_value = mock_account
+
+        mock_get_response = Mock()
+        mock_get_response.content = b'''<MediaContainer>
+            <User id="123" title="TestUser" username="testuser"/>
+        </MediaContainer>'''
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
+
+        mock_put_response = Mock()
+        mock_put_response.raise_for_status = Mock()
+        mock_put.return_value = mock_put_response
+
+        config = {
+            'plex': {
+                'token': 'test_token'
+            }
+        }
+
+        # Use lowercase in the labels dict
+        all_user_labels = {
+            'testuser': 'Recommended_testuser',
+            'anotheruser': 'Recommended_anotheruser'
+        }
+
+        result = apply_user_label_restrictions(config, all_user_labels)
+
+        # Should still match TestUser despite case difference
+        # Returns False because 'anotheruser' wasn't found, but TestUser was processed
+        assert result is False
+        mock_put.assert_called_once()
+
+
+class TestContentRatingFilter:
+    """Tests for content rating filter functions."""
+
+    def test_get_max_rating_for_user_returns_rating(self):
+        """Test getting max_rating for a user who has one configured."""
+        from utils.plex import get_max_rating_for_user
+
+        user_prefs = {
+            'kids': {'display_name': 'Kids', 'max_rating': 'PG'},
+            'teen': {'display_name': 'Teen', 'max_rating': 'PG-13'}
+        }
+
+        assert get_max_rating_for_user(user_prefs, 'kids') == 'PG'
+        assert get_max_rating_for_user(user_prefs, 'teen') == 'PG-13'
+
+    def test_get_max_rating_for_user_returns_none_when_not_set(self):
+        """Test getting max_rating returns None when not configured."""
+        from utils.plex import get_max_rating_for_user
+
+        user_prefs = {
+            'adult': {'display_name': 'Adult'}  # No max_rating
+        }
+
+        assert get_max_rating_for_user(user_prefs, 'adult') is None
+
+    def test_get_max_rating_for_user_returns_none_for_unknown_user(self):
+        """Test getting max_rating returns None for unknown user."""
+        from utils.plex import get_max_rating_for_user
+
+        user_prefs = {'kids': {'max_rating': 'PG'}}
+
+        assert get_max_rating_for_user(user_prefs, 'unknown') is None
+        assert get_max_rating_for_user(user_prefs, None) is None
+
+    def test_is_rating_allowed_movie_hierarchy(self):
+        """Test movie rating hierarchy: G < PG < PG-13 < R < NC-17."""
+        from utils.plex import is_rating_allowed
+
+        # PG-13 max rating
+        assert is_rating_allowed('G', 'PG-13', 'movie') is True
+        assert is_rating_allowed('PG', 'PG-13', 'movie') is True
+        assert is_rating_allowed('PG-13', 'PG-13', 'movie') is True
+        assert is_rating_allowed('R', 'PG-13', 'movie') is False
+        assert is_rating_allowed('NC-17', 'PG-13', 'movie') is False
+
+        # PG max rating
+        assert is_rating_allowed('G', 'PG', 'movie') is True
+        assert is_rating_allowed('PG', 'PG', 'movie') is True
+        assert is_rating_allowed('PG-13', 'PG', 'movie') is False
+        assert is_rating_allowed('R', 'PG', 'movie') is False
+
+    def test_is_rating_allowed_tv_hierarchy(self):
+        """Test TV rating hierarchy: TV-Y < TV-Y7 < TV-G < TV-PG < TV-14 < TV-MA."""
+        from utils.plex import is_rating_allowed
+
+        # TV-PG max rating
+        assert is_rating_allowed('TV-Y', 'TV-PG', 'tv') is True
+        assert is_rating_allowed('TV-Y7', 'TV-PG', 'tv') is True
+        assert is_rating_allowed('TV-G', 'TV-PG', 'tv') is True
+        assert is_rating_allowed('TV-PG', 'TV-PG', 'tv') is True
+        assert is_rating_allowed('TV-14', 'TV-PG', 'tv') is False
+        assert is_rating_allowed('TV-MA', 'TV-PG', 'tv') is False
+
+        # TV-14 max rating
+        assert is_rating_allowed('TV-PG', 'TV-14', 'tv') is True
+        assert is_rating_allowed('TV-14', 'TV-14', 'tv') is True
+        assert is_rating_allowed('TV-MA', 'TV-14', 'tv') is False
+
+    def test_is_rating_allowed_case_insensitive(self):
+        """Test rating comparison is case insensitive."""
+        from utils.plex import is_rating_allowed
+
+        assert is_rating_allowed('pg-13', 'PG-13', 'movie') is True
+        assert is_rating_allowed('PG-13', 'pg-13', 'movie') is True
+        assert is_rating_allowed('tv-pg', 'TV-PG', 'tv') is True
+
+    def test_is_rating_allowed_no_max_rating(self):
+        """Test that no max_rating allows all content."""
+        from utils.plex import is_rating_allowed
+
+        assert is_rating_allowed('R', None, 'movie') is True
+        assert is_rating_allowed('NC-17', None, 'movie') is True
+        assert is_rating_allowed('TV-MA', None, 'tv') is True
+
+    def test_is_rating_allowed_no_content_rating(self):
+        """Test that missing content_rating allows the content."""
+        from utils.plex import is_rating_allowed
+
+        assert is_rating_allowed(None, 'PG-13', 'movie') is True
+        assert is_rating_allowed('', 'PG-13', 'movie') is True
+
+    def test_is_rating_allowed_unknown_rating(self):
+        """Test that unknown ratings (NR, Unrated) are allowed."""
+        from utils.plex import is_rating_allowed
+
+        assert is_rating_allowed('NR', 'PG-13', 'movie') is True
+        assert is_rating_allowed('Unrated', 'PG', 'movie') is True
+        assert is_rating_allowed('Not Rated', 'R', 'movie') is True

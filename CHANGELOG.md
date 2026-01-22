@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.15] - 2026-01-21
+
+### Added
+- **Per-user content rating filter**: Each user can set a `max_rating` in their preferences (e.g., `PG-13` for movies, `TV-14` for TV). Recommendations above that rating are filtered out. Configure in `users.preferences.username.max_rating`
+
+### Fixed
+- **Private collections now fully working**: Collections are hidden from other users while items remain visible to everyone. Uses separate label prefixes: `PrivateCollection_*` for collections (excluded), `Recommended_*` for items (not excluded). Multiple users can be recommended the same item and all will see it in their library
+
+### Removed
+- Dead import `from urllib.parse import quote` in `utils/plex.py`
+
+## [2.8.14] - 2026-01-21
+
+### Added
+- **Private collections** (enabled by default): Each user only sees their own recommendations, not other users'. Uses Plex's exclude-based label restrictions. Disable with `private_collections: false` in tuning.yml. Note: Admin always sees all (Plex limitation), restrictions work on Library tab (Home/Recommended has a known Plex bug)
+
 ## [2.8.13] - 2026-01-20
 
 ### Added
