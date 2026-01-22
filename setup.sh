@@ -453,6 +453,13 @@ tmdb:
 
 users:
   list: $USERS_LIST
+  # Per-user preferences (optional)
+  # preferences:
+  #   username:
+  #     display_name: Display Name
+  #     exclude_genres: [horror, thriller]
+  #     max_rating: PG-13  # Movies: G, PG, PG-13, R, NC-17
+  #                        # TV: TV-Y, TV-Y7, TV-G, TV-PG, TV-14, TV-MA
 
 general:
   plex_only: true
