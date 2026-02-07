@@ -788,7 +788,7 @@ def get_excluded_genres_for_user(exclude_genres: set, user_preferences: dict, us
     """
     excluded = set(exclude_genres)
 
-    if username and username in user_preferences:
+    if username and user_preferences and username in user_preferences:
         user_prefs = user_preferences[username]
         user_excluded = user_prefs.get('exclude_genres', [])
         excluded.update([g.lower() for g in user_excluded])
@@ -815,7 +815,7 @@ def get_max_rating_for_user(user_preferences: dict, username: str = None) -> Opt
     Returns:
         Content rating string (e.g., 'PG-13', 'TV-14') or None if no restriction
     """
-    if not username or username not in user_preferences:
+    if not username or not user_preferences or username not in user_preferences:
         return None
 
     user_prefs = user_preferences[username]

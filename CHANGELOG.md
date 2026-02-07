@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.16] - 2026-02-06
+
+### Fixed
+- **TypeError when user_preferences is None** (#140): Fixed crash when `users.preferences` config key exists but resolves to `None` (e.g., empty YAML value). Added null-safety to `get_excluded_genres_for_user`, `get_max_rating_for_user`, and collection display name lookup
+
 ## [2.8.15] - 2026-01-21
 
 ### Added
