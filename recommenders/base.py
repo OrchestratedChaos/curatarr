@@ -437,7 +437,7 @@ class BaseRecommender(ABC):
         ] if exclude_genre_str else []
 
         # Load user preferences
-        self.user_preferences = self.config.get('users', {}).get('preferences', {})
+        self.user_preferences = self.config.get('users', {}).get('preferences', {}) or {}
 
         # Load weights
         weights_config = self.config.get('weights', {})
@@ -896,7 +896,7 @@ class BaseRecommender(ABC):
             return False
 
         username = label_name.replace('Recommended_', '')
-        if username in self.user_preferences and 'display_name' in self.user_preferences[username]:
+        if self.user_preferences and username in self.user_preferences and 'display_name' in self.user_preferences[username]:
             display_name = self.user_preferences[username]['display_name']
         else:
             display_name = username.capitalize()
