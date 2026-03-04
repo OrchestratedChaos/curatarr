@@ -83,7 +83,11 @@ function Check-ForUpdates {
     param($pythonCmd)
 
     if (Test-Path "config/config.yml") {
-        $autoUpdate = & $pythonCmd -c "import yaml; c=yaml.safe_load(open('config/config.yml')); print(c.get('general', {}).get('auto_update', False))" 2>$null
+        try {
+            $autoUpdate = & $pythonCmd -c "import yaml; c=yaml.safe_load(open('config/config.yml')); print(c.get('general', {}).get('auto_update', False))" 2>$null
+        } catch {
+            $autoUpdate = "False"
+        }
 
         if ($autoUpdate -eq "True") {
             Write-Cyan "Checking for updates..."
