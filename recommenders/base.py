@@ -914,7 +914,7 @@ class BaseRecommender(ABC):
         Returns:
             True if collection was created/updated, False otherwise.
         """
-        if not self.config.get('collections', {}).get('add_label'):
+        if not self.config.get('collections', {}).get('add_label', True):
             print(f"{YELLOW}Skipping collection creation (add_label is disabled in config){RESET}")
             return False
 
