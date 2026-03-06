@@ -529,7 +529,7 @@ python -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
 - Plex connection failed → Check URL and token
 - No recommendations → User needs more watch history
 - "Cache outdated" message → Normal after updates, rebuilds automatically
-- Want to disable auto-update → Set `general.auto_update: false` in config/config.yml
+
 
 ### Docker
 ```bash

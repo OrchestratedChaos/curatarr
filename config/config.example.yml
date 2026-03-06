@@ -38,8 +38,9 @@ users:
 # General Settings
 general:
   plex_only: true  # Only recommend from Plex library
-  log_retention_days: 7
   auto_update: true
+  log_retention_days: 7
+
 
 # Huntarr: Find missing/upcoming movies from collections
 huntarr:

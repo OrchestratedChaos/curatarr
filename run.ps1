@@ -76,6 +76,7 @@ function Check-Dependencies {
     return $pythonCmd
 }
 
+
 # ------------------------------------------------------------------------
 # AUTO-UPDATE FROM GITHUB
 # ------------------------------------------------------------------------
@@ -93,10 +94,10 @@ function Check-ForUpdates {
             Write-Cyan "Checking for updates..."
 
             if (Test-Path ".git") {
-                # Fetch latest from remote
                 git fetch origin main --quiet 2>$null
                 if ($LASTEXITCODE -ne 0) {
                     Write-Yellow "Could not check for updates (network error)"
+                    Write-Host ""
                     return
                 }
 
@@ -107,7 +108,7 @@ function Check-ForUpdates {
                     Write-Yellow "Update available! Pulling latest changes..."
 
                     git stash --quiet 2>$null
-                    $pullResult = git pull origin main --quiet 2>&1
+                    git pull origin main --quiet 2>&1 | Out-Null
 
                     if ($LASTEXITCODE -eq 0) {
                         Write-Green "OK Updated successfully!"
@@ -117,8 +118,18 @@ function Check-ForUpdates {
                         & $MyInvocation.MyCommand.Path @PSBoundParameters
                         exit
                     } else {
-                        Write-Red "Update failed, continuing with current version"
-                        git stash pop --quiet 2>$null
+                        Write-Yellow "Pull failed (history changed), resetting to latest..."
+                        git stash drop --quiet 2>$null
+                        git reset --hard origin/main 2>$null
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Green "OK Reset to latest successfully!"
+                            Write-Yellow "Restarting with updated code..."
+                            Write-Host ""
+                            & $MyInvocation.MyCommand.Path @PSBoundParameters
+                            exit
+                        } else {
+                            Write-Red "Update failed, continuing with current version"
+                        }
                     }
                 } else {
                     Write-Green "OK Already up to date"
