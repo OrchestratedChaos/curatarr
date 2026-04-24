@@ -7,4 +7,4 @@ plexapi>=4.13.0
 requests>=2.28.0
 
 # YAML configuration parser
-pyyaml>=6.0
+pyyaml>=6.0.3
