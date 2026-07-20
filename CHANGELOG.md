@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.19] - 2026-07-20
+
+### Fixed
+- **Renaming a Plex account no longer resets user settings** (#153): Per-user preferences, cache files, and Plex labels/collections were keyed on the mutable Plex username instead of the stable Plex account id. Renaming an account in Plex created what looked like a brand-new user, dropping `display_name`/`exclude_genres`/`max_rating` back to defaults and orphaning the old collection. Curatarr now tracks a Plex account id -> username map (`cache/user_id_map.json`) and, on detecting a rename, migrates `users.preferences.<name>` and `users.list` in `config.yml`, renames the affected cache files, and cleans up the stale collection under the old name. Falls back to today's behavior if a stable id can't be resolved
+
 ## [2.8.16] - 2026-02-06
 
 ### Fixed
