@@ -27,7 +27,6 @@ from utils import (
     TMDB_RATE_LIMIT_DELAY,
     DEFAULT_LIMIT_PLEX_RESULTS,
     WEIGHT_SUM_TOLERANCE,
-    PLEX_REQUEST_TIMEOUT,
     TIER_SAFE_PERCENT, TIER_DIVERSE_PERCENT, TIER_WILDCARD_PERCENT,
     GREEN, YELLOW, CYAN, RED, RESET,
     load_config,
@@ -485,39 +484,6 @@ class BaseRecommender(ABC):
         self.watched_ids = set()
         self.watched_data_counters = self._get_watched_data()
         self._save_watched_cache()
-
-    def _get_plex_user_ids(self) -> List[str]:
-        """Resolve configured Plex usernames to their user IDs."""
-        user_ids = []
-        try:
-            users_response = requests.get(
-                f"{self.config['plex_users']['url']}/api/v2",
-                params={
-                    'apikey': self.config['plex_users']['api_key'],
-                    'cmd': 'get_users'
-                },
-                timeout=PLEX_REQUEST_TIMEOUT
-            )
-            users_response.raise_for_status()
-            plex_users = users_response.json()['response']['data']
-
-            users_to_match = [self.single_user] if self.single_user else self.users['plex_users']
-
-            for username in users_to_match:
-                user = next(
-                    (u for u in plex_users
-                     if u['username'].lower() == username.lower()),
-                    None
-                )
-                if user:
-                    user_ids.append(str(user['user_id']))
-                else:
-                    log_error(f"User '{username}' not found in Plex accounts!")
-
-        except (requests.RequestException, KeyError, ValueError) as e:
-            log_error(f"Error resolving Plex users: {e}")
-
-        return user_ids
 
     def _get_managed_users_watched_data(self) -> Dict:
         """Get watched data from managed Plex users."""

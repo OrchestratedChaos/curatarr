@@ -22,6 +22,7 @@ from utils import (
     get_plex_account_ids, get_watched_show_count,
     fetch_plex_watch_history_shows,
     fetch_show_completion_data, identify_dropped_shows,
+    fetch_tautulli_show_watched_data, merge_show_watched_data,
     log_warning, log_error,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
     calculate_similarity_score,
@@ -273,6 +274,22 @@ class PlexTVRecommender(BaseRecommender):
         watched_ids, show_timestamps = fetch_plex_watch_history_shows(
             self.config, account_ids, shows_section, return_timestamps=True
         )
+
+        # Optionally merge in Tautulli watch history, weighted the same way as
+        # Plex history. Covers users whose Plex-native history is thin (e.g.
+        # shared/external users). Falls back to Plex-only if disabled,
+        # unreachable, or no users could be mapped.
+        if self.config.get('tautulli', {}).get('enabled', False):
+            tautulli_ids, tautulli_timestamps = fetch_tautulli_show_watched_data(self.config, account_ids)
+            if tautulli_ids:
+                plex_count = len(watched_ids)
+                watched_ids, show_timestamps = merge_show_watched_data(
+                    watched_ids, show_timestamps, tautulli_ids, tautulli_timestamps
+                )
+                logger.info(
+                    f"Tautulli: merged {len(tautulli_ids)} watched shows "
+                    f"({len(watched_ids)} unique watched shows, was {plex_count} from Plex alone)"
+                )
 
         # Store watched show IDs
         self.watched_ids.update(watched_ids)
