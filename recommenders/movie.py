@@ -24,6 +24,7 @@ from utils import (
     RATING_MULTIPLIER_2_STAR,
     RATING_MULTIPLIER_UNRATED,
     get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
+    fetch_tautulli_movie_history, merge_movie_history,
     log_warning, log_error,
     get_negative_multiplier,
     calculate_recency_multiplier, calculate_rewatch_multiplier,
@@ -276,6 +277,20 @@ class PlexMovieRecommender(BaseRecommender):
 
         # Fetch watch history using the history API (properly per-user)
         history_items, _ = fetch_plex_watch_history_movies(self.config, account_ids, movies_section)
+
+        # Optionally merge in Tautulli watch history, weighted the same way as
+        # Plex history. Covers users whose Plex-native history is thin (e.g.
+        # shared/external users). Falls back to Plex-only if disabled,
+        # unreachable, or no users could be mapped.
+        if self.config.get('tautulli', {}).get('enabled', False):
+            tautulli_items = fetch_tautulli_movie_history(self.config, account_ids)
+            if tautulli_items:
+                plex_unique = len({str(item.ratingKey) for item in history_items})
+                history_items = merge_movie_history(history_items, tautulli_items)
+                logger.info(
+                    f"Tautulli: merged {len(tautulli_items)} history entries "
+                    f"({len(history_items)} unique watched movies, was {plex_unique} from Plex alone)"
+                )
 
         # Process history items to extract IDs, dates, and ratings
         for item in history_items:

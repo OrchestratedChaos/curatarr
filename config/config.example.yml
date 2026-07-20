@@ -50,6 +50,17 @@ huntarr:
 logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR
 
+# Optional: Tautulli watch-history integration
+# Supplements Plex's own watch history with history from Tautulli, weighted
+# the same way. Mainly useful for shared/external users whose Plex-native
+# history retention is thin. Users are matched to Plex accounts by email
+# (falls back to username). Disabled by default; if unreachable or a user
+# can't be matched, Curatarr silently falls back to Plex-only history.
+tautulli:
+  enabled: false
+  url: http://YOUR_TAUTULLI_URL:8181  # e.g. http://192.168.1.10:8181
+  api_key: YOUR_TAUTULLI_API_KEY  # Settings -> Web Interface -> API Key
+
 # =============================================================================
 # OPTIONAL MODULE FILES (in this directory)
 # =============================================================================

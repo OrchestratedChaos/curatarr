@@ -2,6 +2,14 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.20] - 2026-07-20
+
+### Added
+- **Optional Tautulli watch-history integration** (#150): When `tautulli.enabled` is set, Curatarr supplements each user's Plex watch history with history pulled from a Tautulli instance, weighted the same way as Plex history (recency decay, ratings, rewatch). Mainly useful for shared/external Plex users whose Plex-native history retention is thin. Users are matched to Plex accounts by email, falling back to username. Disabled by default; if Tautulli is unreachable or a user can't be mapped, Curatarr silently falls back to Plex-only history (no regression). Configure via the new `tautulli` block in `config.yml` (`enabled`, `url`, `api_key`)
+
+### Removed
+- Dead `_get_plex_user_ids` scaffolding in `recommenders/base.py` (unused, 0 callers) - superseded by `utils/tautulli.py`'s user-mapping logic
+
 ## [2.8.19] - 2026-07-20
 
 ### Fixed

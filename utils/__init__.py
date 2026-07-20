@@ -246,6 +246,20 @@ from .simkl import (
     get_authenticated_simkl_client,
 )
 
+# Tautulli utilities
+from .tautulli import (
+    TautulliAPIError,
+    TautulliClient,
+    TautulliHistoryItem,
+    create_tautulli_client,
+    build_user_map,
+    map_users,
+    fetch_tautulli_movie_history,
+    fetch_tautulli_show_watched_data,
+    merge_movie_history,
+    merge_show_watched_data,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -407,4 +421,15 @@ __all__ = [
     'SimklClient',
     'create_simkl_client',
     'get_authenticated_simkl_client',
+    # Tautulli
+    'TautulliAPIError',
+    'TautulliClient',
+    'TautulliHistoryItem',
+    'create_tautulli_client',
+    'build_user_map',
+    'map_users',
+    'fetch_tautulli_movie_history',
+    'fetch_tautulli_show_watched_data',
+    'merge_movie_history',
+    'merge_show_watched_data',
 ]
