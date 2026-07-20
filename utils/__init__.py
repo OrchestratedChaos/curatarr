@@ -176,6 +176,20 @@ from .plex import (
     apply_user_label_restrictions,
 )
 
+# User identity migration utilities (stable Plex account id -> username)
+from .user_migration import (
+    USER_ID_MAP_FILENAME,
+    load_user_id_map,
+    save_user_id_map,
+    get_live_plex_user_map,
+    detect_renamed_users,
+    rename_user_preferences_key,
+    rename_user_in_users_list,
+    migrate_cache_files,
+    cleanup_orphaned_user_collections,
+    migrate_renamed_plex_users,
+)
+
 # Trakt utilities
 from .trakt import (
     TRAKT_RATE_LIMIT_DELAY,
@@ -347,6 +361,17 @@ __all__ = [
     'extract_rating',
     'get_library_imdb_ids',
     'get_plex_user_ids',
+    # User migration (stable Plex id -> username)
+    'USER_ID_MAP_FILENAME',
+    'load_user_id_map',
+    'save_user_id_map',
+    'get_live_plex_user_map',
+    'detect_renamed_users',
+    'rename_user_preferences_key',
+    'rename_user_in_users_list',
+    'migrate_cache_files',
+    'cleanup_orphaned_user_collections',
+    'migrate_renamed_plex_users',
     # Trakt
     'TRAKT_RATE_LIMIT_DELAY',
     'TraktAuthError',

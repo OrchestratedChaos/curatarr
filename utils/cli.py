@@ -21,6 +21,7 @@ from .display import (
     setup_logging,
 )
 from .helpers import cleanup_old_logs, get_project_root
+from .user_migration import migrate_renamed_plex_users
 
 
 def get_users_from_config(config: Dict) -> List[str]:
@@ -207,6 +208,16 @@ def run_recommender_main(
     try:
         with open(config_path, 'r') as f:
             root_config = yaml.safe_load(f)
+
+        # Detect Plex account renames (keyed by stable id) and migrate any
+        # affected preferences/cache files/collections before this run
+        # processes users. Best-effort - never blocks a normal run.
+        cache_dir = os.path.join(project_root, 'cache')
+        renamed_users = migrate_renamed_plex_users(root_config, config_path, cache_dir)
+        if renamed_users:
+            with open(config_path, 'r') as f:
+                root_config = yaml.safe_load(f)
+
         base_config = adapt_config_func(root_config)
     except Exception as e:
         log_error(f"Could not load config.yml from project root: {e}")

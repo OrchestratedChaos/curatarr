@@ -454,6 +454,7 @@ class TestRunRecommenderMain:
 
         assert exc_info.value.code == 1
 
+    @patch('utils.cli.migrate_renamed_plex_users')
     @patch('utils.cli.print_runtime')
     @patch('utils.cli.resolve_admin_username')
     @patch('utils.cli.setup_logging')
@@ -463,12 +464,13 @@ class TestRunRecommenderMain:
     @patch('utils.cli.argparse.ArgumentParser.parse_args')
     def test_exits_if_no_users_configured(
         self, mock_parse_args, mock_root, mock_open, mock_yaml,
-        mock_setup_log, mock_resolve, mock_print
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test exits with code 1 if no users configured."""
         mock_parse_args.return_value = Mock(username=None, debug=False)
         mock_root.return_value = '/fake/root'
         mock_yaml.return_value = {'plex': {'token': 'abc'}}  # No users
+        mock_migrate.return_value = {}
 
         mock_adapt = Mock(return_value={'plex': {'token': 'abc'}, 'general': {}})
         mock_process = Mock()
@@ -479,6 +481,7 @@ class TestRunRecommenderMain:
 
         assert exc_info.value.code == 1
 
+    @patch('utils.cli.migrate_renamed_plex_users')
     @patch('utils.cli.print_runtime')
     @patch('utils.cli.resolve_admin_username')
     @patch('utils.cli.setup_logging')
@@ -488,7 +491,7 @@ class TestRunRecommenderMain:
     @patch('utils.cli.argparse.ArgumentParser.parse_args')
     def test_processes_each_user(
         self, mock_parse_args, mock_root, mock_open, mock_yaml,
-        mock_setup_log, mock_resolve, mock_print
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test calls process_func for each configured user."""
         mock_parse_args.return_value = Mock(username=None, debug=False)
@@ -497,6 +500,7 @@ class TestRunRecommenderMain:
             'plex': {'token': 'abc'},
             'users': {'list': 'alice, bob'}
         }
+        mock_migrate.return_value = {}
 
         mock_adapt = Mock(return_value={
             'plex': {'token': 'abc'},
@@ -511,6 +515,7 @@ class TestRunRecommenderMain:
 
         assert mock_process.call_count == 2
 
+    @patch('utils.cli.migrate_renamed_plex_users')
     @patch('utils.cli.print_runtime')
     @patch('utils.cli.resolve_admin_username')
     @patch('utils.cli.setup_logging')
@@ -520,7 +525,7 @@ class TestRunRecommenderMain:
     @patch('utils.cli.argparse.ArgumentParser.parse_args')
     def test_single_user_mode(
         self, mock_parse_args, mock_root, mock_open, mock_yaml,
-        mock_setup_log, mock_resolve, mock_print
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test processes only specified user in single user mode."""
         mock_parse_args.return_value = Mock(username='bob', debug=False)
@@ -529,6 +534,7 @@ class TestRunRecommenderMain:
             'plex': {'token': 'abc'},
             'users': {'list': 'alice, bob, charlie'}
         }
+        mock_migrate.return_value = {}
 
         mock_adapt = Mock(return_value={
             'plex': {'token': 'abc'},
@@ -543,6 +549,7 @@ class TestRunRecommenderMain:
 
         assert mock_process.call_count == 1
 
+    @patch('utils.cli.migrate_renamed_plex_users')
     @patch('utils.cli.print_runtime')
     @patch('utils.cli.resolve_admin_username')
     @patch('utils.cli.setup_logging')
@@ -552,7 +559,7 @@ class TestRunRecommenderMain:
     @patch('utils.cli.argparse.ArgumentParser.parse_args')
     def test_enables_debug_logging(
         self, mock_parse_args, mock_root, mock_open, mock_yaml,
-        mock_setup_log, mock_resolve, mock_print
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test enables debug logging when --debug flag is set."""
         mock_parse_args.return_value = Mock(username=None, debug=True)
@@ -561,6 +568,7 @@ class TestRunRecommenderMain:
             'plex': {'token': 'abc'},
             'users': {'list': 'alice'}
         }
+        mock_migrate.return_value = {}
 
         mock_adapt = Mock(return_value={
             'plex': {'token': 'abc'},
@@ -577,3 +585,67 @@ class TestRunRecommenderMain:
         mock_setup_log.assert_called_once()
         call_kwargs = mock_setup_log.call_args
         assert call_kwargs[1]['debug'] is True
+
+    @patch('utils.cli.migrate_renamed_plex_users')
+    @patch('utils.cli.print_runtime')
+    @patch('utils.cli.resolve_admin_username')
+    @patch('utils.cli.setup_logging')
+    @patch('utils.cli.yaml.safe_load')
+    @patch('builtins.open', create=True)
+    @patch('utils.cli.get_project_root')
+    @patch('utils.cli.argparse.ArgumentParser.parse_args')
+    def test_calls_user_migration_before_adapting_config(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml,
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """Test run_recommender_main invokes rename migration and re-reads
+        config.yml when a rename was migrated, so downstream processing
+        sees the updated usernames."""
+        mock_parse_args.return_value = Mock(username=None, debug=False)
+        mock_root.return_value = '/fake/root'
+        mock_yaml.side_effect = [
+            {'plex': {'token': 'abc'}, 'users': {'list': 'oldname'}},
+            {'plex': {'token': 'abc'}, 'users': {'list': 'newname'}},
+        ]
+        mock_migrate.return_value = {'oldname': 'newname'}
+
+        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, 'general': {}})
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main('Movie', 'Test', mock_adapt, mock_process)
+
+        mock_migrate.assert_called_once()
+        # Config was re-read after migration, so the adapted config (and
+        # therefore the processed user) reflects the new username.
+        assert mock_yaml.call_count == 2
+        mock_process.assert_called_once()
+        assert mock_process.call_args[0][3] == 'newname'
+
+    @patch('utils.cli.migrate_renamed_plex_users')
+    @patch('utils.cli.print_runtime')
+    @patch('utils.cli.resolve_admin_username')
+    @patch('utils.cli.setup_logging')
+    @patch('utils.cli.yaml.safe_load')
+    @patch('builtins.open', create=True)
+    @patch('utils.cli.get_project_root')
+    @patch('utils.cli.argparse.ArgumentParser.parse_args')
+    def test_skips_config_reload_when_no_renames(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml,
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """Test config.yml is only read once when no rename was detected."""
+        mock_parse_args.return_value = Mock(username=None, debug=False)
+        mock_root.return_value = '/fake/root'
+        mock_yaml.return_value = {'plex': {'token': 'abc'}, 'users': {'list': 'alice'}}
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, 'general': {}})
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main('Movie', 'Test', mock_adapt, mock_process)
+
+        assert mock_yaml.call_count == 1
