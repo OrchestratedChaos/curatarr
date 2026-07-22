@@ -19,6 +19,12 @@ Set-Location $ScriptDir
 
 $DebugFlag = if ($Debug) { "--debug" } else { "" }
 
+# Trust anchor for signed release verification. Fingerprint is pinned in
+# this script (not just in the allowed_signers file) so a tampered
+# allowed_signers file alone cannot widen trust. See RELEASING.md.
+$script:ReleaseSignerFingerprint = "SHA256:yrqOXw6sWZGPKON9mJJvjhsBKTgMzsn3VTGdNL5mxKU"
+$script:AllowedSignersFile = Join-Path $ScriptDir ".github/allowed_signers"
+
 # ------------------------------------------------------------------------
 # DEPENDENCY CHECKING AND INSTALLATION
 # ------------------------------------------------------------------------
@@ -60,16 +66,19 @@ function Check-Dependencies {
     }
     Write-Green "OK pip found"
 
-    # Install/update Python requirements
+    # Install/update Python requirements (versions are pinned in
+    # requirements.txt; no --upgrade so pinned versions are respected)
     if (Test-Path "requirements.txt") {
         Write-Cyan "Installing Python dependencies..."
-        & $pythonCmd -m pip install -r requirements.txt --quiet --upgrade 2>&1 | Out-Null
+        & $pythonCmd -m pip install -r requirements.txt --quiet 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Red "X Failed to install Python dependencies"
             Write-Host "Try running manually: python -m pip install -r requirements.txt"
             exit 1
         }
         Write-Green "OK All dependencies installed"
+        # TODO follow-up: switch to `pip install --require-hashes` once
+        # requirements.txt carries per-package hashes.
     }
 
     Write-Host ""
@@ -77,8 +86,84 @@ function Check-Dependencies {
 }
 
 # ------------------------------------------------------------------------
-# AUTO-UPDATE FROM GITHUB
+# AUTO-UPDATE FROM GITHUB (SSH-signed release tags only)
 # ------------------------------------------------------------------------
+
+# Select-VerifiedRelease: walks release tags (vX.Y.Z) newest-first,
+# skipping any that aren't strictly newer than $currentVersion. For each
+# remaining candidate, verifies it is a signed annotated tag whose
+# signature checks out against $script:AllowedSignersFile (the
+# locally-trusted copy, never one fetched from the candidate ref) AND
+# whose signing key fingerprint equals the pinned
+# $script:ReleaseSignerFingerprint. Returns the first (newest) tag that
+# passes both checks, or $null if no candidate qualifies (fail-closed) or
+# verification tooling is unavailable.
+function Select-VerifiedRelease {
+    param($pythonCmd, $currentVersion)
+
+    if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
+        Write-Yellow "ssh-keygen not available - cannot verify signed releases."
+        return $null
+    }
+
+    if (-not (Test-Path $script:AllowedSignersFile)) {
+        Write-Yellow "Missing .github/allowed_signers - cannot verify signed releases."
+        return $null
+    }
+
+    $candidates = @(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' 2>$null)
+    if ($candidates.Count -eq 0 -or [string]::IsNullOrWhiteSpace($candidates[0])) {
+        return $null
+    }
+
+    # Sort candidates newest-first by numeric version (portable; mirrors
+    # run.sh's approach so behavior is identical cross-platform). Non
+    # vX.Y.Z tags are dropped here too.
+    $sortScript = @'
+import sys
+def key(t):
+    try:
+        return tuple(int(p) for p in t.lstrip("v").split("."))
+    except ValueError:
+        return None
+tags = [(key(t), t) for t in sys.argv[1:]]
+tags = [t for t in tags if t[0] is not None]
+tags.sort(key=lambda t: t[0], reverse=True)
+print("\n".join(t[1] for t in tags))
+'@
+    $sorted = @(& $pythonCmd -c $sortScript @candidates)
+
+    $cmpScript = @'
+import sys
+def parse(v):
+    return tuple(int(p) for p in v.strip().split("."))
+try:
+    a = parse(sys.argv[1])
+    b = parse(sys.argv[2])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if a > b else 1)
+'@
+
+    foreach ($tag in $sorted) {
+        if ([string]::IsNullOrWhiteSpace($tag)) { continue }
+        $tagVersion = $tag.TrimStart('v')
+
+        $null = & $pythonCmd -c $cmpScript $tagVersion $currentVersion 2>$null
+        if ($LASTEXITCODE -ne 0) { continue }
+
+        $verifyOutput = git -c "gpg.ssh.allowedSignersFile=$script:AllowedSignersFile" verify-tag --raw $tag 2>&1
+        if ($LASTEXITCODE -ne 0) { continue }
+
+        $tagFpr = ([regex]::Match(($verifyOutput | Out-String), 'SHA256:[A-Za-z0-9+/=]+')).Value
+        if ($tagFpr -eq $script:ReleaseSignerFingerprint) {
+            return $tag
+        }
+    }
+
+    return $null
+}
+
 function Check-ForUpdates {
     param($pythonCmd)
 
@@ -93,35 +178,48 @@ function Check-ForUpdates {
             Write-Cyan "Checking for updates..."
 
             if (Test-Path ".git") {
-                # Fetch latest from remote
-                git fetch origin main --quiet 2>$null
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Yellow "Could not check for updates (network error)"
+                $currentVersion = $null
+                $configPyContent = Get-Content "utils/config.py" -Raw
+                if ($configPyContent -match '__version__\s*=\s*"(\d+\.\d+\.\d+)"') {
+                    $currentVersion = $Matches[1]
+                }
+
+                if (-not $currentVersion) {
+                    Write-Yellow "Could not determine current version, skipping update check"
+                    Write-Host ""
                     return
                 }
 
-                $local = git rev-parse HEAD 2>$null
-                $remote = git rev-parse origin/main 2>$null
+                # Fetch latest release tags from remote
+                git fetch --tags --force --prune origin --quiet 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Yellow "Could not check for updates (network error)"
+                    Write-Host ""
+                    return
+                }
 
-                if ($local -ne $remote) {
-                    Write-Yellow "Update available! Pulling latest changes..."
+                $selectedTag = Select-VerifiedRelease -pythonCmd $pythonCmd -currentVersion $currentVersion
 
-                    git stash --quiet 2>$null
-                    $pullResult = git pull origin main --quiet 2>&1
+                if (-not $selectedTag) {
+                    Write-Green "OK No verified signed release available - staying on current version v$currentVersion"
+                    Write-Host ""
+                    return
+                }
 
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Green "OK Updated successfully!"
-                        git stash pop --quiet 2>$null
-                        Write-Yellow "Restarting with updated code..."
-                        Write-Host ""
-                        & $MyInvocation.MyCommand.Path @PSBoundParameters
-                        exit
-                    } else {
-                        Write-Red "Update failed, continuing with current version"
-                        git stash pop --quiet 2>$null
-                    }
+                Write-Yellow "Verified signed release $selectedTag available! Updating..."
+
+                git stash --quiet 2>$null
+
+                git checkout $selectedTag --quiet 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Green "OK Updated to $selectedTag!"
+                    Write-Yellow "Restarting with updated code..."
+                    Write-Host ""
+                    & $MyInvocation.MyCommand.Path @PSBoundParameters
+                    exit
                 } else {
-                    Write-Green "OK Already up to date"
+                    Write-Red "Update failed, continuing with current version"
+                    git stash pop --quiet 2>$null
                 }
             } else {
                 Write-Yellow "Not a git repository, skipping update check"

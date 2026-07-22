@@ -1,0 +1,6 @@
+# SSH allowed-signers file used to verify signed Curatarr release tags.
+# Format: git's allowed-signers format (see ssh-keygen(1) / git-verify-tag(1)).
+# Principal must match the tagger email used when signing a release tag.
+# Only the PUBLIC half of the release-signing key lives here; the private
+# key is kept offline on the maintainer's machine. See RELEASING.md.
+jasonbsmith1568@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIINUnyyTuXRhMU7XEpgBwm3dKrkv0D3U7mz+21piPb8q curatarr-release-signing

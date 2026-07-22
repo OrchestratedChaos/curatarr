@@ -1,10 +1,15 @@
 # Python dependencies for Plex recommendation system
+#
+# Pinned to exact versions so `pip install -r requirements.txt` (no
+# --upgrade) is reproducible. Bump deliberately, one PR at a time.
+# Follow-up: move to `pip install --require-hashes` for supply-chain
+# integrity beyond version pinning.
 
 # Core Plex API client
-plexapi>=4.13.0
+plexapi==4.17.2
 
 # HTTP requests library
-requests>=2.28.0
+requests==2.32.5
 
 # YAML configuration parser
-pyyaml>=6.0
+pyyaml==6.0.3

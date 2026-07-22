@@ -30,6 +30,12 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Trust anchor for signed release verification. Fingerprint is pinned in
+# this script (not just in the allowed_signers file) so a tampered
+# allowed_signers file alone cannot widen trust. See RELEASING.md.
+RELEASE_SIGNER_FINGERPRINT="SHA256:yrqOXw6sWZGPKON9mJJvjhsBKTgMzsn3VTGdNL5mxKU"
+ALLOWED_SIGNERS_FILE="$SCRIPT_DIR/.github/allowed_signers"
+
 # ------------------------------------------------------------------------
 # DEPENDENCY CHECKING AND INSTALLATION
 # ------------------------------------------------------------------------
@@ -64,23 +70,113 @@ check_and_install_dependencies() {
     fi
     echo -e "${GREEN}✓ pip3 found${NC}"
 
-    # Install/update Python requirements
+    # Install/update Python requirements (versions are pinned in
+    # requirements.txt; no --upgrade so pinned versions are respected)
     if [ -f "requirements.txt" ]; then
         echo -e "${CYAN}Installing Python dependencies...${NC}"
-        pip3 install -r requirements.txt --quiet --upgrade || {
+        pip3 install -r requirements.txt --quiet || {
             echo -e "${RED}❌ Failed to install Python dependencies${NC}"
             echo "Try running manually: pip3 install -r requirements.txt"
             exit 1
         }
         echo -e "${GREEN}✓ All dependencies installed${NC}"
+        # TODO follow-up: switch to `pip3 install --require-hashes` once
+        # requirements.txt carries per-package hashes.
     fi
 
     echo ""
 }
 
 # ------------------------------------------------------------------------
-# AUTO-UPDATE FROM GITHUB
+# AUTO-UPDATE FROM GITHUB (SSH-signed release tags only)
 # ------------------------------------------------------------------------
+
+# version_gt A B: succeeds (exit 0) if dotted version A is strictly
+# greater than dotted version B. Pure-python so behavior is identical on
+# macOS/Linux regardless of whether `sort -V` is available.
+version_gt() {
+    python3 -c "
+import sys
+def parse(v):
+    return tuple(int(p) for p in v.strip().split('.'))
+try:
+    a = parse(sys.argv[1])
+    b = parse(sys.argv[2])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if a > b else 1)
+" "$1" "$2" 2>/dev/null
+}
+
+# select_verified_release CURRENT_VERSION: walks release tags (vX.Y.Z)
+# newest-first, skipping any that aren't strictly newer than
+# CURRENT_VERSION. For each remaining candidate, verifies it is a signed
+# annotated tag whose signature checks out against ALLOWED_SIGNERS_FILE
+# (the locally-trusted copy, never one fetched from the candidate ref)
+# AND whose signing key fingerprint equals the pinned
+# RELEASE_SIGNER_FINGERPRINT. Echoes the first (newest) tag that passes
+# both checks. Prints nothing and returns non-zero if no candidate
+# qualifies (fail-closed) or if verification tooling is unavailable.
+select_verified_release() {
+    local current_version="$1"
+
+    if ! command -v ssh-keygen >/dev/null 2>&1; then
+        echo -e "${YELLOW}ssh-keygen not available — cannot verify signed releases.${NC}" >&2
+        return 1
+    fi
+
+    if [ ! -f "$ALLOWED_SIGNERS_FILE" ]; then
+        echo -e "${YELLOW}Missing .github/allowed_signers — cannot verify signed releases.${NC}" >&2
+        return 1
+    fi
+
+    local candidates
+    candidates=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null)
+    [ -z "$candidates" ] && return 1
+
+    # Sort candidates newest-first by numeric version (portable; avoids
+    # relying on `sort -V`, which isn't available on every platform).
+    # Non vX.Y.Z tags are dropped here too.
+    local sorted
+    sorted=$(python3 -c "
+import sys
+def key(t):
+    try:
+        return tuple(int(p) for p in t.lstrip('v').split('.'))
+    except ValueError:
+        return None
+tags = [(key(t), t) for t in sys.argv[1:]]
+tags = [t for t in tags if t[0] is not None]
+tags.sort(key=lambda t: t[0], reverse=True)
+print('\n'.join(t[1] for t in tags))
+" $candidates)
+
+    local tag tag_version verify_output tag_fpr
+    while IFS= read -r tag; do
+        [ -z "$tag" ] && continue
+        tag_version="${tag#v}"
+
+        version_gt "$tag_version" "$current_version" || continue
+
+        # Guarded as an `if` condition (not a bare assignment) because
+        # under `set -e` a failed verify-tag (the normal outcome for any
+        # unsigned/wrong-key tag) inside `VAR=$(...)` would otherwise
+        # abort this whole function instead of letting the loop try the
+        # next-newest candidate.
+        if ! verify_output=$(git -c gpg.ssh.allowedSignersFile="$ALLOWED_SIGNERS_FILE" verify-tag --raw "$tag" 2>&1); then
+            continue
+        fi
+
+        tag_fpr=$(printf '%s\n' "$verify_output" | grep -oE 'SHA256:[A-Za-z0-9+/=]+' | head -1)
+        if [ "$tag_fpr" = "$RELEASE_SIGNER_FINGERPRINT" ]; then
+            echo "$tag"
+            return 0
+        fi
+    done <<< "$sorted"
+
+    return 1
+}
+
 check_for_updates() {
     # Skip update check in Docker (users should rebuild to update)
     if [ "$RUNNING_IN_DOCKER" = "true" ]; then
@@ -96,38 +192,46 @@ check_for_updates() {
 
             # Check if we're in a git repo
             if [ -d ".git" ]; then
-                # Fetch latest from remote
-                git fetch origin main --quiet 2>/dev/null || {
-                    echo -e "${YELLOW}Could not check for updates (network error)${NC}"
+                CURRENT_VERSION=$(grep -oE '__version__ = "[0-9]+\.[0-9]+\.[0-9]+"' utils/config.py | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+                if [ -z "$CURRENT_VERSION" ]; then
+                    echo -e "${YELLOW}Could not determine current version, skipping update check${NC}"
+                    echo ""
                     return
-                }
+                fi
 
-                # Compare local and remote
-                LOCAL=$(git rev-parse HEAD 2>/dev/null)
-                REMOTE=$(git rev-parse origin/main 2>/dev/null)
+                # Fetch latest release tags from remote
+                if ! git fetch --tags --force --prune origin --quiet 2>/dev/null; then
+                    echo -e "${YELLOW}Could not check for updates (network error)${NC}"
+                    echo ""
+                    return
+                fi
 
-                if [ "$LOCAL" != "$REMOTE" ]; then
-                    echo -e "${YELLOW}Update available! Pulling latest changes...${NC}"
+                # `|| true` matters here: under `set -e`, a non-zero exit
+                # from select_verified_release (the normal fail-closed
+                # case when nothing verifies) would otherwise kill the
+                # whole script instead of falling through to the
+                # "staying on current version" branch below.
+                SELECTED_TAG=$(select_verified_release "$CURRENT_VERSION") || true
 
-                    # Stash any local changes
-                    git stash --quiet 2>/dev/null || true
+                if [ -z "$SELECTED_TAG" ]; then
+                    echo -e "${GREEN}✓ No verified signed release available — staying on current version v${CURRENT_VERSION}${NC}"
+                    echo ""
+                    return
+                fi
 
-                    # Pull updates
-                    if git pull origin main --quiet 2>/dev/null; then
-                        echo -e "${GREEN}✓ Updated successfully!${NC}"
+                echo -e "${YELLOW}Verified signed release ${SELECTED_TAG} available! Updating...${NC}"
 
-                        # Re-apply stashed changes if any
-                        git stash pop --quiet 2>/dev/null || true
+                # Stash any local changes
+                git stash --quiet 2>/dev/null || true
 
-                        echo -e "${YELLOW}Restarting with updated code...${NC}"
-                        echo ""
-                        exec "$0" "$@"  # Restart script with same arguments
-                    else
-                        echo -e "${RED}Update failed, continuing with current version${NC}"
-                        git stash pop --quiet 2>/dev/null || true
-                    fi
+                if git checkout "$SELECTED_TAG" --quiet 2>/dev/null; then
+                    echo -e "${GREEN}✓ Updated to ${SELECTED_TAG}!${NC}"
+                    echo -e "${YELLOW}Restarting with updated code...${NC}"
+                    echo ""
+                    exec "$0" "$@"  # Restart script with same arguments
                 else
-                    echo -e "${GREEN}✓ Already up to date${NC}"
+                    echo -e "${RED}Update failed, continuing with current version${NC}"
+                    git stash pop --quiet 2>/dev/null || true
                 fi
             else
                 echo -e "${YELLOW}Not a git repository, skipping update check${NC}"
