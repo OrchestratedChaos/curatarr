@@ -29,7 +29,7 @@ from utils import get_project_root, get_users_from_config, load_config
 
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
 from .security import redact
-from .status import get_last_run_status, list_log_files, read_log_tail
+from .status import find_user_watchlist, get_last_run_status, list_log_files, read_log_tail
 
 DEFAULT_PORT = 8787
 
@@ -48,19 +48,27 @@ def create_app(project_root: str = None) -> Flask:
     app.config['EXTERNAL_DIR'] = external_dir
     app.job_manager = JobManager(project_root, logs_dir)
 
-    def _load_users():
+    def _load_config():
         config_path = os.path.join(project_root, 'config', 'config.yml')
         try:
-            config = load_config(config_path)
+            return load_config(config_path)
         except Exception:
-            return []
-        return get_users_from_config(config)
+            return None
+
+    def _load_users():
+        config = _load_config()
+        return get_users_from_config(config) if config else []
 
     @app.get('/')
     def dashboard():
+        config = _load_config()
         rows = [
-            {'username': user, **get_last_run_status(logs_dir, user)}
-            for user in _load_users()
+            {
+                'username': user,
+                **get_last_run_status(logs_dir, user),
+                'watchlist_file': find_user_watchlist(external_dir, config, user),
+            }
+            for user in (get_users_from_config(config) if config else [])
         ]
         return render_template('dashboard.html', rows=rows, job=app.job_manager.status())
 

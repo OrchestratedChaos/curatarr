@@ -12,7 +12,7 @@
 
 <table class="status-table">
   <thead>
-    <tr><th>User</th><th>Last Run</th><th>Status</th><th>Log</th></tr>
+    <tr><th>User</th><th>Last Run</th><th>Status</th><th>Log</th><th>Watchlist</th></tr>
   </thead>
   <tbody>
     {% for row in rows %}
@@ -27,9 +27,16 @@
         —
         {% endif %}
       </td>
+      <td>
+        {% if row.watchlist_file %}
+        <a href="{{ url_for('results_watchlist', filename=row.watchlist_file) }}" target="_blank" rel="noopener">watchlist.html</a>
+        {% else %}
+        —
+        {% endif %}
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="4">No users configured in config/config.yml (users.list).</td></tr>
+    <tr><td colspan="5">No users configured in config/config.yml (users.list).</td></tr>
     {% endfor %}
   </tbody>
 </table>
