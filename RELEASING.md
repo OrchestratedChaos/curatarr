@@ -86,10 +86,18 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    `SHA256SUMS.txt`.
 6. Publishes the GitHub Release via `gh release create` (GitHub CLI only
    - no third-party marketplace actions), attaching both files.
-
-The workflow has a commented extension point for Phase 2: per-OS
-PyInstaller binary builds. That is **not implemented yet** - releases
-today ship a source archive + checksums only.
+7. Once that job succeeds, the `build-binaries` matrix job builds a
+   standalone PyInstaller binary for Windows, macOS (arm64 + Intel),
+   and Linux and uploads each one - plus a matching `.sha256` checksum
+   file - to the same release. This job depends on `release`
+   (`needs: release`) as its only gate: it never runs for a tag that
+   failed the signature/fingerprint/version checks above, and it does
+   not re-verify them independently on top - one gate, not two that
+   could drift out of sync. See `curatarr.spec` and `docs/BINARIES.md`
+   for what's bundled, where a binary's config/cache/logs live, and
+   current limitations (binaries are manual-download / no auto-update -
+   the updater above is source/git-install only - and don't yet
+   support triggering a run from the UI).
 
 ## Manual sanity-check
 

@@ -51,6 +51,17 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ## Quick Start
 
+### Standalone binary (no Python required)
+
+Download the binary for your OS from the
+[latest release](https://github.com/OrchestratedChaos/curatarr/releases),
+run it, and it opens the web UI in your browser. See
+[docs/BINARIES.md](docs/BINARIES.md) for platform-specific run
+instructions (Windows SmartScreen / macOS Gatekeeper both warn on an
+unsigned binary the first time - that doc covers getting past it),
+where config/cache/logs live for a binary install, and current
+limitations.
+
 ### macOS / Linux
 ```bash
 git clone https://github.com/OrchestratedChaos/curatarr.git
@@ -92,6 +103,10 @@ A local dashboard for running recommendations and checking status without the te
 ./run-ui.sh     # macOS/Linux
 .\run-ui.ps1   # Windows (PowerShell)
 ```
+
+Or skip the source install entirely and download a
+[standalone binary](docs/BINARIES.md) - it opens straight to this same
+UI.
 
 Opens `http://127.0.0.1:8787` in your browser once the server is ready (binds to
 localhost only). From there you can see each user's last-run status, trigger a
@@ -478,6 +493,8 @@ curatarr/
 ├── run-ui.sh                # Web UI launcher (macOS/Linux)
 ├── run-ui.ps1               # Web UI launcher (Windows)
 ├── web/                     # Local web UI (Flask, beta)
+├── curatarr_app.py          # Standalone-binary entry point (see docs/BINARIES.md)
+├── curatarr.spec            # PyInstaller build spec
 ├── Dockerfile               # Docker image definition
 ├── docker-compose.yml       # Docker Compose config
 ├── cache/                   # TMDB metadata cache

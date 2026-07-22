@@ -7,7 +7,10 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
-from utils.helpers import normalize_title, map_path, cleanup_old_logs, compute_profile_hash, TITLE_SUFFIXES_TO_STRIP
+from utils.helpers import (
+    normalize_title, map_path, cleanup_old_logs, compute_profile_hash,
+    get_project_root, TITLE_SUFFIXES_TO_STRIP,
+)
 
 
 class TestNormalizeTitle:
@@ -316,3 +319,66 @@ class TestComputeProfileHash:
         result = compute_profile_hash(profile)
         assert len(result) == 16
         assert isinstance(result, str)
+
+
+class TestGetProjectRoot:
+    """Tests for get_project_root().
+
+    get_project_root() is @lru_cache(maxsize=1), so every test clears
+    the cache before and after - otherwise a frozen/mocked result from
+    one test would leak into whichever test (in this file or another)
+    happens to call the real function next.
+    """
+
+    def setup_method(self):
+        get_project_root.cache_clear()
+
+    def teardown_method(self):
+        get_project_root.cache_clear()
+
+    def test_non_frozen_returns_repo_root(self):
+        """Normal (non-frozen) run: unchanged behavior - parent of utils/."""
+        root = get_project_root()
+        assert os.path.isdir(os.path.join(root, 'utils'))
+        assert os.path.isdir(os.path.join(root, 'web'))
+
+    @patch('utils.helpers.sys.frozen', True, create=True)
+    def test_frozen_windows_uses_appdata(self, tmp_path, monkeypatch):
+        """A frozen binary on Windows uses %APPDATA%\\curatarr."""
+        monkeypatch.setattr(os, 'name', 'nt')
+        monkeypatch.setenv('APPDATA', str(tmp_path))
+        root = get_project_root()
+        assert root == os.path.join(str(tmp_path), 'curatarr')
+        assert os.path.isdir(root)
+
+    @patch('utils.helpers.sys.frozen', True, create=True)
+    def test_frozen_windows_falls_back_to_home_without_appdata(self, tmp_path, monkeypatch):
+        """No %APPDATA% set (unusual, but shouldn't crash): fall back to ~\\curatarr."""
+        monkeypatch.setattr(os, 'name', 'nt')
+        monkeypatch.delenv('APPDATA', raising=False)
+        monkeypatch.setenv('HOME', str(tmp_path))
+        root = get_project_root()
+        assert root == os.path.join(str(tmp_path), 'curatarr')
+        assert os.path.isdir(root)
+
+    @patch('utils.helpers.sys.frozen', True, create=True)
+    def test_frozen_posix_uses_dot_curatarr_in_home(self, tmp_path, monkeypatch):
+        """A frozen binary on macOS/Linux uses ~/.curatarr."""
+        monkeypatch.setattr(os, 'name', 'posix')
+        monkeypatch.setenv('HOME', str(tmp_path))
+        root = get_project_root()
+        assert root == os.path.join(str(tmp_path), '.curatarr')
+        assert os.path.isdir(root)
+
+    @patch('utils.helpers.sys.frozen', True, create=True)
+    def test_frozen_reuses_existing_dir(self, tmp_path, monkeypatch):
+        """Second run against an already-populated data dir doesn't error."""
+        monkeypatch.setattr(os, 'name', 'posix')
+        monkeypatch.setenv('HOME', str(tmp_path))
+        existing = os.path.join(str(tmp_path), '.curatarr')
+        os.makedirs(existing)
+        with open(os.path.join(existing, 'marker.txt'), 'w') as f:
+            f.write('keep me')
+        root = get_project_root()
+        assert root == existing
+        assert os.path.isfile(os.path.join(existing, 'marker.txt'))

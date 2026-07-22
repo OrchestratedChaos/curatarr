@@ -1,0 +1,7 @@
+# Build-only dependencies for packaging the standalone binary
+# (curatarr.spec). Not needed to run curatarr from source - see
+# requirements.txt for that. Install alongside requirements.txt only
+# when building a binary: pip install -r requirements.txt -r build-requirements.txt
+#
+# See docs/BINARIES.md for the build command and CI matrix.
+pyinstaller==6.21.0

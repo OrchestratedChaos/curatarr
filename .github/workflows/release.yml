@@ -119,17 +119,85 @@ jobs:
             "curatarr-${VERSION}.tar.gz" \
             "SHA256SUMS.txt"
 
-      # -----------------------------------------------------------------
-      # Phase 2 extension point (not implemented yet):
-      #
-      # Add a matrix job here that builds per-OS standalone binaries with
-      # PyInstaller (ubuntu-latest / macos-latest / windows-latest),
-      # depends on `release` above (needs: release), and uploads each
-      # binary as an additional release asset with:
-      #
-      #   gh release upload "$GITHUB_REF_NAME" <binary-path>
-      #
-      # Keep the signed-tag + version-match gates in this job as the
-      # single source of truth for "is this a legitimate release" -
-      # binary-build jobs should only run after this job succeeds.
-      # -----------------------------------------------------------------
+  # ---------------------------------------------------------------------
+  # Standalone per-OS binaries (PyInstaller --onefile, see curatarr.spec
+  # and docs/BINARIES.md). `needs: release` is the whole gate here - the
+  # `release` job above is the single source of truth for "is this a
+  # legitimate release" (signed tag + pinned fingerprint + version
+  # match), so this job only runs at all once that one has succeeded.
+  # No independent re-verification here on purpose - one gate, not two
+  # that could drift out of sync.
+  # ---------------------------------------------------------------------
+  build-binaries:
+    name: Build binary (${{ matrix.asset_name }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: curatarr-windows-x86_64.exe
+            dist_name: curatarr.exe
+          - os: macos-latest
+            asset_name: curatarr-macos-arm64
+            dist_name: curatarr
+          - os: macos-13
+            asset_name: curatarr-macos-x86_64
+            dist_name: curatarr
+          - os: ubuntu-latest
+            asset_name: curatarr-linux-x86_64
+            dist_name: curatarr
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r build-requirements.txt
+
+      - name: Build binary with PyInstaller
+        shell: bash
+        run: |
+          set -euo pipefail
+          pyinstaller --clean --noconfirm curatarr.spec
+
+      - name: Rename binary and compute SHA256
+        shell: bash
+        env:
+          ASSET_NAME: ${{ matrix.asset_name }}
+          DIST_NAME: ${{ matrix.dist_name }}
+        run: |
+          set -euo pipefail
+          mv "dist/$DIST_NAME" "$ASSET_NAME"
+          python -c "
+          import hashlib, os
+          path = os.environ['ASSET_NAME']
+          h = hashlib.sha256()
+          with open(path, 'rb') as f:
+              for chunk in iter(lambda: f.read(1 << 20), b''):
+                  h.update(chunk)
+          with open(path + '.sha256', 'w') as out:
+              out.write(f'{h.hexdigest()}  {path}\n')
+          "
+          cat "$ASSET_NAME.sha256"
+
+      - name: Upload binary to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_NAME: ${{ matrix.asset_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$GITHUB_REF_NAME" \
+            "$ASSET_NAME" \
+            "$ASSET_NAME.sha256" \
+            --clobber
