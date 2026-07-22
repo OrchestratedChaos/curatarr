@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+env:
+  # Pinned fingerprint of the maintainer's release-signing key. This is
+  # checked in addition to `git verify-tag` succeeding, so that widening
+  # .github/allowed_signers to a new key can't silently widen trust here.
+  RELEASE_SIGNER_FINGERPRINT: "SHA256:yrqOXw6sWZGPKON9mJJvjhsBKTgMzsn3VTGdNL5mxKU"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is signed by the trusted release key
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          git config gpg.ssh.allowedSignersFile .github/allowed_signers
+
+          VERIFY_OUTPUT="$(git verify-tag "$GITHUB_REF_NAME" 2>&1)"
+          VERIFY_EXIT=$?
+          echo "$VERIFY_OUTPUT"
+
+          if [ "$VERIFY_EXIT" -ne 0 ]; then
+            echo "::error::git verify-tag failed for $GITHUB_REF_NAME - refusing to release an unsigned or untrusted tag"
+            exit 1
+          fi
+
+          if ! echo "$VERIFY_OUTPUT" | grep -qF "$RELEASE_SIGNER_FINGERPRINT"; then
+            echo "::error::Tag $GITHUB_REF_NAME did not verify against the pinned release-signing key fingerprint ($RELEASE_SIGNER_FINGERPRINT)"
+            exit 1
+          fi
+
+          echo "Verified: $GITHUB_REF_NAME is signed by the pinned release-signing key."
+
+      - name: Verify tag version matches utils/config.py
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' utils/config.py)"
+
+          if [ -z "$CODE_VERSION" ]; then
+            echo "::error::Could not parse __version__ from utils/config.py"
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match utils/config.py __version__ ($CODE_VERSION)"
+            exit 1
+          fi
+
+          echo "Tag version matches __version__ ($CODE_VERSION)."
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PREV_TAG="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+
+          {
+            if [ -n "$PREV_TAG" ]; then
+              echo "## Changes since $PREV_TAG"
+              echo
+              git log "${PREV_TAG}..${GITHUB_REF_NAME}" --no-merges --pretty=format:'- %s (%h)'
+            else
+              echo "## Changes"
+              echo
+              echo "Initial tracked release."
+              git log "$GITHUB_REF_NAME" --no-merges --pretty=format:'- %s (%h)'
+            fi
+            echo
+          } > release-notes.md
+
+          cat release-notes.md
+
+      - name: Build source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          PREFIX="curatarr-${VERSION}/"
+          ARCHIVE="curatarr-${VERSION}.tar.gz"
+
+          git archive --format=tar.gz --prefix="$PREFIX" -o "$ARCHIVE" "$GITHUB_REF_NAME"
+          sha256sum "$ARCHIVE" > SHA256SUMS.txt
+
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            "curatarr-${VERSION}.tar.gz" \
+            "SHA256SUMS.txt"
+
+      # -----------------------------------------------------------------
+      # Phase 2 extension point (not implemented yet):
+      #
+      # Add a matrix job here that builds per-OS standalone binaries with
+      # PyInstaller (ubuntu-latest / macos-latest / windows-latest),
+      # depends on `release` above (needs: release), and uploads each
+      # binary as an additional release asset with:
+      #
+      #   gh release upload "$GITHUB_REF_NAME" <binary-path>
+      #
+      # Keep the signed-tag + version-match gates in this job as the
+      # single source of truth for "is this a legitimate release" -
+      # binary-build jobs should only run after this job succeeds.
+      # -----------------------------------------------------------------
