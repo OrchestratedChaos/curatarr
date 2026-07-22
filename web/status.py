@@ -112,6 +112,36 @@ def list_log_files(logs_dir: str) -> List[Dict]:
     return entries
 
 
+def display_name_safe_slug(config: Dict, username: str) -> str:
+    """Mirror recommenders/external_output.py's filename derivation:
+    display_name (falling back to the username itself), lowercased,
+    spaces replaced with underscores.
+    """
+    prefs = (config or {}).get('users', {}).get('preferences', {}) or {}
+    display_name = (prefs.get(username) or {}).get('display_name', username)
+    return str(display_name).lower().replace(' ', '_')
+
+
+def find_user_watchlist(external_dir: str, config: Dict, username: str) -> Optional[str]:
+    """Return the basename of this user's generated watchlist, if any.
+
+    Prefers the per-user "<display_name>_watchlist.html" file that
+    recommenders/external_output.py writes; falls back to the combined
+    (all-users, tabbed) "watchlist.html" if that's all that exists yet.
+    Returns None if neither has been generated.
+    """
+    slug = display_name_safe_slug(config, username)
+    per_user = f'{slug}_watchlist.html'
+    if os.path.isfile(os.path.join(external_dir, per_user)):
+        return per_user
+
+    combined = 'watchlist.html'
+    if os.path.isfile(os.path.join(external_dir, combined)):
+        return combined
+
+    return None
+
+
 def read_log_tail(logs_dir: str, filename: str, max_lines: int = 500) -> str:
     """Read the last max_lines of logs_dir/filename, secrets redacted.
 

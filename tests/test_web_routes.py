@@ -52,6 +52,21 @@ class TestDashboard:
         resp = c.get('/')
         assert b'success' in resp.data
 
+    def test_links_to_per_user_watchlist_when_generated(self, client):
+        c, app, root = client
+        ext_dir = os.path.join(root, 'recommendations', 'external')
+        with open(os.path.join(ext_dir, 'alice_a_watchlist.html'), 'w') as f:
+            f.write('<html>alice list</html>')
+        resp = c.get('/')
+        assert resp.status_code == 200
+        assert b'alice_a_watchlist.html' in resp.data
+
+    def test_dashboard_watchlist_link_absent_when_nothing_generated(self, client):
+        c, app, root = client
+        resp = c.get('/')
+        assert resp.status_code == 200
+        assert b'_watchlist.html' not in resp.data
+
     def test_handles_missing_config_gracefully(self, tmp_path):
         (tmp_path / 'logs').mkdir()
         (tmp_path / 'recommendations' / 'external').mkdir(parents=True)

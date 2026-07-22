@@ -8,7 +8,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from web.status import get_last_run_status, list_log_files, read_log_tail
+from web.status import (
+    display_name_safe_slug, find_user_watchlist, get_last_run_status,
+    list_log_files, read_log_tail,
+)
 
 
 def _write_log(logs_dir, name, content):
@@ -117,3 +120,39 @@ class TestReadLogTail:
         _write_log(tmp_path, 'a.log', content)
         result = read_log_tail(str(tmp_path), 'a.log', max_lines=3)
         assert result.splitlines() == ['line7', 'line8', 'line9']
+
+class TestDisplayNameSafeSlug:
+    """Tests for display_name_safe_slug()"""
+
+    def test_uses_display_name_when_configured(self):
+        config = {'users': {'preferences': {'alice': {'display_name': 'Alice A'}}}}
+        assert display_name_safe_slug(config, 'alice') == 'alice_a'
+
+    def test_falls_back_to_username_when_no_display_name(self):
+        config = {'users': {'preferences': {}}}
+        assert display_name_safe_slug(config, 'bob') == 'bob'
+
+    def test_handles_none_config(self):
+        assert display_name_safe_slug(None, 'bob') == 'bob'
+
+
+class TestFindUserWatchlist:
+    """Tests for find_user_watchlist()"""
+
+    def test_prefers_per_user_file(self, tmp_path):
+        config = {'users': {'preferences': {'alice': {'display_name': 'Alice A'}}}}
+        (tmp_path / 'alice_a_watchlist.html').write_text('<html></html>')
+        (tmp_path / 'watchlist.html').write_text('<html></html>')
+        result = find_user_watchlist(str(tmp_path), config, 'alice')
+        assert result == 'alice_a_watchlist.html'
+
+    def test_falls_back_to_combined_file(self, tmp_path):
+        config = {'users': {'preferences': {'alice': {'display_name': 'Alice A'}}}}
+        (tmp_path / 'watchlist.html').write_text('<html></html>')
+        result = find_user_watchlist(str(tmp_path), config, 'alice')
+        assert result == 'watchlist.html'
+
+    def test_returns_none_when_nothing_generated(self, tmp_path):
+        config = {'users': {'preferences': {}}}
+        result = find_user_watchlist(str(tmp_path), config, 'bob')
+        assert result is None

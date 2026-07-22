@@ -44,6 +44,9 @@ plex:
   token: "not-a-real-token"
 users:
   list: "alice, bob"
+  preferences:
+    alice:
+      display_name: "Alice A"
 '''
 
 
