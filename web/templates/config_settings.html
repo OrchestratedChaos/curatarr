@@ -1,0 +1,168 @@
+{% extends 'base.html' %}
+{% block title %}Settings - Curatarr{% endblock %}
+{% block content %}
+<h1>Settings / Tuning</h1>
+
+{% if saved %}
+<p class="banner running">Saved.</p>
+{% endif %}
+{% if errors['_global'] %}
+<p class="banner error">{{ errors['_global'] }}</p>
+{% endif %}
+
+<form method="post" action="{{ url_for('config_settings_save') }}" class="config-form">
+
+  <fieldset>
+    <legend>Export safety - Sonarr / Radarr / Trakt</legend>
+    <p class="banner warn">
+      Turning <strong>Auto-sync</strong> ON here means curatarr starts writing to your
+      download clients (adding movies/shows to Sonarr/Radarr, or syncing lists to Trakt) on
+      every run, with no confirmation prompt. <strong>User mode</strong> and
+      <strong>Plex users</strong> control whose recommendations get synced - double-check
+      both before enabling auto-sync for anyone but yourself.
+    </p>
+
+    {% for svc in ['sonarr', 'radarr', 'trakt'] %}
+    <div class="sync-safety-row">
+      <h3>{{ svc|capitalize }}</h3>
+      <label>
+        <input type="checkbox" name="{{ svc }}_auto_sync" {% if sync_safety[svc].auto_sync %}checked{% endif %}>
+        Auto-sync every run
+      </label>
+      <label>User mode
+        <select name="{{ svc }}_user_mode">
+          {% for choice in user_mode_choices %}
+          <option value="{{ choice }}" {% if sync_safety[svc].user_mode == choice %}selected{% endif %}>{{ choice }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if errors[svc ~ '_user_mode'] %}<p class="field-error">{{ errors[svc ~ '_user_mode'] }}</p>{% endif %}
+      <label>Plex users to sync (comma-separated, used when user mode is "mapping")
+        <input type="text" name="{{ svc }}_plex_users" value="{{ sync_safety[svc].plex_users }}">
+      </label>
+    </div>
+    {% endfor %}
+  </fieldset>
+
+  <fieldset>
+    <legend>Movie scoring weights (must sum to 1.0)</legend>
+    <label>Genre <input type="text" name="movies_weight_genre" value="{{ movies.weights.genre }}"></label>
+    <label>Director <input type="text" name="movies_weight_director" value="{{ movies.weights.director }}"></label>
+    <label>Actor <input type="text" name="movies_weight_actor" value="{{ movies.weights.actor }}"></label>
+    <label>Keyword <input type="text" name="movies_weight_keyword" value="{{ movies.weights.keyword }}"></label>
+    {% for f in ['movies_weight_genre', 'movies_weight_director', 'movies_weight_actor', 'movies_weight_keyword', 'movies_weights'] %}
+      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+    {% endfor %}
+
+    <label>Result limit <input type="text" name="movies_limit_results" value="{{ movies.limit_results }}"></label>
+    {% if errors.movies_limit_results %}<p class="field-error">{{ errors.movies_limit_results }}</p>{% endif %}
+    <label>Min TMDB rating <input type="text" name="movies_min_rating" value="{{ movies.min_rating }}"></label>
+    {% if errors.movies_min_rating %}<p class="field-error">{{ errors.movies_min_rating }}</p>{% endif %}
+    <label>Min vote count <input type="text" name="movies_min_vote_count" value="{{ movies.min_vote_count }}"></label>
+    {% if errors.movies_min_vote_count %}<p class="field-error">{{ errors.movies_min_vote_count }}</p>{% endif %}
+  </fieldset>
+
+  <fieldset>
+    <legend>TV scoring weights (must sum to 1.0)</legend>
+    <label>Genre <input type="text" name="tv_weight_genre" value="{{ tv.weights.genre }}"></label>
+    <label>Studio <input type="text" name="tv_weight_studio" value="{{ tv.weights.studio }}"></label>
+    <label>Actor <input type="text" name="tv_weight_actor" value="{{ tv.weights.actor }}"></label>
+    <label>Keyword <input type="text" name="tv_weight_keyword" value="{{ tv.weights.keyword }}"></label>
+    {% for f in ['tv_weight_genre', 'tv_weight_studio', 'tv_weight_actor', 'tv_weight_keyword', 'tv_weights'] %}
+      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+    {% endfor %}
+
+    <label>Result limit <input type="text" name="tv_limit_results" value="{{ tv.limit_results }}"></label>
+    {% if errors.tv_limit_results %}<p class="field-error">{{ errors.tv_limit_results }}</p>{% endif %}
+    <label>Min TMDB rating <input type="text" name="tv_min_rating" value="{{ tv.min_rating }}"></label>
+    {% if errors.tv_min_rating %}<p class="field-error">{{ errors.tv_min_rating }}</p>{% endif %}
+    <label>Min vote count <input type="text" name="tv_min_vote_count" value="{{ tv.min_vote_count }}"></label>
+    {% if errors.tv_min_vote_count %}<p class="field-error">{{ errors.tv_min_vote_count }}</p>{% endif %}
+  </fieldset>
+
+  <fieldset>
+    <legend>Recency decay</legend>
+    <label><input type="checkbox" name="recency_enabled" {% if recency.enabled %}checked{% endif %}> Enabled</label>
+    <label>0-30 days <input type="text" name="recency_days_0_30" value="{{ recency.days_0_30 }}"></label>
+    <label>31-90 days <input type="text" name="recency_days_31_90" value="{{ recency.days_31_90 }}"></label>
+    <label>91-180 days <input type="text" name="recency_days_91_180" value="{{ recency.days_91_180 }}"></label>
+    <label>181-365 days <input type="text" name="recency_days_181_365" value="{{ recency.days_181_365 }}"></label>
+    <label>365+ days <input type="text" name="recency_days_365_plus" value="{{ recency.days_365_plus }}"></label>
+    {% for f in ['recency_days_0_30', 'recency_days_31_90', 'recency_days_91_180', 'recency_days_181_365', 'recency_days_365_plus'] %}
+      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+    {% endfor %}
+  </fieldset>
+
+  <fieldset>
+    <legend>Rating multipliers (5-star scale)</legend>
+    <label>5 star <input type="text" name="rating_star_5" value="{{ rating_multipliers.star_5 }}"></label>
+    <label>4 star <input type="text" name="rating_star_4" value="{{ rating_multipliers.star_4 }}"></label>
+    <label>3 star <input type="text" name="rating_star_3" value="{{ rating_multipliers.star_3 }}"></label>
+    <label>2 star <input type="text" name="rating_star_2" value="{{ rating_multipliers.star_2 }}"></label>
+    <label>1 star <input type="text" name="rating_star_1" value="{{ rating_multipliers.star_1 }}"></label>
+    {% for f in ['rating_star_5', 'rating_star_4', 'rating_star_3', 'rating_star_2', 'rating_star_1'] %}
+      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+    {% endfor %}
+  </fieldset>
+
+  <fieldset>
+    <legend>Negative signals</legend>
+    <label><input type="checkbox" name="negsig_enabled" {% if negative_signals.enabled %}checked{% endif %}> Enabled</label>
+
+    <h3>Bad ratings</h3>
+    <label><input type="checkbox" name="negsig_bad_ratings_enabled" {% if negative_signals.bad_ratings_enabled %}checked{% endif %}> Enabled</label>
+    <label>Threshold (Plex 0-10 scale) <input type="text" name="negsig_bad_ratings_threshold" value="{{ negative_signals.bad_ratings_threshold }}"></label>
+    {% if errors.negsig_bad_ratings_threshold %}<p class="field-error">{{ errors.negsig_bad_ratings_threshold }}</p>{% endif %}
+    <label>Cap penalty <input type="text" name="negsig_bad_ratings_cap_penalty" value="{{ negative_signals.bad_ratings_cap_penalty }}"></label>
+    {% if errors.negsig_bad_ratings_cap_penalty %}<p class="field-error">{{ errors.negsig_bad_ratings_cap_penalty }}</p>{% endif %}
+
+    <h3>Dropped shows</h3>
+    <label><input type="checkbox" name="negsig_dropped_enabled" {% if negative_signals.dropped_enabled %}checked{% endif %}> Enabled</label>
+    <label>Min episodes watched <input type="text" name="negsig_dropped_min_episodes" value="{{ negative_signals.dropped_min_episodes }}"></label>
+    {% if errors.negsig_dropped_min_episodes %}<p class="field-error">{{ errors.negsig_dropped_min_episodes }}</p>{% endif %}
+    <label>Max completion percent <input type="text" name="negsig_dropped_max_completion" value="{{ negative_signals.dropped_max_completion }}"></label>
+    {% if errors.negsig_dropped_max_completion %}<p class="field-error">{{ errors.negsig_dropped_max_completion }}</p>{% endif %}
+    <label>Penalty multiplier <input type="text" name="negsig_dropped_penalty_multiplier" value="{{ negative_signals.dropped_penalty_multiplier }}"></label>
+    {% if errors.negsig_dropped_penalty_multiplier %}<p class="field-error">{{ errors.negsig_dropped_penalty_multiplier }}</p>{% endif %}
+  </fieldset>
+
+  <fieldset>
+    <legend>External recommendations</legend>
+    <label><input type="checkbox" name="ext_enabled" {% if external.enabled %}checked{% endif %}> Enabled</label>
+    <label>Movie limit <input type="text" name="ext_movie_limit" value="{{ external.movie_limit }}"></label>
+    {% if errors.ext_movie_limit %}<p class="field-error">{{ errors.ext_movie_limit }}</p>{% endif %}
+    <label>Show limit <input type="text" name="ext_show_limit" value="{{ external.show_limit }}"></label>
+    {% if errors.ext_show_limit %}<p class="field-error">{{ errors.ext_show_limit }}</p>{% endif %}
+    <label>Min relevance score (0-1) <input type="text" name="ext_min_relevance_score" value="{{ external.min_relevance_score }}"></label>
+    {% if errors.ext_min_relevance_score %}<p class="field-error">{{ errors.ext_min_relevance_score }}</p>{% endif %}
+    <label>Min votes <input type="text" name="ext_min_votes" value="{{ external.min_votes }}"></label>
+    {% if errors.ext_min_votes %}<p class="field-error">{{ errors.ext_min_votes }}</p>{% endif %}
+    <label>Max discovery iterations <input type="text" name="ext_max_iterations" value="{{ external.max_iterations }}"></label>
+    {% if errors.ext_max_iterations %}<p class="field-error">{{ errors.ext_max_iterations }}</p>{% endif %}
+    <label>Language filter (ISO 639-1, blank = any) <input type="text" name="ext_language" value="{{ external.language }}"></label>
+    <label><input type="checkbox" name="ext_auto_open_html" {% if external.auto_open_html %}checked{% endif %}> Auto-open watchlist HTML after generation</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>General</legend>
+    <label><input type="checkbox" name="general_auto_update" {% if general.auto_update %}checked{% endif %}> Auto-update on run</label>
+    <label><input type="checkbox" name="general_plex_only" {% if general.plex_only %}checked{% endif %}> Plex-only (only recommend from Plex library)</label>
+    <label>Log retention days <input type="text" name="general_log_retention_days" value="{{ general.log_retention_days }}"></label>
+    {% if errors.general_log_retention_days %}<p class="field-error">{{ errors.general_log_retention_days }}</p>{% endif %}
+  </fieldset>
+
+  <fieldset>
+    <legend>Logging</legend>
+    <label>Level
+      <select name="logging_level">
+        {% for choice in log_level_choices %}
+        <option value="{{ choice }}" {% if logging.level == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if errors.logging_level %}<p class="field-error">{{ errors.logging_level }}</p>{% endif %}
+  </fieldset>
+
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

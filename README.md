@@ -98,6 +98,23 @@ localhost only). From there you can see each user's last-run status, trigger a
 run (full pipeline, or just movie/tv/external) with a live streaming log, and
 browse generated watchlists and past logs.
 
+**Config screens** let you set up curatarr entirely from the browser instead of
+hand-editing YAML:
+
+- **Connections** (`/config/connections`) - Plex, TMDB, Tautulli, Sonarr, Radarr,
+  and Trakt, each with a Test Connection button.
+- **Users** (`/config/users`) - add/remove Plex users and per-user preferences
+  (display name, excluded genres, max content rating, streaming services).
+- **Settings** (`/config/settings`) - scoring weights, quality filters, recency
+  decay, rating multipliers, negative signals, external recommendation limits,
+  and the Sonarr/Radarr/Trakt auto-sync safety toggles (surfaced with a warning -
+  turning auto-sync on starts writing to your download clients on every run).
+
+Secrets (tokens/API keys) are never shown once saved - fields show a
+"configured" / "not set" status, and you only need to enter a new value to
+change one. Saves are validated (e.g. scoring weights must sum to 1.0) and
+written atomically, so a bad submission can't corrupt your config files.
+
 ---
 
 ## What You Get
