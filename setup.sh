@@ -463,7 +463,7 @@ users:
 
 general:
   plex_only: true
-  auto_update: false
+  auto_update: true
   log_retention_days: 7
 EOF
 

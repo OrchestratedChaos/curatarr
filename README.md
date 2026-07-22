@@ -42,7 +42,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 ### For You (Simple & Robust)
 - **One command** — `./run.sh` handles everything
 - **Modular config** — Main settings plus optional integration files
-- **Auto-updates** — Pulls latest code from GitHub on each run (optional)
+- **Auto-updates** — Applies SSH-signed release updates from GitHub on each run (optional)
 - **Smart caching** — Auto-clears incompatible caches after updates
 - **Auto-scheduling** — Optional daily cron job
 - **Clean logs** — Know exactly what happened
@@ -175,7 +175,7 @@ users:
 ### General Settings
 ```yaml
 general:
-  auto_update: true           # Pull latest code from GitHub on run
+  auto_update: true           # Apply verified signed releases from GitHub on run
   log_retention_days: 7       # Keep logs for 7 days
 ```
 
