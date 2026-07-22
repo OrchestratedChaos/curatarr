@@ -6,10 +6,10 @@
 # integrity beyond version pinning.
 
 # Core Plex API client
-plexapi==4.17.2
+plexapi==4.18.2
 
 # HTTP requests library
-requests==2.32.5
+requests==2.34.2
 
 # YAML configuration parser
 pyyaml==6.0.3
