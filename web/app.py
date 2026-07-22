@@ -27,6 +27,7 @@ from flask import (
 
 from utils import get_project_root, get_users_from_config, load_config
 
+from .config_app import register_config_routes
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
 from .security import redact
 from .status import find_user_watchlist, get_last_run_status, list_log_files, read_log_tail
@@ -47,6 +48,8 @@ def create_app(project_root: str = None) -> Flask:
     app.config['LOGS_DIR'] = logs_dir
     app.config['EXTERNAL_DIR'] = external_dir
     app.job_manager = JobManager(project_root, logs_dir)
+
+    register_config_routes(app)
 
     def _load_config():
         config_path = os.path.join(project_root, 'config', 'config.yml')

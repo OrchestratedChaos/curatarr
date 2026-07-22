@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Users - Curatarr{% endblock %}
+{% block content %}
+<h1>Users</h1>
+
+{% if saved %}
+<p class="banner running">Saved.</p>
+{% endif %}
+{% if errors['_global'] %}
+<p class="banner error">{{ errors['_global'] }}</p>
+{% endif %}
+
+<!--
+  Per-library recommendation mapping (#157) is deferred. Preferences here
+  are keyed only by username (preferences.<user>.exclude_genres/
+  max_rating/streaming_services). When #157 lands, this table gains a
+  library-selector dimension per user - see the NOTE in
+  web/config_app.py's Users screen section for where that shape change
+  is contained.
+-->
+
+<form method="post" action="{{ url_for('config_users_save') }}" class="config-form">
+  <input type="hidden" name="user_count" value="{{ users|length }}">
+
+  <table class="status-table">
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Display name</th>
+        <th>Exclude genres</th>
+        <th>Max rating</th>
+        <th>Streaming services</th>
+        <th>Remove</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>
+          <input type="hidden" name="username_{{ loop.index0 }}" value="{{ u.username }}">
+          {{ u.username }}
+        </td>
+        <td><input type="text" name="display_name_{{ loop.index0 }}" value="{{ u.display_name }}"></td>
+        <td><input type="text" name="exclude_genres_{{ loop.index0 }}" value="{{ u.exclude_genres }}" placeholder="horror, children"></td>
+        <td>
+          <select name="max_rating_{{ loop.index0 }}">
+            <option value="" {% if not u.max_rating %}selected{% endif %}>(no restriction)</option>
+            {% for choice in rating_choices %}
+            <option value="{{ choice }}" {% if u.max_rating == choice %}selected{% endif %}>{{ choice }}</option>
+            {% endfor %}
+          </select>
+          {% if errors['max_rating_' ~ loop.index0] %}
+          <p class="field-error">{{ errors['max_rating_' ~ loop.index0] }}</p>
+          {% endif %}
+        </td>
+        <td><input type="text" name="streaming_services_{{ loop.index0 }}" value="{{ u.streaming_services }}" placeholder="netflix, hulu"></td>
+        <td><label><input type="checkbox" name="remove_{{ loop.index0 }}"> remove</label></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6">No users configured yet - add one below.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <fieldset>
+    <legend>Add a user</legend>
+    <label>Plex username
+      <input type="text" name="new_username" value="{{ new_username }}" placeholder="plex_username">
+    </label>
+    {% if errors.new_username %}<p class="field-error">{{ errors.new_username }}</p>{% endif %}
+  </fieldset>
+
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

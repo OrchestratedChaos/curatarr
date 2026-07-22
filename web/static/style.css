@@ -112,6 +112,69 @@ form select {
 
 .banner.running { background: rgba(79, 140, 255, 0.15); }
 .banner.error { background: rgba(229, 83, 75, 0.15); color: var(--fail); }
+.banner.warn { background: rgba(216, 161, 42, 0.15); color: var(--warn); }
+
+.config-form fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px 16px;
+  margin-bottom: 16px;
+}
+
+.config-form legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.config-form h3 {
+  font-size: 0.95rem;
+  color: var(--muted);
+  margin: 12px 0 4px;
+}
+
+.config-form label {
+  display: block;
+  margin: 8px 0;
+  color: var(--muted);
+}
+
+.config-form input[type="text"],
+.config-form input[type="password"] {
+  display: block;
+  margin-top: 4px;
+  padding: 6px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.config-form input[type="checkbox"] {
+  margin-right: 6px;
+}
+
+.field-error {
+  color: var(--fail);
+  font-size: 0.85rem;
+  margin: 2px 0 8px;
+}
+
+.test-result {
+  margin-left: 10px;
+  font-size: 0.85rem;
+}
+
+.test-result.ok { color: var(--ok); }
+.test-result.fail { color: var(--fail); }
+
+.sync-safety-row {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+.sync-safety-row:first-of-type { border-top: none; margin-top: 0; }
 
 .log-output {
   background: #0b0d11;

@@ -1,0 +1,162 @@
+{% extends 'base.html' %}
+{% block title %}Connections - Curatarr{% endblock %}
+{% block content %}
+<h1>Setup / Connections</h1>
+
+{% if saved %}
+<p class="banner running">Saved.</p>
+{% endif %}
+{% if errors['_global'] %}
+<p class="banner error">{{ errors['_global'] }}</p>
+{% endif %}
+
+<form method="post" action="{{ url_for('config_connections_save') }}" class="config-form">
+
+  <fieldset>
+    <legend>Plex</legend>
+    <label>Server URL
+      <input type="text" name="plex_url" value="{{ plex.url }}" placeholder="http://localhost:32400">
+    </label>
+    {% if errors.plex_url %}<p class="field-error">{{ errors.plex_url }}</p>{% endif %}
+
+    <label>Token ({{ plex.token_status }})
+      <input type="password" name="plex_token" placeholder="Leave blank to keep existing" autocomplete="off">
+    </label>
+
+    <label>Movie library
+      <input type="text" name="plex_movie_library" value="{{ plex.movie_library }}">
+    </label>
+    {% if errors.plex_movie_library %}<p class="field-error">{{ errors.plex_movie_library }}</p>{% endif %}
+
+    <label>TV library
+      <input type="text" name="plex_tv_library" value="{{ plex.tv_library }}">
+    </label>
+    {% if errors.plex_tv_library %}<p class="field-error">{{ errors.plex_tv_library }}</p>{% endif %}
+
+    <button type="button" class="test-connection" data-service="plex"
+            data-field-map='{"url": "plex_url", "token": "plex_token"}'>Test Connection</button>
+    <span class="test-result" data-result-for="plex"></span>
+  </fieldset>
+
+  <fieldset>
+    <legend>TMDB</legend>
+    <label>API key ({{ tmdb.api_key_status }})
+      <input type="password" name="tmdb_api_key" placeholder="Leave blank to keep existing" autocomplete="off">
+    </label>
+    <button type="button" class="test-connection" data-service="tmdb"
+            data-field-map='{"api_key": "tmdb_api_key"}'>Test Connection</button>
+    <span class="test-result" data-result-for="tmdb"></span>
+  </fieldset>
+
+  <fieldset>
+    <legend>Tautulli</legend>
+    <label><input type="checkbox" name="tautulli_enabled" {% if tautulli.enabled %}checked{% endif %}> Enabled</label>
+    <label>URL
+      <input type="text" name="tautulli_url" value="{{ tautulli.url }}" placeholder="http://localhost:8181">
+    </label>
+    {% if errors.tautulli_url %}<p class="field-error">{{ errors.tautulli_url }}</p>{% endif %}
+    <label>API key ({{ tautulli.api_key_status }})
+      <input type="password" name="tautulli_api_key" placeholder="Leave blank to keep existing" autocomplete="off">
+    </label>
+    <button type="button" class="test-connection" data-service="tautulli"
+            data-field-map='{"url": "tautulli_url", "api_key": "tautulli_api_key"}'>Test Connection</button>
+    <span class="test-result" data-result-for="tautulli"></span>
+  </fieldset>
+
+  <fieldset>
+    <legend>Sonarr</legend>
+    <label><input type="checkbox" name="sonarr_enabled" {% if sonarr.enabled %}checked{% endif %}> Enabled</label>
+    <label>URL
+      <input type="text" name="sonarr_url" value="{{ sonarr.url }}" placeholder="http://localhost:8989">
+    </label>
+    {% if errors.sonarr_url %}<p class="field-error">{{ errors.sonarr_url }}</p>{% endif %}
+    <label>API key ({{ sonarr.api_key_status }})
+      <input type="password" name="sonarr_api_key" placeholder="Leave blank to keep existing" autocomplete="off">
+    </label>
+    <button type="button" class="test-connection" data-service="sonarr"
+            data-field-map='{"url": "sonarr_url", "api_key": "sonarr_api_key"}'>Test Connection</button>
+    <span class="test-result" data-result-for="sonarr"></span>
+
+    <p class="muted">Sync-safety fields (also editable, with more context, on the Settings screen):</p>
+    <label><input type="checkbox" name="sonarr_auto_sync" {% if sonarr.auto_sync %}checked{% endif %}> Auto-sync every run</label>
+    <label>User mode
+      <select name="sonarr_user_mode">
+        {% for choice in user_mode_choices %}
+        <option value="{{ choice }}" {% if sonarr.user_mode == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if errors.sonarr_user_mode %}<p class="field-error">{{ errors.sonarr_user_mode }}</p>{% endif %}
+    <label>Plex users to sync (comma-separated)
+      <input type="text" name="sonarr_plex_users" value="{{ sonarr.plex_users }}">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Radarr</legend>
+    <label><input type="checkbox" name="radarr_enabled" {% if radarr.enabled %}checked{% endif %}> Enabled</label>
+    <label>URL
+      <input type="text" name="radarr_url" value="{{ radarr.url }}" placeholder="http://localhost:7878">
+    </label>
+    {% if errors.radarr_url %}<p class="field-error">{{ errors.radarr_url }}</p>{% endif %}
+    <label>API key ({{ radarr.api_key_status }})
+      <input type="password" name="radarr_api_key" placeholder="Leave blank to keep existing" autocomplete="off">
+    </label>
+    <button type="button" class="test-connection" data-service="radarr"
+            data-field-map='{"url": "radarr_url", "api_key": "radarr_api_key"}'>Test Connection</button>
+    <span class="test-result" data-result-for="radarr"></span>
+
+    <p class="muted">Sync-safety fields (also editable, with more context, on the Settings screen):</p>
+    <label><input type="checkbox" name="radarr_auto_sync" {% if radarr.auto_sync %}checked{% endif %}> Auto-sync every run</label>
+    <label>User mode
+      <select name="radarr_user_mode">
+        {% for choice in user_mode_choices %}
+        <option value="{{ choice }}" {% if radarr.user_mode == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if errors.radarr_user_mode %}<p class="field-error">{{ errors.radarr_user_mode }}</p>{% endif %}
+    <label>Plex users to sync (comma-separated)
+      <input type="text" name="radarr_plex_users" value="{{ radarr.plex_users }}">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Trakt</legend>
+    <label><input type="checkbox" name="trakt_enabled" {% if trakt.enabled %}checked{% endif %}> Enabled</label>
+    <label>Client ID
+      <input type="text" name="trakt_client_id" value="{{ trakt.client_id }}">
+    </label>
+    {% if errors.trakt_client_id %}<p class="field-error">{{ errors.trakt_client_id }}</p>{% endif %}
+    <label>Client secret ({{ trakt.client_secret_status }})
+      <input type="password" name="trakt_client_secret" placeholder="Leave blank to keep existing" autocomplete="off">
+    </label>
+    <p class="muted">
+      Account link: {{ trakt.access_token_status }}.
+      Run <code>python3 -m utils.trakt_auth</code> from the project root to link/relink a Trakt account
+      (device-code OAuth can't be completed from this form).
+    </p>
+    <button type="button" class="test-connection" data-service="trakt"
+            data-field-map='{"client_id": "trakt_client_id", "client_secret": "trakt_client_secret"}'>Test Connection</button>
+    <span class="test-result" data-result-for="trakt"></span>
+
+    <p class="muted">Sync-safety fields (also editable, with more context, on the Settings screen):</p>
+    <label><input type="checkbox" name="trakt_auto_sync" {% if trakt.auto_sync %}checked{% endif %}> Auto-sync every run</label>
+    <label>User mode
+      <select name="trakt_user_mode">
+        {% for choice in user_mode_choices %}
+        <option value="{{ choice }}" {% if trakt.user_mode == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if errors.trakt_user_mode %}<p class="field-error">{{ errors.trakt_user_mode }}</p>{% endif %}
+    <label>Plex users to sync (comma-separated)
+      <input type="text" name="trakt_plex_users" value="{{ trakt.plex_users }}">
+    </label>
+  </fieldset>
+
+  <button type="submit">Save</button>
+</form>
+
+<script src="{{ url_for('static', filename='config.js') }}"></script>
+{% endblock %}
