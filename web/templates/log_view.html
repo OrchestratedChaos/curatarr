@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block title %}{{ filename }} - Curatarr{% endblock %}
+{% block content %}
+<h1>{{ filename }}</h1>
+<p><a href="{{ url_for('results') }}">&larr; back to results</a></p>
+<pre class="log-output">{{ content }}</pre>
+{% endblock %}
