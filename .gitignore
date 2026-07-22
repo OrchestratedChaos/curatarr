@@ -31,3 +31,9 @@ __pycache__/
 CLAUDE.md
 TODO.md
 .coverage
+
+# PyInstaller build output (see curatarr.spec / docs/BINARIES.md)
+build/
+dist/
+*.buildvenv/
+.buildvenv/
