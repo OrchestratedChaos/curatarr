@@ -13,3 +13,6 @@ requests==2.34.2
 
 # YAML configuration parser
 pyyaml==6.0.3
+
+# Local web UI (dashboard, run-with-live-log, results) - see web/
+flask==3.1.3

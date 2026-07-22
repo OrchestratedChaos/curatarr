@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}Results - Curatarr{% endblock %}
+{% block content %}
+<h1>Results</h1>
+
+<h2>Watchlists</h2>
+{% if watchlists %}
+<ul class="file-list">
+  {% for w in watchlists %}
+  <li>
+    <a href="{{ url_for('results_watchlist', filename=w.name) }}" target="_blank" rel="noopener">{{ w.name }}</a>
+    <span class="muted">({{ w.mtime.strftime('%Y-%m-%d %H:%M') }})</span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No watchlists generated yet - run recommendations first.</p>
+{% endif %}
+
+<h2>Logs</h2>
+{% if logs %}
+<table class="status-table">
+  <thead><tr><th>Log file</th><th>Modified</th><th>Size</th></tr></thead>
+  <tbody>
+    {% for log in logs %}
+    <tr>
+      <td><a href="{{ url_for('results_log', filename=log.name) }}">{{ log.name }}</a></td>
+      <td>{{ log.mtime.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      <td>{{ (log.size / 1024) | round(1) }} KB</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No logs yet.</p>
+{% endif %}
+{% endblock %}

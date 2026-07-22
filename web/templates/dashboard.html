@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard - Curatarr{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+{% if job and job.state == 'running' %}
+<p class="banner running">
+  A run is in progress ({{ job.engine }} / {{ job.user }}) -
+  <a href="{{ url_for('run_form') }}">watch live</a>
+</p>
+{% endif %}
+
+<table class="status-table">
+  <thead>
+    <tr><th>User</th><th>Last Run</th><th>Status</th><th>Log</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.username }}</td>
+      <td>{{ row.timestamp.strftime('%Y-%m-%d %H:%M:%S') if row.timestamp else '—' }}</td>
+      <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+      <td>
+        {% if row.log_file %}
+        <a href="{{ url_for('results_log', filename=row.log_file) }}">view log</a>
+        {% else %}
+        —
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4">No users configured in config/config.yml (users.list).</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p>
+  <a class="button" href="{{ url_for('run_form') }}">Run recommendations</a>
+  &middot;
+  <a href="{{ url_for('results') }}">View watchlists &amp; logs</a>
+</p>
+{% endblock %}

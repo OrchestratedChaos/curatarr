@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block title %}Run - Curatarr{% endblock %}
+{% block content %}
+<h1>Run Recommendations</h1>
+
+{% if error == 'busy' %}
+<p class="banner error">A run is already in progress - wait for it to finish.</p>
+{% elif error %}
+<p class="banner error">{{ error }}</p>
+{% endif %}
+
+<form method="post" action="{{ url_for('run_trigger') }}" id="run-form">
+  <label>Engine
+    <select name="engine" id="engine-select">
+      <option value="full">Full run (movie + tv + external)</option>
+      <option value="movie">Movie recommendations</option>
+      <option value="tv">TV recommendations</option>
+      <option value="external">External watchlists</option>
+    </select>
+  </label>
+  <label>User
+    <select name="user" id="user-select">
+      <option value="all">All users</option>
+      {% for u in users %}
+      <option value="{{ u }}">{{ u }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" {% if running %}disabled{% endif %}>Run</button>
+</form>
+
+<h2>Output</h2>
+<p id="job-status">
+  {% if job %}
+  {{ job.engine }} / {{ job.user }} - <span id="job-state">{{ job.state }}</span>
+  {% else %}
+  No run yet.
+  {% endif %}
+</p>
+<pre id="output" class="log-output"></pre>
+
+<script>
+  window.CURATARR_HAS_JOB = {{ 'true' if job else 'false' }};
+</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

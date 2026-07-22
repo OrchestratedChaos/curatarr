@@ -84,6 +84,22 @@ First run takes 5-10 minutes to analyze your library. After that, it's fast.
 
 ---
 
+## Web UI (beta)
+
+A local dashboard for running recommendations and checking status without the terminal:
+
+```bash
+./run-ui.sh     # macOS/Linux
+.\run-ui.ps1   # Windows (PowerShell)
+```
+
+Opens `http://127.0.0.1:8787` in your browser once the server is ready (binds to
+localhost only). From there you can see each user's last-run status, trigger a
+run (full pipeline, or just movie/tv/external) with a live streaming log, and
+browse generated watchlists and past logs.
+
+---
+
 ## What You Get
 
 ### In Plex
@@ -442,6 +458,9 @@ curatarr/
 ├── tests/                   # Unit tests (960+)
 ├── run.sh                   # Main entry point (macOS/Linux)
 ├── run.ps1                  # Main entry point (Windows)
+├── run-ui.sh                # Web UI launcher (macOS/Linux)
+├── run-ui.ps1               # Web UI launcher (Windows)
+├── web/                     # Local web UI (Flask, beta)
 ├── Dockerfile               # Docker image definition
 ├── docker-compose.yml       # Docker Compose config
 ├── cache/                   # TMDB metadata cache
