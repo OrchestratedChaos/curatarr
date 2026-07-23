@@ -63,6 +63,8 @@ where config/cache/logs live for a binary install, and current
 limitations.
 
 ### macOS / Linux
+Requires Python 3.10+ (`python3 --version`). `run.sh` checks this up front and
+tells you clearly if it isn't met - it won't leave a half-updated install.
 ```bash
 git clone https://github.com/OrchestratedChaos/curatarr.git
 cd curatarr
@@ -70,11 +72,17 @@ cd curatarr
 ```
 
 ### Windows (PowerShell)
+Requires Python 3.10+ (`python --version`). `run.ps1` checks this up front and
+tells you clearly if it isn't met - it won't leave a half-updated install.
 ```powershell
 git clone https://github.com/OrchestratedChaos/curatarr.git
 cd curatarr
 .\run.ps1   # Setup wizard runs on first launch
 ```
+
+Below the Python floor, or don't want to manage a Python install at all? Use
+the [standalone binary](#standalone-binary-no-python-required) instead - it
+bundles its own Python and UI deps, so it's unaffected by this.
 
 ### Docker
 ```bash

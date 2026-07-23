@@ -145,17 +145,33 @@ never apply a tag whose version isn't strictly greater than its current
   repos/actions/checkout/git/refs/tags/v8 --jq .object.sha`, following
   one more level via `gh api repos/<owner>/<repo>/git/tags/<sha>` if that
   returns an annotated tag object instead of a commit).
-- **Runtime Python dependencies are hash-pinned.** `requirements.txt`
-  stays the human-edited `==`-pinned source of truth; `requirements.lock`
-  is a generated, fully-hashed (direct + transitive, macOS/Linux/Windows)
-  lock that `run.sh`/`run.ps1` install with `pip install
-  --require-hashes`, so a compromised package index or a MITM'd download
-  can't silently substitute a different build of a dependency during the
-  auto-updater's install step. Regenerate after any `requirements.txt`
-  change - see the comment at the top of `requirements.lock` for the
-  exact command (uses [`uv`](https://docs.astral.sh/uv/)). Build-only
-  dependencies (`build-requirements.txt`, PyInstaller, CI-only) are not
-  hash-pinned - they never run on an end user's machine.
+- **Runtime Python dependencies are hash-pinned, and split core vs. UI.**
+  `requirements.txt` (core: plexapi/requests/pyyaml) stays the
+  human-edited `==`-pinned source of truth for the CLI/cron
+  recommendation engine; `requirements.lock` is its generated, fully-hashed
+  (direct + transitive, macOS/Linux/Windows) lock that `run.sh`/`run.ps1`
+  install with `pip install --require-hashes`, so a compromised package
+  index or a MITM'd download can't silently substitute a different build
+  of a dependency during the auto-updater's install step. If that hashed
+  install itself fails (hash/platform mismatch), `run.sh`/`run.ps1` fall
+  back to a plain pinned install from `requirements.txt` with a warning
+  rather than hard-failing the update - hashed stays the primary path.
+  `requirements-ui.txt`/`requirements-ui.lock` are the same thing for the
+  web UI's own deps (flask, ruamel.yaml), installed only by
+  `run-ui.sh`/`run-ui.ps1` (and the binary build) - kept out of the core
+  files so a plain `./run.sh` update never pulls in the UI stack. Both
+  `run.sh`/`run.ps1` and `run-ui.sh`/`run-ui.ps1` also gate on the Python
+  floor declared in the `--python-version X.Y` comment in the relevant
+  lock file's header *before* attempting any install (and, for the
+  auto-updater, *before* checking out a candidate release tag at all -
+  see `check_for_updates`/`Check-ForUpdates`), so an interpreter below the
+  floor gets one clear, actionable message and its working installation
+  is left untouched instead of a broken half-update. Regenerate a lock
+  after any change to its `requirements*.txt` - see the comment at the
+  top of `requirements.lock`/`requirements-ui.lock` for the exact command
+  (uses [`uv`](https://docs.astral.sh/uv/)). Build-only dependencies
+  (`build-requirements.txt`, PyInstaller, CI-only) are not hash-pinned -
+  they never run on an end user's machine.
 - **Fingerprint parsing is anchored, not "first match anywhere".** Both
   `run.sh`/`run.ps1`'s `select_verified_release`/`Select-VerifiedRelease`
   and `release.yml`'s tag-verification step capture only what `git

@@ -51,7 +51,36 @@ function Check-Dependencies {
 
     $pythonCmd = $python.Source
     $pythonVersion = & $pythonCmd --version 2>&1
+    $pythonVersionNumber = [regex]::Match("$pythonVersion", '(\d+\.\d+\.\d+)').Groups[1].Value
     Write-Green "OK Python $pythonVersion found"
+
+    # Python floor gate. requirements.lock's own header declares the
+    # actual floor via the `--python-version X.Y` in its regenerate
+    # command (see that file) - reading it back out here means an
+    # interpreter below the floor gets one clear, actionable message
+    # instead of a wall of pip resolution errors, and this (working)
+    # installation is left completely untouched.
+    if ((Test-Path "requirements.lock") -and $pythonVersionNumber) {
+        $lockContent = Get-Content "requirements.lock" -Raw
+        $floorMatch = [regex]::Match($lockContent, '--python-version (\d+\.\d+)')
+        if ($floorMatch.Success) {
+            $requiredPython = $floorMatch.Groups[1].Value
+            $currentTuple = ConvertTo-VersionTuple $pythonVersionNumber
+            $requiredTuple = ConvertTo-VersionTuple $requiredPython
+            if ($currentTuple -and $requiredTuple -and (Compare-VersionTuple $currentTuple $requiredTuple) -lt 0) {
+                Write-Red "X Python $pythonVersionNumber found, but curatarr requires Python $requiredPython+"
+                Write-Host ""
+                Write-Host "Nothing has been changed - your existing setup is untouched."
+                Write-Host "To proceed, either:"
+                Write-Host "  - Upgrade Python to $requiredPython+ (https://www.python.org/downloads/), or"
+                Write-Host "  - Use a standalone curatarr binary instead - it bundles its own Python"
+                Write-Host "    and UI deps, so it's unaffected by this system Python floor:"
+                Write-Host "    https://github.com/OrchestratedChaos/curatarr/releases"
+                Write-Host ""
+                exit 1
+            }
+        }
+    }
 
     # Check pip
     $pipCheck = & $pythonCmd -m pip --version 2>&1
@@ -72,15 +101,33 @@ function Check-Dependencies {
     # refuse to install anything whose downloaded artifact doesn't match
     # a pinned SHA256, so a compromised index or MITM'd download can't
     # silently substitute a different build of a dependency here.
+    #
+    # If the hash-verified install itself fails (e.g. a hash/platform
+    # mismatch), fall back to the normal pinned install from
+    # requirements.txt with a clear warning rather than hard-failing the
+    # whole update. Hashed stays the primary, preferred path.
     if (Test-Path "requirements.lock") {
-        Write-Cyan "Installing Python dependencies..."
+        Write-Cyan "Installing Python dependencies (hash-verified)..."
         & $pythonCmd -m pip install --require-hashes -r requirements.lock --quiet 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Red "X Failed to install Python dependencies"
-            Write-Host "Try running manually: python -m pip install --require-hashes -r requirements.lock"
-            exit 1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Green "OK All dependencies installed (hash-verified)"
+        } else {
+            Write-Yellow "Hash-verified install failed (hash/platform mismatch?)"
+            Write-Yellow "Falling back to a normal pinned install from requirements.txt"
+            Write-Yellow "(no hash verification for this run). See RELEASING.md if this persists."
+            if (Test-Path "requirements.txt") {
+                & $pythonCmd -m pip install -r requirements.txt --quiet 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Red "X Failed to install Python dependencies"
+                    Write-Host "Try running manually: python -m pip install -r requirements.txt"
+                    exit 1
+                }
+                Write-Green "OK All dependencies installed (fallback, unhashed)"
+            } else {
+                Write-Red "X Failed to install Python dependencies"
+                exit 1
+            }
         }
-        Write-Green "OK All dependencies installed"
     } elseif (Test-Path "requirements.txt") {
         Write-Yellow "requirements.lock not found, falling back to requirements.txt (no hash verification)"
         & $pythonCmd -m pip install -r requirements.txt --quiet 2>&1 | Out-Null
@@ -294,7 +341,37 @@ function Check-ForUpdates {
                     return
                 }
 
-                Write-Yellow "Verified signed release $selectedTag available! Updating..."
+                Write-Yellow "Verified signed release $selectedTag available!"
+
+                # Python floor gate, checked BEFORE touching the working
+                # tree: peek at the candidate tag's requirements.lock via
+                # `git show` (no checkout needed) and read its declared
+                # floor the same way Check-Dependencies does. If the
+                # running interpreter doesn't meet it, skip this update
+                # and stay on the current (working) version - switching
+                # the working tree onto code whose deps can't even
+                # install would be strictly worse than not updating.
+                $candidateLock = git show "${selectedTag}:requirements.lock" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $candidateLock) {
+                    $candidateLockText = $candidateLock -join "`n"
+                    $candidateFloorMatch = [regex]::Match($candidateLockText, '--python-version (\d+\.\d+)')
+                    if ($candidateFloorMatch.Success) {
+                        $candidateRequiredPython = $candidateFloorMatch.Groups[1].Value
+                        $currentPythonVersion = (& $pythonCmd --version 2>&1)
+                        $currentPythonNumber = [regex]::Match("$currentPythonVersion", '(\d+\.\d+\.\d+)').Groups[1].Value
+                        $currentTuple = ConvertTo-VersionTuple $currentPythonNumber
+                        $candidateRequiredTuple = ConvertTo-VersionTuple $candidateRequiredPython
+                        if ($currentTuple -and $candidateRequiredTuple -and (Compare-VersionTuple $currentTuple $candidateRequiredTuple) -lt 0) {
+                            Write-Yellow "$selectedTag requires Python $candidateRequiredPython+ (you have $currentPythonNumber) - staying on v$currentVersion."
+                            Write-Yellow "Upgrade Python to $candidateRequiredPython+, or use a standalone binary (bundles its own"
+                            Write-Yellow "Python + UI deps): https://github.com/OrchestratedChaos/curatarr/releases"
+                            Write-Host ""
+                            return
+                        }
+                    }
+                }
+
+                Write-Yellow "Updating..."
 
                 git stash --quiet 2>$null
 
@@ -1386,6 +1463,25 @@ function Main {
         Write-Cyan "file:///$($watchlistFile -replace '\\', '/')"
     }
     Write-Host ""
+
+    # One-time notice pointing existing CLI/scheduled-task users at the
+    # local web UI, added by run-ui.ps1. Non-intrusive: a single line,
+    # shown once (tracked via a marker in cache/, already gitignored),
+    # never forces or auto-launches anything.
+    $uiNoticeMarker = Join-Path $ScriptDir "cache\.ui_notice_shown"
+    if (-not (Test-Path $uiNoticeMarker)) {
+        Write-Host "New: " -NoNewline -ForegroundColor Cyan
+        Write-Host "a local web UI is now available - run " -NoNewline
+        Write-Host ".\run-ui.ps1" -NoNewline -ForegroundColor Cyan
+        Write-Host " for a dashboard, live logs, and config editor."
+        Write-Host ""
+        try {
+            New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir "cache") | Out-Null
+            New-Item -ItemType File -Force -Path $uiNoticeMarker | Out-Null
+        } catch {
+            # Non-fatal - worst case the notice repeats next run.
+        }
+    }
 }
 
 # Run main function

@@ -133,9 +133,14 @@ binary the same as a source install.
 ## Building it yourself
 
 ```bash
-pip install -r requirements.txt -r build-requirements.txt
+pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt
 pyinstaller --clean --noconfirm curatarr.spec
 ```
+
+The binary bundles the web UI too, so `requirements-ui.txt` (flask,
+ruamel.yaml) has to be installed alongside the core deps before running
+PyInstaller - see `requirements.txt`'s header for why those live in a
+separate file for source installs.
 
 Produces `dist/curatarr` (`dist/curatarr.exe` on Windows). See
 `curatarr.spec` for what's bundled and why, and
