@@ -33,8 +33,6 @@ def _read_yaml(root, name):
 VALID_FORM = {
     'plex_url': 'http://localhost:32400',
     'plex_token': '',
-    'plex_movie_library': 'Movies',
-    'plex_tv_library': 'TV Shows',
     'tmdb_api_key': '',
     'tautulli_url': '',
     'tautulli_api_key': '',
@@ -75,8 +73,6 @@ class TestSave:
 
         core = _read_yaml(root, 'config')
         assert core['plex']['url'] == 'http://localhost:32400'
-        assert core['plex']['movie_library'] == 'Movies'
-        assert core['plex']['tv_library'] == 'TV Shows'
 
     def test_saves_sonarr_radarr_trakt_to_their_own_files(self, client):
         c, app, root = client
@@ -168,13 +164,6 @@ class TestValidation:
 
         after = _read_yaml(root, 'config')
         assert after == before
-
-    def test_missing_required_movie_library_rejected(self, client):
-        c, app, root = client
-        bad = dict(VALID_FORM)
-        bad['plex_movie_library'] = ''
-        resp = c.post('/config/connections', data=bad)
-        assert resp.status_code == 400
 
     def test_invalid_user_mode_rejected(self, client):
         c, app, root = client

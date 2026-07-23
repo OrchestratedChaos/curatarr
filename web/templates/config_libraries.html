@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+{% block title %}Libraries - Curatarr{% endblock %}
+{% block content %}
+<h1>Libraries</h1>
+
+{% if saved %}
+<p class="banner running">Saved.</p>
+{% endif %}
+{% if errors['_global'] %}
+<p class="banner error">{{ errors['_global'] }}</p>
+{% endif %}
+
+<p class="muted">
+  Each Plex library (movies or TV) curatarr scans and generates recommendations for. Every
+  library can route to its own Radarr/Sonarr instance and folder/quality/tag settings here -
+  any field left blank falls back to the global Sonarr/Radarr connection on the
+  <a href="{{ url_for('config_connections') }}">Connections</a> screen.
+</p>
+
+<form method="post" action="{{ url_for('config_libraries_save') }}" class="config-form">
+  <input type="hidden" name="library_count" value="{{ libraries|length }}">
+
+  <table class="status-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Plex section</th>
+        <th>Media type</th>
+        <th>Root folder</th>
+        <th>Quality profile</th>
+        <th>Tag</th>
+        <th>Monitor</th>
+        <th>Search</th>
+        <th>Min. availability (movie)</th>
+        <th>Series type (tv)</th>
+        <th>Season folders (tv)</th>
+        <th>Instance URL</th>
+        <th>Instance API key</th>
+        <th>Remove</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lib in libraries %}
+      <tr>
+        <td>
+          <input type="hidden" name="library_id_{{ loop.index0 }}" value="{{ lib.id }}">
+          <input type="text" name="name_{{ loop.index0 }}" value="{{ lib.name }}">
+          {% if errors['name_' ~ loop.index0] %}<p class="field-error">{{ errors['name_' ~ loop.index0] }}</p>{% endif %}
+        </td>
+        <td>
+          <input type="text" name="section_{{ loop.index0 }}" value="{{ lib.section }}">
+          {% if errors['section_' ~ loop.index0] %}<p class="field-error">{{ errors['section_' ~ loop.index0] }}</p>{% endif %}
+        </td>
+        <td>
+          <select name="media_type_{{ loop.index0 }}">
+            {% for choice in media_type_choices %}
+            <option value="{{ choice }}" {% if lib.media_type == choice %}selected{% endif %}>{{ choice }}</option>
+            {% endfor %}
+          </select>
+          {% if errors['media_type_' ~ loop.index0] %}<p class="field-error">{{ errors['media_type_' ~ loop.index0] }}</p>{% endif %}
+        </td>
+        <td><input type="text" name="arr_{{ loop.index0 }}_root_folder" value="{{ lib.arr.root_folder }}" placeholder="(use global)"></td>
+        <td><input type="text" name="arr_{{ loop.index0 }}_quality_profile" value="{{ lib.arr.quality_profile }}" placeholder="(use global)"></td>
+        <td><input type="text" name="arr_{{ loop.index0 }}_tag" value="{{ lib.arr.tag }}" placeholder="(use global)"></td>
+        <td><input type="checkbox" name="arr_{{ loop.index0 }}_monitor" {% if lib.arr.monitor %}checked{% endif %}></td>
+        <td><input type="checkbox" name="arr_{{ loop.index0 }}_search" {% if lib.arr.search %}checked{% endif %}></td>
+        <td><input type="text" name="arr_{{ loop.index0 }}_minimum_availability" value="{{ lib.arr.minimum_availability }}" placeholder="(use global)"></td>
+        <td><input type="text" name="arr_{{ loop.index0 }}_series_type" value="{{ lib.arr.series_type }}" placeholder="(use global)"></td>
+        <td><input type="checkbox" name="arr_{{ loop.index0 }}_season_folder" {% if lib.arr.season_folder %}checked{% endif %}></td>
+        <td>
+          <input type="text" name="instance_url_{{ loop.index0 }}" value="{{ lib.instance_url }}" placeholder="(use global Sonarr/Radarr)">
+          {% if errors['instance_url_' ~ loop.index0] %}<p class="field-error">{{ errors['instance_url_' ~ loop.index0] }}</p>{% endif %}
+        </td>
+        <td>
+          <span class="muted">{{ lib.instance_api_key_status }}</span>
+          <input type="password" name="instance_api_key_{{ loop.index0 }}" placeholder="Leave blank to keep existing" autocomplete="off">
+        </td>
+        <td><label><input type="checkbox" name="remove_{{ loop.index0 }}"> remove</label></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="14">No libraries configured yet - add one below.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <fieldset>
+    <legend>Add a library</legend>
+    <label>Name
+      <input type="text" name="new_name" value="{{ new_name }}" placeholder="Kids Movies">
+    </label>
+    {% if errors.new_name %}<p class="field-error">{{ errors.new_name }}</p>{% endif %}
+    <label>Plex section
+      <input type="text" name="new_section" value="{{ new_section }}" placeholder="Kids Movies">
+    </label>
+    {% if errors.new_section %}<p class="field-error">{{ errors.new_section }}</p>{% endif %}
+    <label>Media type
+      <select name="new_media_type">
+        {% for choice in media_type_choices %}
+        <option value="{{ choice }}" {% if new_media_type == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if errors.new_media_type %}<p class="field-error">{{ errors.new_media_type }}</p>{% endif %}
+    <p class="muted">Routing (folder/quality/tag/instance) and monitor/search can be filled in after adding.</p>
+  </fieldset>
+
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

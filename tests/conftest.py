@@ -47,6 +47,22 @@ users:
   preferences:
     alice:
       display_name: "Alice A"
+libraries:
+  - id: movies
+    name: Movies
+    section: Movies
+    media_type: movie
+    arr:
+      root_folder: /data/movies
+      quality_profile: HD-1080p
+      minimum_availability: released
+      instance:
+        url: "http://localhost:7878"
+        api_key: "not-a-real-radarr-key"
+  - id: tv-shows
+    name: TV Shows
+    section: TV Shows
+    media_type: tv
 '''
 
 

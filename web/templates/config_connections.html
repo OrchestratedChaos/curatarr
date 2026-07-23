@@ -23,15 +23,10 @@
       <input type="password" name="plex_token" placeholder="Leave blank to keep existing" autocomplete="off">
     </label>
 
-    <label>Movie library
-      <input type="text" name="plex_movie_library" value="{{ plex.movie_library }}">
-    </label>
-    {% if errors.plex_movie_library %}<p class="field-error">{{ errors.plex_movie_library }}</p>{% endif %}
-
-    <label>TV library
-      <input type="text" name="plex_tv_library" value="{{ plex.tv_library }}">
-    </label>
-    {% if errors.plex_tv_library %}<p class="field-error">{{ errors.plex_tv_library }}</p>{% endif %}
+    <p class="muted">
+      Movie/TV libraries are now configured on the
+      <a href="{{ url_for('config_libraries') }}">Libraries</a> screen.
+    </p>
 
     <button type="button" class="test-connection" data-service="plex"
             data-field-map='{"url": "plex_url", "token": "plex_token"}'>Test Connection</button>

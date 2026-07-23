@@ -181,6 +181,29 @@ def parse_csv_list(value: Optional[str]) -> list:
     return [item.strip() for item in value.split(',') if item.strip()]
 
 
+def existing_library_secret(core: CommentedMap, library_id: Optional[str]) -> str:
+    """Current arr.instance.api_key for the on-disk library whose id is
+    *library_id*, or '' if that id doesn't match any existing entry (a
+    brand new library row being added this submission) or has no
+    instance api_key configured.
+
+    Used by web.config_app's Libraries screen (_apply_libraries /
+    _libraries_view) so a blank instance_api_key submission keeps
+    whatever secret was already saved for that specific library row -
+    matched by its immutable id, not by list position, since rows can
+    be reordered/added/removed within the same submission.
+    """
+    if not library_id:
+        return ''
+    for entry in core.get('libraries') or []:
+        entry = entry or {}
+        if entry.get('id') == library_id:
+            arr = entry.get('arr') or {}
+            instance = arr.get('instance') or {}
+            return instance.get('api_key', '') or ''
+    return ''
+
+
 def format_csv_list(value) -> str:
     """Inverse of parse_csv_list, for pre-filling a text input from a
     YAML list (or a legacy comma-string) on GET."""
