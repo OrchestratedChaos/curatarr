@@ -173,7 +173,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r build-requirements.txt
+          pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt
 
       - name: Build binary with PyInstaller
         shell: bash

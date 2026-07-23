@@ -57,6 +57,29 @@ check_and_install_dependencies() {
     PYTHON_VERSION=$(python3 --version | awk '{print $2}')
     echo -e "${GREEN}✓ Python $PYTHON_VERSION found${NC}"
 
+    # Python floor gate. requirements.lock's own header declares the
+    # actual floor via the `--python-version X.Y` in its regenerate
+    # command (see that file) - reading it back out here means an
+    # interpreter below the floor gets one clear, actionable message
+    # instead of a wall of pip resolution errors, and this (working)
+    # installation is left completely untouched.
+    if [ -f "requirements.lock" ]; then
+        REQUIRED_PYTHON=$(grep -oE -- '--python-version [0-9]+\.[0-9]+' requirements.lock | head -1 | awk '{print $2}')
+        if [ -n "$REQUIRED_PYTHON" ] && ! version_ge "$PYTHON_VERSION" "$REQUIRED_PYTHON"; then
+            echo -e "${RED}❌ Python $PYTHON_VERSION found, but curatarr requires Python $REQUIRED_PYTHON+${NC}"
+            echo ""
+            echo "Nothing has been changed - your existing setup is untouched."
+            echo "To proceed, either:"
+            echo "  - Upgrade Python to $REQUIRED_PYTHON+ (https://www.python.org/downloads/ or"
+            echo "    'brew install python3' on macOS), or"
+            echo "  - Use a standalone curatarr binary instead - it bundles its own Python"
+            echo "    and UI deps, so it's unaffected by this system Python floor:"
+            echo "    https://github.com/OrchestratedChaos/curatarr/releases"
+            echo ""
+            exit 1
+        fi
+    fi
+
     # Check pip3
     if ! command -v pip3 &> /dev/null; then
         echo -e "${YELLOW}pip3 not found, attempting to install...${NC}"
@@ -76,14 +99,35 @@ check_and_install_dependencies() {
     # refuse to install anything whose downloaded artifact doesn't match
     # a pinned SHA256, so a compromised index or MITM'd download can't
     # silently substitute a different build of a dependency here.
+    #
+    # If the hash-verified install itself fails (e.g. a hash/platform
+    # mismatch - requirements.lock is regenerated for a specific
+    # `--python-version`, and a wheel that doesn't exist for this exact
+    # interpreter/platform combo can trip that up even when the floor
+    # check above passed), fall back to the normal pinned install from
+    # requirements.txt with a clear warning rather than hard-failing the
+    # whole update. Hashed stays the primary, preferred path.
     if [ -f "requirements.lock" ]; then
-        echo -e "${CYAN}Installing Python dependencies...${NC}"
-        pip3 install --require-hashes -r requirements.lock --quiet || {
-            echo -e "${RED}❌ Failed to install Python dependencies${NC}"
-            echo "Try running manually: pip3 install --require-hashes -r requirements.lock"
-            exit 1
-        }
-        echo -e "${GREEN}✓ All dependencies installed${NC}"
+        echo -e "${CYAN}Installing Python dependencies (hash-verified)...${NC}"
+        if pip3 install --require-hashes -r requirements.lock --quiet; then
+            echo -e "${GREEN}✓ All dependencies installed (hash-verified)${NC}"
+        else
+            echo -e "${YELLOW}⚠ Hash-verified install failed (hash/platform mismatch?)${NC}"
+            echo -e "${YELLOW}  Falling back to a normal pinned install from requirements.txt${NC}"
+            echo -e "${YELLOW}  (no hash verification for this run). See RELEASING.md if this${NC}"
+            echo -e "${YELLOW}  persists.${NC}"
+            if [ -f "requirements.txt" ]; then
+                pip3 install -r requirements.txt --quiet || {
+                    echo -e "${RED}❌ Failed to install Python dependencies${NC}"
+                    echo "Try running manually: pip3 install -r requirements.txt"
+                    exit 1
+                }
+                echo -e "${GREEN}✓ All dependencies installed (fallback, unhashed)${NC}"
+            else
+                echo -e "${RED}❌ Failed to install Python dependencies${NC}"
+                exit 1
+            fi
+        fi
     elif [ -f "requirements.txt" ]; then
         echo -e "${YELLOW}requirements.lock not found, falling back to requirements.txt (no hash verification)${NC}"
         pip3 install -r requirements.txt --quiet || {
@@ -115,6 +159,23 @@ try:
 except ValueError:
     sys.exit(1)
 sys.exit(0 if a > b else 1)
+" "$1" "$2" 2>/dev/null
+}
+
+# version_ge A B: succeeds (exit 0) if dotted version A is greater than
+# or equal to dotted version B. Used for the Python floor gate (is the
+# running interpreter's version >= the required floor?).
+version_ge() {
+    python3 -c "
+import sys
+def parse(v):
+    return tuple(int(p) for p in v.strip().split('.'))
+try:
+    a = parse(sys.argv[1])
+    b = parse(sys.argv[2])
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if a >= b else 1)
 " "$1" "$2" 2>/dev/null
 }
 
@@ -239,7 +300,31 @@ check_for_updates() {
                     return
                 fi
 
-                echo -e "${YELLOW}Verified signed release ${SELECTED_TAG} available! Updating...${NC}"
+                echo -e "${YELLOW}Verified signed release ${SELECTED_TAG} available!${NC}"
+
+                # Python floor gate, checked BEFORE touching the working
+                # tree: peek at the candidate tag's requirements.lock via
+                # `git show` (no checkout needed) and read its declared
+                # floor the same way check_and_install_dependencies does.
+                # If the running interpreter doesn't meet it, skip this
+                # update and stay on the current (working) version -
+                # switching the working tree onto code whose deps can't
+                # even install would be strictly worse than not updating.
+                CANDIDATE_LOCK=$(git show "${SELECTED_TAG}:requirements.lock" 2>/dev/null) || true
+                CANDIDATE_REQUIRED_PYTHON=""
+                if [ -n "$CANDIDATE_LOCK" ]; then
+                    CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+                fi
+                CURRENT_PYTHON=$(python3 --version | awk '{print $2}')
+                if [ -n "$CANDIDATE_REQUIRED_PYTHON" ] && ! version_ge "$CURRENT_PYTHON" "$CANDIDATE_REQUIRED_PYTHON"; then
+                    echo -e "${YELLOW}${SELECTED_TAG} requires Python ${CANDIDATE_REQUIRED_PYTHON}+ (you have ${CURRENT_PYTHON}) — staying on v${CURRENT_VERSION}.${NC}"
+                    echo -e "${YELLOW}Upgrade Python to ${CANDIDATE_REQUIRED_PYTHON}+, or use a standalone binary (bundles its own${NC}"
+                    echo -e "${YELLOW}Python + UI deps): https://github.com/OrchestratedChaos/curatarr/releases${NC}"
+                    echo ""
+                    return
+                fi
+
+                echo -e "${YELLOW}Updating...${NC}"
 
                 # Stash any local changes
                 git stash --quiet 2>/dev/null || true
@@ -540,6 +625,17 @@ main() {
         echo -e "View external watchlist: ${CYAN}file://$watchlist_file${NC}"
     fi
     echo ""
+
+    # One-time notice pointing existing CLI/cron users at the local web
+    # UI, added by ./run-ui.sh. Non-intrusive: a single line, shown once
+    # (tracked via a marker in cache/, already gitignored), never forces
+    # or auto-launches anything.
+    local ui_notice_marker="$SCRIPT_DIR/cache/.ui_notice_shown"
+    if [ ! -f "$ui_notice_marker" ]; then
+        echo -e "${CYAN}New:${NC} a local web UI is now available - run ${CYAN}./run-ui.sh${NC} for a dashboard, live logs, and config editor."
+        echo ""
+        mkdir -p "$SCRIPT_DIR/cache" 2>/dev/null && touch "$ui_notice_marker" 2>/dev/null || true
+    fi
 }
 
 # Run main function

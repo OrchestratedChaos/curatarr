@@ -1,26 +1,38 @@
-# Python dependencies for Plex recommendation system
+# Core Python dependencies for Plex recommendation system (CLI/cron).
 #
 # Pinned to exact versions so `pip install -r requirements.txt` (no
 # --upgrade) is reproducible. Bump deliberately, one PR at a time.
+#
+# This is the *core* dependency set only - just what the CLI/cron
+# recommendation engine needs (movie/tv/external recommenders). The
+# local web UI's own deps (flask, ruamel.yaml) live in
+# requirements-ui.txt so that a plain `./run.sh` update for existing
+# CLI/cron users never pulls in the (heavier) UI stack. See
+# requirements-ui.txt and run-ui.sh/run-ui.ps1.
 #
 # run.sh/run.ps1 actually install from requirements.lock (this file's
 # direct + transitive deps, fully SHA256-hashed, `pip install
 # --require-hashes`) for supply-chain integrity beyond version pinning.
 # After changing this file, regenerate requirements.lock - see the
 # comment at the top of that file for the command.
+#
+# Python floor: plexapi>=4.18.0 and requests>=2.33.0 both require
+# Python 3.10+, so 3.10 is the effective floor for this file regardless
+# of which of the two drives it - see requirements.lock's header for
+# the full explanation of why neither can be pinned back down to
+# restore Python 3.8/3.9 support without dropping the requests
+# CVE-2026-25645 fix.
 
 # Core Plex API client
 plexapi==4.18.2
 
-# HTTP requests library
+# HTTP requests library. Pinned at 2.34.2 for the CVE-2026-25645 fix
+# (GHSA-gc5v-m9x4-r6x2, insecure temp file reuse in
+# extract_zipped_paths() - a function curatarr itself never calls, but
+# the pin is kept as defense in depth). Note this alone already
+# requires Python>=3.10 (first-patched 2.33.0 does too) - independent
+# of the plexapi floor above.
 requests==2.34.2
 
 # YAML configuration parser
 pyyaml==6.0.3
-
-# Local web UI (dashboard, run-with-live-log, results) - see web/
-flask==3.1.3
-
-# Round-trip YAML for the web UI config screens (preserves comments/
-# structure in config/*.yml on save) - see web/config_io.py
-ruamel.yaml==0.18.6
