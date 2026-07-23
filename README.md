@@ -4,6 +4,8 @@
 
 Turn your Plex server into a smart recommendation engine. Analyze what you and your users watch, then surface the hidden gems already in your library—plus discover what to add next.
 
+![Curatarr dashboard](docs/img/dashboard.png)
+
 ---
 
 ## Why This Exists
@@ -15,6 +17,27 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 - Scoring unwatched content by similarity (keywords, genres, cast, directors)
 - Creating personalized collections that update automatically
 - Generating external watchlists so you know what to acquire next
+
+---
+
+## Download
+
+Grab the binary for your platform - no Python, no `git clone`:
+
+| Platform | Asset |
+|---|---|
+| Windows x64 | `curatarr-windows-x86_64.exe` |
+| macOS universal (Intel + Apple Silicon) | `curatarr-macos-universal` |
+| Linux x64 | `curatarr-linux-x86_64` |
+| Linux arm64 | `curatarr-linux-arm64` |
+
+[Latest release](https://github.com/OrchestratedChaos/curatarr/releases/latest) · full platform-specific steps and checksums in [docs/BINARIES.md](docs/BINARIES.md)
+
+Double-click it and it opens the dashboard at `http://127.0.0.1:8787` in your browser - no Python install, no terminal.
+
+First run, your OS will warn about an unsigned binary - Windows SmartScreen: **More info → Run anyway**; macOS Gatekeeper: right-click → **Open**. Details in [docs/BINARIES.md](docs/BINARIES.md#unsigned-binaries).
+
+Binaries are manual-download, no auto-update - grab a newer one from Releases to upgrade. Want auto-updates instead? Use a [source install](#quick-start) - `run.sh`/`run.ps1` apply signed releases automatically.
 
 ---
 
@@ -52,16 +75,8 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ## Quick Start
 
-### Standalone binary (no Python required)
-
-Download the binary for your OS from the
-[latest release](https://github.com/OrchestratedChaos/curatarr/releases),
-run it, and it opens the web UI in your browser. See
-[docs/BINARIES.md](docs/BINARIES.md) for platform-specific run
-instructions (Windows SmartScreen / macOS Gatekeeper both warn on an
-unsigned binary the first time - that doc covers getting past it),
-where config/cache/logs live for a binary install, and current
-limitations.
+Below is the source install (Python required, auto-updates via signed releases).
+Prefer a no-Python download instead? See [Download](#download) above.
 
 ### macOS / Linux
 Requires Python 3.10+ (`python3 --version`). `run.sh` checks this up front and
@@ -82,8 +97,8 @@ cd curatarr
 ```
 
 Below the Python floor, or don't want to manage a Python install at all? Use
-the [standalone binary](#standalone-binary-no-python-required) instead - it
-bundles its own Python and UI deps, so it's unaffected by this.
+the [standalone binary](#download) instead - it bundles its own Python and
+UI deps, so it's unaffected by this.
 
 ### Docker
 ```bash
@@ -113,9 +128,8 @@ A local dashboard for running recommendations and checking status without the te
 .\run-ui.ps1   # Windows (PowerShell)
 ```
 
-Or skip the source install entirely and download a
-[standalone binary](docs/BINARIES.md) - it opens straight to this same
-UI.
+Or skip the source install entirely and grab a [standalone binary](#download)
+- it opens straight to this same UI.
 
 Opens `http://127.0.0.1:8787` in your browser once the server is ready (binds to
 localhost only). From there you can see each user's last-run status, trigger a
@@ -126,7 +140,9 @@ browse generated watchlists and past logs.
 hand-editing YAML:
 
 - **Connections** (`/config/connections`) - Plex, TMDB, Tautulli, Sonarr, Radarr,
-  and Trakt, each with a Test Connection button.
+  and Trakt, each with a Test Connection button. (Simkl and MDBList are
+  YAML-only for now - `config/simkl.yml` / `config/mdblist.yml` - not yet on
+  this screen.)
 - **Users** (`/config/users`) - add/remove Plex users and per-user preferences
   (display name, excluded genres, max content rating, streaming services).
 - **Settings** (`/config/settings`) - scoring weights, quality filters, recency
@@ -141,6 +157,16 @@ Secrets (tokens/API keys) are never shown once saved - fields show a
 "configured" / "not set" status, and you only need to enter a new value to
 change one. Saves are validated (e.g. scoring weights must sum to 1.0) and
 written atomically, so a bad submission can't corrupt your config files.
+
+### Screenshots
+
+| Dashboard | Run |
+|---|---|
+| ![Dashboard](docs/img/dashboard.png) | ![Run](docs/img/run.png) |
+
+| Results | Connections |
+|---|---|
+| ![Results](docs/img/results.png) | ![Connections](docs/img/connections.png) |
 
 ---
 
@@ -232,11 +258,80 @@ users:
 - TV: `TV-Y`, `TV-Y7`, `TV-G`, `TV-PG`, `TV-14`, `TV-MA` (from least to most restrictive)
 - Recommendations above the user's `max_rating` are filtered out
 
+### Multi-Library Setup (Optional)
+
+By default Curatarr uses the single `plex.movie_library` / `plex.tv_library`
+pair above. To manage multiple Plex libraries separately (e.g. Movies + Kids
+Movies, or TV Shows + Anime) - each with its own Sonarr/Radarr routing - add
+a `libraries:` block to `config/config.yml` instead:
+
+```yaml
+libraries:
+  - id: movies                       # stable slug; auto-derived from name if omitted
+    name: Movies
+    section: Movies                  # Plex section title
+    media_type: movie                # movie | tv
+    arr:                             # optional; each field falls back to the global sonarr.yml/radarr.yml
+      root_folder: /data/movies
+      quality_profile: HD-1080p
+      tag: Curatarr
+      monitor: false
+      search: false
+      minimum_availability: released # movie-only
+    instance:                        # optional; routes this library to its own *arr instance
+      url: http://localhost:7878
+      api_key: YOUR_RADARR_API_KEY
+  - id: tv-shows
+    name: TV Shows
+    section: TV Shows
+    media_type: tv
+    arr:
+      root_folder: /data/tv
+      quality_profile: HD-1080p
+      series_type: standard          # tv-only
+```
+
+Each library is scanned and scored independently. `arr:` sets the
+root folder/quality profile/tag/monitor/search/availability/series-type for
+that library - any field left out falls back to the matching global
+`radarr.yml`/`sonarr.yml` setting for that media type. `instance:` is
+separate and optional: it points the library at its own Radarr/Sonarr
+server instead of the default one in `radarr.yml`/`sonarr.yml`, for setups
+where (say) Anime routes to a different Radarr than Movies. Manage all of
+this from the browser instead at `/config/libraries` (see
+[Web UI](#web-ui-beta)).
+
+**Already using `plex.movie_library`/`plex.tv_library`?** Nothing to change -
+Curatarr auto-synthesizes those into a single-entry `libraries:` list at
+load time, so existing configs keep working unchanged.
+
+### Tautulli Integration (Optional)
+
+Supplements Plex's own watch history with history from Tautulli - mainly
+useful for shared/external users whose Plex-native history retention is
+thin.
+
+```yaml
+# In config/config.yml
+tautulli:
+  enabled: true
+  url: http://YOUR_TAUTULLI_URL:8181
+  api_key: YOUR_TAUTULLI_API_KEY   # Settings -> Web Interface -> API Key
+```
+
+Users are matched to Plex accounts by email (falls back to username).
+Disabled by default; if Tautulli is unreachable or a user can't be matched,
+Curatarr silently falls back to Plex-only history.
+
 ### General Settings
 ```yaml
 general:
-  auto_update: true           # Apply verified signed releases from GitHub on run
-  log_retention_days: 7       # Keep logs for 7 days
+  plex_only: true              # Only recommend from Plex library
+  auto_update: true            # Apply verified signed releases from GitHub on run
+  log_retention_days: 7        # Keep logs for 7 days
+
+logging:
+  level: INFO                  # DEBUG, INFO, WARNING, ERROR
 ```
 
 ### Tuning (Optional)
@@ -354,7 +449,8 @@ search_for_movie: false     # Don't search for movie
 
 ### MDBList Integration (Optional)
 
-Export recommendations to MDBList for use with Kometa/PMM and other tools:
+YAML-only for now - not yet in the [Connections UI](#web-ui-beta). Export
+recommendations to MDBList for use with Kometa/PMM and other tools:
 
 ```yaml
 # config/mdblist.yml
@@ -377,7 +473,8 @@ replace_existing: true      # Clear list before adding (vs. append)
 
 ### Simkl Integration (Optional)
 
-Full integration with Simkl for anime/TV/movie tracking with excellent anime database:
+YAML-only for now - not yet in the [Connections UI](#web-ui-beta). Full
+integration with Simkl for anime/TV/movie tracking with excellent anime database:
 
 ```yaml
 # config/simkl.yml
@@ -486,7 +583,7 @@ Weighted by recency (recent watches count more), user ratings (5-star content co
 ```
 curatarr/
 ├── config/                  # Configuration files
-│   ├── config.yml           # Main config (Plex, TMDB, users)
+│   ├── config.yml           # Main config (Plex, TMDB, users, libraries, tautulli)
 │   ├── tuning.yml           # Scoring weights and display options
 │   ├── trakt.yml            # Trakt integration
 │   ├── sonarr.yml           # Sonarr integration
@@ -498,8 +595,8 @@ curatarr/
 │   ├── tv.py                # TV show recommendations
 │   ├── external.py          # External watchlist generator
 │   └── base.py              # Shared base classes
-├── utils/                   # Shared utilities (20 modules)
-├── tests/                   # Unit tests (960+)
+├── utils/                   # Shared utilities (23 modules)
+├── tests/                   # Unit tests (~1,754 across 41 files)
 ├── run.sh                   # Main entry point (macOS/Linux)
 ├── run.ps1                  # Main entry point (Windows)
 ├── run-ui.sh                # Web UI launcher (macOS/Linux)
@@ -619,22 +716,29 @@ git pull origin main
 
 ---
 
-## Feature Requests
+## Contributing
+
+### Feature Requests
 
 Have an idea for Curatarr? We track feature requests as GitHub Issues and **your vote matters!**
 
-### How to Vote
-
+**How to vote:**
 1. Browse [open enhancement requests](https://github.com/OrchestratedChaos/curatarr/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement)
 2. Find a feature you want
 3. **Click the 👍 reaction** on the issue (top of the issue, next to the title)
 4. That's it! Issues with more votes get prioritized
 
-### How to Request a Feature
-
+**How to request a feature:**
 1. [Search existing issues](https://github.com/OrchestratedChaos/curatarr/issues) to avoid duplicates
 2. [Open a new issue](https://github.com/OrchestratedChaos/curatarr/issues/new) with the `enhancement` label
 3. Describe what you want and why it would be useful
+
+### Code Contributions
+
+Bug fixes and small improvements are welcome. Open an issue first for
+anything nontrivial so the approach can be discussed before you sink time
+into it, then send a PR against `main`. The test suite runs on every PR
+(`.github/workflows/tests.yml`) - keep it green.
 
 ---
 
