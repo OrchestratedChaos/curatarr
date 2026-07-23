@@ -2,6 +2,20 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.25] - 2026-07-23
+
+### Added
+- **Multiple Plex libraries** (#157): Each Plex library is now a first-class entity with its own Sonarr/Radarr routing - per-library root folder, quality profile, tags, monitor/search, and optionally a separate *arr instance. Recommendations (in-library Plex collections and external -> Sonarr/Radarr suggestions) run per-library, so Movies, TV, Anime, and Kids can each follow their own rules and land in their own destinations from a single instance. Existing single-library configs auto-migrate on first run. Manage via the new **Libraries** screen (`/config/libraries`) or the `libraries:` list in `config.yml`
+- **Web UI**: Run curatarr from the browser (`http://127.0.0.1:8787`) - dashboard, run-with-live-log, results, and config screens for connections/users/settings/libraries. CLI/cron flow is unchanged
+- **One-click binaries for every platform**: Windows (x64), macOS (universal - Intel + Apple Silicon), and Linux (x64 + arm64) downloads, each with a SHA256 checksum - no Python or terminal required
+
+### Changed
+- Auto-update now verifies a signed release tag (fail-closed) before applying
+
+### Security
+- Patched `requests` CVE; dependencies pinned and hash-locked
+- Added secret-scanning (gitleaks) gate on every push
+
 ## [2.8.20] - 2026-07-20
 
 ### Added
