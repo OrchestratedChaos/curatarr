@@ -47,7 +47,7 @@ check_and_install_dependencies() {
     if ! command -v python3 &> /dev/null; then
         echo -e "${RED}❌ Python 3 not found${NC}"
         echo ""
-        echo "Please install Python 3.8+ from:"
+        echo "Please install Python 3.10+ from:"
         echo "  - macOS: https://www.python.org/downloads/ or 'brew install python3'"
         echo "  - Linux: sudo apt install python3 python3-pip"
         echo ""
