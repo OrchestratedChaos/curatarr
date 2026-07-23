@@ -2,6 +2,7 @@
 results screens, plus the localhost-only binding guardrail.
 """
 
+import concurrent.futures
 import os
 import sys
 import time
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
+import web.app as app_module
 from web.app import create_app, _wait_for_listening
 
 
@@ -125,6 +127,38 @@ class TestRunPage:
         body = resp.get_data(as_text=True)
         assert 'event: done' in body
 
+    def test_run_stream_emits_heartbeat_when_idle(self, client, monkeypatch):
+        """H2: with no new output for SSE_HEARTBEAT_SECONDS, generate()
+        must send a keepalive comment instead of blocking forever."""
+        c, app, root = client
+        monkeypatch.setattr(app_module, 'SSE_HEARTBEAT_SECONDS', 0.05)
+        monkeypatch.setenv('CURATARR_TEST_SLOW', '0.5')
+        c.post('/run', data={'engine': 'movie', 'user': 'alice'})
+        resp = c.get('/run/stream')
+        body = resp.get_data(as_text=True)
+        assert ': keepalive' in body
+        assert 'event: done' in body
+        _wait_until_idle(app)
+
+    def test_run_stream_disconnect_mid_run_unsubscribes(self, client, monkeypatch):
+        """H2: a client that disappears mid-stream (closed tab, dead
+        socket) must be unsubscribed - not left in job._subscribers
+        piling up output nobody will ever read."""
+        c, app, root = client
+        monkeypatch.setenv('CURATARR_TEST_SLOW', '2')
+        c.post('/run', data={'engine': 'movie', 'user': 'alice'})
+        job = app.job_manager.current_job()
+
+        resp = c.get('/run/stream')
+        chunks = iter(resp.response)
+        next(chunks)  # pull one chunk so the generator has actually subscribed
+        assert len(job._subscribers) == 1
+
+        resp.close()  # simulates the browser socket going away mid-stream
+
+        assert len(job._subscribers) == 0
+        _wait_until_idle(app)
+
     def test_run_status_json_idle(self, client):
         c, app, root = client
         resp = c.get('/run/status')
@@ -169,6 +203,31 @@ class TestResults:
         resp = c.get('/results/watchlist/watchlist.html')
         assert resp.status_code == 200
         assert b'hello world' in resp.data
+
+    def test_watchlist_html_gets_restrictive_csp_header(self, client):
+        """Defense-in-depth on top of the escaping fix in
+        recommenders/external_output.py - even a future gap there
+        shouldn't be able to turn into a script driving this app's own
+        state-changing endpoints."""
+        c, app, root = client
+        ext_dir = os.path.join(root, 'recommendations', 'external')
+        with open(os.path.join(ext_dir, 'watchlist.html'), 'w') as f:
+            f.write('<html>hello</html>')
+        resp = c.get('/results/watchlist/watchlist.html')
+        assert resp.status_code == 200
+        csp = resp.headers.get('Content-Security-Policy', '')
+        assert "object-src 'none'" in csp
+        assert "frame-ancestors 'none'" in csp
+        assert resp.headers.get('X-Content-Type-Options') == 'nosniff'
+
+    def test_watchlist_md_does_not_get_html_csp_header(self, client):
+        c, app, root = client
+        ext_dir = os.path.join(root, 'recommendations', 'external')
+        with open(os.path.join(ext_dir, 'alice_watchlist.md'), 'w') as f:
+            f.write('# hello')
+        resp = c.get('/results/watchlist/alice_watchlist.md')
+        assert resp.status_code == 200
+        assert 'Content-Security-Policy' not in resp.headers
 
     def test_watchlist_rejects_non_html_md_extension(self, client):
         c, app, root = client
@@ -245,3 +304,103 @@ class TestBindingGuardrail:
         # Only the redaction/no-wildcard-bind explanation may mention
         # 0.0.0.0 in prose; app.run() itself must never pass it as host=.
         assert not re.search(r'host\s*=\s*[\'"]0\.0\.0\.0[\'"]', source)
+
+
+class TestOriginHostGuard:
+    """Tests for web.security.register_origin_host_guard, wired into
+    every request via create_app(). The `client` fixture's test client
+    stamps a same-origin Origin header by default (see
+    _BrowserLikeTestClient in web/app.py) so every *other* test in this
+    module models a real same-origin browser request; these tests
+    override that default to exercise rejection.
+    """
+
+    def test_cross_origin_post_rejected_403(self, client):
+        c, app, root = client
+        resp = c.post(
+            '/run', data={'engine': 'movie', 'user': 'alice'},
+            headers={'Origin': 'http://evil.example.com'},
+        )
+        assert resp.status_code == 403
+        assert app.job_manager.current_job() is None
+
+    def test_cross_origin_config_post_rejected_403(self, client):
+        c, app, root = client
+        resp = c.post(
+            '/config/users', data={'user_count': '0', 'new_username': ''},
+            headers={'Origin': 'https://attacker.example.com'},
+        )
+        assert resp.status_code == 403
+
+    def test_post_with_no_origin_or_referer_rejected_403(self, client):
+        c, app, root = client
+        resp = c.post(
+            '/run', data={'engine': 'movie', 'user': 'alice'},
+            headers={'Origin': ''},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_fallback_accepted_when_origin_absent(self, client):
+        c, app, root = client
+        resp = c.post(
+            '/run', data={'engine': 'external', 'user': 'all'},
+            headers={'Origin': '', 'Referer': 'http://localhost/run'},
+        )
+        assert resp.status_code == 303
+        _wait_until_idle(app)
+
+    def test_same_origin_post_with_port_accepted(self, client):
+        c, app, root = client
+        resp = c.post(
+            '/run', data={'engine': 'external', 'user': 'all'},
+            headers={'Origin': 'http://127.0.0.1:8787'},
+        )
+        assert resp.status_code == 303
+        _wait_until_idle(app)
+
+    def test_get_requests_ignore_origin(self, client):
+        c, app, root = client
+        resp = c.get('/', headers={'Origin': 'http://evil.example.com'})
+        assert resp.status_code == 200
+
+    def test_bad_host_header_rejected_400(self, client):
+        c, app, root = client
+        resp = c.get('/', headers={'Host': 'evil.example.com'})
+        assert resp.status_code == 400
+
+    def test_bad_host_header_with_port_rejected_400(self, client):
+        c, app, root = client
+        resp = c.get('/', headers={'Host': 'evil.example.com:8787'})
+        assert resp.status_code == 400
+
+    def test_valid_host_with_port_accepted(self, client):
+        c, app, root = client
+        resp = c.get('/', headers={'Host': '127.0.0.1:8787'})
+        assert resp.status_code == 200
+
+    def test_valid_bare_localhost_host_accepted(self, client):
+        c, app, root = client
+        resp = c.get('/', headers={'Host': 'localhost'})
+        assert resp.status_code == 200
+
+
+class TestConcurrentRun:
+    """Concurrency test for JobManager's single-run lock, driven through
+    the actual HTTP route rather than calling JobManager.start()
+    directly - a true race, not a sequential simulation."""
+
+    def test_concurrent_double_post_run_only_one_launches(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setenv('CURATARR_TEST_SLOW', '1')
+
+        def _post(_):
+            return c.post('/run', data={'engine': 'movie', 'user': 'alice'})
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            responses = list(pool.map(_post, range(6)))
+
+        busy = [r for r in responses if 'error=busy' in r.headers.get('Location', '')]
+        launched = [r for r in responses if 'error=busy' not in r.headers.get('Location', '')]
+        assert len(launched) == 1
+        assert len(busy) == 5
+        _wait_until_idle(app)

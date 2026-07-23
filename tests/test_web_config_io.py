@@ -6,7 +6,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from ruamel.yaml.comments import CommentedMap
+
 from web.config_io import (
+    ensure_section,
     format_csv_list,
     is_secret_field,
     load_module,
@@ -15,6 +18,7 @@ from web.config_io import (
     parse_csv_list,
     save_module,
     secret_status,
+    validate_merge,
 )
 
 
@@ -130,6 +134,15 @@ class TestSecretHelpers:
         assert merge_secret(None, '') == ''
         assert merge_secret('', '') == ''
 
+    def test_merge_secret_whitespace_only_submission_with_none_existing(self):
+        assert merge_secret(None, '   ') == ''
+
+    def test_merge_secret_strips_whitespace_around_new_value(self):
+        assert merge_secret('old-token', '  new-token  ') == 'new-token'
+
+    def test_merge_secret_none_existing_nonblank_submission(self):
+        assert merge_secret(None, 'brand-new') == 'brand-new'
+
     def test_secret_status(self):
         assert secret_status('a-real-token') == 'configured'
         assert secret_status('') == 'not set'
@@ -149,3 +162,90 @@ class TestCsvHelpers:
         assert format_csv_list([]) == ''
         assert format_csv_list(None) == ''
         assert format_csv_list('already-a-string') == 'already-a-string'
+
+
+class TestEnsureSection:
+    """Tests for ensure_section() - M2's fix for a present-but-null
+    config section (a bare `plex:`/`general:` line parses to None, not
+    an empty mapping)."""
+
+    def test_creates_missing_section(self):
+        parent = CommentedMap()
+        section = ensure_section(parent, 'plex')
+        assert isinstance(section, CommentedMap)
+        assert parent['plex'] is section
+
+    def test_replaces_null_section_with_empty_map(self):
+        parent = CommentedMap()
+        parent['general'] = None  # what a bare `general:` line loads as
+        section = ensure_section(parent, 'general')
+        assert isinstance(section, CommentedMap)
+        assert parent['general'] is section
+        section['auto_update'] = True
+        assert parent['general']['auto_update'] is True
+
+    def test_returns_existing_populated_section_unchanged(self):
+        parent = CommentedMap()
+        existing = CommentedMap()
+        existing['url'] = 'http://localhost:32400'
+        parent['plex'] = existing
+        section = ensure_section(parent, 'plex')
+        assert section is existing
+        assert section['url'] == 'http://localhost:32400'
+
+
+class TestValidateMerge:
+    """Tests for validate_merge() - M4's pre-write dry-run of the full
+    utils.load_config merge on a temp copy of config/."""
+
+    def test_clean_merge_returns_none(self, tmp_path):
+        config_dir = tmp_path / 'config'
+        config_dir.mkdir()
+        (config_dir / 'config.yml').write_text(
+            'plex:\n  url: http://localhost:32400\n  token: tok\nusers:\n  list: alice\n',
+            encoding='utf-8',
+        )
+        core = load_module(str(config_dir / 'config.yml'))
+        core['plex']['url'] = 'http://localhost:9999'
+
+        assert validate_merge(str(tmp_path), {'config': core}) is None
+        # and the real file was never touched by the dry run
+        real_content = (config_dir / 'config.yml').read_text(encoding='utf-8')
+        assert 'localhost:9999' not in real_content
+
+    def test_broken_merge_returns_error_without_touching_real_files(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / 'config'
+        config_dir.mkdir()
+        config_path = config_dir / 'config.yml'
+        config_path.write_text('plex:\n  url: http://localhost:32400\n', encoding='utf-8')
+        before = config_path.read_text(encoding='utf-8')
+        core = load_module(str(config_path))
+        core['plex']['url'] = 'http://localhost:9999'
+
+        def _boom(path):
+            raise ValueError('merge is broken')
+
+        monkeypatch.setattr('utils.load_config', _boom)
+
+        error = validate_merge(str(tmp_path), {'config': core})
+        assert error is not None
+        assert 'merge is broken' in error
+        assert config_path.read_text(encoding='utf-8') == before
+
+    def test_unrelated_module_files_are_carried_through_unchanged(self, tmp_path):
+        config_dir = tmp_path / 'config'
+        config_dir.mkdir()
+        (config_dir / 'config.yml').write_text(
+            'plex:\n  url: http://localhost:32400\n  token: tok\nusers:\n  list: alice\n',
+            encoding='utf-8',
+        )
+        (config_dir / 'sonarr.yml').write_text(
+            'enabled: true\nurl: http://localhost:8989\napi_key: abc\n', encoding='utf-8',
+        )
+        core = load_module(str(config_dir / 'config.yml'))
+        core['plex']['url'] = 'http://localhost:1111'
+
+        # Only 'config' is in the update set - sonarr.yml must still be
+        # read from the real config dir (unmodified) for the merge, not
+        # silently dropped.
+        assert validate_merge(str(tmp_path), {'config': core}) is None

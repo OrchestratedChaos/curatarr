@@ -8,7 +8,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
+import web.status as status_mod
 from web.status import (
+    TAIL_BYTES,
     display_name_safe_slug, find_user_watchlist, get_last_run_status,
     list_log_files, read_log_tail,
 )
@@ -78,6 +80,57 @@ class TestGetLastRunStatus:
         assert isinstance(result['timestamp'], datetime)
         assert result['timestamp'] == datetime.fromtimestamp(os.path.getmtime(path))
 
+    def test_username_with_glob_special_chars_does_not_match_other_users(self, tmp_path):
+        # A Plex username of "*" (or containing "?"/"[...]") must not
+        # turn the glob pattern into a wildcard that leaks other users'
+        # last-run status onto this one's dashboard row.
+        _write_log(tmp_path, 'recommendations_bob_20260101_030000.log', 'ok\n')
+        result = get_last_run_status(str(tmp_path), '*')
+        assert result == {'status': 'never_run', 'timestamp': None, 'log_file': None}
+
+    def test_username_with_bracket_glob_chars_does_not_match(self, tmp_path):
+        _write_log(tmp_path, 'recommendations_bob_20260101_030000.log', 'ok\n')
+        result = get_last_run_status(str(tmp_path), '[ab]*')
+        assert result['status'] == 'never_run'
+
+    def test_traceback_marker_within_tail_window_is_detected(self, tmp_path):
+        filler = 'x' * (TAIL_BYTES + 1000)
+        content = filler + '\nTraceback (most recent call last):\nValueError\n'
+        _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', content)
+        result = get_last_run_status(str(tmp_path), 'alice')
+        assert result['status'] == 'failed'
+
+    def test_traceback_marker_beyond_tail_window_is_not_detected(self, tmp_path):
+        # Documents the heuristic's known limitation (per TAIL_BYTES):
+        # only the last TAIL_BYTES of a log are inspected, so a
+        # traceback appearing only earlier than that in a very large log
+        # won't flip status to 'failed'. The important thing this
+        # asserts is that it doesn't crash on a large file either way.
+        content = 'Traceback (most recent call last):\nValueError\n' + ('x' * (TAIL_BYTES + 1000))
+        _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', content)
+        result = get_last_run_status(str(tmp_path), 'alice')
+        assert result['status'] == 'success'
+
+    def test_getmtime_oserror_falls_back_to_none_timestamp(self, tmp_path, monkeypatch):
+        # Unparseable-timestamp filename forces the getmtime() fallback;
+        # simulate the file vanishing (log-retention cleanup racing this
+        # request) right before that specific call. The first getmtime()
+        # call (inside latest_user_log()'s max(key=...) over glob
+        # results) must still succeed, so this only fails the second.
+        _write_log(tmp_path, 'recommendations_alice_20261301_030000.log', 'ok\n')
+        real_getmtime = os.path.getmtime
+        calls = {'n': 0}
+
+        def _flaky(path):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return real_getmtime(path)
+            raise OSError('gone')
+
+        monkeypatch.setattr(status_mod.os.path, 'getmtime', _flaky)
+        result = get_last_run_status(str(tmp_path), 'alice')
+        assert result['timestamp'] is None
+
 
 class TestListLogFiles:
     """Tests for list_log_files()"""
@@ -93,6 +146,20 @@ class TestListLogFiles:
         os.utime(b, (100, 100))
         result = list_log_files(str(tmp_path))
         assert [e['name'] for e in result] == ['b.log', 'a.log']
+
+    def test_skips_file_deleted_mid_scan_instead_of_raising(self, tmp_path, monkeypatch):
+        _write_log(tmp_path, 'gone.log', 'a')
+        _write_log(tmp_path, 'still-here.log', 'b')
+        real_getsize = os.path.getsize
+
+        def _flaky(path):
+            if path.endswith('gone.log'):
+                raise OSError('deleted mid-scan')
+            return real_getsize(path)
+
+        monkeypatch.setattr(status_mod.os.path, 'getsize', _flaky)
+        result = list_log_files(str(tmp_path))
+        assert [e['name'] for e in result] == ['still-here.log']
 
 
 class TestReadLogTail:
@@ -120,6 +187,25 @@ class TestReadLogTail:
         _write_log(tmp_path, 'a.log', content)
         result = read_log_tail(str(tmp_path), 'a.log', max_lines=3)
         assert result.splitlines() == ['line7', 'line8', 'line9']
+
+    def test_rejects_non_log_extension(self, tmp_path):
+        (tmp_path / 'config.yml').write_text('plex:\n  token: secret\n', encoding='utf-8')
+        with pytest.raises(FileNotFoundError):
+            read_log_tail(str(tmp_path), 'config.yml')
+
+    def test_rejects_symlink_escape(self, tmp_path):
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (outside / 'secret.log').write_text('TOP SECRET', encoding='utf-8')
+        logs_dir = tmp_path / 'logs'
+        logs_dir.mkdir()
+        try:
+            os.symlink(str(outside / 'secret.log'), str(logs_dir / 'escape.log'))
+        except (OSError, NotImplementedError):
+            pytest.skip('symlinks not supported in this environment')
+        with pytest.raises(FileNotFoundError):
+            read_log_tail(str(logs_dir), 'escape.log')
+
 
 class TestDisplayNameSafeSlug:
     """Tests for display_name_safe_slug()"""

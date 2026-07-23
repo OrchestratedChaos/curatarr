@@ -31,10 +31,10 @@ from typing import Dict, Optional
 from flask import jsonify, redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap
 
-from utils import load_config
 from utils.plex import MOVIE_RATING_HIERARCHY, TV_RATING_HIERARCHY
 
 from .config_io import (
+    ensure_section,
     format_csv_list,
     load_module,
     merge_secret,
@@ -42,6 +42,7 @@ from .config_io import (
     parse_csv_list,
     save_module,
     secret_status,
+    validate_merge,
 )
 from .config_test_connection import TESTERS
 from .security import redact
@@ -61,23 +62,28 @@ LOG_LEVEL_CHOICES = ('DEBUG', 'INFO', 'WARNING', 'ERROR')
 RATING_CHOICES = MOVIE_RATING_HIERARCHY + TV_RATING_HIERARCHY
 
 
-def _reload_error(project_root: str) -> Optional[str]:
-    """Post-write sanity check: reload everything just written through the
-    same utils.load_config merge path the recommenders use at run time.
+def _commit_modules(project_root: str, modules: Dict[str, CommentedMap]) -> Optional[str]:
+    """Validate *modules* (module-file-name -> CommentedMap to write) via
+    a dry-run merge (config_io.validate_merge) BEFORE writing anything
+    for real, then save every module. Field-level validation (weights
+    sum, URLs, choices - see config_validate.py) happens even earlier,
+    before this is ever called, which is what actually prevents most
+    bad input from being considered at all. This is the second,
+    defense-in-depth check: it catches a value that's individually
+    well-typed but still breaks utils.load_config's merge some other
+    way - and catches it on a throwaway temp copy, so a bad save can
+    never reach the real config files (nor leave some of a multi-file
+    save applied and others not).
 
-    Field-level validation (weights sum, URLs, choices - see
-    config_validate.py) happens *before* any file is touched, which is
-    what actually prevents bad input from ever reaching disk. This is a
-    second, defense-in-depth check that the files we just wrote still
-    parse and merge cleanly - it should never fire given the writers
-    above only ever set well-typed values, but if it does, the operator
-    finds out immediately instead of on the next scheduled run.
+    Returns an error message (and writes nothing) if the dry-run merge
+    fails, else None once every module in *modules* has been saved.
     """
-    try:
-        load_config(module_path(project_root, 'config'))
-    except Exception as exc:
-        logger.error(f"Post-write config reload check failed: {exc}")
-        return str(exc)
+    error = validate_merge(project_root, modules)
+    if error:
+        logger.error(f"Config merge validation failed - nothing saved: {error}")
+        return error
+    for name, data in modules.items():
+        save_module(module_path(project_root, name), data)
     return None
 
 
@@ -112,13 +118,13 @@ def register_config_routes(app) -> None:
                 **_connections_view(data, overrides=parsed),
             ), 400
 
-        _apply_connections(project_root, data, parsed)
-        reload_error = _reload_error(project_root)
-        if reload_error:
+        modules = _apply_connections(project_root, data, parsed)
+        commit_error = _commit_modules(project_root, modules)
+        if commit_error:
             return render_template(
                 'config_connections.html',
                 saved=False,
-                errors={'_global': f'Saved, but the config failed to reload: {reload_error}'},
+                errors={'_global': f'Could not save: {commit_error}'},
                 **_connections_view(_load_connections(project_root)),
             ), 500
         return redirect(url_for('config_connections', saved='1'), code=303)
@@ -134,10 +140,20 @@ def register_config_routes(app) -> None:
 
         # Secret fields: an empty submission means "use the already-saved
         # value" so Test Connection works without retyping a token that
-        # was configured on a previous save.
+        # was configured on a previous save - but ONLY when the URL being
+        # tested is the same URL that secret was saved against. Without
+        # this check, submitting a blank token/api_key alongside an
+        # attacker-supplied `url` would make this endpoint fetch the real
+        # stored secret and send it straight to that URL - an
+        # exfiltration path, not just a UX convenience. If the URL has
+        # changed, a blank secret field stays blank and the tester below
+        # fails fast with its own "required" message instead.
         existing = _existing_secret_lookup(data, service)
-        for key, existing_value in existing.items():
-            form[key] = merge_secret(existing_value, form.get(key, ''))
+        saved_url = _existing_url_lookup(data, service)
+        url_unchanged = saved_url is None or form.get('url', '').strip() == saved_url.strip()
+        if url_unchanged:
+            for key, existing_value in existing.items():
+                form[key] = merge_secret(existing_value, form.get(key, ''))
 
         result = tester(form)
         # Defense in depth: an underlying client's exception message could
@@ -175,13 +191,13 @@ def register_config_routes(app) -> None:
                 **_users_view(core, overrides=parsed),
             ), 400
 
-        _apply_users(project_root, core, parsed)
-        reload_error = _reload_error(project_root)
-        if reload_error:
+        modules = _apply_users(project_root, core, parsed)
+        commit_error = _commit_modules(project_root, modules)
+        if commit_error:
             return render_template(
                 'config_users.html',
                 saved=False,
-                errors={'_global': f'Saved, but the config failed to reload: {reload_error}'},
+                errors={'_global': f'Could not save: {commit_error}'},
                 **_users_view(load_module(module_path(project_root, 'config'))),
             ), 500
         return redirect(url_for('config_users', saved='1'), code=303)
@@ -223,13 +239,13 @@ def register_config_routes(app) -> None:
                 **_settings_view(tuning, core, sonarr, radarr, trakt, overrides=parsed),
             ), 400
 
-        _apply_settings(project_root, tuning, core, sonarr, radarr, trakt, parsed)
-        reload_error = _reload_error(project_root)
-        if reload_error:
+        modules = _apply_settings(project_root, tuning, core, sonarr, radarr, trakt, parsed)
+        commit_error = _commit_modules(project_root, modules)
+        if commit_error:
             return render_template(
                 'config_settings.html',
                 saved=False,
-                errors={'_global': f'Saved, but the config failed to reload: {reload_error}'},
+                errors={'_global': f'Could not save: {commit_error}'},
                 **_settings_view(
                     load_module(module_path(project_root, 'tuning')),
                     load_module(module_path(project_root, 'config')),
@@ -252,6 +268,22 @@ def _load_connections(project_root: str) -> Dict[str, CommentedMap]:
         'radarr': load_module(module_path(project_root, 'radarr')),
         'trakt': load_module(module_path(project_root, 'trakt')),
     }
+
+
+def _existing_url_lookup(data: Dict[str, CommentedMap], service: str) -> Optional[str]:
+    """The already-saved URL for *service*, or None for services with no
+    user-suppliable destination URL (tmdb/trakt always talk to their
+    fixed real API, so there's no URL for a submission to redirect a
+    stored secret to). Used by config_test_connection to gate the
+    saved-secret auto-fill on 'is this actually still the saved URL'."""
+    core = data['core']
+    if service == 'plex':
+        return (core.get('plex') or {}).get('url', '') or ''
+    if service == 'tautulli':
+        return (core.get('tautulli') or {}).get('url', '') or ''
+    if service in ('sonarr', 'radarr'):
+        return (data[service] or {}).get('url', '') or ''
+    return None
 
 
 def _existing_secret_lookup(data: Dict[str, CommentedMap], service: str) -> Dict[str, str]:
@@ -430,24 +462,27 @@ def _parse_connections_form(form, errors: Dict[str, str]) -> Dict:
     }
 
 
-def _apply_connections(project_root: str, data: Dict[str, CommentedMap], parsed: Dict) -> None:
+def _apply_connections(project_root: str, data: Dict[str, CommentedMap], parsed: Dict) -> Dict[str, CommentedMap]:
+    """Mutate the in-memory CommentedMaps for this screen and return them
+    keyed by module name, WITHOUT writing anything to disk - the caller
+    (config_connections_save) commits them via _commit_modules, which
+    validates the full merge on a temp copy first (see M4 in the audit).
+    """
     core = data['core']
 
-    core.setdefault('plex', CommentedMap())
-    core['plex']['url'] = parsed['plex']['url']
-    core['plex']['movie_library'] = parsed['plex']['movie_library']
-    core['plex']['tv_library'] = parsed['plex']['tv_library']
-    core['plex']['token'] = merge_secret(core['plex'].get('token'), parsed['plex']['token_submitted'])
+    plex_section = ensure_section(core, 'plex')
+    plex_section['url'] = parsed['plex']['url']
+    plex_section['movie_library'] = parsed['plex']['movie_library']
+    plex_section['tv_library'] = parsed['plex']['tv_library']
+    plex_section['token'] = merge_secret(plex_section.get('token'), parsed['plex']['token_submitted'])
 
-    core.setdefault('tmdb', CommentedMap())
-    core['tmdb']['api_key'] = merge_secret(core['tmdb'].get('api_key'), parsed['tmdb']['api_key_submitted'])
+    tmdb_section = ensure_section(core, 'tmdb')
+    tmdb_section['api_key'] = merge_secret(tmdb_section.get('api_key'), parsed['tmdb']['api_key_submitted'])
 
-    core.setdefault('tautulli', CommentedMap())
-    core['tautulli']['enabled'] = parsed['tautulli']['enabled']
-    core['tautulli']['url'] = parsed['tautulli']['url']
-    core['tautulli']['api_key'] = merge_secret(core['tautulli'].get('api_key'), parsed['tautulli']['api_key_submitted'])
-
-    save_module(module_path(project_root, 'config'), core)
+    tautulli_section = ensure_section(core, 'tautulli')
+    tautulli_section['enabled'] = parsed['tautulli']['enabled']
+    tautulli_section['url'] = parsed['tautulli']['url']
+    tautulli_section['api_key'] = merge_secret(tautulli_section.get('api_key'), parsed['tautulli']['api_key_submitted'])
 
     sonarr = data['sonarr']
     sonarr['enabled'] = parsed['sonarr']['enabled']
@@ -456,7 +491,6 @@ def _apply_connections(project_root: str, data: Dict[str, CommentedMap], parsed:
     sonarr['auto_sync'] = parsed['sonarr']['auto_sync']
     sonarr['user_mode'] = parsed['sonarr']['user_mode']
     sonarr['plex_users'] = parse_csv_list(parsed['sonarr']['plex_users'])
-    save_module(module_path(project_root, 'sonarr'), sonarr)
 
     radarr = data['radarr']
     radarr['enabled'] = parsed['radarr']['enabled']
@@ -465,7 +499,6 @@ def _apply_connections(project_root: str, data: Dict[str, CommentedMap], parsed:
     radarr['auto_sync'] = parsed['radarr']['auto_sync']
     radarr['user_mode'] = parsed['radarr']['user_mode']
     radarr['plex_users'] = parse_csv_list(parsed['radarr']['plex_users'])
-    save_module(module_path(project_root, 'radarr'), radarr)
 
     trakt = data['trakt']
     trakt['enabled'] = parsed['trakt']['enabled']
@@ -476,7 +509,8 @@ def _apply_connections(project_root: str, data: Dict[str, CommentedMap], parsed:
     export['user_mode'] = parsed['trakt']['user_mode']
     export['plex_users'] = parse_csv_list(parsed['trakt']['plex_users'])
     trakt['export'] = export
-    save_module(module_path(project_root, 'trakt'), trakt)
+
+    return {'config': core, 'sonarr': sonarr, 'radarr': radarr, 'trakt': trakt}
 
 
 # =========================================================================
@@ -556,16 +590,15 @@ def _parse_users_form(form, errors: Dict[str, str]) -> Dict:
     return {'users': rows, 'new_username': ''}
 
 
-def _apply_users(project_root: str, core: CommentedMap, parsed: Dict) -> None:
-    core.setdefault('users', CommentedMap())
+def _apply_users(project_root: str, core: CommentedMap, parsed: Dict) -> Dict[str, CommentedMap]:
+    """Mutate *core* in place and return it keyed by module name, WITHOUT
+    writing to disk - see _apply_connections' docstring for why."""
+    users_section = ensure_section(core, 'users')
     kept = [row for row in parsed['users'] if not row['remove']]
 
-    core['users']['list'] = ', '.join(row['username'] for row in kept)
+    users_section['list'] = ', '.join(row['username'] for row in kept)
 
-    preferences = core['users'].get('preferences')
-    if preferences is None:
-        preferences = CommentedMap()
-        core['users']['preferences'] = preferences
+    preferences = ensure_section(users_section, 'preferences')
 
     # Drop removed users' preferences entirely.
     for row in parsed['users']:
@@ -593,7 +626,7 @@ def _apply_users(project_root: str, core: CommentedMap, parsed: Dict) -> None:
         else:
             entry.pop('streaming_services', None)
 
-    save_module(module_path(project_root, 'config'), core)
+    return {'config': core}
 
 
 # =========================================================================
@@ -832,74 +865,66 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
 
 def _apply_settings(project_root: str, tuning: CommentedMap, core: CommentedMap,
                      sonarr: CommentedMap, radarr: CommentedMap, trakt: CommentedMap,
-                     parsed: Dict) -> None:
-    tuning.setdefault('movies', CommentedMap())
-    tuning['movies']['limit_results'] = parsed['movies']['limit_results']
-    tuning['movies'].setdefault('weights', CommentedMap())
-    tuning['movies']['weights'].update(parsed['movies']['weights'])
-    tuning['movies'].setdefault('quality_filters', CommentedMap())
-    tuning['movies']['quality_filters']['min_rating'] = parsed['movies']['min_rating']
-    tuning['movies']['quality_filters']['min_vote_count'] = parsed['movies']['min_vote_count']
+                     parsed: Dict) -> Dict[str, CommentedMap]:
+    """Mutate the in-memory CommentedMaps for this screen and return them
+    keyed by module name, WITHOUT writing to disk - see
+    _apply_connections' docstring for why."""
+    movies_section = ensure_section(tuning, 'movies')
+    movies_section['limit_results'] = parsed['movies']['limit_results']
+    ensure_section(movies_section, 'weights').update(parsed['movies']['weights'])
+    movies_quality = ensure_section(movies_section, 'quality_filters')
+    movies_quality['min_rating'] = parsed['movies']['min_rating']
+    movies_quality['min_vote_count'] = parsed['movies']['min_vote_count']
 
-    tuning.setdefault('tv', CommentedMap())
-    tuning['tv']['limit_results'] = parsed['tv']['limit_results']
-    tuning['tv'].setdefault('weights', CommentedMap())
-    tuning['tv']['weights'].update(parsed['tv']['weights'])
-    tuning['tv'].setdefault('quality_filters', CommentedMap())
-    tuning['tv']['quality_filters']['min_rating'] = parsed['tv']['min_rating']
-    tuning['tv']['quality_filters']['min_vote_count'] = parsed['tv']['min_vote_count']
+    tv_section = ensure_section(tuning, 'tv')
+    tv_section['limit_results'] = parsed['tv']['limit_results']
+    ensure_section(tv_section, 'weights').update(parsed['tv']['weights'])
+    tv_quality = ensure_section(tv_section, 'quality_filters')
+    tv_quality['min_rating'] = parsed['tv']['min_rating']
+    tv_quality['min_vote_count'] = parsed['tv']['min_vote_count']
 
-    tuning.setdefault('recency_decay', CommentedMap())
-    tuning['recency_decay'].update(parsed['recency'])
-
-    tuning.setdefault('rating_multipliers', CommentedMap())
-    tuning['rating_multipliers'].update(parsed['rating_multipliers'])
+    ensure_section(tuning, 'recency_decay').update(parsed['recency'])
+    ensure_section(tuning, 'rating_multipliers').update(parsed['rating_multipliers'])
 
     ns = parsed['negative_signals']
-    tuning.setdefault('negative_signals', CommentedMap())
-    tuning['negative_signals']['enabled'] = ns['enabled']
-    tuning['negative_signals'].setdefault('bad_ratings', CommentedMap())
-    tuning['negative_signals']['bad_ratings']['enabled'] = ns['bad_ratings_enabled']
-    tuning['negative_signals']['bad_ratings']['threshold'] = ns['bad_ratings_threshold']
-    tuning['negative_signals']['bad_ratings']['cap_penalty'] = ns['bad_ratings_cap_penalty']
-    tuning['negative_signals'].setdefault('dropped_shows', CommentedMap())
-    tuning['negative_signals']['dropped_shows']['enabled'] = ns['dropped_enabled']
-    tuning['negative_signals']['dropped_shows']['min_episodes_watched'] = ns['dropped_min_episodes']
-    tuning['negative_signals']['dropped_shows']['max_completion_percent'] = ns['dropped_max_completion']
-    tuning['negative_signals']['dropped_shows']['penalty_multiplier'] = ns['dropped_penalty_multiplier']
+    negsig = ensure_section(tuning, 'negative_signals')
+    negsig['enabled'] = ns['enabled']
+    bad_ratings = ensure_section(negsig, 'bad_ratings')
+    bad_ratings['enabled'] = ns['bad_ratings_enabled']
+    bad_ratings['threshold'] = ns['bad_ratings_threshold']
+    bad_ratings['cap_penalty'] = ns['bad_ratings_cap_penalty']
+    dropped_shows = ensure_section(negsig, 'dropped_shows')
+    dropped_shows['enabled'] = ns['dropped_enabled']
+    dropped_shows['min_episodes_watched'] = ns['dropped_min_episodes']
+    dropped_shows['max_completion_percent'] = ns['dropped_max_completion']
+    dropped_shows['penalty_multiplier'] = ns['dropped_penalty_multiplier']
 
     ext = parsed['external']
-    tuning.setdefault('external_recommendations', CommentedMap())
-    tuning['external_recommendations']['enabled'] = ext['enabled']
-    tuning['external_recommendations']['movie_limit'] = ext['movie_limit']
-    tuning['external_recommendations']['show_limit'] = ext['show_limit']
-    tuning['external_recommendations']['min_relevance_score'] = ext['min_relevance_score']
-    tuning['external_recommendations']['min_votes'] = ext['min_votes']
-    tuning['external_recommendations']['max_iterations'] = ext['max_iterations']
-    tuning['external_recommendations']['language'] = ext['language'] or None
-    tuning['external_recommendations']['auto_open_html'] = ext['auto_open_html']
+    ext_section = ensure_section(tuning, 'external_recommendations')
+    ext_section['enabled'] = ext['enabled']
+    ext_section['movie_limit'] = ext['movie_limit']
+    ext_section['show_limit'] = ext['show_limit']
+    ext_section['min_relevance_score'] = ext['min_relevance_score']
+    ext_section['min_votes'] = ext['min_votes']
+    ext_section['max_iterations'] = ext['max_iterations']
+    ext_section['language'] = ext['language'] or None
+    ext_section['auto_open_html'] = ext['auto_open_html']
 
-    save_module(module_path(project_root, 'tuning'), tuning)
-
-    core.setdefault('general', CommentedMap())
-    core['general'].update(parsed['general'])
-    core.setdefault('logging', CommentedMap())
-    core['logging']['level'] = parsed['logging']['level']
-    save_module(module_path(project_root, 'config'), core)
+    ensure_section(core, 'general').update(parsed['general'])
+    ensure_section(core, 'logging')['level'] = parsed['logging']['level']
 
     sonarr['auto_sync'] = parsed['sync_safety']['sonarr']['auto_sync']
     sonarr['user_mode'] = parsed['sync_safety']['sonarr']['user_mode']
     sonarr['plex_users'] = parse_csv_list(parsed['sync_safety']['sonarr']['plex_users'])
-    save_module(module_path(project_root, 'sonarr'), sonarr)
 
     radarr['auto_sync'] = parsed['sync_safety']['radarr']['auto_sync']
     radarr['user_mode'] = parsed['sync_safety']['radarr']['user_mode']
     radarr['plex_users'] = parse_csv_list(parsed['sync_safety']['radarr']['plex_users'])
-    save_module(module_path(project_root, 'radarr'), radarr)
 
     trakt_export = trakt.get('export') or CommentedMap()
     trakt_export['auto_sync'] = parsed['sync_safety']['trakt']['auto_sync']
     trakt_export['user_mode'] = parsed['sync_safety']['trakt']['user_mode']
     trakt_export['plex_users'] = parse_csv_list(parsed['sync_safety']['trakt']['plex_users'])
     trakt['export'] = trakt_export
-    save_module(module_path(project_root, 'trakt'), trakt)
+
+    return {'tuning': tuning, 'config': core, 'sonarr': sonarr, 'radarr': radarr, 'trakt': trakt}

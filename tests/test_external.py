@@ -363,9 +363,7 @@ class TestCacheOperations:
     def test_save_and_load_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Patch the cache directory
-            with patch('recommenders.external.os.path.dirname') as mock_dirname:
-                mock_dirname.return_value = tmpdir
-
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
                 cache_data = {
                     '12345': {
                         'tmdb_id': 12345,
@@ -390,9 +388,7 @@ class TestCacheOperations:
 
     def test_load_empty_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('recommenders.external.os.path.dirname') as mock_dirname:
-                mock_dirname.return_value = tmpdir
-
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
                 loaded = load_cache('NonExistent', 'movies')
 
                 assert loaded == {}
@@ -1321,8 +1317,7 @@ class TestExternalRecsCacheVersioning:
                 shutil.copy(cache_path, dest_path)
 
                 # Patch the project root detection
-                with patch('recommenders.external.os.path.dirname') as mock_dirname:
-                    mock_dirname.return_value = tmpdir
+                with patch('recommenders.external.get_project_root', return_value=tmpdir):
                     result = load_cache('testuser', 'movie')
                     # Old version should return empty
                     assert result == {}
@@ -1333,9 +1328,7 @@ class TestExternalRecsCacheVersioning:
         """Test save adds version to cache."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Patch the project root detection
-            with patch('recommenders.external.os.path.dirname') as mock_dirname:
-                mock_dirname.return_value = tmpdir
-
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
                 cache_data = {'12345': {'title': 'Test', 'tmdb_id': 12345}}
                 save_cache('testuser', 'movie', cache_data)
 
@@ -1361,8 +1354,7 @@ class TestExternalRecsCacheVersioning:
             with open(cache_path, 'w') as f:
                 json.dump(cache_data, f)
 
-            with patch('recommenders.external.os.path.dirname') as mock_dirname:
-                mock_dirname.return_value = tmpdir
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
                 result = load_cache('testuser', 'movie')
 
                 assert '12345' in result

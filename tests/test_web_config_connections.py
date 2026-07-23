@@ -250,3 +250,100 @@ class TestConnectionsTestEndpoint:
         body = resp.get_json()
         assert body['ok'] is False
         assert 'trakt_auth' in body['message']
+
+    def test_sonarr_test_with_different_url_does_not_leak_saved_key(self, client, monkeypatch):
+        """HIGH #1: submitting a blank secret alongside a URL that
+        differs from the saved one must never cause the stored secret to
+        be sent to that (possibly attacker-controlled) URL."""
+        c, app, root = client
+        c.post('/config/connections', data=VALID_FORM)  # saves sonarr api_key = sonarr-key-123
+
+        captured = {}
+
+        class _FakeClient:
+            def __init__(self, url, api_key):
+                captured['url'] = url
+                captured['api_key'] = api_key
+
+            def test_connection(self):
+                return True
+
+        import web.config_test_connection as cc
+        monkeypatch.setattr(cc, 'SonarrClient', _FakeClient)
+
+        resp = c.post(
+            '/config/test/sonarr',
+            data={'url': 'http://attacker.example.com', 'api_key': ''},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # test_sonarr() fails fast on a blank api_key before ever
+        # constructing SonarrClient - the saved key was never merged in
+        # (and never even reaches the network).
+        assert body['ok'] is False
+        assert captured == {}
+
+    def test_plex_test_with_same_saved_url_still_uses_saved_token(self, client, monkeypatch):
+        """The blank-secret convenience still works for the normal case:
+        testing the URL that's already saved."""
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form['plex_token'] = 'plex-token-123'
+        c.post('/config/connections', data=form)
+
+        captured = {}
+
+        class _FakeServer:
+            class library:
+                @staticmethod
+                def sections():
+                    captured['called'] = True
+                    return [object()]
+
+        import web.config_test_connection as cc
+
+        def _fake_init_plex(config):
+            captured['token'] = config['plex']['token']
+            return _FakeServer()
+
+        monkeypatch.setattr(cc, 'init_plex', _fake_init_plex)
+
+        resp = c.post('/config/test/plex', data={'url': 'http://localhost:32400', 'token': ''})
+        assert resp.status_code == 200
+        assert resp.get_json()['ok'] is True
+        assert captured['token'] == 'plex-token-123'
+
+    def test_null_plex_section_in_hand_edited_yaml_does_not_500(self, client):
+        """M2: a bare `plex:` line (parses to None, not {}) must not 500
+        or half-save the connections form."""
+        c, app, root = client
+        config_path = module_path(root, 'config')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write('plex:\nusers:\n  list: "alice, bob"\n')
+
+        resp = c.post('/config/connections', data=VALID_FORM)
+        assert resp.status_code == 303
+
+        core = _read_yaml(root, 'config')
+        assert core['plex']['url'] == 'http://localhost:32400'
+        sonarr = _read_yaml(root, 'sonarr')
+        assert sonarr['url'] == 'http://localhost:8989'
+
+    def test_merge_validation_failure_prevents_write_and_returns_500(self, client, monkeypatch):
+        """M4: a merge that fails the pre-write dry-run must not write
+        ANY of the module files for this save."""
+        c, app, root = client
+        import web.config_app as config_app_mod
+        monkeypatch.setattr(
+            config_app_mod, 'validate_merge',
+            lambda project_root, modules: 'simulated merge failure',
+        )
+
+        resp = c.post('/config/connections', data=VALID_FORM)
+        assert resp.status_code == 500
+
+        # sonarr.yml didn't exist before this save - if _commit_modules
+        # correctly gates every write on the dry-run passing, it's still
+        # absent (empty) after a failed one.
+        sonarr = _read_yaml(root, 'sonarr')
+        assert sonarr == {}

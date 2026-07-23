@@ -14,8 +14,9 @@ bug that slips through) never leaves a half-written config file behind.
 """
 
 import os
+import shutil
 import tempfile
-from typing import Optional
+from typing import Dict, Optional
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
@@ -85,6 +86,69 @@ def save_module(path: str, data: CommentedMap) -> None:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise
+
+
+def ensure_section(parent: CommentedMap, key: str) -> CommentedMap:
+    """Return parent[key] as a CommentedMap, creating one if the key is
+    missing OR present-but-null.
+
+    A bare ``plex:`` / ``general:`` / ``movies:`` line (no nested keys)
+    parses through ruamel/pyyaml as key -> None, not key -> {}. Plain
+    ``parent.setdefault(key, CommentedMap())`` doesn't help in that case
+    since the key already exists (with a None value) - the very next
+    ``parent[key]['field'] = ...`` would then raise TypeError on the
+    None. Any hand-edited or partially-migrated config file can produce
+    this shape, so every _apply_* writer in web/config_app.py goes
+    through this helper instead of setdefault() before mutating a
+    sub-section, so a null section becomes an empty mapping instead of
+    a 500 (and a half-written save, since sibling sections already
+    written to their own module file before the crash would otherwise
+    stay saved while this one - and everything after it - never runs).
+    """
+    section = parent.get(key)
+    if not isinstance(section, CommentedMap):
+        section = CommentedMap()
+        parent[key] = section
+    return section
+
+
+def validate_merge(project_root: str, modules: Dict[str, CommentedMap]) -> Optional[str]:
+    """Dry-run utils.load_config's full merge against a throwaway temp
+    copy of config/ with *modules* substituted in, so a value that
+    passes this screen's own field validation (config_validate.py) but
+    still breaks the merge some other way (e.g. utils.config's own
+    parsing) is caught BEFORE any real file on disk is touched.
+
+    This closes the gap in the old post-write-only reload check, which
+    could only report a broken merge *after* save_module had already
+    replaced the real files - too late for the operator whose next
+    scheduled run would already be reading the broken config.
+
+    *modules* maps MODULE_FILES names ('config', 'tuning', 'sonarr',
+    'radarr', 'trakt') to the CommentedMap that would be written for
+    that module; every module file not being changed by this save is
+    copied through unchanged from the real config dir, so the merge is
+    evaluated against the actual resulting config, not just the files
+    one screen owns.
+
+    Returns None if the merge is clean, or an error message otherwise.
+    """
+    from utils import load_config as _load_config
+
+    src_dir = config_dir(project_root)
+    with tempfile.TemporaryDirectory(prefix='curatarr-config-validate-') as tmp_dir:
+        if os.path.isdir(src_dir):
+            for name in os.listdir(src_dir):
+                src_path = os.path.join(src_dir, name)
+                if os.path.isfile(src_path):
+                    shutil.copy2(src_path, os.path.join(tmp_dir, name))
+        for name, data in modules.items():
+            save_module(os.path.join(tmp_dir, f'{name}.yml'), data)
+        try:
+            _load_config(os.path.join(tmp_dir, 'config.yml'))
+        except Exception as exc:
+            return str(exc)
+    return None
 
 
 def is_secret_field(key: str) -> bool:
