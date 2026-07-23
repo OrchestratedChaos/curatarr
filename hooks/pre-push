@@ -1,0 +1,8 @@
+#!/bin/bash
+# Pre-push hook -- runs scripts/hooks/pre-push-checks.sh
+# Installed via: bash scripts/setup-hooks.sh
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+bash scripts/hooks/pre-push-checks.sh < /dev/null

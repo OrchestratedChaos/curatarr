@@ -1,0 +1,109 @@
+title = "OrchestratedChaos gitleaks config"
+
+# Start from gitleaks' built-in ruleset (AWS keys, generic private keys,
+# common vendor tokens, etc.) and layer this user's own secret shapes on
+# top -- see custom rules below.
+[extend]
+useDefault = true
+
+# -- Plex --------------------------------------------------------------------
+[[rules]]
+id = "plex-token"
+description = "Plex API token (X-Plex-Token header / plexToken / PLEX_TOKEN)"
+regex = '''(?i)(x-plex-token|plex[_-]?token)[\s"'\]]{0,3}[:=][\s"']{0,3}([a-zA-Z0-9_-]{19,25})(?:["'\s]|$)'''
+secretGroup = 2
+keywords = ["x-plex-token", "plextoken", "plex_token"]
+
+# -- TMDB ----------------------------------------------------------------------
+[[rules]]
+id = "tmdb-api-key"
+description = "TMDB API key"
+regex = '''(?i)tmdb[_-]?api[_-]?key[\s"'\]]{0,3}[:=][\s"']{0,3}([a-f0-9]{32})(?:["'\s]|$)'''
+secretGroup = 1
+keywords = ["tmdb_api_key", "tmdbapikey"]
+
+# -- Tautulli ------------------------------------------------------------------
+[[rules]]
+id = "tautulli-api-key"
+description = "Tautulli API key"
+regex = '''(?i)tautulli[_-]?api[_-]?key[\s"'\]]{0,3}[:=][\s"']{0,3}([a-f0-9]{32})(?:["'\s]|$)'''
+secretGroup = 1
+keywords = ["tautulli_api_key", "tautulliapikey"]
+
+# -- Sonarr / Radarr -------------------------------------------------------------
+[[rules]]
+id = "arr-api-key"
+description = "Sonarr/Radarr API key (X-Api-Key header or api_key config value)"
+regex = '''(?i)(x-api-key|(?:sonarr|radarr)[_-]?api[_-]?key)[\s"'\]]{0,3}[:=][\s"']{0,3}([a-f0-9]{32})(?:["'\s]|$)'''
+secretGroup = 2
+keywords = ["x-api-key", "sonarr_api_key", "radarr_api_key"]
+
+# -- Trakt -----------------------------------------------------------------------
+[[rules]]
+id = "trakt-credentials"
+description = "Trakt client_id/client_secret/access_token/refresh_token"
+regex = '''(?i)trakt[_-]?(?:client[_-]?id|client[_-]?secret|access[_-]?token|refresh[_-]?token)[\s"'\]]{0,3}[:=][\s"']{0,3}([a-zA-Z0-9_-]{20,64})(?:["'\s]|$)'''
+secretGroup = 1
+keywords = ["trakt_client_id", "trakt_client_secret", "trakt_access_token", "trakt_refresh_token"]
+
+# -- MDBList -----------------------------------------------------------------------
+[[rules]]
+id = "mdblist-api-key"
+description = "MDBList API key"
+regex = '''(?i)mdblist[_-]?api[_-]?key[\s"'\]]{0,3}[:=][\s"']{0,3}([a-zA-Z0-9]{20,40})(?:["'\s]|$)'''
+secretGroup = 1
+keywords = ["mdblist_api_key", "mdblistapikey"]
+
+# -- Simkl -----------------------------------------------------------------------
+[[rules]]
+id = "simkl-credentials"
+description = "Simkl API key / client secret"
+regex = '''(?i)simkl[_-]?(?:api[_-]?key|client[_-]?secret)[\s"'\]]{0,3}[:=][\s"']{0,3}([a-zA-Z0-9]{20,64})(?:["'\s]|$)'''
+secretGroup = 1
+keywords = ["simkl_api_key", "simkl_client_secret"]
+
+# -- ntfy ------------------------------------------------------------------------
+[[rules]]
+id = "ntfy-topic-url"
+description = "ntfy.sh topic URL (anyone with this URL can read/publish to the topic)"
+regex = '''https?://ntfy\.sh/[A-Za-z0-9_-]{6,64}'''
+keywords = ["ntfy.sh"]
+
+# -- Generic ------------------------------------------------------------------------
+# Catches bare `token:`/`api_key:` style values too -- this codebase's YAML
+# configs nest per-service keys (plex: -> token:, sonarr: -> api_key:)
+# rather than prefixing them with the service name, so the service-specific
+# rules above miss the real on-disk shape; this is the backstop for those.
+[[rules]]
+id = "generic-high-entropy-secret"
+description = "Generic password/secret/token/api-key assignment with a high-entropy value"
+regex = '''(?i)(?:password|passwd|secret|token|api[_-]?key)[\s"'\]]{0,3}[:=][\s"']{1,3}([a-zA-Z0-9_\-!@#$%^&*]{16,64})["']?'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["password", "passwd", "secret", "token", "api_key", "apikey", "api-key"]
+
+[allowlist]
+description = "Known-safe placeholders, examples, and generated/vendored files"
+regexTarget = "match"
+regexes = [
+  '''(?i)YOUR[_-][A-Z0-9_-]*(KEY|TOKEN|SECRET)''',
+  '''(?i)<[A-Z0-9_-]*(KEY|TOKEN|SECRET)>''',
+  '''(?i)\{\{[^}]*(key|token|secret)[^}]*\}\}''',
+  '''(?i)\bchangeme\b''',
+  '''(?i)\bexample\b''',
+  '''(?i)\bplaceholder\b''',
+  '''x{16,}''',
+  '''0{16,}''',
+]
+paths = [
+  '''(^|/)\.git/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)(dist|build)/''',
+  '''(^|/)(cache|logs)/''',
+  '''\.(lock|svg|png|jpg|jpeg|gif|ico|woff2?|ttf|eot)$''',
+  '''(^|/).*\.example\.(ya?ml|json|env)$''',
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\.template$''',
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)requirements(-[a-z]+)?\.lock$''',
+]
