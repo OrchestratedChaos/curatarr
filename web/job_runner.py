@@ -271,6 +271,17 @@ class JobManager:
                 # run.sh itself spawns movie.py/tv.py/external.py as
                 # further children, not just the immediate bash process.
                 popen_kwargs['start_new_session'] = True
+            else:
+                # Suppress the child's own console window - matters for
+                # the windowed (console=False, see curatarr.spec) build:
+                # without this, a console-subsystem child (powershell.exe
+                # for the 'full' engine on a source install, or the
+                # re-invoked frozen exe itself) would otherwise flash a
+                # console window even though stdout/stderr are already
+                # piped back to this process. getattr(...) default keeps
+                # this importable/testable on non-Windows (the attribute
+                # only exists in the subprocess module on win32).
+                popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
             try:
                 process = subprocess.Popen(cmd, **popen_kwargs)
             except OSError as exc:

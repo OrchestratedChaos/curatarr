@@ -11,8 +11,19 @@ web UI's Run button work in a frozen PyInstaller binary (see
 web/job_runner.py's _build_command) - it dispatches to the requested
 recommender's own main() instead of shelling out to a
 recommenders/<x>.py file that doesn't exist once packaged.
+
+_attach_or_setup_console() (the AttachConsole/AllocConsole/CONOUT$
+dance behind the windowed, console=False Windows build) is marked
+`# pragma: no cover` in curatarr_app.py itself rather than unit-tested
+here - it needs the real Windows ctypes console API, which doesn't
+exist on the Linux CI runner (or this Mac dev machine). It's verified
+against an actual Windows build as part of the release process instead
+(see RELEASING.md). The tests below cover everything around it that
+*is* safely testable cross-platform: debug detection, the log path,
+and _configure_windowed_launch()'s not-frozen/not-Windows no-op guard.
 """
 
+import os
 import runpy
 import sys
 from unittest.mock import patch
@@ -34,6 +45,66 @@ class TestCuratarrApp:
         calls main() exactly once, matching run-ui.sh / run-ui.ps1."""
         runpy.run_module('curatarr_app', run_name='__main__')
         mock_main.assert_called_once_with()
+
+
+class TestDebugRequested:
+    """Tests for _debug_requested() - gates the AllocConsole fallback
+    and file-logging level in _attach_or_setup_console()."""
+
+    def test_true_when_debug_flag_present(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['curatarr', '--debug'])
+        monkeypatch.delenv('CURATARR_DEBUG', raising=False)
+        assert curatarr_app._debug_requested() is True
+
+    def test_true_when_env_var_set(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['curatarr'])
+        monkeypatch.setenv('CURATARR_DEBUG', '1')
+        assert curatarr_app._debug_requested() is True
+
+    def test_false_by_default(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['curatarr'])
+        monkeypatch.delenv('CURATARR_DEBUG', raising=False)
+        assert curatarr_app._debug_requested() is False
+
+
+class TestBootLogPath:
+    """Tests for _boot_log_path() - where the windowed build logs to
+    when there's no console to print to."""
+
+    def test_joins_project_root_logs_curatarr_log(self, monkeypatch, tmp_path):
+        monkeypatch.setattr('utils.get_project_root', lambda: str(tmp_path))
+        result = curatarr_app._boot_log_path()
+        assert result == os.path.join(str(tmp_path), 'logs', 'curatarr.log')
+
+
+class TestConfigureWindowedLaunch:
+    """_configure_windowed_launch() is only meaningful for the frozen
+    Windows build (curatarr.spec's console=False) - everywhere else it
+    must be a no-op, since macOS/Linux builds and non-frozen dev runs
+    already have a normal, working console."""
+
+    def test_noop_when_not_frozen(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        with patch('curatarr_app._attach_or_setup_console') as mock_attach:
+            curatarr_app._configure_windowed_launch()
+        mock_attach.assert_not_called()
+
+    def test_noop_when_not_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'posix')
+        with patch('curatarr_app._attach_or_setup_console') as mock_attach:
+            curatarr_app._configure_windowed_launch()
+        mock_attach.assert_not_called()
+
+    def test_dispatches_when_frozen_on_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        monkeypatch.setattr(sys, 'argv', ['curatarr'])
+        monkeypatch.delenv('CURATARR_DEBUG', raising=False)
+        with patch('curatarr_app._attach_or_setup_console') as mock_attach:
+            curatarr_app._configure_windowed_launch()
+        mock_attach.assert_called_once_with(False)
 
 
 class TestRunOneRecommender:
