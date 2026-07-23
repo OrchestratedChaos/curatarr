@@ -47,6 +47,13 @@ def validate_choice(value: str, field: str, errors: Dict[str, str], choices) -> 
         errors[field] = f'Must be one of: {", ".join(choices)}'
 
 
+def validate_media_type(value: str, field: str, errors: Dict[str, str]) -> None:
+    """Thin wrapper over validate_choice for the Libraries screen's
+    media_type field (#157 Phase 4) - kept separate from the generic
+    helper so the ('movie', 'tv') choice set has one place to change."""
+    validate_choice(value, field, errors, ('movie', 'tv'))
+
+
 def validate_float(value, field: str, errors: Dict[str, str], lo: float = None,
                     hi: float = None, label: str = None) -> Optional[float]:
     """Parse *value* as a float, recording an error and returning None on
