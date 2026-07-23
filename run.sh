@@ -70,18 +70,28 @@ check_and_install_dependencies() {
     fi
     echo -e "${GREEN}✓ pip3 found${NC}"
 
-    # Install/update Python requirements (versions are pinned in
-    # requirements.txt; no --upgrade so pinned versions are respected)
-    if [ -f "requirements.txt" ]; then
+    # Install Python dependencies from the fully-hashed lock file
+    # (requirements.lock, generated from requirements.txt - see the
+    # comment at the top of that file). `--require-hashes` makes pip
+    # refuse to install anything whose downloaded artifact doesn't match
+    # a pinned SHA256, so a compromised index or MITM'd download can't
+    # silently substitute a different build of a dependency here.
+    if [ -f "requirements.lock" ]; then
         echo -e "${CYAN}Installing Python dependencies...${NC}"
+        pip3 install --require-hashes -r requirements.lock --quiet || {
+            echo -e "${RED}❌ Failed to install Python dependencies${NC}"
+            echo "Try running manually: pip3 install --require-hashes -r requirements.lock"
+            exit 1
+        }
+        echo -e "${GREEN}✓ All dependencies installed${NC}"
+    elif [ -f "requirements.txt" ]; then
+        echo -e "${YELLOW}requirements.lock not found, falling back to requirements.txt (no hash verification)${NC}"
         pip3 install -r requirements.txt --quiet || {
             echo -e "${RED}❌ Failed to install Python dependencies${NC}"
             echo "Try running manually: pip3 install -r requirements.txt"
             exit 1
         }
         echo -e "${GREEN}✓ All dependencies installed${NC}"
-        # TODO follow-up: switch to `pip3 install --require-hashes` once
-        # requirements.txt carries per-package hashes.
     fi
 
     echo ""
@@ -163,12 +173,22 @@ print('\n'.join(t[1] for t in tags))
         # unsigned/wrong-key tag) inside `VAR=$(...)` would otherwise
         # abort this whole function instead of letting the loop try the
         # next-newest candidate.
-        if ! verify_output=$(git -c gpg.ssh.allowedSignersFile="$ALLOWED_SIGNERS_FILE" verify-tag --raw "$tag" 2>&1); then
+        #
+        # `2>&1 1>/dev/null` captures ONLY stderr (where git writes its own
+        # signature-status line) and discards stdout, so a tag body/message
+        # (which `-v` would print to stdout — we never pass `-v`) can never
+        # end up in verify_output regardless of git version. Belt-and-
+        # suspenders with the anchored regex below.
+        if ! verify_output=$(git -c gpg.ssh.allowedSignersFile="$ALLOWED_SIGNERS_FILE" verify-tag --raw "$tag" 2>&1 1>/dev/null); then
             continue
         fi
 
-        tag_fpr=$(printf '%s\n' "$verify_output" | grep -oE 'SHA256:[A-Za-z0-9+/=]+' | head -1)
-        if [ "$tag_fpr" = "$RELEASE_SIGNER_FINGERPRINT" ]; then
+        # Anchored to git's own "with <algo> key SHA256:..." phrase, not
+        # just the first SHA256: token anywhere in the output — a
+        # fingerprint injected elsewhere (e.g. a crafted tag message) can
+        # never be selected in place of the actually-verified key.
+        tag_fpr=$(printf '%s\n' "$verify_output" | grep -oE 'with [A-Za-z0-9-]+ key SHA256:[A-Za-z0-9+/=]+' | grep -oE 'SHA256:[A-Za-z0-9+/=]+' | head -1)
+        if [ -n "$tag_fpr" ] && [ "$tag_fpr" = "$RELEASE_SIGNER_FINGERPRINT" ]; then
             echo "$tag"
             return 0
         fi

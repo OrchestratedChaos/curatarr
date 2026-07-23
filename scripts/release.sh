@@ -160,7 +160,12 @@ git -c user.email="$RELEASE_TAG_EMAIL" tag -s "$TAG" -m "$TAG"
 echo "==> Verifying ${TAG} locally against ${ALLOWED_SIGNERS_FILE} before pushing"
 git config gpg.ssh.allowedSignersFile "$ALLOWED_SIGNERS_FILE"
 
-VERIFY_OUTPUT="$(git verify-tag "$TAG" 2>&1)" || {
+# `2>&1 1>/dev/null` captures ONLY stderr (where git writes its own
+# signature-status line) and discards stdout, so a tag body/message
+# (which `-v` would print to stdout — we never pass `-v`) can never end
+# up in VERIFY_OUTPUT regardless of git version. Same hardening as
+# run.sh/run.ps1/release.yml - see RELEASING.md.
+VERIFY_OUTPUT="$(git verify-tag "$TAG" 2>&1 1>/dev/null)" || {
   echo "ERROR: local verify-tag failed for $TAG - not pushing" >&2
   echo "$VERIFY_OUTPUT" >&2
   git tag -d "$TAG"
@@ -168,7 +173,13 @@ VERIFY_OUTPUT="$(git verify-tag "$TAG" 2>&1)" || {
 }
 echo "$VERIFY_OUTPUT"
 
-if ! echo "$VERIFY_OUTPUT" | grep -qF "$RELEASE_SIGNER_FINGERPRINT"; then
+# Anchored to git's own "with <algo> key SHA256:..." phrase instead of a
+# plain substring search, so a fingerprint injected elsewhere (e.g. a
+# crafted tag message) can never be picked up in place of the
+# actually-verified key.
+TAG_FPR="$(printf '%s\n' "$VERIFY_OUTPUT" | grep -oE 'with [A-Za-z0-9-]+ key SHA256:[A-Za-z0-9+/=]+' | grep -oE 'SHA256:[A-Za-z0-9+/=]+' | head -1)"
+
+if [ -z "$TAG_FPR" ] || [ "$TAG_FPR" != "$RELEASE_SIGNER_FINGERPRINT" ]; then
   echo "ERROR: $TAG did not verify against the pinned fingerprint ($RELEASE_SIGNER_FINGERPRINT) - not pushing" >&2
   git tag -d "$TAG"
   exit 1

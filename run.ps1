@@ -66,10 +66,23 @@ function Check-Dependencies {
     }
     Write-Green "OK pip found"
 
-    # Install/update Python requirements (versions are pinned in
-    # requirements.txt; no --upgrade so pinned versions are respected)
-    if (Test-Path "requirements.txt") {
+    # Install Python dependencies from the fully-hashed lock file
+    # (requirements.lock, generated from requirements.txt - see the
+    # comment at the top of that file). `--require-hashes` makes pip
+    # refuse to install anything whose downloaded artifact doesn't match
+    # a pinned SHA256, so a compromised index or MITM'd download can't
+    # silently substitute a different build of a dependency here.
+    if (Test-Path "requirements.lock") {
         Write-Cyan "Installing Python dependencies..."
+        & $pythonCmd -m pip install --require-hashes -r requirements.lock --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Red "X Failed to install Python dependencies"
+            Write-Host "Try running manually: python -m pip install --require-hashes -r requirements.lock"
+            exit 1
+        }
+        Write-Green "OK All dependencies installed"
+    } elseif (Test-Path "requirements.txt") {
+        Write-Yellow "requirements.lock not found, falling back to requirements.txt (no hash verification)"
         & $pythonCmd -m pip install -r requirements.txt --quiet 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Red "X Failed to install Python dependencies"
@@ -77,8 +90,6 @@ function Check-Dependencies {
             exit 1
         }
         Write-Green "OK All dependencies installed"
-        # TODO follow-up: switch to `pip install --require-hashes` once
-        # requirements.txt carries per-package hashes.
     }
 
     Write-Host ""
@@ -155,8 +166,22 @@ sys.exit(0 if a > b else 1)
         $verifyOutput = git -c "gpg.ssh.allowedSignersFile=$script:AllowedSignersFile" verify-tag --raw $tag 2>&1
         if ($LASTEXITCODE -ne 0) { continue }
 
-        $tagFpr = ([regex]::Match(($verifyOutput | Out-String), 'SHA256:[A-Za-z0-9+/=]+')).Value
-        if ($tagFpr -eq $script:ReleaseSignerFingerprint) {
+        # PowerShell wraps every line a native command writes to stderr as
+        # an ErrorRecord within the merged 2>&1 stream, while stdout lines
+        # stay plain strings. Keeping only the ErrorRecord entries means we
+        # parse exclusively what git wrote to stderr (its own signature-
+        # status line) — a tag body/message (which `-v` would print to
+        # stdout — we never pass `-v`) can never end up in this text
+        # regardless of git version.
+        $stderrOnly = ($verifyOutput | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { $_.ToString() }) -join "`n"
+
+        # Anchored to git's own "with <algo> key SHA256:..." phrase, not
+        # just the first SHA256: token anywhere in the output — a
+        # fingerprint injected elsewhere (e.g. a crafted tag message) can
+        # never be selected in place of the actually-verified key.
+        $fprMatch = [regex]::Match($stderrOnly, 'with [A-Za-z0-9-]+ key (SHA256:[A-Za-z0-9+/=]+)')
+        $tagFpr = if ($fprMatch.Success) { $fprMatch.Groups[1].Value } else { "" }
+        if ($tagFpr -and $tagFpr -eq $script:ReleaseSignerFingerprint) {
             return $tag
         }
     }

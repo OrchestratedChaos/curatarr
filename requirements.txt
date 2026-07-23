@@ -2,8 +2,12 @@
 #
 # Pinned to exact versions so `pip install -r requirements.txt` (no
 # --upgrade) is reproducible. Bump deliberately, one PR at a time.
-# Follow-up: move to `pip install --require-hashes` for supply-chain
-# integrity beyond version pinning.
+#
+# run.sh/run.ps1 actually install from requirements.lock (this file's
+# direct + transitive deps, fully SHA256-hashed, `pip install
+# --require-hashes`) for supply-chain integrity beyond version pinning.
+# After changing this file, regenerate requirements.lock - see the
+# comment at the top of that file for the command.
 
 # Core Plex API client
 plexapi==4.18.2
