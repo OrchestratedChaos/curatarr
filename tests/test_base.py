@@ -3,6 +3,7 @@ Tests for recommenders/base.py - Base cache and recommender classes.
 """
 
 import os
+import copy
 import pytest
 import requests
 import plexapi.exceptions
@@ -333,6 +334,7 @@ class TestBaseCacheGetTmdbData:
 class ConcreteRecommender(BaseRecommender):
     """Concrete implementation of BaseRecommender for testing."""
     media_type = 'movie'
+    media_key = 'movies'
     library_config_key = 'movie_library'
     default_library_name = 'Movies'
 
@@ -1072,3 +1074,810 @@ class TestBaseRecommenderCollectionNaming:
         assert mock_build_label.called
         base_label_arg = mock_build_label.call_args[0][0]
         assert base_label_arg == 'Recommended_movies-4k'
+
+
+# ------------------------------------------------------------------------
+# Core recommendation-engine coverage: label management, candidate scoring,
+# and the TMDB/IMDb id-resolution chain shared by movie.py and tv.py.
+# ------------------------------------------------------------------------
+
+class ConcreteTVRecommender(BaseRecommender):
+    """Concrete TV implementation of BaseRecommender for testing shared logic."""
+    media_type = 'tv'
+    media_key = 'shows'
+    library_config_key = 'tv_library'
+    default_library_name = 'TV Shows'
+
+    def _load_weights(self, weights_config):
+        return {'genre': 0.5, 'actor': 0.5}
+
+    def _get_watched_data(self):
+        return {'genres': Counter(), 'actors': Counter()}
+
+    def _get_watched_count(self):
+        return 0
+
+    def _save_watched_cache(self):
+        pass
+
+    def _get_media_cache(self):
+        return Mock()
+
+    def _find_plex_item(self, section, rec):
+        return None
+
+    def _calculate_similarity_from_cache(self, item_info):
+        return (0.5, {})
+
+    def _print_similarity_breakdown(self, item_info, score, breakdown):
+        pass
+
+
+def _make_recommender(config=None, users=None, library=None, recommender_cls=ConcreteRecommender,
+                       config_path='/path/to/config.yml'):
+    """Build a fully-initialized recommender with Plex/TMDB/config init mocked out.
+
+    Deep-copies the config so tests are free to mutate recommender.config
+    without polluting the shared module-level fixture dicts.
+    """
+    config = copy.deepcopy(config if config is not None else SINGLE_MOVIE_LIBRARY_CONFIG)
+    users = users or {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+    with patch('recommenders.base.load_config', return_value=config), \
+         patch('recommenders.base.get_configured_users', return_value=users), \
+         patch('recommenders.base.get_tmdb_config', return_value={'use_keywords': True, 'api_key': 'key'}), \
+         patch('recommenders.base.init_plex', return_value=Mock()), \
+         patch('os.makedirs'):
+        return recommender_cls(config_path, library=library)
+
+
+class TestGetManagedUsersWatchedData:
+    """Tests for BaseRecommender._get_managed_users_watched_data."""
+
+    def test_returns_cached_data_when_not_single_user(self):
+        recommender = _make_recommender()
+        recommender.watched_data_counters = {'genres': Counter({'a': 1})}
+        result = recommender._get_managed_users_watched_data()
+        assert result == recommender.watched_data_counters
+
+    def test_returns_cached_data_when_single_user(self):
+        recommender = _make_recommender()
+        recommender.single_user = 'alice'
+        recommender.watched_data_counters = {'genres': Counter({'a': 1})}
+        result = recommender._get_managed_users_watched_data()
+        assert result == recommender.watched_data_counters
+
+    @patch('recommenders.base.MyPlexAccount')
+    def test_admin_user_uses_direct_plex_connection(self, mock_account_cls):
+        recommender = _make_recommender(users={'plex_users': [], 'managed_users': ['admin'], 'admin_user': 'admin'})
+        recommender.watched_data_counters = {}
+        recommender.plex = Mock()
+        item = Mock(ratingKey='10')
+        recommender.plex.library.section.return_value.search.return_value = [item]
+        media_cache = Mock()
+        media_cache.cache = {'movies': {'10': {'tmdb_id': 555}}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+
+        result = recommender._get_managed_users_watched_data()
+
+        assert 10 in recommender.watched_ids
+        assert 555 in result['tmdb_ids']
+        mock_account_cls.return_value.user.assert_not_called()
+
+    @patch('recommenders.base.MyPlexAccount')
+    def test_non_admin_user_switches_user(self, mock_account_cls):
+        recommender = _make_recommender(users={'plex_users': [], 'managed_users': ['bob'], 'admin_user': 'admin'})
+        recommender.watched_data_counters = {}
+        recommender.plex = Mock()
+        switched_plex = Mock()
+        recommender.plex.switchUser.return_value = switched_plex
+        switched_plex.library.section.return_value.search.return_value = []
+        media_cache = Mock()
+        media_cache.cache = {'movies': {}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+
+        recommender._get_managed_users_watched_data()
+
+        recommender.plex.switchUser.assert_called_once()
+
+    @patch('recommenders.base.log_error')
+    @patch('recommenders.base.MyPlexAccount')
+    def test_user_processing_error_continues_to_next_user(self, mock_account_cls, mock_log_error):
+        recommender = _make_recommender(
+            users={'plex_users': [], 'managed_users': ['bob', 'admin'], 'admin_user': 'admin'}
+        )
+        recommender.watched_data_counters = {}
+        recommender.plex = Mock()
+        recommender.plex.switchUser.side_effect = plexapi.exceptions.PlexApiException("fail")
+        recommender.plex.library.section.return_value.search.return_value = []
+        media_cache = Mock()
+        media_cache.cache = {'movies': {}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+
+        recommender._get_managed_users_watched_data()
+
+        mock_log_error.assert_called()
+
+    @patch('recommenders.base.MyPlexAccount')
+    def test_single_user_admin_alias_uses_admin_user(self, mock_account_cls):
+        recommender = _make_recommender(users={'plex_users': [], 'managed_users': [], 'admin_user': 'admin'})
+        recommender.single_user = 'Administrator'
+        recommender.watched_data_counters = {}
+        recommender.plex = Mock()
+        recommender.plex.library.section.return_value.search.return_value = []
+        media_cache = Mock()
+        media_cache.cache = {'movies': {}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+
+        recommender._get_managed_users_watched_data()
+
+        recommender.plex.switchUser.assert_not_called()
+
+
+class TestFindPlexItemsForRecs:
+    """Tests for BaseRecommender._find_plex_items_for_recs."""
+
+    def test_finds_by_rating_key(self):
+        recommender = _make_recommender()
+        recommender.plex = Mock()
+        found_item = Mock()
+        recommender.plex.fetchItem.return_value = found_item
+        section = Mock()
+        selected = [{'title': 'A', 'year': 2020, 'plex_rating_key': 123}]
+
+        items_found, skipped = recommender._find_plex_items_for_recs(section, selected)
+
+        assert items_found == [found_item]
+        assert skipped == []
+        found_item.reload.assert_called_once()
+
+    def test_falls_back_to_fuzzy_search_on_fetch_error(self):
+        recommender = _make_recommender()
+        recommender.plex = Mock()
+        recommender.plex.fetchItem.side_effect = Exception("not found")
+        found_item = Mock()
+        recommender._find_plex_item = Mock(return_value=found_item)
+        section = Mock()
+        selected = [{'title': 'A', 'year': 2020, 'plex_rating_key': 123}]
+
+        items_found, skipped = recommender._find_plex_items_for_recs(section, selected)
+
+        assert items_found == [found_item]
+        recommender._find_plex_item.assert_called_once_with(section, selected[0])
+
+    def test_no_rating_key_uses_fuzzy_search(self):
+        recommender = _make_recommender()
+        recommender.plex = Mock()
+        recommender._find_plex_item = Mock(return_value=None)
+        section = Mock()
+        selected = [{'title': 'Missing', 'year': 2019}]
+
+        items_found, skipped = recommender._find_plex_items_for_recs(section, selected)
+
+        assert items_found == []
+        assert skipped == ['Missing (2019)']
+
+
+class TestRemoveOutdatedLabels:
+    """Tests for BaseRecommender._remove_outdated_labels."""
+
+    @patch('recommenders.base.remove_labels_from_items')
+    @patch('recommenders.base.categorize_labeled_items')
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_removes_watched_and_excluded_returns_fresh(self, mock_excl, mock_categorize, mock_remove):
+        recommender = _make_recommender()
+        section = Mock()
+        fresh_item, watched_item, excluded_item = Mock(), Mock(), Mock()
+        section.search.return_value = [fresh_item, watched_item, excluded_item]
+        mock_categorize.return_value = {
+            'fresh': [fresh_item], 'watched': [watched_item], 'excluded': [excluded_item], 'stale': []
+        }
+
+        result = recommender._remove_outdated_labels(section, 'Recommended_alice', 7)
+
+        assert result == [fresh_item]
+        assert mock_remove.call_count == 2
+        reasons = {call.args[3] for call in mock_remove.call_args_list}
+        assert reasons == {'watched', 'excluded genre'}
+
+
+class TestBuildScoredCandidates:
+    """Tests for BaseRecommender._build_scored_candidates."""
+
+    def test_scores_labeled_items_from_cache(self):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {'movies': {'1': {'title': 'A'}}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender._calculate_similarity_from_cache = Mock(return_value=(0.8, {}))
+        labeled_item = Mock(ratingKey=1, title='A')
+
+        result = recommender._build_scored_candidates([labeled_item], [], [])
+
+        assert result[1] == (labeled_item, 0.8)
+
+    def test_labeled_item_not_in_cache_gets_zero_score(self):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {'movies': {}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        labeled_item = Mock(ratingKey=2, title='B')
+
+        result = recommender._build_scored_candidates([labeled_item], [], [])
+
+        assert result[2] == (labeled_item, 0.0)
+
+    def test_scoring_exception_defaults_to_zero(self):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {'movies': {'3': {'title': 'C'}}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender._calculate_similarity_from_cache = Mock(side_effect=Exception("boom"))
+        labeled_item = Mock(ratingKey=3, title='C')
+
+        result = recommender._build_scored_candidates([labeled_item], [], [])
+
+        assert result[3] == (labeled_item, 0.0)
+
+    def test_selected_items_matched_by_rating_key(self):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {'movies': {}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = set()
+        plex_item = Mock(ratingKey=5, isPlayed=False)
+        selected = [{'title': 'D', 'year': 2021, 'plex_rating_key': 5, 'similarity_score': 0.6}]
+
+        result = recommender._build_scored_candidates([], selected, [plex_item])
+
+        assert result[5] == (plex_item, 0.6)
+
+    def test_selected_items_fallback_title_year_match(self):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {'movies': {}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = set()
+        plex_item = Mock(ratingKey=6, title='E', year=2018, isPlayed=False)
+        selected = [{'title': 'E', 'year': 2018, 'similarity_score': 0.4}]
+
+        result = recommender._build_scored_candidates([], selected, [plex_item])
+
+        assert result[6] == (plex_item, 0.4)
+
+    def test_watched_selected_item_excluded(self):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {'movies': {}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = {7}
+        plex_item = Mock(ratingKey=7, isPlayed=False)
+        selected = [{'title': 'F', 'year': 2020, 'plex_rating_key': 7, 'similarity_score': 0.9}]
+
+        result = recommender._build_scored_candidates([], selected, [plex_item])
+
+        assert 7 not in result
+
+
+class TestFilterCandidatesByRating:
+    """Tests for BaseRecommender._filter_candidates_by_rating."""
+
+    def test_no_max_rating_returns_unchanged(self):
+        recommender = _make_recommender()
+        candidates = {1: (Mock(), 0.5)}
+
+        result = recommender._filter_candidates_by_rating(candidates, None)
+
+        assert result is candidates
+
+    @patch('recommenders.base.is_rating_allowed')
+    def test_filters_disallowed_ratings(self, mock_allowed):
+        recommender = _make_recommender()
+        allowed_item = Mock(contentRating='PG-13')
+        blocked_item = Mock(contentRating='R')
+        mock_allowed.side_effect = lambda rating, max_rating, media_type: rating == 'PG-13'
+        candidates = {1: (allowed_item, 0.5), 2: (blocked_item, 0.7)}
+
+        result = recommender._filter_candidates_by_rating(candidates, 'PG-13')
+
+        assert 1 in result
+        assert 2 not in result
+
+
+class TestUpdateLabelsByRank:
+    """Tests for BaseRecommender._update_labels_by_rank."""
+
+    @patch('recommenders.base.add_labels_to_items')
+    @patch('recommenders.base.remove_labels_from_items')
+    def test_keeps_top_scoring_and_evicts_rest(self, mock_remove, mock_add):
+        recommender = _make_recommender()
+        item_high = Mock(ratingKey=1)
+        item_low = Mock(ratingKey=2)
+        item_new = Mock(ratingKey=3)
+        candidates = {1: (item_high, 0.9), 2: (item_low, 0.1), 3: (item_new, 0.8)}
+        unwatched_labeled = [item_high, item_low]
+
+        result = recommender._update_labels_by_rank(candidates, unwatched_labeled, 'Recommended_alice', target_count=2)
+
+        result_keys = {int(i.ratingKey) for i in result}
+        assert result_keys == {1, 3}
+        mock_remove.assert_called_once()
+        mock_add.assert_called_once()
+
+    @patch('recommenders.base.add_labels_to_items')
+    @patch('recommenders.base.remove_labels_from_items')
+    def test_no_changes_when_already_optimal(self, mock_remove, mock_add):
+        recommender = _make_recommender()
+        item = Mock(ratingKey=1)
+        candidates = {1: (item, 0.9)}
+
+        result = recommender._update_labels_by_rank(candidates, [item], 'Recommended_alice', target_count=1)
+
+        mock_remove.assert_not_called()
+        mock_add.assert_not_called()
+        assert result == [item]
+
+
+class TestSyncPlexCollectionEmpty:
+    """Tests for BaseRecommender._sync_plex_collection with no items."""
+
+    @patch('recommenders.base.update_plex_collection')
+    def test_returns_false_when_no_final_items(self, mock_update):
+        recommender = _make_recommender()
+
+        result = recommender._sync_plex_collection(Mock(), 'Recommended_alice', [])
+
+        assert result is False
+        mock_update.assert_not_called()
+
+
+class TestManagePlexLabelsFullFlow:
+    """Tests for BaseRecommender.manage_plex_labels orchestration."""
+
+    def _base_recommender(self, users=None):
+        users = users or {'plex_users': ['alice'], 'managed_users': [], 'admin_user': 'admin'}
+        recommender = _make_recommender(users=users)
+        recommender.plex = Mock()
+        recommender.config['collections'] = {
+            'add_label': True, 'label_name': 'Recommended',
+            'append_usernames': False, 'private_collections': False,
+        }
+        recommender.confirm_operations = False
+        recommender._find_plex_items_for_recs = Mock(return_value=([Mock()], []))
+        recommender._remove_outdated_labels = Mock(return_value=[])
+        recommender._build_scored_candidates = Mock(return_value={1: (Mock(), 0.9)})
+        recommender._update_labels_by_rank = Mock(return_value=[Mock()])
+        recommender._sync_plex_collection = Mock(return_value=True)
+        recommender._save_watched_cache = Mock()
+        return recommender
+
+    @patch('recommenders.base.build_label_name', return_value='Recommended_alice')
+    def test_happy_path_returns_sync_result(self, mock_build_label):
+        recommender = self._base_recommender()
+
+        result = recommender.manage_plex_labels([{'title': 'Movie', 'year': 2020}])
+
+        assert result is True
+        recommender._sync_plex_collection.assert_called_once()
+
+    @patch('recommenders.base.build_label_name', return_value='Recommended_alice')
+    def test_no_items_found_returns_false(self, mock_build_label):
+        recommender = self._base_recommender()
+        recommender._find_plex_items_for_recs = Mock(return_value=([], ['Skipped Movie (2020)']))
+
+        result = recommender.manage_plex_labels([{'title': 'Movie', 'year': 2020}])
+
+        assert result is False
+        recommender._sync_plex_collection.assert_not_called()
+
+    @patch('recommenders.base.build_label_name', return_value='Recommended_alice')
+    def test_confirm_operations_uses_user_selection(self, mock_build_label):
+        recommender = self._base_recommender()
+        recommender.confirm_operations = True
+        recommender._user_select_recommendations = Mock(return_value=[{'title': 'Movie', 'year': 2020}])
+
+        recommender.manage_plex_labels([{'title': 'Movie', 'year': 2020}])
+
+        recommender._user_select_recommendations.assert_called_once()
+
+    @patch('recommenders.base.build_label_name', return_value='Recommended_alice')
+    def test_confirm_operations_empty_selection_passes_empty_list(self, mock_build_label):
+        recommender = self._base_recommender()
+        recommender.confirm_operations = True
+        recommender._user_select_recommendations = Mock(return_value=[])
+
+        recommender.manage_plex_labels([{'title': 'Movie', 'year': 2020}])
+
+        args = recommender._find_plex_items_for_recs.call_args[0]
+        assert args[1] == []
+
+    @patch('recommenders.base.apply_user_label_restrictions')
+    @patch('recommenders.base.build_label_name', return_value='Recommended_alice')
+    def test_private_collections_applies_restrictions(self, mock_build_label, mock_apply):
+        recommender = self._base_recommender()
+        recommender.config['collections']['private_collections'] = True
+
+        recommender.manage_plex_labels([{'title': 'Movie', 'year': 2020}])
+
+        mock_apply.assert_called_once()
+
+    @patch('recommenders.base.get_max_rating_for_user', return_value='PG-13')
+    @patch('recommenders.base.build_label_name', return_value='Recommended_alice')
+    def test_max_rating_filters_candidates(self, mock_build_label, mock_max_rating):
+        recommender = self._base_recommender()
+        recommender._filter_candidates_by_rating = Mock(return_value={1: (Mock(), 0.9)})
+
+        recommender.manage_plex_labels([{'title': 'Movie', 'year': 2020}])
+
+        recommender._filter_candidates_by_rating.assert_called_once()
+
+    def test_no_recommendations_returns_false(self):
+        recommender = self._base_recommender()
+
+        result = recommender.manage_plex_labels([])
+
+        assert result is False
+
+    def test_add_label_disabled_returns_false(self):
+        recommender = self._base_recommender()
+        recommender.config['collections']['add_label'] = False
+
+        result = recommender.manage_plex_labels([{'title': 'Movie'}])
+
+        assert result is False
+
+
+class TestManagePlexLabelsExceptionHandling:
+    """Tests for BaseRecommender.manage_plex_labels error handling."""
+
+    def test_plex_exception_returns_false(self):
+        recommender = _make_recommender(users={'plex_users': ['alice'], 'managed_users': [], 'admin_user': 'admin'})
+        recommender.plex = Mock()
+        recommender.plex.library.section.side_effect = plexapi.exceptions.PlexApiException("boom")
+
+        result = recommender.manage_plex_labels([{'title': 'Movie', 'year': 2020}])
+
+        assert result is False
+
+
+class TestGetPlexItemTmdbId:
+    """Tests for BaseRecommender._get_plex_item_tmdb_id cache-miss path."""
+
+    @patch('recommenders.base.get_tmdb_id_for_item')
+    def test_cache_miss_saves_and_returns_id(self, mock_get_id):
+        recommender = _make_recommender()
+        recommender._save_watched_cache = Mock()
+        mock_get_id.return_value = 999
+        plex_item = Mock(ratingKey='42')
+
+        result = recommender._get_plex_item_tmdb_id(plex_item)
+
+        assert result == 999
+        assert recommender.plex_tmdb_cache['42'] == 999
+        recommender._save_watched_cache.assert_called_once()
+
+    @patch('recommenders.base.get_tmdb_id_for_item')
+    def test_cache_miss_no_id_found_does_not_save(self, mock_get_id):
+        recommender = _make_recommender()
+        recommender._save_watched_cache = Mock()
+        mock_get_id.return_value = None
+        plex_item = Mock(ratingKey='42')
+
+        result = recommender._get_plex_item_tmdb_id(plex_item)
+
+        assert result is None
+        recommender._save_watched_cache.assert_not_called()
+
+
+class TestGetPlexItemImdbId:
+    """Tests for BaseRecommender._get_plex_item_imdb_id fallback chain."""
+
+    @patch('recommenders.base.extract_ids_from_guids')
+    def test_returns_imdb_from_guids(self, mock_extract):
+        recommender = _make_recommender()
+        mock_extract.return_value = {'imdb_id': 'tt111', 'tmdb_id': None}
+
+        result = recommender._get_plex_item_imdb_id(Mock())
+
+        assert result == 'tt111'
+
+    @patch('recommenders.base.extract_ids_from_guids')
+    def test_falls_back_to_legacy_guid_attribute(self, mock_extract):
+        recommender = _make_recommender()
+        mock_extract.return_value = {'imdb_id': None, 'tmdb_id': None}
+        plex_item = Mock(guid='imdb://tt222')
+
+        result = recommender._get_plex_item_imdb_id(plex_item)
+
+        assert result == 'tt222'
+
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.extract_ids_from_guids')
+    def test_falls_back_to_tmdb_movie_lookup(self, mock_extract, mock_fetch):
+        recommender = _make_recommender()  # media_type == 'movie'
+        mock_extract.return_value = {'imdb_id': None, 'tmdb_id': None}
+        recommender._get_plex_item_tmdb_id = Mock(return_value=555)
+        mock_fetch.return_value = {'imdb_id': 'tt333'}
+        plex_item = Mock(guid=None)
+
+        result = recommender._get_plex_item_imdb_id(plex_item)
+
+        assert result == 'tt333'
+        assert 'movie/555' in mock_fetch.call_args[0][0]
+
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    @patch('recommenders.base.extract_ids_from_guids')
+    def test_falls_back_to_tmdb_tv_external_ids(self, mock_extract, mock_fetch):
+        recommender = _make_recommender(recommender_cls=ConcreteTVRecommender)
+        mock_extract.return_value = {'imdb_id': None, 'tmdb_id': None}
+        recommender._get_plex_item_tmdb_id = Mock(return_value=555)
+        mock_fetch.return_value = {'imdb_id': 'tt444'}
+        plex_item = Mock(guid=None)
+
+        result = recommender._get_plex_item_imdb_id(plex_item)
+
+        assert result == 'tt444'
+        assert 'tv/555/external_ids' in mock_fetch.call_args[0][0]
+
+    @patch('recommenders.base.extract_ids_from_guids')
+    def test_returns_none_when_no_tmdb_id_available(self, mock_extract):
+        recommender = _make_recommender()
+        mock_extract.return_value = {'imdb_id': None, 'tmdb_id': None}
+        recommender._get_plex_item_tmdb_id = Mock(return_value=None)
+        plex_item = Mock(guid=None)
+
+        result = recommender._get_plex_item_imdb_id(plex_item)
+
+        assert result is None
+
+
+class TestGetTmdbIdViaImdb:
+    """Tests for BaseRecommender._get_tmdb_id_via_imdb."""
+
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    def test_returns_tmdb_id_for_movie(self, mock_fetch):
+        recommender = _make_recommender()
+        recommender._get_plex_item_imdb_id = Mock(return_value='tt123')
+        recommender.tmdb_api_key = 'key'
+        mock_fetch.return_value = {'movie_results': [{'id': 42}]}
+
+        result = recommender._get_tmdb_id_via_imdb(Mock())
+
+        assert result == 42
+
+    def test_returns_none_without_imdb_id(self):
+        recommender = _make_recommender()
+        recommender._get_plex_item_imdb_id = Mock(return_value=None)
+
+        result = recommender._get_tmdb_id_via_imdb(Mock())
+
+        assert result is None
+
+    @patch('recommenders.base.fetch_tmdb_with_retry')
+    def test_returns_none_when_no_results(self, mock_fetch):
+        recommender = _make_recommender()
+        recommender._get_plex_item_imdb_id = Mock(return_value='tt123')
+        recommender.tmdb_api_key = 'key'
+        mock_fetch.return_value = {'movie_results': []}
+
+        result = recommender._get_tmdb_id_via_imdb(Mock())
+
+        assert result is None
+
+
+class TestGetTmdbKeywordsForId:
+    """Tests for BaseRecommender._get_tmdb_keywords_for_id."""
+
+    def test_returns_empty_set_without_tmdb_id(self):
+        recommender = _make_recommender()
+
+        assert recommender._get_tmdb_keywords_for_id(None) == set()
+
+    def test_returns_empty_set_when_keywords_disabled(self):
+        recommender = _make_recommender()
+        recommender.use_tmdb_keywords = False
+
+        assert recommender._get_tmdb_keywords_for_id(123) == set()
+
+    @patch('recommenders.base.get_tmdb_keywords')
+    def test_fetches_and_saves_keywords(self, mock_keywords):
+        recommender = _make_recommender()
+        recommender._save_watched_cache = Mock()
+        mock_keywords.return_value = ['a', 'b']
+
+        result = recommender._get_tmdb_keywords_for_id(123)
+
+        assert result == {'a', 'b'}
+        recommender._save_watched_cache.assert_called_once()
+
+
+class TestGetRecommendationsBranches:
+    """Additional branch coverage for BaseRecommender.get_recommendations."""
+
+    def _recommender_with_cache(self, items):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {'movies': items}
+        media_cache._save_cache = Mock()
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = set()
+        recommender.profile_hash = 'hash1'
+        recommender.exclude_genres = []
+        recommender.user_preferences = {}
+        recommender.randomize_recommendations = False
+        return recommender, media_cache
+
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_quality_filter_excludes_low_rated(self, mock_excl):
+        items = {
+            '1': {'title': 'Good', 'rating': 8.0, 'vote_count': 500, 'genres': []},
+            '2': {'title': 'Bad', 'rating': 2.0, 'vote_count': 5, 'genres': []},
+        }
+        recommender, media_cache = self._recommender_with_cache(items)
+        recommender.config['quality_filters'] = {'min_rating': 5.0, 'min_vote_count': 100}
+
+        result = recommender.get_recommendations()
+
+        titles = [i['title'] for i in result['plex_recommendations']]
+        assert 'Bad' not in titles
+
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_uses_cached_score_when_profile_hash_matches(self, mock_excl):
+        items = {'1': {'title': 'Cached', 'rating': 8, 'vote_count': 500, 'genres': [],
+                        'profile_hash': 'hash1', 'cached_score': 0.77, 'score_breakdown': {}}}
+        recommender, media_cache = self._recommender_with_cache(items)
+        recommender._calculate_similarity_from_cache = Mock(side_effect=AssertionError("should not recompute"))
+
+        result = recommender.get_recommendations()
+
+        assert result['plex_recommendations'][0]['similarity_score'] == 0.77
+        media_cache._save_cache.assert_not_called()
+
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_scoring_error_skips_item(self, mock_excl):
+        items = {'1': {'title': 'Bad Score', 'rating': 8, 'vote_count': 500, 'genres': []}}
+        recommender, media_cache = self._recommender_with_cache(items)
+        recommender._calculate_similarity_from_cache = Mock(side_effect=KeyError('boom'))
+
+        result = recommender.get_recommendations()
+
+        assert result['plex_recommendations'] == []
+
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_no_unwatched_items_returns_empty(self, mock_excl):
+        recommender, media_cache = self._recommender_with_cache({})
+
+        result = recommender.get_recommendations()
+
+        assert result == {'plex_recommendations': []}
+
+    @patch('recommenders.base.select_tiered_recommendations')
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_randomize_recommendations_uses_tiered_selection(self, mock_excl, mock_tiered):
+        items = {'1': {'title': 'A', 'rating': 8, 'vote_count': 500, 'genres': []}}
+        recommender, media_cache = self._recommender_with_cache(items)
+        recommender.randomize_recommendations = True
+        mock_tiered.return_value = [items['1']]
+
+        recommender.get_recommendations()
+
+        mock_tiered.assert_called_once()
+
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_debug_logging_prints_breakdown(self, mock_excl):
+        items = {'1': {'title': 'A', 'rating': 8, 'vote_count': 500, 'genres': []}}
+        recommender, media_cache = self._recommender_with_cache(items)
+        recommender._print_similarity_breakdown = Mock()
+        with patch('recommenders.base.logger') as mock_logger:
+            mock_logger.isEnabledFor.return_value = True
+            recommender.get_recommendations()
+
+        recommender._print_similarity_breakdown.assert_called()
+
+    @patch('recommenders.base.get_excluded_genres_for_user', return_value=[])
+    def test_refreshes_watched_data_when_ids_missing(self, mock_excl):
+        recommender, media_cache = self._recommender_with_cache({})
+        recommender.cached_watched_count = 5
+        recommender.watched_ids = set()
+        recommender._get_watched_data = Mock(return_value={'genres': {}})
+        recommender._save_watched_cache = Mock()
+
+        recommender.get_recommendations()
+
+        recommender._get_watched_data.assert_called_once()
+        recommender._save_watched_cache.assert_called_once()
+
+    @patch('recommenders.base.get_excluded_genres_for_user')
+    def test_excluded_genres_filtered_and_counted(self, mock_excl):
+        mock_excl.return_value = ['horror']
+        items = {
+            '1': {'title': 'Scary', 'rating': 8, 'vote_count': 500, 'genres': ['Horror']},
+            '2': {'title': 'Fine', 'rating': 8, 'vote_count': 500, 'genres': ['Comedy']},
+        }
+        recommender, media_cache = self._recommender_with_cache(items)
+
+        result = recommender.get_recommendations()
+
+        titles = [i['title'] for i in result['plex_recommendations']]
+        assert titles == ['Fine']
+
+
+class TestLoadWatchedCache:
+    """Tests for BaseRecommender._load_watched_cache."""
+
+    def _recommender_with_cache_path(self, tmp_path):
+        recommender = _make_recommender()
+        recommender.watched_cache_path = str(tmp_path / 'watched_cache.json')
+        return recommender
+
+    @patch('recommenders.base.check_cache_version', return_value=False)
+    def test_invalid_cache_version_returns_empty_without_reading_file(self, mock_valid, tmp_path):
+        recommender = self._recommender_with_cache_path(tmp_path)
+        with open(recommender.watched_cache_path, 'w') as f:
+            f.write('{"watched_count": 3}')
+
+        result = recommender._load_watched_cache()
+
+        assert result == {}
+        assert recommender.cached_watched_count == 0
+
+    @patch('recommenders.base.check_cache_version', return_value=True)
+    def test_loads_valid_cache_fields(self, mock_valid, tmp_path):
+        recommender = self._recommender_with_cache_path(tmp_path)
+        cache_data = {
+            'watched_count': 2,
+            'watched_data_counters': {'genres': {'Action': 2}},
+            'plex_tmdb_cache': {1: 100},
+            'tmdb_keywords_cache': {100: ['x']},
+            'label_dates': {'a': '2024-01-01'},
+            'watched_movie_ids': [1, 2],
+        }
+        import json as _json
+        with open(recommender.watched_cache_path, 'w') as f:
+            _json.dump(cache_data, f)
+
+        result = recommender._load_watched_cache()
+
+        assert recommender.cached_watched_count == 2
+        assert recommender.watched_ids == {1, 2}
+        assert recommender.plex_tmdb_cache == {'1': 100}
+        assert result['watched_count'] == 2
+
+    @patch('recommenders.base.log_warning')
+    @patch('recommenders.base.check_cache_version', return_value=True)
+    def test_invalid_watched_ids_format_warns_and_clears(self, mock_valid, mock_warn, tmp_path):
+        recommender = self._recommender_with_cache_path(tmp_path)
+        cache_data = {'watched_count': 0, 'watched_movie_ids': 'not-a-list'}
+        import json as _json
+        with open(recommender.watched_cache_path, 'w') as f:
+            _json.dump(cache_data, f)
+
+        recommender._load_watched_cache()
+
+        mock_warn.assert_called()
+        assert recommender.watched_ids == set()
+
+    @patch('recommenders.base.check_cache_version', return_value=True)
+    def test_missing_ids_with_positive_count_triggers_refresh(self, mock_valid, tmp_path):
+        recommender = self._recommender_with_cache_path(tmp_path)
+        cache_data = {'watched_count': 5, 'watched_movie_ids': []}
+        import json as _json
+        with open(recommender.watched_cache_path, 'w') as f:
+            _json.dump(cache_data, f)
+        recommender._refresh_watched_data = Mock()
+
+        recommender._load_watched_cache()
+
+        recommender._refresh_watched_data.assert_called_once()
+
+    @patch('recommenders.base.log_warning')
+    @patch('recommenders.base.check_cache_version', return_value=True)
+    def test_corrupt_json_triggers_refresh(self, mock_valid, mock_warn, tmp_path):
+        recommender = self._recommender_with_cache_path(tmp_path)
+        with open(recommender.watched_cache_path, 'w') as f:
+            f.write('{not valid json')
+        recommender._refresh_watched_data = Mock()
+
+        recommender._load_watched_cache()
+
+        mock_warn.assert_called()
+        recommender._refresh_watched_data.assert_called_once()

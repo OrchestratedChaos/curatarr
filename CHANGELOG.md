@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.26] - 2026-07-23
+
+### Changed
+- Coverage measurement now includes `recommenders/` (base/movie/tv/external/external_exports/external_output) - previously the CI `--cov=.` run already collected these modules, but they were the main drag on the 90% total. Added ~120 unit tests covering the core recommendation engine and #157 per-library logic: label/collection management and candidate scoring in `base.py` (61% -> 96%), watched-history collection and rating-tier weighting in `movie.py`/`tv.py` (56%/54% -> 92%/94%), and the `process_user_movie_library`/`process_user_tv_library` per-library fan-out plus `_resolve_library_groups` routing in `external.py`/`external_exports.py`. Overall coverage 90% -> 92%. `external.py`'s HTML/markdown/watchlist generation and `external_exports.py`'s MDBList/Simkl/Trakt-sync exports remain thin (largely untested) - out of scope for this pass, flagged for follow-up
+
 ## [2.8.25] - 2026-07-23
 
 ### Added

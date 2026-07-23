@@ -19,6 +19,7 @@ from recommenders.external_exports import (
     export_to_sonarr,
     export_to_mdblist,
     export_to_simkl,
+    _resolve_library_groups,
 )
 
 
@@ -883,3 +884,68 @@ class TestExportToSimkl:
         export_to_simkl(config, [], 'api_key')
 
         mock_create.assert_called_once()
+
+
+class TestResolveLibraryGroupsDirect:
+    """Direct unit tests for _resolve_library_groups (#157 Phase 2/3.5
+    per-library *arr export routing/grouping)."""
+
+    @patch('recommenders.external_exports.get_libraries_for_media_type')
+    def test_no_library_id_uses_first_candidate(self, mock_get_libs):
+        movie_lib = {'id': 'movies', 'name': 'Movies', 'media_type': 'movie'}
+        mock_get_libs.return_value = [movie_lib]
+        users = [{'username': 'alice'}, {'username': 'bob'}]
+
+        result = _resolve_library_groups({}, users, 'movie')
+
+        assert result == [(movie_lib, users)]
+
+    @patch('recommenders.external_exports.log_warning')
+    @patch('recommenders.external_exports.get_libraries_for_media_type', return_value=[])
+    def test_no_library_id_and_no_candidates_drops_group(self, mock_get_libs, mock_warn):
+        users = [{'username': 'alice'}]
+
+        result = _resolve_library_groups({}, users, 'movie')
+
+        assert result == []
+        mock_warn.assert_called_once()
+
+    @patch('recommenders.external_exports.get_libraries_for_media_type')
+    def test_explicit_library_id_resolves_matching_library(self, mock_get_libs):
+        movies = {'id': 'movies', 'name': 'Movies', 'media_type': 'movie'}
+        movies_4k = {'id': 'movies-4k', 'name': 'Movies 4K', 'media_type': 'movie'}
+        mock_get_libs.return_value = [movies, movies_4k]
+        users = [{'username': 'alice', 'library_id': 'movies-4k'}]
+
+        result = _resolve_library_groups({}, users, 'movie')
+
+        assert result == [(movies_4k, users)]
+
+    @patch('recommenders.external_exports.log_warning')
+    @patch('recommenders.external_exports.get_libraries_for_media_type')
+    def test_unknown_library_id_drops_group(self, mock_get_libs, mock_warn):
+        movies = {'id': 'movies', 'name': 'Movies', 'media_type': 'movie'}
+        mock_get_libs.return_value = [movies]
+        users = [{'username': 'alice', 'library_id': 'nonexistent'}]
+
+        result = _resolve_library_groups({}, users, 'movie')
+
+        assert result == []
+        mock_warn.assert_called_once()
+
+    @patch('recommenders.external_exports.get_libraries_for_media_type')
+    def test_multiple_groups_resolved_independently(self, mock_get_libs):
+        movies = {'id': 'movies', 'name': 'Movies', 'media_type': 'movie'}
+        movies_4k = {'id': 'movies-4k', 'name': 'Movies 4K', 'media_type': 'movie'}
+        mock_get_libs.return_value = [movies, movies_4k]
+        users = [
+            {'username': 'alice', 'library_id': 'movies'},
+            {'username': 'bob', 'library_id': 'movies-4k'},
+            {'username': 'carol', 'library_id': 'movies'},
+        ]
+
+        result = _resolve_library_groups({}, users, 'movie')
+
+        result_by_lib = {lib['id']: group for lib, group in result}
+        assert {u['username'] for u in result_by_lib['movies']} == {'alice', 'carol'}
+        assert {u['username'] for u in result_by_lib['movies-4k']} == {'bob'}

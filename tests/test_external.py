@@ -2085,6 +2085,285 @@ class TestProcessUserTvLibrary:
         assert mock_markdown.call_args.kwargs['library_suffix'] == '_anime'
 
 
+class TestProcessUserMovieLibraryBranches:
+    """Additional branch coverage for process_user_movie_library: language
+    filtering, in-library/ignore-list cache pruning, Trakt watchlist
+    exclusion, discovery, and above-limit cache trimming (#157 Phase 3.5)."""
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.find_similar_content_with_profile')
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_exercises_filter_discovery_and_trim_branches(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile, mock_enhance,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_get_trakt,
+        mock_find_similar, mock_categorize, mock_markdown
+    ):
+        mock_get_items.return_value = {'titles': {('in library movie', 2018)}, 'tmdb_ids': {777}}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = {'Ignored Movie'}
+        mock_load_cache.return_value = {
+            '1': {'tmdb_id': 1, 'title': 'Foreign Movie', 'year': 2015, 'rating': 6.0,
+                  'vote_count': 100, 'score': 0.5, 'original_language': 'fr'},
+            '777': {'tmdb_id': 777, 'title': 'in library movie', 'year': 2018, 'rating': 7.0,
+                    'vote_count': 200, 'score': 0.7, 'original_language': 'en'},
+            '2': {'tmdb_id': 2, 'title': 'Ignored Movie', 'year': 2016, 'rating': 6.5,
+                  'vote_count': 150, 'score': 0.6, 'original_language': 'en'},
+            '3': {'tmdb_id': 3, 'title': 'Existing Movie', 'year': 2019, 'rating': 7.2,
+                  'vote_count': 300, 'score': 0.5, 'original_language': 'en'},
+        }
+        mock_get_trakt.return_value = Mock(get_watchlist_imdb_ids=Mock(return_value={'tt999'}))
+        mock_find_similar.return_value = [
+            {'tmdb_id': 3, 'title': 'Existing Movie', 'year': 2019, 'rating': 7.5,
+             'vote_count': 350, 'score': 0.95, 'original_language': 'en'},
+            {'tmdb_id': 4, 'title': 'New Movie', 'year': 2021, 'rating': 8.0,
+             'vote_count': 400, 'score': 0.9, 'original_language': 'en'},
+            {'tmdb_id': 5, 'title': 'Another New Movie', 'year': 2022, 'rating': 8.2,
+             'vote_count': 420, 'score': 0.85, 'original_language': 'en'},
+        ]
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'movie_limit': 2, 'min_relevance_score': 0.65, 'language': 'en'},
+            'streaming_services': [], 'trakt': {'import': {'exclude_watchlist': True}},
+            'libraries': [library],
+        }
+
+        result = process_user_movie_library(config, Mock(), 'alice', library)
+
+        mock_find_similar.assert_called_once()
+        assert mock_find_similar.call_args.kwargs['exclude_imdb_ids'] == {'tt999'}
+        # Cache trimmed back down to movie_limit (2) after discovery added 3 items
+        saved_cache = mock_save_cache.call_args[0][2]
+        assert len(saved_cache) == 2
+        assert result['library_id'] == 'movies'
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.build_user_profile')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_builds_profile_when_no_cached_profile(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_build_profile,
+        mock_categorize, mock_markdown
+    ):
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = None
+        mock_load_ignore.return_value = set()
+        mock_load_cache.return_value = {'100': {
+            'tmdb_id': 100, 'title': 'Cached Movie', 'year': 2020,
+            'rating': 7.5, 'vote_count': 500, 'score': 0.9, 'original_language': 'en'
+        }}
+        mock_build_profile.return_value = {'genres': {}}
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'movie_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [], 'trakt': {},
+            'libraries': [library],
+        }
+
+        process_user_movie_library(config, Mock(), 'alice', library)
+
+        mock_build_profile.assert_called_once()
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_skips_enhance_when_user_not_in_export_mapping(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_enhance,
+        mock_categorize, mock_markdown
+    ):
+        """When export.user_mode='mapping' and plex_users is set but doesn't
+        include this user, Trakt enhancement is skipped for them."""
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_load_ignore.return_value = set()
+        mock_load_cache.return_value = {'100': {
+            'tmdb_id': 100, 'title': 'Cached Movie', 'year': 2020,
+            'rating': 7.5, 'vote_count': 500, 'score': 0.9, 'original_language': 'en'
+        }}
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'movie_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [],
+            'trakt': {'export': {'user_mode': 'mapping', 'plex_users': ['bob']}},
+            'libraries': [library],
+        }
+
+        process_user_movie_library(config, Mock(), 'alice', library)
+
+        mock_enhance.assert_not_called()
+
+
+class TestProcessUserTvLibraryBranches:
+    """Additional branch coverage for process_user_tv_library: language
+    filtering, in-library/ignore-list cache pruning, Trakt watchlist
+    exclusion, discovery, and above-limit cache trimming (#157 Phase 3.5)."""
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.find_similar_content_with_profile')
+    @patch('recommenders.external.get_authenticated_trakt_client')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_exercises_filter_discovery_and_trim_branches(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile, mock_enhance,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_get_trakt,
+        mock_find_similar, mock_categorize, mock_markdown
+    ):
+        mock_get_items.return_value = {'titles': {('in library show', 2018)}, 'tmdb_ids': {777}}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = {'Ignored Show'}
+        mock_load_cache.return_value = {
+            '1': {'tmdb_id': 1, 'title': 'Foreign Show', 'year': 2015, 'rating': 6.0,
+                  'vote_count': 100, 'score': 0.5, 'original_language': 'fr'},
+            '777': {'tmdb_id': 777, 'title': 'in library show', 'year': 2018, 'rating': 7.0,
+                    'vote_count': 200, 'score': 0.7, 'original_language': 'en'},
+            '2': {'tmdb_id': 2, 'title': 'Ignored Show', 'year': 2016, 'rating': 6.5,
+                  'vote_count': 150, 'score': 0.6, 'original_language': 'en'},
+            '3': {'tmdb_id': 3, 'title': 'Existing Show', 'year': 2019, 'rating': 7.2,
+                  'vote_count': 300, 'score': 0.5, 'original_language': 'en'},
+        }
+        mock_get_trakt.return_value = Mock(get_watchlist_imdb_ids=Mock(return_value={'tt888'}))
+        mock_find_similar.return_value = [
+            {'tmdb_id': 3, 'title': 'Existing Show', 'year': 2019, 'rating': 7.5,
+             'vote_count': 350, 'score': 0.95, 'original_language': 'en'},
+            {'tmdb_id': 4, 'title': 'New Show', 'year': 2021, 'rating': 8.0,
+             'vote_count': 400, 'score': 0.9, 'original_language': 'en'},
+            {'tmdb_id': 5, 'title': 'Another New Show', 'year': 2022, 'rating': 8.2,
+             'vote_count': 420, 'score': 0.85, 'original_language': 'en'},
+        ]
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'show_limit': 2, 'min_relevance_score': 0.65, 'language': 'en'},
+            'streaming_services': [], 'trakt': {'import': {'exclude_watchlist': True}},
+            'libraries': [library],
+        }
+
+        result = process_user_tv_library(config, Mock(), 'alice', library)
+
+        mock_find_similar.assert_called_once()
+        assert mock_find_similar.call_args.kwargs['exclude_imdb_ids'] == {'tt888'}
+        saved_cache = mock_save_cache.call_args[0][2]
+        assert len(saved_cache) == 2
+        assert result['library_id'] == 'tv-shows'
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.build_user_profile')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_builds_profile_when_no_cached_profile(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_build_profile,
+        mock_categorize, mock_markdown
+    ):
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = None
+        mock_load_ignore.return_value = set()
+        mock_load_cache.return_value = {'200': {
+            'tmdb_id': 200, 'title': 'Cached Show', 'year': 2019,
+            'rating': 8.0, 'vote_count': 300, 'score': 0.9, 'original_language': 'en'
+        }}
+        mock_build_profile.return_value = {'genres': {}}
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'show_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [], 'trakt': {},
+            'libraries': [library],
+        }
+
+        process_user_tv_library(config, Mock(), 'alice', library)
+
+        mock_build_profile.assert_called_once()
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_skips_enhance_when_user_not_in_export_mapping(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_enhance,
+        mock_categorize, mock_markdown
+    ):
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_load_ignore.return_value = set()
+        mock_load_cache.return_value = {'200': {
+            'tmdb_id': 200, 'title': 'Cached Show', 'year': 2019,
+            'rating': 8.0, 'vote_count': 300, 'score': 0.9, 'original_language': 'en'
+        }}
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'show_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [],
+            'trakt': {'export': {'user_mode': 'mapping', 'plex_users': ['bob']}},
+            'libraries': [library],
+        }
+
+        process_user_tv_library(config, Mock(), 'alice', library)
+
+        mock_enhance.assert_not_called()
+
+
 class TestTVMovieGenreDetection:
     """Tests for TV movie (special) genre detection"""
 
