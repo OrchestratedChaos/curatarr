@@ -1711,6 +1711,290 @@ class TestMainLibraryResolution:
         assert mock_sonarr.call_args[0][1] == mock_trakt.call_args[0][1]
 
 
+class TestMainOutputGenerationBranches:
+    """Tests for main()'s watchlist-generation orchestration branches:
+    huntarr-only mode, Plex connection failure, per-user error isolation,
+    shared movie/show counts feeding generate_combined_html, Sequel/Horizon
+    Huntarr wiring, and the html_file/auto_open_html tail."""
+
+    def _base_config(self, **overrides):
+        config = {
+            'plex': {'url': 'http://x', 'token': 'y', 'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'users': {'list': 'alice, bob'},
+            'huntarr': {'sequel_huntarr': False, 'horizon_huntarr': False},
+        }
+        config.update(overrides)
+        return config
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py', '--huntarr-only'])
+    def test_huntarr_only_skips_recommendations(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = self._base_config()
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()
+
+        mock_process_user.assert_not_called()
+        mock_trakt.assert_not_called()
+        mock_sonarr.assert_not_called()
+        mock_radarr.assert_not_called()
+        mock_mdblist.assert_not_called()
+        mock_simkl.assert_not_called()
+
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_plex_connection_failure_exits(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server
+    ):
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = self._base_config()
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.side_effect = Exception("connection refused")
+
+        from recommenders.external import main
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_process_user_exception_is_isolated_per_user(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        """One user's process_user() exception is logged and doesn't stop
+        the other user from being processed."""
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = self._base_config()
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        good_result = {
+            'username': 'bob', 'display_name': 'Bob',
+            'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'movie_profile': {}, 'show_profile': {}, 'user_services': [], 'library_id': None
+        }
+        mock_process_user.side_effect = [Exception("boom"), good_result]
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()  # should not raise
+
+        assert mock_process_user.call_count == 2
+        # Only bob's (successful) data reaches the combined HTML call
+        assert mock_html.call_args[0][0] == [good_result]
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_shared_counts_computed_across_users(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        """movie_counts/show_counts tally how many users want each tmdb_id,
+        across user_services/other_services/acquire, for movies and shows."""
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = self._base_config(users={'list': 'alice, bob'})
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+
+        def make_result(username):
+            return {
+                'username': username, 'display_name': username,
+                'movies_categorized': {
+                    'user_services': {'netflix': [{'tmdb_id': 100}]},
+                    'other_services': {'hulu': [{'tmdb_id': 200}]},
+                    'acquire': [{'tmdb_id': 300}],
+                },
+                'shows_categorized': {
+                    'user_services': {'netflix': [{'tmdb_id': 400}]},
+                    'other_services': {},
+                    'acquire': [{'tmdb_id': 500}],
+                },
+                'movie_profile': {}, 'show_profile': {}, 'user_services': [], 'library_id': None
+            }
+        mock_process_user.side_effect = [make_result('alice'), make_result('bob')]
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()
+
+        movie_counts = mock_html.call_args.kwargs['movie_counts']
+        show_counts = mock_html.call_args.kwargs['show_counts']
+        assert movie_counts == {'100': 2, '200': 2, '300': 2}
+        assert show_counts == {'400': 2, '500': 2}
+        assert mock_html.call_args.kwargs['total_users'] == 2
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_sequel_and_horizon_huntarr_enabled_calls_finders_and_feeds_html(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = self._base_config(
+            huntarr={'sequel_huntarr': True, 'horizon_huntarr': True},
+            users={'list': 'alice'},
+        )
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_process_user.return_value = {
+            'username': 'alice', 'display_name': 'Alice',
+            'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'movie_profile': {}, 'show_profile': {}, 'user_services': [], 'library_id': None
+        }
+        mock_sequels.return_value = [{'title': 'Missing Sequel', 'tmdb_id': 1}]
+        mock_horizon.return_value = [{'title': 'Upcoming Movie', 'tmdb_id': 2}]
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()
+
+        mock_sequels.assert_called_once()
+        mock_horizon.assert_called_once()
+        assert mock_html.call_args.kwargs['missing_sequels'] == mock_sequels.return_value
+        assert mock_html.call_args.kwargs['horizon_movies'] == mock_horizon.return_value
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_no_data_at_all_skips_html_generation(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = self._base_config(users={'list': 'alice'})
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_process_user.return_value = None  # nothing produced
+        mock_sequels.return_value = []
+        mock_horizon.return_value = []
+
+        from recommenders.external import main
+        main()
+
+        mock_html.assert_not_called()
+        mock_trakt.assert_not_called()  # all_users_data empty -> export gate skipped
+
+    @patch('recommenders.external.smart_open_html')
+    @patch('recommenders.external.clickable_link')
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_html_file_generated_prints_link_and_respects_auto_open(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl,
+        mock_clickable, mock_smart_open
+    ):
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = self._base_config(
+            users={'list': 'alice'},
+            external_recommendations={'auto_open_html': True},
+        )
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_process_user.return_value = {
+            'username': 'alice', 'display_name': 'Alice',
+            'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'movie_profile': {}, 'show_profile': {}, 'user_services': [], 'library_id': None
+        }
+        mock_html.return_value = '/fake/root/recommendations/external/watchlist.html'
+        mock_clickable.return_value = 'link'
+
+        from recommenders.external import main
+        main()
+
+        mock_clickable.assert_called_once_with('file:///fake/root/recommendations/external/watchlist.html')
+        mock_smart_open.assert_called_once_with(mock_html.return_value)
+
+
 class TestFanOutMultiLibrary:
     """Tests for #157 Phase 3.5: external recommendation fan-out for configs
     with 2+ libraries of the same media type."""

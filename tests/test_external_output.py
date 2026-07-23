@@ -14,6 +14,8 @@ from recommenders.external_output import (
     generate_combined_html,
     generate_markdown,
     SERVICE_SHORT_NAMES,
+    _load_imdb_cache,
+    _save_imdb_cache,
 )
 
 
@@ -628,3 +630,241 @@ class TestHtmlSorting:
                 html = f.read()
             # Check for percentage handling in sort logic
             assert "endsWith('%')" in html
+
+
+class TestImdbCache:
+    """Tests for _load_imdb_cache / _save_imdb_cache and the IMDB lookup/
+    cache-write path inside generate_combined_html. These use an isolated
+    temp root (output_dir nested one level below a fresh mkdtemp()) so the
+    computed cache path (dirname(output_dir)/cache/imdb_ids_cache.json)
+    can never collide with another test or a prior run - passing a bare
+    tempfile.TemporaryDirectory() directly as output_dir would put the
+    cache at the shared OS temp root and make cache-hit/miss behavior
+    depend on test execution history."""
+
+    def _mock_get_imdb_id(self, api_key, tmdb_id, media_type):
+        return f'tt{tmdb_id}'
+
+    def _isolated_output_dir(self, root):
+        output_dir = os.path.join(root, 'watchlists')
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+    def test_load_returns_empty_dict_when_file_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _load_imdb_cache(os.path.join(tmpdir, 'nope.json'))
+        assert result == {}
+
+    def test_load_returns_empty_dict_on_corrupt_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, 'imdb_ids_cache.json')
+            with open(cache_path, 'w') as f:
+                f.write('{not valid json')
+
+            result = _load_imdb_cache(cache_path)
+
+        assert result == {}
+
+    def test_save_then_load_roundtrips(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, 'nested', 'imdb_ids_cache.json')
+            _save_imdb_cache(cache_path, {'123_movie': 'tt123'})
+
+            result = _load_imdb_cache(cache_path)
+
+        assert result == {'123_movie': 'tt123'}
+
+    def test_save_swallows_ioerror(self):
+        """A cache directory that can't be created shouldn't crash the run."""
+        with patch('recommenders.external_output.os.makedirs', side_effect=IOError("disk full")):
+            _save_imdb_cache('/some/path/imdb_ids_cache.json', {'a': 'b'})  # should not raise
+
+    def test_new_lookup_fetches_and_persists_cache(self):
+        """First-ever run against a fresh cache path takes the cache-miss
+        path: calls get_imdb_id_func and writes the cache file."""
+        with tempfile.TemporaryDirectory() as root:
+            output_dir = self._isolated_output_dir(root)
+            all_users_data = [{
+                'username': 'user1',
+                'display_name': 'User1',
+                'movies_categorized': {
+                    'all_items': [
+                        {'title': 'Fresh Movie', 'year': '2024', 'rating': 7.0, 'score': 0.70,
+                         'tmdb_id': 999001, 'streaming_services': [], 'on_user_services': [],
+                         'added_date': '2024-01-01T00:00:00'}
+                    ],
+                    'user_services': {}, 'other_services': {}, 'acquire': []
+                },
+                'shows_categorized': {'all_items': [], 'user_services': {},
+                                      'other_services': {}, 'acquire': []}
+            }]
+
+            get_imdb_id = Mock(side_effect=self._mock_get_imdb_id)
+            result = generate_combined_html(all_users_data, output_dir, 'api_key', get_imdb_id)
+
+            get_imdb_id.assert_called_once_with('api_key', 999001, 'movie')
+
+            cache_path = os.path.join(root, 'cache', 'imdb_ids_cache.json')
+            assert os.path.exists(cache_path)
+            cache = _load_imdb_cache(cache_path)
+            assert cache['999001_movie'] == 'tt999001'
+
+            with open(result) as f:
+                html = f.read()
+            assert 'data-imdb="tt999001"' in html
+
+    def test_cached_lookup_skips_refetch(self):
+        """A tmdb_id already present in the on-disk cache is not re-fetched."""
+        with tempfile.TemporaryDirectory() as root:
+            output_dir = self._isolated_output_dir(root)
+            cache_path = os.path.join(root, 'cache', 'imdb_ids_cache.json')
+            _save_imdb_cache(cache_path, {'999002_movie': 'tt999002'})
+
+            all_users_data = [{
+                'username': 'user1',
+                'display_name': 'User1',
+                'movies_categorized': {
+                    'all_items': [
+                        {'title': 'Cached Movie', 'year': '2024', 'rating': 7.0, 'score': 0.70,
+                         'tmdb_id': 999002, 'streaming_services': [], 'on_user_services': [],
+                         'added_date': '2024-01-01T00:00:00'}
+                    ],
+                    'user_services': {}, 'other_services': {}, 'acquire': []
+                },
+                'shows_categorized': {'all_items': [], 'user_services': {},
+                                      'other_services': {}, 'acquire': []}
+            }]
+
+            get_imdb_id = Mock(side_effect=self._mock_get_imdb_id)
+            result = generate_combined_html(all_users_data, output_dir, 'api_key', get_imdb_id)
+
+            get_imdb_id.assert_not_called()
+            with open(result) as f:
+                html = f.read()
+            assert 'data-imdb="tt999002"' in html
+
+    def test_missing_sequels_and_horizon_movies_also_use_pending_lookup_path(self):
+        """The missing_sequels / horizon_movies TMDB-ID-collection branches
+        (separate from the per-user movies/shows branch) also queue a
+        pending lookup and land in the persisted cache."""
+        with tempfile.TemporaryDirectory() as root:
+            output_dir = self._isolated_output_dir(root)
+            missing_sequels = [
+                {'title': 'Sequel Movie', 'year': '2024', 'collection_name': 'Coll',
+                 'owned_count': 1, 'total_count': 2, 'tmdb_id': 999003,
+                 'streaming_services': [], 'on_user_services': []}
+            ]
+            horizon_movies = [
+                {'title': 'Horizon Movie', 'collection_name': 'Coll2',
+                 'tmdb_id': 999004, 'release_date': '2026-01-01', 'status': 'Planned'}
+            ]
+
+            get_imdb_id = Mock(side_effect=self._mock_get_imdb_id)
+            generate_combined_html(
+                [], output_dir, 'api_key', get_imdb_id,
+                missing_sequels=missing_sequels, horizon_movies=horizon_movies,
+            )
+
+            assert get_imdb_id.call_count == 2
+            cache_path = os.path.join(root, 'cache', 'imdb_ids_cache.json')
+            cache = _load_imdb_cache(cache_path)
+            assert cache['999003_movie'] == 'tt999003'
+            assert cache['999004_movie'] == 'tt999004'
+
+
+class TestCollectTmdbIdsInlineFallback:
+    """generate_combined_html's internal collect_tmdb_ids_from_categorized
+    falls back to walking user_services/other_services/acquire when
+    'all_items' is absent or empty - covers the dict-of-lists branches."""
+
+    def _mock_get_imdb_id(self, api_key, tmdb_id, media_type):
+        return f'tt{tmdb_id}'
+
+    def test_collects_from_user_services_and_other_services_dicts(self):
+        all_users_data = [{
+            'username': 'user1',
+            'display_name': 'User1',
+            'movies_categorized': {
+                'user_services': {
+                    'netflix': [{'title': 'A', 'year': '2024', 'rating': 7.0, 'score': 0.7,
+                                 'tmdb_id': 999005, 'streaming_services': ['netflix'],
+                                 'added_date': '2024-01-01T00:00:00'}]
+                },
+                'other_services': {
+                    'hulu': [{'title': 'B', 'year': '2024', 'rating': 6.0, 'score': 0.6,
+                              'tmdb_id': 999006, 'streaming_services': ['hulu'],
+                              'added_date': '2024-01-01T00:00:00'}]
+                },
+                'acquire': [],
+            },
+            'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+        }]
+
+        with tempfile.TemporaryDirectory() as root:
+            output_dir = os.path.join(root, 'watchlists')
+            os.makedirs(output_dir, exist_ok=True)
+            get_imdb_id = Mock(side_effect=self._mock_get_imdb_id)
+
+            generate_combined_html(all_users_data, output_dir, 'api_key', get_imdb_id)
+
+            fetched_ids = {c.args[1] for c in get_imdb_id.call_args_list}
+            assert {999005, 999006}.issubset(fetched_ids)
+
+
+class TestGenerateMarkdownOtherServicesAndAcquireForShows:
+    """generate_markdown's TV shows 'Other Services' and 'Acquire' branches
+    (the movies-side equivalents are already covered by
+    test_generates_markdown_file)."""
+
+    def test_shows_other_services_and_acquire_sections_render(self):
+        movies_categorized = {'user_services': {}, 'other_services': {}, 'acquire': []}
+        shows_categorized = {
+            'user_services': {},
+            'other_services': {
+                'hulu': [{'title': 'Other Show', 'year': '2023', 'rating': 7.2, 'score': 0.72,
+                          'added_date': '2024-01-01T00:00:00'}]
+            },
+            'acquire': [
+                {'title': 'Acquire Show', 'year': '2021', 'rating': 6.5, 'score': 0.65,
+                 'added_date': '2024-01-01T00:00:00'}
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_markdown(
+                'testuser', 'TestUser', movies_categorized, shows_categorized, tmpdir
+            )
+            with open(result) as f:
+                content = f.read()
+
+        assert 'Available on Other Services' in content
+        assert 'Other Show' in content
+        assert 'Acquire Show' in content
+        assert '*Consider subscribing if many recommendations are on a single service*' in content
+        assert '*Not available on any streaming service - need physical/digital copy*' in content
+
+
+class TestSequelBadges:
+    """render_sequels_table's is_animated / is_tv_movie badge branches."""
+
+    def _mock_get_imdb_id(self, api_key, tmdb_id, media_type):
+        return f'tt{tmdb_id}'
+
+    def test_animated_and_tv_special_badges_render(self):
+        missing_sequels = [
+            {'title': 'Animated Sequel', 'year': '2024', 'collection_name': 'Coll',
+             'owned_count': 1, 'total_count': 2, 'tmdb_id': 999007,
+             'streaming_services': [], 'on_user_services': [],
+             'is_animated': True, 'is_tv_movie': True}
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                [], tmpdir, 'api_key', self._mock_get_imdb_id,
+                missing_sequels=missing_sequels,
+            )
+            with open(result) as f:
+                html = f.read()
+
+        assert 'animated-badge">Animated</span>' in html
+        assert 'tv-special-badge">TV Special</span>' in html
