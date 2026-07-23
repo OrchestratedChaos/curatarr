@@ -13,9 +13,10 @@ Usage:
 """
 
 import os
+import re
 import shutil
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 import yaml
 
@@ -40,10 +41,26 @@ CORE_SECTIONS = [
     'streaming_services',
     'logging',
     'platform',
+    'libraries',
 ]
 
 # Feature modules (each gets its own file)
 FEATURE_MODULES = ['trakt', 'radarr', 'sonarr']
+
+# Legacy global radarr.yml/sonarr.yml routing field -> unified library
+# arr.* field name, for fields whose name differs by media type. Mirrors
+# utils.config._ARR_FIELD_ALIASES (kept local here to avoid a module-level
+# dependency between the two standalone utilities).
+_LEGACY_ARR_FIELD_ALIASES = {
+    'movie': {'search': 'search_for_movie'},
+    'tv': {'search': 'search_for_series'},
+}
+
+# Legacy routing fields to fold into a library's arr block, by media type.
+_LEGACY_ARR_ROUTING_FIELDS = {
+    'movie': ['root_folder', 'quality_profile', 'tag', 'monitor', 'search', 'minimum_availability'],
+    'tv': ['root_folder', 'quality_profile', 'tag', 'monitor', 'search', 'series_type'],
+}
 
 
 def needs_migration(config: dict) -> bool:
@@ -63,6 +80,13 @@ def needs_migration(config: dict) -> bool:
         return True
     if 'tv' in config and 'sonarr' in config.get('tv', {}):
         return True
+
+    # Additive (#157 Phase 1): legacy single-library plex config not yet
+    # folded into a 'libraries' list also needs migration.
+    if not config.get('libraries'):
+        plex_config = config.get('plex', config.get('PLEX', {})) or {}
+        if plex_config.get('movie_library') or plex_config.get('tv_library'):
+            return True
 
     return False
 
@@ -96,6 +120,104 @@ def extract_feature_config(config: dict, feature: str) -> Optional[dict]:
             return config['tv']['sonarr']
 
     return None
+
+
+def _slugify_library_id(name: str) -> str:
+    """Derive a stable slug id from a library name (e.g. "TV Shows" -> "tv-shows")."""
+    slug = re.sub(r'[^a-z0-9]+', '-', (name or '').strip().lower()).strip('-')
+    return slug or 'library'
+
+
+def _fold_legacy_arr_routing(legacy_config: dict, media_type: str) -> dict:
+    """
+    Fold a legacy radarr.yml/sonarr.yml block's routing fields into the
+    unified per-library arr.* schema. Only fields actually present in
+    legacy_config are copied, to keep the migration diff minimal.
+    """
+    field_map = _LEGACY_ARR_FIELD_ALIASES.get(media_type, {})
+    arr = {}
+    for unified_field in _LEGACY_ARR_ROUTING_FIELDS.get(media_type, []):
+        legacy_field = field_map.get(unified_field, unified_field)
+        if legacy_field in legacy_config:
+            arr[unified_field] = legacy_config[legacy_field]
+    return arr
+
+
+def _load_legacy_module(config: dict, config_dir: str, module: str) -> dict:
+    """
+    Get a feature module's config (radarr/sonarr) from the in-memory config
+    dict being migrated, falling back to reading its standalone module file
+    (e.g. radarr.yml) if the config has already been split into modular
+    files (module sections then live outside the root config.yml dict).
+    """
+    if module in config and config[module]:
+        return config[module]
+
+    module_path = os.path.join(config_dir, f'{module}.yml')
+    if os.path.exists(module_path):
+        try:
+            with open(module_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+                return data or {}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def migrate_to_libraries(config: dict, config_dir: str) -> Optional[List[dict]]:
+    """
+    Build an additive 'libraries' list from legacy single-library plex
+    config, folding in routing fields from radarr.yml/sonarr.yml.
+
+    Purely additive: does NOT remove plex.movie_library/plex.tv_library
+    from config - both the legacy keys and the new 'libraries' list
+    coexist. Idempotent: returns None if config already has a truthy
+    'libraries' section, or if there's no legacy movie_library/tv_library
+    to migrate from.
+
+    Args:
+        config: The config dict being migrated (may still be monolithic,
+            or already split into modular files)
+        config_dir: Directory containing config.yml and module files
+            (radarr.yml, sonarr.yml)
+
+    Returns:
+        Two-entry list [movie library, tv library], or None if not
+        applicable.
+    """
+    if config.get('libraries'):
+        return None
+
+    plex_config = config.get('plex', config.get('PLEX', {})) or {}
+    movie_library = plex_config.get('movie_library')
+    tv_library = plex_config.get('tv_library')
+
+    if not movie_library and not tv_library:
+        return None
+
+    movie_library = movie_library or 'Movies'
+    tv_library = tv_library or 'TV Shows'
+
+    radarr_config = _load_legacy_module(config, config_dir, 'radarr')
+    sonarr_config = _load_legacy_module(config, config_dir, 'sonarr')
+
+    return [
+        {
+            'id': _slugify_library_id(movie_library),
+            'name': movie_library,
+            'section': movie_library,
+            'media_type': 'movie',
+            'arr': _fold_legacy_arr_routing(radarr_config, 'movie'),
+        },
+        {
+            'id': _slugify_library_id(tv_library),
+            'name': tv_library,
+            'section': tv_library,
+            'media_type': 'tv',
+            'arr': _fold_legacy_arr_routing(sonarr_config, 'tv'),
+        },
+    ]
 
 
 def build_core_config(config: dict) -> dict:
@@ -156,6 +278,13 @@ def migrate_config(config_path: str, dry_run: bool = False) -> dict:
         if feature_config:
             feature_configs[feature] = feature_config
 
+    # Additive (#157 Phase 1): fold legacy plex.movie_library/tv_library +
+    # radarr.yml/sonarr.yml routing into a 'libraries' list. Does not
+    # remove the legacy plex keys.
+    libraries = migrate_to_libraries(config, config_dir)
+    if libraries:
+        core_config['libraries'] = libraries
+
     if dry_run:
         print("\n=== Dry Run - Would create these files ===\n")
         print(f"config.yml (slimmed to {len(core_config)} sections)")
@@ -163,6 +292,8 @@ def migrate_config(config_path: str, dry_run: bool = False) -> dict:
             print(f"tuning.yml ({len(tuning_config)} sections)")
         for feature, cfg in feature_configs.items():
             print(f"{feature}.yml")
+        if libraries:
+            print(f"config.yml would gain a 'libraries' section ({len(libraries)} entries)")
         result['migrated'] = True
         return result
 

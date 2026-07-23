@@ -1,5 +1,12 @@
 # Curatarr Sonarr Configuration
 # Auto-add recommended TV shows to Sonarr
+#
+# NOTE: With multi-library support (config.yml -> libraries), per-library
+# `arr` blocks can override root_folder/quality_profile/tag/monitor/search/
+# series_type/instance individually - any field a library omits still falls
+# back to the values below. This file remains the DEFAULT *arr instance
+# (enabled/url/api_key) and the sync policy (auto_sync/user_mode/plex_users),
+# which are NOT overridable per-library.
 
 enabled: false
 

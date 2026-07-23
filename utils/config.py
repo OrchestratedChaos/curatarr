@@ -5,8 +5,9 @@ Handles config loading, section access, and rating multipliers.
 
 import os
 import json
+import re
 import yaml
-from typing import Dict
+from typing import Dict, List
 
 # Project version - single source of truth
 __version__ = "2.8.23"
@@ -464,3 +465,215 @@ def adapt_config_for_media_type(root_config: Dict, media_type: str = 'movies') -
     config['negative_signals'] = get_negative_signals_config(root_config)
 
     return config
+
+
+# =============================================================================
+# Multi-library support (#157 Phase 1)
+#
+# `libraries` is a repeatable, first-class entity living inside config.yml:
+#
+#   libraries:
+#     - id: movies
+#       name: Movies
+#       section: Movies
+#       media_type: movie
+#       arr:
+#         root_folder: /data/movies
+#         quality_profile: HD-1080p
+#         instance:
+#           url: http://localhost:7878
+#           api_key: KEY
+#
+# Global sonarr.yml/radarr.yml remain the default *arr instance (enabled/
+# url/api_key), the which-users-sync policy (auto_sync/user_mode/plex_users),
+# and the field-level fallback for any arr.* field a library omits.
+#
+# Nothing in the recommender pipeline consumes these yet (see Phases 2-4) -
+# this is purely additive.
+# =============================================================================
+
+# Legacy global radarr.yml/sonarr.yml field name -> unified library arr.*
+# field name, for the handful of fields whose name differs by media type.
+_ARR_FIELD_ALIASES = {
+    MEDIA_TYPE_MOVIE: {'search': 'search_for_movie'},
+    MEDIA_TYPE_TV: {'search': 'search_for_series'},
+}
+
+# Per-library routing fields eligible for field-level fallback to the global
+# radarr/sonarr block, by media type. minimum_availability is movie-only,
+# series_type is tv-only.
+_ARR_ROUTING_FIELDS = {
+    MEDIA_TYPE_MOVIE: ['root_folder', 'quality_profile', 'tag', 'monitor', 'search', 'minimum_availability'],
+    MEDIA_TYPE_TV: ['root_folder', 'quality_profile', 'tag', 'monitor', 'search', 'series_type'],
+}
+
+# *arr instance/connection fields - overridable per-library via arr.instance
+_ARR_INSTANCE_FIELDS = ['enabled', 'url', 'api_key']
+
+# Sensible boolean defaults for fields that should never resolve to None
+_ARR_FIELD_DEFAULTS = {'enabled': False, 'monitor': False, 'search': False}
+
+
+def _slugify_library_id(name: str) -> str:
+    """
+    Derive a stable slug id from a library name (e.g. "TV Shows" -> "tv-shows").
+
+    Args:
+        name: Library display name
+
+    Returns:
+        Lowercase, hyphenated slug. Falls back to 'library' if name is blank
+        or has no alphanumeric characters.
+    """
+    slug = re.sub(r'[^a-z0-9]+', '-', (name or '').strip().lower()).strip('-')
+    return slug or 'library'
+
+
+def _normalize_library(library: Dict) -> Dict:
+    """
+    Fill in default id/media_type/section for a single library entry.
+
+    Args:
+        library: Raw library dict from config['libraries']
+
+    Returns:
+        A copy of library with id, name, media_type, section, and arr
+        guaranteed to be present.
+    """
+    normalized = dict(library or {})
+    name = normalized.get('name') or normalized.get('id') or 'Library'
+    normalized['name'] = name
+    normalized['id'] = normalized.get('id') or _slugify_library_id(name)
+    normalized['media_type'] = normalized.get('media_type') or MEDIA_TYPE_MOVIE
+    normalized['section'] = normalized.get('section') or name
+    normalized.setdefault('arr', {})
+    return normalized
+
+
+def _synthesize_legacy_libraries(config: Dict) -> List[Dict]:
+    """
+    Back-compat fallback: synthesize a movie + tv library entry from the
+    legacy single-library plex.movie_library/plex.tv_library settings.
+
+    Each synthesized entry's 'arr' override is left empty, so
+    get_effective_arr_config() naturally falls back to the global
+    radarr/sonarr block for that entry's routing - i.e. arr routing is
+    still effectively "pulled from" the global radarr/sonarr config.
+
+    Args:
+        config: Root configuration dictionary
+
+    Returns:
+        Two-entry list: [movie library, tv library]
+    """
+    plex_config = get_config_section(config, 'plex')
+    movie_library = plex_config.get('movie_library', 'Movies')
+    tv_library = plex_config.get('tv_library', 'TV Shows')
+
+    return [
+        {
+            'id': _slugify_library_id(movie_library),
+            'name': movie_library,
+            'section': movie_library,
+            'media_type': MEDIA_TYPE_MOVIE,
+            'arr': {},
+        },
+        {
+            'id': _slugify_library_id(tv_library),
+            'name': tv_library,
+            'section': tv_library,
+            'media_type': MEDIA_TYPE_TV,
+            'arr': {},
+        },
+    ]
+
+
+def get_libraries(config: Dict) -> List[Dict]:
+    """
+    Get the normalized list of libraries from config.
+
+    Reads config['libraries'] (repeatable multi-library entries) and fills
+    in defaults for any omitted fields: id (slug of name), media_type
+    (defaults to 'movie'), section (defaults to name).
+
+    Back-compat fallback: if config has no 'libraries' section (or it's
+    empty), synthesizes a movie entry from plex.movie_library (default
+    'Movies') and a tv entry from plex.tv_library (default 'TV Shows'),
+    so existing single-library installs keep working without a
+    'libraries:' block in config.yml. This is the single back-compat
+    fallback path.
+
+    Args:
+        config: Root configuration dictionary
+
+    Returns:
+        List of normalized library dicts, each with at least:
+        id, name, section, media_type, arr
+    """
+    raw_libraries = config.get('libraries')
+
+    if raw_libraries:
+        return [_normalize_library(lib) for lib in raw_libraries]
+
+    return _synthesize_legacy_libraries(config)
+
+
+def get_libraries_for_media_type(config: Dict, media_type: str) -> List[Dict]:
+    """
+    Get normalized libraries filtered to a specific media type.
+
+    Args:
+        config: Root configuration dictionary
+        media_type: 'movie' or 'tv' (see MEDIA_TYPE_MOVIE / MEDIA_TYPE_TV)
+
+    Returns:
+        List of normalized library dicts matching media_type
+    """
+    return [lib for lib in get_libraries(config) if lib.get('media_type') == media_type]
+
+
+def get_effective_arr_config(config: Dict, library: Dict) -> Dict:
+    """
+    Resolve the effective *arr (Radarr/Sonarr) routing config for a library.
+
+    Deep-merges, in increasing precedence:
+      1. The global sonarr/radarr block (selected by library['media_type'])
+      2. library['arr'] (per-library routing overrides)
+      3. library['arr']['instance'] (per-library *arr instance connection)
+
+    Args:
+        config: Root configuration dictionary
+        library: A library dict (see get_libraries)
+
+    Returns:
+        Dict with effective keys: enabled, url, api_key, root_folder,
+        quality_profile, tag, monitor, search, plus minimum_availability
+        (movie libraries) or series_type (tv libraries).
+    """
+    media_type = library.get('media_type') or MEDIA_TYPE_MOVIE
+    arr_key = 'radarr' if media_type == MEDIA_TYPE_MOVIE else 'sonarr'
+    global_arr = get_config_section(config, arr_key)
+    library_arr = library.get('arr') or {}
+    instance = library_arr.get('instance') or {}
+    aliases = _ARR_FIELD_ALIASES.get(media_type, {})
+
+    effective = {}
+
+    # Instance/connection fields: global -> library.arr -> library.arr.instance
+    for field in _ARR_INSTANCE_FIELDS:
+        value = global_arr.get(field, _ARR_FIELD_DEFAULTS.get(field))
+        if field in library_arr:
+            value = library_arr[field]
+        if field in instance:
+            value = instance[field]
+        effective[field] = value
+
+    # Routing fields: global (legacy field name) -> library.arr (unified name)
+    for field in _ARR_ROUTING_FIELDS.get(media_type, []):
+        global_field = aliases.get(field, field)
+        value = global_arr.get(global_field, _ARR_FIELD_DEFAULTS.get(field))
+        if field in library_arr:
+            value = library_arr[field]
+        effective[field] = value
+
+    return effective
