@@ -3,6 +3,7 @@ Output generation for external recommendations.
 Generates markdown watchlists and combined HTML views.
 """
 
+import html
 import json
 import os
 from datetime import datetime
@@ -10,6 +11,22 @@ from typing import Dict, List
 from urllib.parse import quote_plus
 
 from utils.config import TMDB_ANIMATION_GENRE_ID
+
+
+def _esc(value) -> str:
+    """HTML-escape a value pulled from TMDB (title, collection name,
+    status, etc.) or from local config (display name) before it's
+    interpolated into watchlist.html.
+
+    Every field rendered by generate_combined_html below used to be
+    dropped into an f-string unescaped - a movie/show title containing
+    `<script>` (a real, if rare, possibility for anything sourced from
+    TMDB's public catalog, or from a locally-configured display_name)
+    would execute in the browser as stored XSS against this app's own
+    origin the moment someone opened their generated watchlist. str()
+    first so non-string values (year ints, etc.) go through cleanly.
+    """
+    return html.escape(str(value), quote=True)
 
 
 def _load_imdb_cache(cache_path: str) -> Dict[str, str]:
@@ -362,10 +379,10 @@ def generate_combined_html(
             genre_ids = item.get('genre_ids', [])
             animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ''
             rows.append(f'''
-                <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="{media_type}" data-user="{user_id}">
+                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="{_esc(media_type)}" data-user="{_esc(user_id)}">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{item['title']} {animated_badge}{shared_badge}</td>
-                    <td>{item['year']}</td>
+                    <td>{_esc(item['title'])} {animated_badge}{shared_badge}</td>
+                    <td>{_esc(item['year'])}</td>
                     <td>{item['rating']:.1f}</td>
                     <td>{item['score']:.0%}</td>
                     <td><div class="streaming-icons">{streaming_html}</div></td>
@@ -393,11 +410,11 @@ def generate_combined_html(
             if item.get('is_tv_movie'):
                 badges += '<span class="tv-special-badge">TV Special</span>'
             rows.append(f'''
-                <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="sequel-huntarr">
+                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="sequel-huntarr">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{item['title']} {badges}</td>
-                    <td>{item.get('year', '')}</td>
-                    <td>{collection_name}</td>
+                    <td>{_esc(item['title'])} {badges}</td>
+                    <td>{_esc(item.get('year', ''))}</td>
+                    <td>{_esc(collection_name)}</td>
                     <td>{owned}/{total}</td>
                     <td><div class="streaming-icons">{streaming_html}</div></td>
                 </tr>''')
@@ -418,12 +435,12 @@ def generate_combined_html(
             genre_ids = item.get('genre_ids', [])
             animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ''
             rows.append(f'''
-                <tr data-tmdb="{tmdb_id}" data-imdb="{imdb_id}" data-type="movie" data-user="horizon-huntarr">
+                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="horizon-huntarr">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{item['title']} {animated_badge}</td>
-                    <td>{collection_name}</td>
-                    <td>{release_date}</td>
-                    <td><span class="status-badge {status_class}">{status}</span></td>
+                    <td>{_esc(item['title'])} {animated_badge}</td>
+                    <td>{_esc(collection_name)}</td>
+                    <td>{_esc(release_date)}</td>
+                    <td><span class="status-badge {_esc(status_class)}">{_esc(status)}</span></td>
                 </tr>''')
         return '\n'.join(rows)
 
@@ -440,7 +457,7 @@ def generate_combined_html(
         is_active = "active" if i == 0 else ""
 
         # Tab button
-        tabs_html += f'<button class="tab-btn {is_active}" data-user="{user_id}">{display_name}</button>\n'
+        tabs_html += f'<button class="tab-btn {is_active}" data-user="{_esc(user_id)}">{_esc(display_name)}</button>\n'
 
         # Panel content - use flat all_items sorted by score
         panel_content = ""
@@ -476,7 +493,7 @@ def generate_combined_html(
         if not panel_content:
             panel_content = "<p>No recommendations available for this user.</p>"
 
-        panels_html += f'<div class="tab-panel {is_active}" data-user="{user_id}">{panel_content}</div>\n'
+        panels_html += f'<div class="tab-panel {is_active}" data-user="{_esc(user_id)}">{panel_content}</div>\n'
 
     # Build Huntarr tabs (separate row below user tabs)
     huntarr_tabs_html = ""

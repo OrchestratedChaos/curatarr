@@ -831,7 +831,7 @@ def find_missing_sequels(
     from utils.display import show_progress
 
     # Cache paths
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = get_project_root()
     cache_path = os.path.join(project_root, 'cache', 'huntarr_cache.json')
 
     try:
@@ -1173,7 +1173,7 @@ def find_horizon_movies(
     """
     from utils.display import show_progress
 
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = get_project_root()
     cache_path = os.path.join(project_root, 'cache', 'horizon_huntarr_cache.json')
     sequel_cache_path = os.path.join(project_root, 'cache', 'huntarr_cache.json')
 
@@ -1708,7 +1708,7 @@ def find_similar_content_with_profile(
     # Get Trakt candidates once (not per-iteration)
     trakt_candidates = {}
     if config:
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        project_root = get_project_root()
         cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
         library_tmdb_ids = library_data.get('tmdb_ids', set())
 
@@ -1873,7 +1873,7 @@ def find_similar_content_with_profile(
 
 def load_cache(display_name: str, media_type: str) -> Dict:
     """Load existing recommendations cache, filtering out items below quality thresholds"""
-    cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+    cache_dir = os.path.join(get_project_root(), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
     cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
@@ -1913,7 +1913,7 @@ def load_cache(display_name: str, media_type: str) -> Dict:
 
 def save_cache(display_name: str, media_type: str, cache_data: Dict) -> None:
     """Save recommendations cache with version."""
-    cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+    cache_dir = os.path.join(get_project_root(), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
     cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
@@ -1928,7 +1928,7 @@ def save_cache(display_name: str, media_type: str, cache_data: Dict) -> None:
 def load_ignore_list(display_name: str) -> Set[str]:
     """Load user's manual ignore list"""
     safe_name = display_name.lower().replace(' ', '_')
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = get_project_root()
     ignore_file = os.path.join(project_root, 'recommendations', 'external', f'{safe_name}_ignore.txt')
     if os.path.exists(ignore_file):
         with open(ignore_file, 'r') as f:
@@ -2232,7 +2232,7 @@ def process_user(config, plex, username):
     )
 
     # Generate markdown per user
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = get_project_root()
     output_dir = os.path.join(project_root, 'recommendations', 'external')
     generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir)
 
@@ -2265,8 +2265,9 @@ def main():
                         help='Run only Huntarr features (skip recommendations)')
     args = parser.parse_args()
 
-    # Load config from project root (one level up from recommenders/)
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Load config from project root (repo root for a source install, the
+    # per-user data dir when frozen - see utils.helpers.get_project_root)
+    project_root = get_project_root()
     config_path = os.path.join(project_root, 'config/config.yml')
     config = load_config(config_path)
 

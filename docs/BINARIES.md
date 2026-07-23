@@ -114,19 +114,21 @@ config at all: open the **Connections** / **Users** / **Settings**
 screens in the web UI to set everything up from the browser instead of
 hand-editing YAML.
 
-## Known limitation: triggering a run from the binary
+## Triggering a run from the binary
 
 The web UI's **Run** button normally launches `recommenders/movie.py`
 etc. as a subprocess (see `web/job_runner.py`) using the current Python
-interpreter and an on-disk script path. Inside a frozen binary neither
-of those exist in the expected form (`sys.executable` is the binary
+interpreter and an on-disk script path - neither of which exists in the
+expected form inside a frozen binary (`sys.executable` is the binary
 itself, not a Python interpreter, and there's no `recommenders/`
-directory on disk next to the data dir). Browsing the dashboard,
-results, and config screens all work fully from the binary; triggering
-a run from it does not yet. Bundling the recommenders as additional
-onefile targets (or invoking them in-process with a safer entry point
-than their current `sys.exit()`-calling CLI shape) is a follow-up, not
-implemented in this change.
+directory on disk next to the data dir). Instead, when running frozen,
+`web/job_runner.py` re-invokes the packaged exe itself as
+`curatarr --run-recommender <engine> [user]`; `curatarr_app.py`
+recognizes that flag and runs the requested recommender's own `main()`
+in that fresh subprocess (never inside the long-lived server process -
+see `curatarr_app.py`'s module docstring for why that distinction
+matters). The Movie/TV/External/Full Pipeline buttons all work from the
+binary the same as a source install.
 
 ## Building it yourself
 

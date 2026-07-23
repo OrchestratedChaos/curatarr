@@ -100,8 +100,16 @@ def test_trakt(client_id: str, client_secret: str, access_token: str, refresh_to
             'ok': False,
             'message': "Not authenticated yet - run 'python3 -m utils.trakt_auth' to link your Trakt account",
         }
-    client = TraktClient(client_id, client_secret, access_token, refresh_token)
-    username = client.get_username()
+    try:
+        client = TraktClient(client_id, client_secret, access_token, refresh_token)
+        username = client.get_username()
+    except Exception as exc:
+        # Matches every other tester in this module: a raw requests/API
+        # error (network failure, unexpected response shape, etc.) must
+        # never bubble up as an unhandled 500 with an unredacted
+        # traceback - it gets the same {ok, message} shape as an
+        # ordinary "connection failed" result instead.
+        return _connection_failed(exc, 'Trakt')
     if username:
         return {'ok': True, 'message': f'Connected as {username}'}
     return {

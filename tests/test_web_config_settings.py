@@ -176,3 +176,32 @@ class TestValidation:
 
         after = _read_yaml(root, 'tuning')
         assert after == before
+
+
+class TestNullSection:
+    def test_null_general_section_in_hand_edited_yaml_does_not_500(self, client):
+        """M2: a bare `general:` line (parses to None, not {}) must not
+        500 - it should be treated the same as a missing section."""
+        c, app, root = client
+        config_path = module_path(root, 'config')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write('plex:\n  url: "http://localhost:32400"\ngeneral:\nusers:\n  list: "alice, bob"\n')
+
+        resp = c.post('/config/settings', data=VALID_FORM)
+        assert resp.status_code == 303
+
+        core = _read_yaml(root, 'config')
+        assert core['general']['log_retention_days'] == 7
+
+    def test_null_negative_signals_section_in_tuning_yml_does_not_500(self, client):
+        c, app, root = client
+        tuning_path = module_path(root, 'tuning')
+        os.makedirs(os.path.dirname(tuning_path), exist_ok=True)
+        with open(tuning_path, 'w', encoding='utf-8') as f:
+            f.write('negative_signals:\n')
+
+        resp = c.post('/config/settings', data=VALID_FORM)
+        assert resp.status_code == 303
+
+        tuning = _read_yaml(root, 'tuning')
+        assert tuning['negative_signals']['bad_ratings']['threshold'] == 3

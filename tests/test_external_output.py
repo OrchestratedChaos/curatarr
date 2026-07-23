@@ -429,6 +429,125 @@ class TestGenerateMarkdown:
             assert 'TV Shows to Watch' not in content
 
 
+class TestHtmlEscaping:
+    """Tests for the XSS fix: TMDB-derived (and locally-configured)
+    fields must be HTML-escaped before being interpolated into
+    watchlist.html - see web-audit finding #4."""
+
+    def _mock_get_imdb_id(self, api_key, tmdb_id, media_type):
+        return f'tt{tmdb_id}'
+
+    def test_malicious_movie_title_is_escaped_not_executable(self):
+        payload = '<script>alert(1)</script>'
+        all_users_data = [{
+            'username': 'user1',
+            'display_name': 'User1',
+            'movies_categorized': {
+                'all_items': [
+                    {'title': payload, 'year': '2024', 'rating': 7.0, 'score': 0.70,
+                     'tmdb_id': 1, 'streaming_services': [], 'on_user_services': [],
+                     'added_date': '2024-01-01T00:00:00'}
+                ],
+                'user_services': {}, 'other_services': {}, 'acquire': []
+            },
+            'shows_categorized': {'all_items': [], 'user_services': {},
+                                  'other_services': {}, 'acquire': []}
+        }]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                all_users_data, tmpdir, 'api_key', self._mock_get_imdb_id
+            )
+            with open(result) as f:
+                html = f.read()
+            assert payload not in html
+            assert '&lt;script&gt;alert(1)&lt;/script&gt;' in html
+
+    def test_malicious_display_name_is_escaped(self):
+        payload = '"><img src=x onerror=alert(1)>'
+        all_users_data = [{
+            'username': 'user1',
+            'display_name': payload,
+            'movies_categorized': {'all_items': [], 'user_services': {},
+                                   'other_services': {}, 'acquire': []},
+            'shows_categorized': {'all_items': [], 'user_services': {},
+                                  'other_services': {}, 'acquire': []}
+        }]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                all_users_data, tmpdir, 'api_key', self._mock_get_imdb_id
+            )
+            with open(result) as f:
+                html = f.read()
+            assert payload not in html
+            # The dangerous part is the payload breaking out into a real
+            # <img> tag - html.escape() neutralizes that by escaping the
+            # angle brackets/quotes, even though the literal substring
+            # "onerror=alert(1)" (no HTML-meaningful chars of its own)
+            # still appears as inert escaped text content.
+            assert '<img' not in html
+            assert '&lt;img' in html
+
+    def test_malicious_sequel_collection_name_is_escaped(self):
+        missing_sequels = [
+            {'title': 'Normal Movie', 'year': '2024',
+             'collection_name': '<script>alert(2)</script>',
+             'owned_count': 1, 'total_count': 2, 'tmdb_id': 456,
+             'streaming_services': [], 'on_user_services': []}
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                [], tmpdir, 'api_key', self._mock_get_imdb_id,
+                missing_sequels=missing_sequels,
+            )
+            with open(result) as f:
+                html = f.read()
+            assert '<script>alert(2)</script>' not in html
+
+    def test_malicious_horizon_status_is_escaped(self):
+        horizon_movies = [
+            {'title': 'Normal Movie', 'collection_name': 'Normal Collection',
+             'tmdb_id': 789, 'release_date': '2026-06-15',
+             'status': '"><script>alert(3)</script>'}
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                [], tmpdir, 'api_key', self._mock_get_imdb_id,
+                horizon_movies=horizon_movies,
+            )
+            with open(result) as f:
+                html = f.read()
+            assert '<script>alert(3)</script>' not in html
+
+    def test_normal_titles_still_render_readably(self):
+        # Sanity check the fix doesn't mangle ordinary titles containing
+        # characters that are legitimately part of HTML escaping's
+        # domain (apostrophes, ampersands) but aren't attacks.
+        all_users_data = [{
+            'username': 'user1',
+            'display_name': 'User1',
+            'movies_categorized': {
+                'all_items': [
+                    {'title': "Tom & Jerry: It's a Wonderful Movie", 'year': '2024',
+                     'rating': 7.0, 'score': 0.70, 'tmdb_id': 1,
+                     'streaming_services': [], 'on_user_services': [],
+                     'added_date': '2024-01-01T00:00:00'}
+                ],
+                'user_services': {}, 'other_services': {}, 'acquire': []
+            },
+            'shows_categorized': {'all_items': [], 'user_services': {},
+                                  'other_services': {}, 'acquire': []}
+        }]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_combined_html(
+                all_users_data, tmpdir, 'api_key', self._mock_get_imdb_id
+            )
+            with open(result) as f:
+                html = f.read()
+            assert 'Tom &amp; Jerry: It&#x27;s a Wonderful Movie' in html
+
+
 class TestHtmlSorting:
     """Tests for HTML table sorting functionality"""
 

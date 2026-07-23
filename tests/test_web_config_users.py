@@ -129,3 +129,44 @@ class TestValidation:
         })
         after = _read_config(root)
         assert after == before
+
+
+class TestNullSection:
+    def test_null_users_section_in_hand_edited_yaml_does_not_500(self, client):
+        """M2: a bare `users:` line (parses to None, not {}) must not
+        500 - it should be treated the same as a missing section."""
+        c, app, root = client
+        config_path = module_path(root, 'config')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write('plex:\n  url: "http://localhost:32400"\nusers:\n')
+
+        resp = c.post('/config/users', data={
+            'user_count': '1',
+            'username_0': 'carol', 'display_name_0': '', 'exclude_genres_0': '',
+            'max_rating_0': '', 'streaming_services_0': '',
+            'new_username': '',
+        })
+        assert resp.status_code == 303
+
+        core = _read_config(root)
+        assert 'carol' in core['users']['list']
+
+    def test_null_preferences_subsection_does_not_500(self, client):
+        c, app, root = client
+        config_path = module_path(root, 'config')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write(
+                'plex:\n  url: "http://localhost:32400"\n'
+                'users:\n  list: "alice"\n  preferences:\n'
+            )
+
+        resp = c.post('/config/users', data={
+            'user_count': '1',
+            'username_0': 'alice', 'display_name_0': 'Alice A', 'exclude_genres_0': '',
+            'max_rating_0': '', 'streaming_services_0': '',
+            'new_username': '',
+        })
+        assert resp.status_code == 303
+
+        core = _read_config(root)
+        assert core['users']['preferences']['alice']['display_name'] == 'Alice A'

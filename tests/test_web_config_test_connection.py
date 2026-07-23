@@ -185,6 +185,23 @@ class TestTrakt:
         result = cc.test_trakt('cid', 'csecret', 'atoken', 'rtoken')
         assert result['ok'] is False
 
+    def test_raw_client_exception_is_caught_not_a_500(self, monkeypatch):
+        # Matches every other tester in this module: a raw requests/API
+        # error must produce a normal {ok, message} failure, not an
+        # unhandled exception with an unredacted traceback.
+        class _FakeClient:
+            def __init__(self, client_id, client_secret, access_token, refresh_token):
+                pass
+
+            def get_username(self):
+                raise ConnectionError('boom: token=abcdef123456 leaked')
+
+        monkeypatch.setattr(cc, 'TraktClient', _FakeClient)
+        result = cc.test_trakt('cid', 'csecret', 'atoken', 'rtoken')
+        assert result['ok'] is False
+        assert 'boom' in result['message']
+        assert 'abcdef123456' not in result['message']
+
 
 class TestTestersRegistry:
     def test_all_services_registered(self):

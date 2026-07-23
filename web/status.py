@@ -57,7 +57,12 @@ def latest_user_log(logs_dir: str, username: str) -> Optional[str]:
     so "latest" reflects whichever of the two most recently ran for
     this user, not necessarily a single combined run.
     """
-    pattern = os.path.join(logs_dir, f'recommendations_{username}_*.log')
+    # glob.escape the username so a name containing glob special chars
+    # (*, ?, [...]) can't turn this into an unintended wildcard match -
+    # e.g. a Plex username of "*" would otherwise match every user's
+    # log files instead of just this one, leaking other users' run
+    # status onto this user's dashboard row.
+    pattern = os.path.join(logs_dir, f'recommendations_{glob.escape(username)}_*.log')
     candidates = glob.glob(pattern)
     if not candidates:
         return None
@@ -79,7 +84,13 @@ def get_last_run_status(logs_dir: str, username: str) -> Dict:
     basename = os.path.basename(log_path)
     timestamp = _parse_timestamp(basename)
     if timestamp is None:
-        timestamp = datetime.fromtimestamp(os.path.getmtime(log_path))
+        try:
+            timestamp = datetime.fromtimestamp(os.path.getmtime(log_path))
+        except OSError:
+            # Log was removed (e.g. log-retention cleanup) between the
+            # glob() in latest_user_log() and here - fall back to no
+            # timestamp rather than 500ing the dashboard.
+            timestamp = None
 
     content = _read_tail(log_path)
     if not content.strip():
@@ -103,11 +114,14 @@ def list_log_files(logs_dir: str) -> List[Dict]:
         path = os.path.join(logs_dir, name)
         if not os.path.isfile(path):
             continue
-        entries.append({
-            'name': name,
-            'size': os.path.getsize(path),
-            'mtime': datetime.fromtimestamp(os.path.getmtime(path)),
-        })
+        try:
+            size = os.path.getsize(path)
+            mtime = datetime.fromtimestamp(os.path.getmtime(path))
+        except OSError:
+            # Deleted between listdir() and here (e.g. concurrent log
+            # rotation/cleanup) - skip it rather than 500ing /results.
+            continue
+        entries.append({'name': name, 'size': size, 'mtime': mtime})
     entries.sort(key=lambda e: e['mtime'], reverse=True)
     return entries
 
@@ -145,9 +159,11 @@ def find_user_watchlist(external_dir: str, config: Dict, username: str) -> Optio
 def read_log_tail(logs_dir: str, filename: str, max_lines: int = 500) -> str:
     """Read the last max_lines of logs_dir/filename, secrets redacted.
 
-    Raises FileNotFoundError if filename escapes logs_dir or doesn't
-    resolve to a real file.
+    Raises FileNotFoundError if filename escapes logs_dir, isn't a
+    *.log file, or doesn't resolve to a real file.
     """
+    if not filename.endswith('.log'):
+        raise FileNotFoundError(filename)
     path = safe_join(logs_dir, filename)
     if not os.path.isfile(path):
         raise FileNotFoundError(filename)
