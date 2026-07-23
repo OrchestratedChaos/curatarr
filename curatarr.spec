@@ -13,7 +13,17 @@ Notes:
 - hiddenimports covers packages PyInstaller's static import analysis
   doesn't always resolve on its own: ruamel.yaml and plexapi both do
   a fair amount of lazy/conditional importing internally.
+- target_arch is read from the PYINSTALLER_TARGET_ARCH env var (macOS
+  only - PyInstaller ignores it elsewhere) so the same spec produces
+  the normal single-arch macOS binary by default, and a universal2
+  (Intel + Apple Silicon) binary when PYINSTALLER_TARGET_ARCH=universal2
+  is set - see the macOS job in .github/workflows/release.yml and
+  docs/BINARIES.md's "Building it yourself" section for the universal2
+  prerequisites (a universal2 Python + universal2 wheels/fused wheels
+  for pyyaml, ruamel.yaml.clib and markupsafe).
 """
+
+import os
 
 from PyInstaller.utils.hooks import collect_submodules
 
@@ -63,7 +73,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch=os.environ.get('PYINSTALLER_TARGET_ARCH') or None,
     codesign_identity=None,
     entitlements_file=None,
 )

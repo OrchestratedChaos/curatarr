@@ -9,9 +9,9 @@ it, and it opens the web UI in your browser - no Python install, no
 | Platform | Asset |
 |---|---|
 | Windows (x86_64) | `curatarr-windows-x86_64.exe` |
-| macOS (Apple Silicon) | `curatarr-macos-arm64` |
-| macOS (Intel) | `curatarr-macos-x86_64` |
+| macOS (Intel + Apple Silicon) | `curatarr-macos-universal` |
 | Linux (x86_64) | `curatarr-linux-x86_64` |
+| Linux (arm64) | `curatarr-linux-arm64` |
 
 Each asset has a matching `<asset>.sha256` file with its checksum.
 
@@ -30,30 +30,32 @@ Each asset has a matching `<asset>.sha256` file with its checksum.
 
 ### macOS
 
-1. Download `curatarr-macos-arm64` (Apple Silicon: M1/M2/M3/M4) or
-   `curatarr-macos-x86_64` (Intel), and make it executable:
-   `chmod +x curatarr-macos-*`.
+1. Download `curatarr-macos-universal` and make it executable:
+   `chmod +x curatarr-macos-universal`. It's a single **universal2**
+   binary that runs natively on both Intel and Apple Silicon
+   (M1/M2/M3/M4) Macs - no need to pick one.
 2. Gatekeeper will refuse to open an unsigned binary downloaded from
    the internet the normal way - see
    [Unsigned binaries](#unsigned-binaries) for the two ways around
    that.
 3. Run it (double-click in Finder after clearing Gatekeeper, or
-   `./curatarr-macos-arm64` in Terminal). Your browser opens to
+   `./curatarr-macos-universal` in Terminal). Your browser opens to
    `http://127.0.0.1:8787`.
 
 ### Linux
 
-1. Download `curatarr-linux-x86_64` and `chmod +x` it.
-2. Run it: `./curatarr-linux-x86_64`. It opens `http://127.0.0.1:8787`
-   in your default browser (via `xdg-open`/`webbrowser`); if nothing
-   opens (e.g. no desktop environment), the terminal output shows the
-   URL to open manually.
+1. Download `curatarr-linux-x86_64` (Intel/AMD) or `curatarr-linux-arm64`
+   (arm64, e.g. Raspberry Pi 4/5, AWS Graviton) and `chmod +x` it.
+2. Run it: `./curatarr-linux-x86_64` (or `./curatarr-linux-arm64`). It
+   opens `http://127.0.0.1:8787` in your default browser (via
+   `xdg-open`/`webbrowser`); if nothing opens (e.g. no desktop
+   environment), the terminal output shows the URL to open manually.
 
 ## Verifying the checksum
 
 ```bash
 # macOS/Linux
-shasum -a 256 -c curatarr-macos-arm64.sha256
+shasum -a 256 -c curatarr-macos-universal.sha256
 
 # Windows (PowerShell)
 (Get-FileHash .\curatarr-windows-x86_64.exe -Algorithm SHA256).Hash.ToLower()
@@ -78,7 +80,7 @@ warn you the first time you run a downloaded binary:
   double-click on a freshly-downloaded unsigned binary will just say
   it "cannot be opened" and won't offer this option - it has to be the
   right-click path the first time.) Alternatively, clear the quarantine
-  attribute from a terminal: `xattr -d com.apple.quarantine curatarr-macos-arm64`.
+  attribute from a terminal: `xattr -d com.apple.quarantine curatarr-macos-universal`.
 - **Linux**: no equivalent gate; just needs `chmod +x`.
 
 Only download binaries from the official
@@ -146,3 +148,20 @@ Produces `dist/curatarr` (`dist/curatarr.exe` on Windows). See
 `curatarr.spec` for what's bundled and why, and
 `.github/workflows/release.yml` for the CI matrix that does this for
 every tagged release.
+
+### Building the macOS universal2 binary yourself
+
+`curatarr-macos-universal` needs a **universal2** Python (Intel + Apple
+Silicon in one interpreter) - the regular python.org/Homebrew installer
+for your own Mac's architecture only produces a single-arch build, which
+PyInstaller can't turn into a universal2 binary on its own. You also
+need universal2 wheels for every compiled dependency; PyPI doesn't
+publish those for `pyyaml`, `ruamel.yaml.clib`, or `markupsafe` (only
+separate x86_64/arm64 wheels), so those three have to be fused into
+universal2 wheels first. See the `build-macos-universal` job in
+`.github/workflows/release.yml` for the exact, working recipe
+(install python.org's universal2 `.pkg`, then
+`delocate-merge` the three thin wheels, then
+`PYINSTALLER_TARGET_ARCH=universal2 pyinstaller --clean --noconfirm curatarr.spec`).
+Verify the result with `lipo -archs dist/curatarr` - it must list both
+`x86_64` and `arm64`.
