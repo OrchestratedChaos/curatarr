@@ -3,6 +3,7 @@ Tests for recommenders/movie.py - Movie recommendation system.
 """
 
 import os
+import copy
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from collections import Counter
@@ -1010,3 +1011,332 @@ class TestPlexMovieRecommenderLibraryImdbIds:
 
         assert 'tt1234567' in result
         mock_get_ids.assert_called()
+
+
+# ------------------------------------------------------------------------
+# Core recommendation-engine coverage: rating-tier weighting, watched-history
+# collection, movie detail extraction, and the per-user/per-library
+# process_recommendations orchestration entry point (#157).
+# ------------------------------------------------------------------------
+
+MOVIE_TEST_CONFIG = {
+    'plex': {'url': 'http://localhost', 'token': 'abc'},
+    'general': {},
+    'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'keyword': 0.2},
+}
+
+
+def _make_movie_recommender(config=None, users=None, movie_cache_data=None, config_path='/path/to/config.yml'):
+    """Build a fully-initialized PlexMovieRecommender with all I/O mocked out.
+
+    Note: __init__ eagerly gathers watched data (real _get_plex_watched_data /
+    _get_managed_users_watched_data call) and touches the library, so the Plex
+    client is a MagicMock (safe default iteration -> []) and the media cache
+    is likewise a MagicMock. Tests that care about the specifics of the
+    watched-history gathering should patch the relevant
+    recommenders.movie.* utility functions *before* calling this helper so
+    construction picks them up.
+    """
+    config = copy.deepcopy(config if config is not None else MOVIE_TEST_CONFIG)
+    users = users or {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+    movie_cache = MagicMock()
+    movie_cache.cache = {'movies': movie_cache_data or {}}
+    with patch('recommenders.movie.MovieCache', return_value=movie_cache), \
+         patch('recommenders.base.init_plex', return_value=MagicMock()), \
+         patch('recommenders.base.get_configured_users', return_value=users), \
+         patch('recommenders.base.get_tmdb_config', return_value={'use_keywords': True, 'api_key': 'key'}), \
+         patch('recommenders.base.load_config', return_value=config), \
+         patch('os.makedirs'):
+        recommender = PlexMovieRecommender(config_path)
+    return recommender
+
+
+class TestCalculateRatingMultiplier:
+    """Tests for PlexMovieRecommender._calculate_rating_multiplier (rating-tier weighting)."""
+
+    def test_none_rating_returns_unrated_default(self):
+        recommender = _make_movie_recommender()
+        assert recommender._calculate_rating_multiplier(None) == 0.6
+
+    def test_zero_rating_returns_unrated_default(self):
+        recommender = _make_movie_recommender()
+        assert recommender._calculate_rating_multiplier(0) == 0.6
+
+    def test_five_star_rating_returns_full_weight(self):
+        recommender = _make_movie_recommender()
+        assert recommender._calculate_rating_multiplier(9.5) == 1.0
+
+    def test_four_star_rating(self):
+        recommender = _make_movie_recommender()
+        assert recommender._calculate_rating_multiplier(7.5) == 0.75
+
+    def test_three_star_rating(self):
+        recommender = _make_movie_recommender()
+        assert recommender._calculate_rating_multiplier(5.5) == 0.5
+
+    def test_two_star_rating_above_threshold(self):
+        recommender = _make_movie_recommender()
+        # threshold defaults to 3, so rating 4 is above threshold - positive tier path
+        assert recommender._calculate_rating_multiplier(4) == 0.25
+
+    def test_low_rating_with_negative_signals_enabled_is_negative(self):
+        recommender = _make_movie_recommender()
+        result = recommender._calculate_rating_multiplier(1.0)
+        assert result < 0
+
+    def test_low_rating_with_negative_signals_globally_disabled(self):
+        recommender = _make_movie_recommender()
+        recommender.config['negative_signals'] = {'enabled': False}
+        result = recommender._calculate_rating_multiplier(1.0)
+        assert result == 0.25
+
+    def test_low_rating_with_bad_ratings_disabled(self):
+        recommender = _make_movie_recommender()
+        recommender.config['negative_signals'] = {'enabled': True, 'bad_ratings': {'enabled': False}}
+        result = recommender._calculate_rating_multiplier(1.0)
+        assert result == 0.25
+
+
+class TestGetPlexWatchedDataMovie:
+    """Tests for PlexMovieRecommender._get_plex_watched_data.
+
+    __init__ eagerly calls this (plex_users installs gather watched data at
+    construction time), so these tests patch the network-touching utilities
+    *before* constructing the recommender and assert on the resulting state.
+    """
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.movie.get_plex_account_ids', return_value=[])
+    @patch('recommenders.movie.get_watched_movie_count', return_value=0)
+    def test_returns_cached_counters_when_not_single_user_and_recalled(self, mock_count, mock_account_ids, mock_exists):
+        recommender = _make_movie_recommender()
+        # __init__ already populated watched_data_counters via a real call;
+        # a direct re-call (not single_user) must short-circuit to the cache.
+        cached = recommender.watched_data_counters
+        assert cached
+
+        result = recommender._get_plex_watched_data()
+
+        assert result is cached
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.movie.process_counters_from_cache')
+    @patch('recommenders.movie.calculate_rewatch_multiplier', return_value=1.0)
+    @patch('recommenders.movie.calculate_recency_multiplier', return_value=1.0)
+    @patch('recommenders.movie.fetch_plex_watch_history_movies')
+    @patch('recommenders.movie.get_plex_account_ids')
+    @patch('recommenders.movie.get_watched_movie_count', return_value=1)
+    def test_processes_watch_history_and_updates_counters(
+        self, mock_count, mock_account_ids, mock_history, mock_recency, mock_rewatch, mock_process_counters, mock_exists
+    ):
+        mock_account_ids.return_value = ['acct1']
+        history_item = Mock(ratingKey=42, viewedAt=None, userRating=None)
+        mock_history.return_value = ([history_item], {})
+
+        recommender = _make_movie_recommender(movie_cache_data={'42': {'title': 'Watched Movie', 'tmdb_id': 999}})
+
+        assert 42 in recommender.watched_ids
+        mock_process_counters.assert_called_once()
+        assert 999 in recommender.watched_data_counters['tmdb_ids']
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.movie.log_error')
+    @patch('recommenders.movie.get_plex_account_ids', return_value=[])
+    @patch('recommenders.movie.get_watched_movie_count', return_value=1)
+    def test_no_account_ids_logs_error(self, mock_count, mock_account_ids, mock_log_error, mock_exists):
+        _make_movie_recommender()
+
+        mock_log_error.assert_called()
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.movie.process_counters_from_cache')
+    @patch('recommenders.movie.calculate_rewatch_multiplier', return_value=1.0)
+    @patch('recommenders.movie.calculate_recency_multiplier', return_value=1.0)
+    @patch('recommenders.movie.merge_movie_history')
+    @patch('recommenders.movie.fetch_tautulli_movie_history')
+    @patch('recommenders.movie.fetch_plex_watch_history_movies')
+    @patch('recommenders.movie.get_plex_account_ids')
+    @patch('recommenders.movie.get_watched_movie_count', return_value=1)
+    def test_merges_tautulli_history_when_enabled(
+        self, mock_count, mock_account_ids, mock_history, mock_tautulli, mock_merge,
+        mock_recency, mock_rewatch, mock_process_counters, mock_exists
+    ):
+        mock_account_ids.return_value = ['acct1']
+        mock_history.return_value = ([], {})
+        mock_tautulli.return_value = [Mock(ratingKey=7)]
+        mock_merge.return_value = [Mock(ratingKey=7, viewedAt=None, userRating=None)]
+
+        config = copy.deepcopy(MOVIE_TEST_CONFIG)
+        config['tautulli'] = {'enabled': True}
+        _make_movie_recommender(config=config, movie_cache_data={})
+
+        mock_merge.assert_called_once()
+
+
+class TestGetMovieDetails:
+    """Tests for PlexMovieRecommender.get_movie_details."""
+
+    @patch('recommenders.movie.extract_genres', return_value=['Action'])
+    @patch('recommenders.movie.extract_rating', return_value=8.0)
+    @patch('recommenders.movie.extract_ids_from_guids', return_value={'imdb_id': 'tt1', 'tmdb_id': 1})
+    def test_extracts_full_details(self, mock_ids, mock_rating, mock_genres):
+        recommender = _make_movie_recommender()
+        recommender.show_rating = True
+        recommender.show_cast = True
+        recommender.use_tmdb_keywords = False
+        director = Mock(tag='Director A')
+        actor = Mock(tag='Actor A')
+        movie = Mock(title='Movie A', year=2020, summary='Summary', directors=[director], roles=[actor])
+
+        result = recommender.get_movie_details(movie)
+
+        assert result['title'] == 'Movie A'
+        assert 'Director A' in result['directors']
+        assert result['ratings']['audience_rating'] == 8.0
+        assert 'Actor A' in result['cast']
+        movie.reload.assert_called_once()
+
+    @patch('recommenders.movie.extract_ids_from_guids', return_value={'imdb_id': None, 'tmdb_id': None})
+    def test_fetches_tmdb_keywords_when_enabled(self, mock_ids):
+        recommender = _make_movie_recommender()
+        recommender.use_tmdb_keywords = True
+        recommender.tmdb_api_key = 'key'
+        recommender._get_plex_item_tmdb_id = Mock(return_value=55)
+        recommender._get_tmdb_keywords_for_id = Mock(return_value={'kw1', 'kw2'})
+        movie = Mock(title='Movie B', year=2021, summary='', directors=[], roles=[])
+
+        result = recommender.get_movie_details(movie)
+
+        assert set(result['tmdb_keywords']) == {'kw1', 'kw2'}
+
+    def test_handles_exception_returns_empty_dict(self):
+        recommender = _make_movie_recommender()
+        movie = Mock()
+        movie.reload.side_effect = Exception("plex error")
+
+        result = recommender.get_movie_details(movie)
+
+        assert result == {}
+
+
+class TestFindPlexItemAndWatchedDataSelectionMovie:
+    """Tests for _find_plex_item delegation and _get_watched_data branch selection."""
+
+    @patch('recommenders.movie.find_plex_movie')
+    def test_find_plex_item_delegates_to_utility(self, mock_find):
+        recommender = _make_movie_recommender()
+        mock_find.return_value = 'found'
+        section = Mock()
+        rec = {'title': 'X', 'year': 2020}
+
+        result = recommender._find_plex_item(section, rec)
+
+        assert result == 'found'
+        mock_find.assert_called_once_with(section, 'X', 2020)
+
+    def test_get_watched_data_uses_plex_history_when_plex_users_configured(self):
+        recommender = _make_movie_recommender(
+            users={'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        )
+        recommender._get_plex_watched_data = Mock(return_value={'genres': {}})
+        recommender._get_managed_users_watched_data = Mock(return_value={'genres': {}})
+
+        recommender._get_watched_data()
+
+        recommender._get_plex_watched_data.assert_called_once()
+        recommender._get_managed_users_watched_data.assert_not_called()
+
+    @patch('recommenders.base.MyPlexAccount')
+    @patch('recommenders.movie.get_watched_movie_count', return_value=0)
+    def test_get_watched_data_uses_managed_users_when_no_plex_users(self, mock_count, mock_account_cls):
+        recommender = _make_movie_recommender(
+            users={'plex_users': [], 'managed_users': ['bob'], 'admin_user': 'admin'}
+        )
+        recommender._get_plex_watched_data = Mock(return_value={'genres': {}})
+        recommender._get_managed_users_watched_data = Mock(return_value={'genres': {}})
+
+        recommender._get_watched_data()
+
+        recommender._get_managed_users_watched_data.assert_called_once()
+        recommender._get_plex_watched_data.assert_not_called()
+
+
+class TestSaveCacheMovie:
+    """Tests for PlexMovieRecommender._save_cache."""
+
+    def test_save_cache_calls_save_watched_cache(self):
+        recommender = _make_movie_recommender()
+        recommender._save_watched_cache = Mock()
+
+        recommender._save_cache()
+
+        recommender._save_watched_cache.assert_called_once()
+
+
+class TestProcessRecommendationsMovie:
+    """Tests for movie.process_recommendations (per-user/per-library orchestration, #157)."""
+
+    @patch('recommenders.movie.format_movie_output', return_value='formatted')
+    @patch('recommenders.movie.PlexMovieRecommender')
+    @patch('recommenders.movie.teardown_log_file')
+    @patch('recommenders.movie.setup_log_file')
+    def test_happy_path_prints_and_manages_labels(self, mock_setup, mock_teardown, mock_recommender_cls, mock_format):
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': [{'title': 'A', 'year': 2020}]}
+        mock_instance.config = {'general': {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0)
+
+        mock_instance.manage_plex_labels.assert_called_once()
+        mock_instance._save_cache.assert_called_once()
+
+    @patch('recommenders.movie.log_warning')
+    @patch('recommenders.movie.PlexMovieRecommender')
+    @patch('recommenders.movie.teardown_log_file')
+    @patch('recommenders.movie.setup_log_file')
+    def test_no_recommendations_warns_and_skips_labels(self, mock_setup, mock_teardown, mock_recommender_cls, mock_warn):
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': []}
+        mock_instance.config = {'general': {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0)
+
+        mock_instance.manage_plex_labels.assert_not_called()
+        mock_warn.assert_called()
+
+    @patch('recommenders.movie.PlexMovieRecommender')
+    @patch('recommenders.movie.teardown_log_file')
+    @patch('recommenders.movie.setup_log_file')
+    def test_debug_flag_propagated_from_config(self, mock_setup, mock_teardown, mock_recommender_cls):
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': []}
+        mock_instance.config = {'general': {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({'general': {'debug': True}}, '/path/to/config.yml', 0)
+
+        assert mock_instance.debug is True
+
+    @patch('recommenders.movie.PlexMovieRecommender')
+    @patch('recommenders.movie.teardown_log_file')
+    @patch('recommenders.movie.setup_log_file')
+    def test_fatal_error_exits(self, mock_setup, mock_teardown, mock_recommender_cls):
+        mock_recommender_cls.side_effect = RuntimeError("Plex server unreachable")
+
+        with patch('recommenders.movie.sys.exit') as mock_exit:
+            process_recommendations({'general': {}}, '/path/to/config.yml', 0)
+
+        mock_exit.assert_called_once_with(1)
+
+    @patch('recommenders.movie.PlexMovieRecommender')
+    @patch('recommenders.movie.teardown_log_file')
+    @patch('recommenders.movie.setup_log_file')
+    def test_non_fatal_error_does_not_exit(self, mock_setup, mock_teardown, mock_recommender_cls):
+        mock_recommender_cls.side_effect = ValueError("Something else broke")
+
+        with patch('recommenders.movie.sys.exit') as mock_exit:
+            process_recommendations({'general': {}}, '/path/to/config.yml', 0)
+
+        mock_exit.assert_not_called()

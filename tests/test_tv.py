@@ -3,6 +3,7 @@ Tests for recommenders/tv.py - TV show recommendation system.
 """
 
 import os
+import copy
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from collections import Counter
@@ -1051,3 +1052,397 @@ class TestMainMediaTypeKey:
         _, kwargs = mock_run_main.call_args
         assert kwargs['media_type_key'] == 'tv'
         assert kwargs['process_func'] is process_recommendations
+
+
+# ------------------------------------------------------------------------
+# Core recommendation-engine coverage: rating-tier weighting, watched-history
+# collection (incl. dropped-show negative signals), show detail extraction,
+# and the per-user/per-library process_recommendations orchestration entry
+# point (#157).
+# ------------------------------------------------------------------------
+
+TV_TEST_CONFIG = {
+    'plex': {'url': 'http://localhost', 'token': 'abc'},
+    'general': {},
+    'weights': {'genre': 0.2, 'actor': 0.15, 'studio': 0.15, 'keyword': 0.45, 'language': 0.05},
+}
+
+
+def _make_tv_recommender(config=None, users=None, show_cache_data=None, config_path='/path/to/config.yml'):
+    """Build a fully-initialized PlexTVRecommender with all I/O mocked out.
+
+    See _make_movie_recommender in test_movie.py for the rationale (MagicMock
+    Plex client for safe default iteration, __init__ eagerly gathers watched
+    data for plex_users installs).
+    """
+    config = copy.deepcopy(config if config is not None else TV_TEST_CONFIG)
+    users = users or {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+    show_cache = MagicMock()
+    show_cache.cache = {'shows': show_cache_data or {}}
+    with patch('recommenders.tv.ShowCache', return_value=show_cache), \
+         patch('recommenders.base.init_plex', return_value=MagicMock()), \
+         patch('recommenders.base.get_configured_users', return_value=users), \
+         patch('recommenders.base.get_tmdb_config', return_value={'use_keywords': True, 'api_key': 'key'}), \
+         patch('recommenders.base.load_config', return_value=config), \
+         patch('os.makedirs'):
+        recommender = PlexTVRecommender(config_path)
+    return recommender
+
+
+class TestCalculateRatingMultiplierTV:
+    """Tests for PlexTVRecommender._calculate_rating_multiplier (rating-tier weighting)."""
+
+    def test_none_rating_returns_unrated_default(self):
+        recommender = _make_tv_recommender()
+        assert recommender._calculate_rating_multiplier(None) == 0.6
+
+    def test_five_star_rating_returns_full_weight(self):
+        recommender = _make_tv_recommender()
+        assert recommender._calculate_rating_multiplier(9.5) == 1.0
+
+    def test_four_star_rating(self):
+        recommender = _make_tv_recommender()
+        assert recommender._calculate_rating_multiplier(7.5) == 0.75
+
+    def test_three_star_rating(self):
+        recommender = _make_tv_recommender()
+        assert recommender._calculate_rating_multiplier(5.5) == 0.5
+
+    def test_two_star_rating_above_threshold(self):
+        recommender = _make_tv_recommender()
+        assert recommender._calculate_rating_multiplier(4) == 0.25
+
+    def test_low_rating_with_negative_signals_enabled_is_negative(self):
+        recommender = _make_tv_recommender()
+        result = recommender._calculate_rating_multiplier(1.0)
+        assert result < 0
+
+    def test_low_rating_with_negative_signals_globally_disabled(self):
+        recommender = _make_tv_recommender()
+        recommender.config['negative_signals'] = {'enabled': False}
+        result = recommender._calculate_rating_multiplier(1.0)
+        assert result == 0.25
+
+
+class TestGetWatchedCountTV:
+    """Tests for PlexTVRecommender._get_watched_count user-source branches."""
+
+    @patch('recommenders.tv.get_watched_show_count', return_value=3)
+    def test_uses_single_user_when_set(self, mock_count):
+        recommender = _make_tv_recommender()
+        recommender.single_user = 'alice'
+
+        recommender._get_watched_count()
+
+        assert mock_count.call_args[0][1] == ['alice']
+
+    @patch('recommenders.base.MyPlexAccount')
+    @patch('recommenders.tv.get_watched_show_count', return_value=3)
+    def test_uses_managed_users_when_no_plex_users(self, mock_count, mock_account_cls):
+        recommender = _make_tv_recommender(
+            users={'plex_users': [], 'managed_users': ['bob'], 'admin_user': 'admin'}
+        )
+
+        recommender._get_watched_count()
+
+        assert mock_count.call_args[0][1] == ['bob']
+
+
+class TestGetPlexWatchedShowsData:
+    """Tests for PlexTVRecommender._get_plex_watched_shows_data.
+
+    __init__ eagerly calls this (plex_users installs gather watched data at
+    construction time), so these tests patch the network-touching utilities
+    *before* constructing the recommender and assert on the resulting state.
+    """
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.tv.get_plex_account_ids', return_value=[])
+    @patch('recommenders.tv.get_watched_show_count', return_value=0)
+    def test_returns_cached_counters_when_not_single_user_and_recalled(self, mock_count, mock_account_ids, mock_exists):
+        recommender = _make_tv_recommender()
+        cached = recommender.watched_data_counters
+        assert cached
+
+        result = recommender._get_plex_watched_shows_data()
+
+        assert result is cached
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.tv.process_counters_from_cache')
+    @patch('recommenders.tv.calculate_rewatch_multiplier', return_value=1.0)
+    @patch('recommenders.tv.calculate_recency_multiplier', return_value=1.0)
+    @patch('recommenders.tv.fetch_plex_watch_history_shows')
+    @patch('recommenders.tv.get_plex_account_ids')
+    @patch('recommenders.tv.get_watched_show_count', return_value=1)
+    def test_processes_watch_history_and_updates_counters(
+        self, mock_count, mock_account_ids, mock_history, mock_recency, mock_rewatch,
+        mock_process_counters, mock_exists
+    ):
+        mock_account_ids.return_value = ['acct1']
+        mock_history.return_value = ({99}, {99: 1700000000})
+
+        config = copy.deepcopy(TV_TEST_CONFIG)
+        config['negative_signals'] = {'dropped_shows': {'enabled': False}}
+        recommender = _make_tv_recommender(
+            config=config, show_cache_data={'99': {'title': 'Watched Show', 'tmdb_id': 888}}
+        )
+
+        assert 99 in recommender.watched_ids
+        mock_process_counters.assert_called_once()
+        assert 888 in recommender.watched_data_counters['tmdb_ids']
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.tv.log_error')
+    @patch('recommenders.tv.get_plex_account_ids', return_value=[])
+    @patch('recommenders.tv.get_watched_show_count', return_value=1)
+    def test_no_account_ids_logs_error(self, mock_count, mock_account_ids, mock_log_error, mock_exists):
+        _make_tv_recommender()
+
+        mock_log_error.assert_called()
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.tv.process_counters_from_cache')
+    @patch('recommenders.tv.calculate_rewatch_multiplier', return_value=1.0)
+    @patch('recommenders.tv.calculate_recency_multiplier', return_value=1.0)
+    @patch('recommenders.tv.identify_dropped_shows')
+    @patch('recommenders.tv.fetch_show_completion_data')
+    @patch('recommenders.tv.fetch_plex_watch_history_shows')
+    @patch('recommenders.tv.get_plex_account_ids')
+    @patch('recommenders.tv.get_watched_show_count', return_value=1)
+    def test_dropped_shows_processed_as_negative_signal(
+        self, mock_count, mock_account_ids, mock_history, mock_completion, mock_identify,
+        mock_recency, mock_rewatch, mock_process_counters, mock_exists
+    ):
+        mock_account_ids.return_value = ['acct1']
+        mock_history.return_value = ({50}, {50: 1700000000})
+        mock_completion.return_value = {50: {'watched_episodes': 2, 'total_episodes': 10, 'completion_percent': 20}}
+        mock_identify.return_value = {50}
+
+        recommender = _make_tv_recommender(show_cache_data={'50': {'title': 'Dropped Show', 'tmdb_id': 777}})
+
+        # Dropped show still tracked (so it isn't re-recommended) but is
+        # processed with a negative weight, not as a normal positive signal.
+        assert 777 in recommender.watched_data_counters['tmdb_ids']
+        mock_process_counters.assert_called_once()
+        call_kwargs = mock_process_counters.call_args
+        assert call_kwargs[1]['weight'] < 0
+
+    @patch('os.path.exists', return_value=False)
+    @patch('recommenders.tv.merge_show_watched_data')
+    @patch('recommenders.tv.fetch_tautulli_show_watched_data')
+    @patch('recommenders.tv.fetch_plex_watch_history_shows')
+    @patch('recommenders.tv.get_plex_account_ids')
+    @patch('recommenders.tv.get_watched_show_count', return_value=1)
+    def test_merges_tautulli_history_when_enabled(
+        self, mock_count, mock_account_ids, mock_history, mock_tautulli, mock_merge, mock_exists
+    ):
+        mock_account_ids.return_value = ['acct1']
+        mock_history.return_value = (set(), {})
+        mock_tautulli.return_value = ({60}, {60: 1700000000})
+        mock_merge.return_value = ({60}, {60: 1700000000})
+
+        config = copy.deepcopy(TV_TEST_CONFIG)
+        config['tautulli'] = {'enabled': True}
+        config['negative_signals'] = {'dropped_shows': {'enabled': False}}
+        _make_tv_recommender(config=config, show_cache_data={})
+
+        mock_merge.assert_called_once()
+
+
+class TestGetShowDetails:
+    """Tests for PlexTVRecommender.get_show_details."""
+
+    @patch('recommenders.tv.extract_genres', return_value=['Drama'])
+    @patch('recommenders.tv.extract_rating', return_value=7.5)
+    @patch('recommenders.tv.extract_ids_from_guids', return_value={'imdb_id': 'tt1', 'tmdb_id': 1})
+    def test_extracts_full_details(self, mock_ids, mock_rating, mock_genres):
+        recommender = _make_tv_recommender()
+        recommender.show_rating = True
+        recommender.show_cast = True
+        recommender.use_tmdb_keywords = False
+        actor = Mock(tag='Actor A')
+        show = Mock(title='Show A', year=2020, summary='Summary', studio='Studio A', roles=[actor])
+
+        result = recommender.get_show_details(show)
+
+        assert result['title'] == 'Show A'
+        assert result['studio'] == 'Studio A'
+        assert result['ratings']['audience_rating'] == 7.5
+        assert 'Actor A' in result['cast']
+        show.reload.assert_called_once()
+
+    @patch('recommenders.tv.extract_ids_from_guids', return_value={'imdb_id': None, 'tmdb_id': None})
+    def test_fetches_tmdb_keywords_when_enabled(self, mock_ids):
+        recommender = _make_tv_recommender()
+        recommender.use_tmdb_keywords = True
+        recommender.tmdb_api_key = 'key'
+        recommender._get_plex_item_tmdb_id = Mock(return_value=66)
+        recommender._get_tmdb_keywords_for_id = Mock(return_value={'kw1'})
+        show = Mock(title='Show B', year=2021, summary='', studio='N/A', roles=[])
+
+        result = recommender.get_show_details(show)
+
+        assert set(result['tmdb_keywords']) == {'kw1'}
+
+    def test_handles_exception_returns_empty_dict(self):
+        recommender = _make_tv_recommender()
+        show = Mock()
+        show.reload.side_effect = Exception("plex error")
+
+        result = recommender.get_show_details(show)
+
+        assert result == {}
+
+
+class TestFindPlexItemAndWatchedDataSelectionTV:
+    """Tests for _find_plex_item matching and _get_watched_data branch selection."""
+
+    def test_find_plex_item_matches_title_and_year(self):
+        recommender = _make_tv_recommender()
+        section = Mock()
+        match = Mock(title='X', year=2020)
+        other = Mock(title='X', year=1999)
+        section.search.return_value = [other, match]
+
+        result = recommender._find_plex_item(section, {'title': 'X', 'year': 2020})
+
+        assert result is match
+        section.search.assert_called_once_with(title='X')
+
+    def test_find_plex_item_returns_none_when_no_year_match(self):
+        recommender = _make_tv_recommender()
+        section = Mock()
+        section.search.return_value = [Mock(title='X', year=1999)]
+
+        result = recommender._find_plex_item(section, {'title': 'X', 'year': 2020})
+
+        assert result is None
+
+    def test_get_watched_data_uses_plex_history_when_plex_users_configured(self):
+        recommender = _make_tv_recommender(
+            users={'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        )
+        recommender._get_plex_watched_shows_data = Mock(return_value={'genres': {}})
+        recommender._get_managed_users_watched_data = Mock(return_value={'genres': {}})
+
+        recommender._get_watched_data()
+
+        recommender._get_plex_watched_shows_data.assert_called_once()
+        recommender._get_managed_users_watched_data.assert_not_called()
+
+    @patch('recommenders.base.MyPlexAccount')
+    @patch('recommenders.tv.get_watched_show_count', return_value=0)
+    def test_get_watched_data_uses_managed_users_when_no_plex_users(self, mock_count, mock_account_cls):
+        recommender = _make_tv_recommender(
+            users={'plex_users': [], 'managed_users': ['bob'], 'admin_user': 'admin'}
+        )
+        recommender._get_plex_watched_shows_data = Mock(return_value={'genres': {}})
+        recommender._get_managed_users_watched_data = Mock(return_value={'genres': {}})
+
+        recommender._get_watched_data()
+
+        recommender._get_managed_users_watched_data.assert_called_once()
+        recommender._get_plex_watched_shows_data.assert_not_called()
+
+
+class TestGetLibraryShowsSetError:
+    """Tests for PlexTVRecommender._get_library_shows_set exception handling."""
+
+    def test_returns_empty_set_on_error(self):
+        recommender = _make_tv_recommender()
+        recommender.plex.library.section.side_effect = Exception("boom")
+
+        result = recommender._get_library_shows_set()
+
+        assert result == set()
+
+
+class TestSaveCacheTV:
+    """Tests for PlexTVRecommender._save_cache."""
+
+    def test_save_cache_calls_save_watched_cache(self):
+        recommender = _make_tv_recommender()
+        recommender._save_watched_cache = Mock()
+
+        recommender._save_cache()
+
+        recommender._save_watched_cache.assert_called_once()
+
+
+class TestCalculateSimilarityFranchiseBonus:
+    """Tests for PlexTVRecommender._calculate_similarity_from_cache franchise/spinoff bonus."""
+
+    @patch('recommenders.tv.calculate_similarity_score', return_value=(0.5, {'details': {}}))
+    def test_shared_production_company_applies_bonus(self, mock_calc):
+        recommender = _make_tv_recommender()
+        recommender.watched_data = {
+            'genres': {}, 'studios': {}, 'actors': {}, 'languages': {}, 'tmdb_keywords': {},
+            'production_companies': {42: 3.0},
+        }
+        show_info = {'genres': [], 'studio': 'N/A', 'cast': [], 'language': 'N/A',
+                     'tmdb_keywords': [], 'production_company_ids': [42]}
+
+        score, breakdown = recommender._calculate_similarity_from_cache(show_info)
+
+        assert score > 0.5
+        assert 'franchise_bonus' in breakdown
+
+    @patch('recommenders.tv.calculate_similarity_score', return_value=(0.5, {'details': {}}))
+    def test_no_shared_production_company_no_bonus(self, mock_calc):
+        recommender = _make_tv_recommender()
+        recommender.watched_data = {
+            'genres': {}, 'studios': {}, 'actors': {}, 'languages': {}, 'tmdb_keywords': {},
+            'production_companies': {},
+        }
+        show_info = {'genres': [], 'studio': 'N/A', 'cast': [], 'language': 'N/A',
+                     'tmdb_keywords': [], 'production_company_ids': [42]}
+
+        score, breakdown = recommender._calculate_similarity_from_cache(show_info)
+
+        assert score == 0.5
+        assert 'franchise_bonus' not in breakdown
+
+
+class TestProcessRecommendationsTV:
+    """Tests for tv.process_recommendations (per-user/per-library orchestration, #157)."""
+
+    @patch('recommenders.tv.format_show_output', return_value='formatted')
+    @patch('recommenders.tv.PlexTVRecommender')
+    @patch('recommenders.tv.teardown_log_file')
+    @patch('recommenders.tv.setup_log_file')
+    def test_happy_path_prints_and_manages_labels(self, mock_setup, mock_teardown, mock_recommender_cls, mock_format):
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': [{'title': 'A', 'year': 2020}]}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0)
+
+        mock_instance.manage_plex_labels.assert_called_once_with([{'title': 'A', 'year': 2020}])
+
+    @patch('recommenders.tv.log_warning')
+    @patch('recommenders.tv.PlexTVRecommender')
+    @patch('recommenders.tv.teardown_log_file')
+    @patch('recommenders.tv.setup_log_file')
+    def test_no_recommendations_still_manages_labels(self, mock_setup, mock_teardown, mock_recommender_cls, mock_warn):
+        """Unlike movie.process_recommendations, TV always calls
+        manage_plex_labels (even with no new recs) to remove stale labels."""
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': []}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0)
+
+        mock_instance.manage_plex_labels.assert_called_once_with([])
+        mock_warn.assert_called()
+
+    @patch('recommenders.tv.PlexTVRecommender')
+    @patch('recommenders.tv.teardown_log_file')
+    @patch('recommenders.tv.setup_log_file')
+    def test_exception_is_caught_and_printed(self, mock_setup, mock_teardown, mock_recommender_cls):
+        mock_recommender_cls.side_effect = RuntimeError("boom")
+
+        # Should not raise - exception is caught and logged.
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0)
+
+        mock_teardown.assert_called_once()
