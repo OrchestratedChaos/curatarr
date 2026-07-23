@@ -50,6 +50,39 @@ huntarr:
 logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR
 
+# Optional: Multi-library support
+# Define one entry per Plex library you want Curatarr to manage separately
+# (e.g. "Movies" and "Kids Movies", or "TV Shows" and "Anime"). Each entry's
+# `arr` block is optional - any field left out falls back to the matching
+# global radarr.yml/sonarr.yml setting for that media_type. `instance` is
+# also optional, for routing a specific library to its own *arr instance
+# instead of the default one configured in radarr.yml/sonarr.yml.
+# If this section is omitted entirely, Curatarr falls back to the single
+# movie_library/tv_library above (unchanged legacy behavior).
+# libraries:
+#   - id: movies              # stable slug; auto-derived from name if omitted
+#     name: Movies
+#     section: Movies          # Plex section title
+#     media_type: movie        # movie | tv
+#     arr:                     # optional; each field falls back to global sonarr/radarr
+#       root_folder: /data/movies
+#       quality_profile: HD-1080p
+#       tag: Curatarr
+#       monitor: false
+#       search: false
+#       minimum_availability: released   # movie-only
+#   - id: tv-shows
+#     name: TV Shows
+#     section: TV Shows
+#     media_type: tv
+#     arr:
+#       root_folder: /data/tv
+#       quality_profile: HD-1080p
+#       series_type: standard            # tv-only
+#       instance:               # optional per-library *arr instance; falls back to global block
+#         url: http://localhost:8989
+#         api_key: YOUR_SONARR_API_KEY
+
 # Optional: Tautulli watch-history integration
 # Supplements Plex's own watch history with history from Tautulli, weighted
 # the same way. Mainly useful for shared/external users whose Plex-native

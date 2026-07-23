@@ -51,6 +51,9 @@ from .config import (
     get_negative_signals_config,
     get_negative_multiplier,
     adapt_config_for_media_type,
+    get_libraries,
+    get_libraries_for_media_type,
+    get_effective_arr_config,
 )
 
 # Display utilities
@@ -286,6 +289,9 @@ __all__ = [
     'load_config',
     'get_rating_multipliers',
     'adapt_config_for_media_type',
+    'get_libraries',
+    'get_libraries_for_media_type',
+    'get_effective_arr_config',
     # Display
     'RED',
     'GREEN',

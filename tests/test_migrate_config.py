@@ -15,6 +15,7 @@ from utils.migrate_config import (
     extract_feature_config,
     build_core_config,
     migrate_config,
+    migrate_to_libraries,
     main,
     TUNING_SECTIONS,
     CORE_SECTIONS,
@@ -57,6 +58,126 @@ class TestNeedsMigration:
             'users': {'list': 'alice'},
         }
         assert needs_migration(config) is False
+
+    def test_returns_true_for_legacy_movie_library_without_libraries(self):
+        """Test returns True if plex.movie_library present but no libraries list (#157)."""
+        config = {'plex': {'movie_library': 'Movies'}}
+        assert needs_migration(config) is True
+
+    def test_returns_true_for_legacy_tv_library_without_libraries(self):
+        """Test returns True if plex.tv_library present but no libraries list (#157)."""
+        config = {'plex': {'tv_library': 'TV Shows'}}
+        assert needs_migration(config) is True
+
+    def test_returns_false_when_libraries_already_present(self):
+        """Test returns False if libraries already migrated, even with legacy keys (idempotent)."""
+        config = {
+            'plex': {'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'libraries': [{'id': 'movies'}, {'id': 'tv-shows'}],
+        }
+        assert needs_migration(config) is False
+
+    def test_returns_false_when_no_plex_library_keys(self):
+        """Test returns False if plex config has no movie_library/tv_library at all."""
+        config = {'plex': {'url': 'http://localhost:32400'}}
+        assert needs_migration(config) is False
+
+
+class TestCoreSectionsIncludesLibraries:
+    """Test CORE_SECTIONS includes 'libraries' (#157 Phase 1)"""
+
+    def test_libraries_in_core_sections(self):
+        assert 'libraries' in CORE_SECTIONS
+
+
+class TestMigrateToLibraries:
+    """Tests for migrate_to_libraries (#157 Phase 1)"""
+
+    def test_returns_none_if_libraries_already_present(self, tmp_path):
+        config = {'plex': {'movie_library': 'Movies'}, 'libraries': [{'id': 'movies'}]}
+        result = migrate_to_libraries(config, str(tmp_path))
+        assert result is None
+
+    def test_returns_none_if_no_legacy_library_keys(self, tmp_path):
+        config = {'plex': {'url': 'http://localhost:32400'}}
+        result = migrate_to_libraries(config, str(tmp_path))
+        assert result is None
+
+    def test_builds_two_entries_from_scalar_config(self, tmp_path):
+        config = {'plex': {'movie_library': 'Movies', 'tv_library': 'TV Shows'}}
+        result = migrate_to_libraries(config, str(tmp_path))
+        assert len(result) == 2
+        assert result[0]['id'] == 'movies'
+        assert result[0]['media_type'] == 'movie'
+        assert result[0]['name'] == 'Movies'
+        assert result[1]['id'] == 'tv-shows'
+        assert result[1]['media_type'] == 'tv'
+        assert result[1]['name'] == 'TV Shows'
+
+    def test_defaults_missing_tv_library_name(self, tmp_path):
+        config = {'plex': {'movie_library': 'Movies'}}
+        result = migrate_to_libraries(config, str(tmp_path))
+        assert len(result) == 2
+        assert result[1]['name'] == 'TV Shows'
+
+    def test_folds_radarr_routing_from_config_dict(self, tmp_path):
+        config = {
+            'plex': {'movie_library': 'Movies'},
+            'radarr': {
+                'root_folder': '/data/movies',
+                'quality_profile': '4K',
+                'tag': 'Curatarr',
+                'monitor': True,
+                'search_for_movie': True,
+                'minimum_availability': 'announced',
+            },
+        }
+        result = migrate_to_libraries(config, str(tmp_path))
+        movie_arr = result[0]['arr']
+        assert movie_arr['root_folder'] == '/data/movies'
+        assert movie_arr['quality_profile'] == '4K'
+        assert movie_arr['tag'] == 'Curatarr'
+        assert movie_arr['monitor'] is True
+        assert movie_arr['search'] is True
+        assert movie_arr['minimum_availability'] == 'announced'
+
+    def test_folds_sonarr_routing_from_config_dict(self, tmp_path):
+        config = {
+            'plex': {'tv_library': 'TV Shows'},
+            'sonarr': {
+                'root_folder': '/data/tv',
+                'series_type': 'anime',
+                'search_for_series': True,
+            },
+        }
+        result = migrate_to_libraries(config, str(tmp_path))
+        tv_arr = result[1]['arr']
+        assert tv_arr['root_folder'] == '/data/tv'
+        assert tv_arr['series_type'] == 'anime'
+        assert tv_arr['search'] is True
+
+    def test_folds_radarr_routing_from_standalone_module_file(self, tmp_path):
+        """When config.yml is already modular, radarr.yml lives as a separate file."""
+        radarr_path = tmp_path / 'radarr.yml'
+        with open(radarr_path, 'w') as f:
+            yaml.dump({'root_folder': '/data/movies', 'quality_profile': 'HD-1080p'}, f)
+
+        config = {'plex': {'movie_library': 'Movies'}}
+        result = migrate_to_libraries(config, str(tmp_path))
+        assert result[0]['arr']['root_folder'] == '/data/movies'
+        assert result[0]['arr']['quality_profile'] == 'HD-1080p'
+
+    def test_only_copies_fields_present_in_legacy_config(self, tmp_path):
+        config = {'plex': {'movie_library': 'Movies'}, 'radarr': {'root_folder': '/data/movies'}}
+        result = migrate_to_libraries(config, str(tmp_path))
+        assert result[0]['arr'] == {'root_folder': '/data/movies'}
+
+    def test_does_not_mutate_plex_library_keys(self, tmp_path):
+        """Additive: migrate_to_libraries doesn't touch plex.movie_library/tv_library."""
+        config = {'plex': {'movie_library': 'Movies', 'tv_library': 'TV Shows'}}
+        migrate_to_libraries(config, str(tmp_path))
+        assert config['plex']['movie_library'] == 'Movies'
+        assert config['plex']['tv_library'] == 'TV Shows'
 
 
 class TestExtractTuningConfig:
@@ -228,6 +349,84 @@ class TestMigrateConfig:
         assert 'trakt.yml' in result['files_created']
         assert os.path.exists(str(tmp_path / 'tuning.yml'))
         assert os.path.exists(str(tmp_path / 'trakt.yml'))
+
+
+class TestMigrateConfigLibraries:
+    """Tests for the 'libraries' hook inside migrate_config (#157 Phase 1)"""
+
+    def test_scalar_and_arr_config_folds_into_libraries(self, tmp_path):
+        """End-to-end: legacy movie_library/tv_library + radarr/sonarr routing
+        become a 'libraries' list in the migrated config.yml."""
+        config_path = str(tmp_path / 'config.yml')
+        config = {
+            'plex': {'url': 'http://localhost', 'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'tmdb': {'api_key': 'abc'},
+            'radarr': {'enabled': True, 'root_folder': '/data/movies', 'quality_profile': '4K'},
+            'sonarr': {'enabled': True, 'root_folder': '/data/tv', 'series_type': 'anime'},
+        }
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        result = migrate_config(config_path)
+
+        assert result['migrated'] is True
+        with open(config_path, 'r') as f:
+            migrated = yaml.safe_load(f)
+
+        assert 'libraries' in migrated
+        assert len(migrated['libraries']) == 2
+        movie_lib = next(l for l in migrated['libraries'] if l['media_type'] == 'movie')
+        tv_lib = next(l for l in migrated['libraries'] if l['media_type'] == 'tv')
+        assert movie_lib['arr']['root_folder'] == '/data/movies'
+        assert movie_lib['arr']['quality_profile'] == '4K'
+        assert tv_lib['arr']['root_folder'] == '/data/tv'
+        assert tv_lib['arr']['series_type'] == 'anime'
+
+    def test_additive_does_not_delete_legacy_plex_keys(self, tmp_path):
+        """Migration must not remove plex.movie_library/tv_library - additive only."""
+        config_path = str(tmp_path / 'config.yml')
+        config = {
+            'plex': {'url': 'http://localhost', 'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'tmdb': {'api_key': 'abc'},
+        }
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        migrate_config(config_path)
+
+        with open(config_path, 'r') as f:
+            migrated = yaml.safe_load(f)
+
+        assert migrated['plex']['movie_library'] == 'Movies'
+        assert migrated['plex']['tv_library'] == 'TV Shows'
+        assert 'libraries' in migrated
+
+    def test_idempotent_second_run_does_not_remigrate(self, tmp_path):
+        """Running migrate_config again after libraries exist is a no-op."""
+        config_path = str(tmp_path / 'config.yml')
+        config = {
+            'plex': {'url': 'http://localhost', 'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'tmdb': {'api_key': 'abc'},
+        }
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        first = migrate_config(config_path)
+        assert first['migrated'] is True
+
+        second = migrate_config(config_path)
+        assert second['migrated'] is False
+
+    def test_no_migration_needed_when_no_legacy_library_keys_and_already_modular(self, tmp_path):
+        """A config with only core sections and no movie_library/tv_library needs no migration."""
+        config_path = str(tmp_path / 'config.yml')
+        config = {'plex': {'url': 'http://localhost'}, 'tmdb': {'api_key': 'abc'}}
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        result = migrate_config(config_path)
+
+        assert result['migrated'] is False
 
 
 class TestMain:

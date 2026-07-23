@@ -7,6 +7,8 @@ import pytest
 
 from utils.config import (
     CACHE_VERSION,
+    MEDIA_TYPE_MOVIE,
+    MEDIA_TYPE_TV,
     DEFAULT_RATING_MULTIPLIERS,
     DEFAULT_NEGATIVE_MULTIPLIERS,
     DEFAULT_NEGATIVE_THRESHOLD,
@@ -18,6 +20,9 @@ from utils.config import (
     get_negative_multiplier,
     adapt_config_for_media_type,
     load_config,
+    get_libraries,
+    get_libraries_for_media_type,
+    get_effective_arr_config,
 )
 
 
@@ -539,3 +544,233 @@ class TestAdaptConfigRadarrSonarr:
         result = adapt_config_for_media_type(config, 'tv')
         assert result['sonarr']['enabled'] is True
         assert result['sonarr']['url'] == 'http://sonarr:8989'
+
+
+class TestGetLibraries:
+    """Tests for get_libraries fallback synthesis and normalization (#157 Phase 1)"""
+
+    def test_no_libraries_key_synthesizes_two_entries(self):
+        config = {'plex': {}}
+        result = get_libraries(config)
+        assert len(result) == 2
+        assert result[0]['media_type'] == MEDIA_TYPE_MOVIE
+        assert result[1]['media_type'] == MEDIA_TYPE_TV
+
+    def test_synthesis_defaults_names_when_plex_library_keys_absent(self):
+        config = {'plex': {}}
+        result = get_libraries(config)
+        assert result[0]['name'] == 'Movies'
+        assert result[1]['name'] == 'TV Shows'
+
+    def test_synthesis_uses_configured_library_names(self):
+        config = {'plex': {'movie_library': 'Films', 'tv_library': 'Shows'}}
+        result = get_libraries(config)
+        assert result[0]['name'] == 'Films'
+        assert result[0]['section'] == 'Films'
+        assert result[1]['name'] == 'Shows'
+        assert result[1]['section'] == 'Shows'
+
+    def test_synthesis_derives_slug_ids(self):
+        config = {'plex': {'movie_library': 'My Movies', 'tv_library': 'TV Shows'}}
+        result = get_libraries(config)
+        assert result[0]['id'] == 'my-movies'
+        assert result[1]['id'] == 'tv-shows'
+
+    def test_empty_libraries_list_also_synthesizes(self):
+        config = {'plex': {}, 'libraries': []}
+        result = get_libraries(config)
+        assert len(result) == 2
+
+    def test_synthesized_arr_merges_from_global_radarr_sonarr(self):
+        config = {
+            'plex': {'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'radarr': {'enabled': True, 'root_folder': '/data/movies', 'quality_profile': '4K'},
+            'sonarr': {'enabled': True, 'root_folder': '/data/tv', 'series_type': 'anime'},
+        }
+        libraries = get_libraries(config)
+        movie_lib = next(l for l in libraries if l['media_type'] == MEDIA_TYPE_MOVIE)
+        tv_lib = next(l for l in libraries if l['media_type'] == MEDIA_TYPE_TV)
+
+        movie_arr = get_effective_arr_config(config, movie_lib)
+        assert movie_arr['enabled'] is True
+        assert movie_arr['root_folder'] == '/data/movies'
+        assert movie_arr['quality_profile'] == '4K'
+
+        tv_arr = get_effective_arr_config(config, tv_lib)
+        assert tv_arr['enabled'] is True
+        assert tv_arr['root_folder'] == '/data/tv'
+        assert tv_arr['series_type'] == 'anime'
+
+    def test_normalizes_missing_id_from_name_slug(self):
+        config = {'libraries': [{'name': 'Kids Movies', 'media_type': 'movie'}]}
+        result = get_libraries(config)
+        assert result[0]['id'] == 'kids-movies'
+
+    def test_normalizes_missing_media_type_defaults_movie(self):
+        config = {'libraries': [{'name': 'Movies'}]}
+        result = get_libraries(config)
+        assert result[0]['media_type'] == MEDIA_TYPE_MOVIE
+
+    def test_normalizes_missing_section_defaults_to_name(self):
+        config = {'libraries': [{'name': 'Anime', 'media_type': 'tv'}]}
+        result = get_libraries(config)
+        assert result[0]['section'] == 'Anime'
+
+    def test_preserves_explicit_fields(self):
+        config = {
+            'libraries': [
+                {'id': 'custom-id', 'name': 'Movies', 'section': 'Custom Section', 'media_type': 'movie'},
+            ]
+        }
+        result = get_libraries(config)
+        assert result[0]['id'] == 'custom-id'
+        assert result[0]['section'] == 'Custom Section'
+
+    def test_multiple_libraries_of_same_media_type(self):
+        config = {
+            'libraries': [
+                {'name': 'Movies', 'media_type': 'movie'},
+                {'name': 'Kids Movies', 'media_type': 'movie'},
+            ]
+        }
+        result = get_libraries(config)
+        assert len(result) == 2
+        assert result[0]['id'] == 'movies'
+        assert result[1]['id'] == 'kids-movies'
+
+
+class TestGetLibrariesForMediaType:
+    """Tests for get_libraries_for_media_type"""
+
+    def test_filters_to_movie_libraries(self):
+        config = {
+            'libraries': [
+                {'name': 'Movies', 'media_type': 'movie'},
+                {'name': 'TV Shows', 'media_type': 'tv'},
+            ]
+        }
+        result = get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)
+        assert len(result) == 1
+        assert result[0]['name'] == 'Movies'
+
+    def test_filters_to_tv_libraries(self):
+        config = {
+            'libraries': [
+                {'name': 'Movies', 'media_type': 'movie'},
+                {'name': 'TV Shows', 'media_type': 'tv'},
+                {'name': 'Anime', 'media_type': 'tv'},
+            ]
+        }
+        result = get_libraries_for_media_type(config, MEDIA_TYPE_TV)
+        assert len(result) == 2
+
+    def test_returns_empty_list_when_no_match(self):
+        config = {'libraries': [{'name': 'Movies', 'media_type': 'movie'}]}
+        result = get_libraries_for_media_type(config, MEDIA_TYPE_TV)
+        assert result == []
+
+    def test_falls_back_to_synthesized_libraries(self):
+        config = {'plex': {}}
+        result = get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)
+        assert len(result) == 1
+        assert result[0]['name'] == 'Movies'
+
+
+class TestGetEffectiveArrConfig:
+    """Tests for get_effective_arr_config merge precedence (#157 Phase 1)"""
+
+    def test_uses_global_when_library_arr_empty(self):
+        config = {'radarr': {'enabled': True, 'url': 'http://radarr:7878', 'api_key': 'globalkey',
+                              'root_folder': '/movies', 'quality_profile': 'HD-1080p'}}
+        library = {'media_type': 'movie', 'arr': {}}
+        result = get_effective_arr_config(config, library)
+        assert result['enabled'] is True
+        assert result['url'] == 'http://radarr:7878'
+        assert result['api_key'] == 'globalkey'
+        assert result['root_folder'] == '/movies'
+        assert result['quality_profile'] == 'HD-1080p'
+
+    def test_library_arr_overrides_global_routing_field(self):
+        config = {'radarr': {'enabled': True, 'root_folder': '/movies', 'quality_profile': 'HD-1080p'}}
+        library = {'media_type': 'movie', 'arr': {'root_folder': '/kids-movies'}}
+        result = get_effective_arr_config(config, library)
+        # Overridden field
+        assert result['root_folder'] == '/kids-movies'
+        # Fallback field untouched
+        assert result['quality_profile'] == 'HD-1080p'
+
+    def test_instance_overrides_url_and_api_key(self):
+        config = {'radarr': {'enabled': True, 'url': 'http://default:7878', 'api_key': 'default_key'}}
+        library = {
+            'media_type': 'movie',
+            'arr': {'instance': {'url': 'http://custom:7878', 'api_key': 'custom_key'}},
+        }
+        result = get_effective_arr_config(config, library)
+        assert result['url'] == 'http://custom:7878'
+        assert result['api_key'] == 'custom_key'
+
+    def test_instance_partial_override_falls_back_for_omitted_field(self):
+        config = {'radarr': {'enabled': True, 'url': 'http://default:7878', 'api_key': 'default_key'}}
+        library = {
+            'media_type': 'movie',
+            'arr': {'instance': {'url': 'http://custom:7878'}},
+        }
+        result = get_effective_arr_config(config, library)
+        assert result['url'] == 'http://custom:7878'
+        assert result['api_key'] == 'default_key'
+
+    def test_movie_gets_minimum_availability_not_series_type(self):
+        config = {'radarr': {'minimum_availability': 'announced'}}
+        library = {'media_type': 'movie', 'arr': {}}
+        result = get_effective_arr_config(config, library)
+        assert result['minimum_availability'] == 'announced'
+        assert 'series_type' not in result
+
+    def test_tv_gets_series_type_not_minimum_availability(self):
+        config = {'sonarr': {'series_type': 'anime'}}
+        library = {'media_type': 'tv', 'arr': {}}
+        result = get_effective_arr_config(config, library)
+        assert result['series_type'] == 'anime'
+        assert 'minimum_availability' not in result
+
+    def test_search_field_falls_back_to_legacy_radarr_search_for_movie(self):
+        config = {'radarr': {'search_for_movie': True}}
+        library = {'media_type': 'movie', 'arr': {}}
+        result = get_effective_arr_config(config, library)
+        assert result['search'] is True
+
+    def test_search_field_falls_back_to_legacy_sonarr_search_for_series(self):
+        config = {'sonarr': {'search_for_series': True}}
+        library = {'media_type': 'tv', 'arr': {}}
+        result = get_effective_arr_config(config, library)
+        assert result['search'] is True
+
+    def test_library_arr_search_overrides_legacy_global_search(self):
+        config = {'radarr': {'search_for_movie': False}}
+        library = {'media_type': 'movie', 'arr': {'search': True}}
+        result = get_effective_arr_config(config, library)
+        assert result['search'] is True
+
+    def test_defaults_when_no_global_arr_config_at_all(self):
+        config = {}
+        library = {'media_type': 'movie', 'arr': {}}
+        result = get_effective_arr_config(config, library)
+        assert result['enabled'] is False
+        assert result['monitor'] is False
+        assert result['search'] is False
+        assert result['url'] is None
+        assert result['api_key'] is None
+
+    def test_missing_media_type_defaults_to_movie(self):
+        config = {'radarr': {'root_folder': '/movies'}}
+        library = {'arr': {}}
+        result = get_effective_arr_config(config, library)
+        assert result['root_folder'] == '/movies'
+        assert 'minimum_availability' in result
+
+    def test_missing_arr_key_falls_back_entirely_to_global(self):
+        config = {'sonarr': {'enabled': True, 'root_folder': '/tv'}}
+        library = {'media_type': 'tv'}
+        result = get_effective_arr_config(config, library)
+        assert result['enabled'] is True
+        assert result['root_folder'] == '/tv'
