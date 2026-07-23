@@ -10,6 +10,7 @@
 </p>
 {% endif %}
 
+<div class="table-scroll">
 <table class="status-table">
   <thead>
     <tr><th>User</th><th>Last Run</th><th>Status</th><th>Log</th><th>Watchlist</th></tr>
@@ -40,6 +41,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 
 <p>
   <a class="button" href="{{ url_for('run_form') }}">Run recommendations</a>

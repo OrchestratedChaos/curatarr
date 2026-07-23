@@ -7,20 +7,25 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="{{ url_for('dashboard') }}">Curatarr</a>
-    <nav>
-      <a href="{{ url_for('dashboard') }}">Dashboard</a>
-      <a href="{{ url_for('run_form') }}">Run</a>
-      <a href="{{ url_for('results') }}">Results</a>
-      <a href="{{ url_for('config_connections') }}">Connections</a>
-      <a href="{{ url_for('config_libraries') }}">Libraries</a>
-      <a href="{{ url_for('config_users') }}">Users</a>
-      <a href="{{ url_for('config_settings') }}">Settings</a>
-    </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+  <div class="curtain-top" aria-hidden="true"></div>
+  <div class="curtain-left" aria-hidden="true"></div>
+  <div class="curtain-right" aria-hidden="true"></div>
+  <div class="page-wrapper">
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('dashboard') }}">Curatarr</a>
+      <nav>
+        <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.path == url_for('dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('run_form') }}" class="{{ 'active' if request.path == url_for('run_form') }}">Run</a>
+        <a href="{{ url_for('results') }}" class="{{ 'active' if request.path == url_for('results') }}">Results</a>
+        <a href="{{ url_for('config_connections') }}" class="{{ 'active' if request.path == url_for('config_connections') }}">Connections</a>
+        <a href="{{ url_for('config_libraries') }}" class="{{ 'active' if request.path == url_for('config_libraries') }}">Libraries</a>
+        <a href="{{ url_for('config_users') }}" class="{{ 'active' if request.path == url_for('config_users') }}">Users</a>
+        <a href="{{ url_for('config_settings') }}" class="{{ 'active' if request.path == url_for('config_settings') }}">Settings</a>
+      </nav>
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
 </body>
 </html>
