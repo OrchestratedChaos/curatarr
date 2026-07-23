@@ -34,6 +34,7 @@ from utils import (
     GREEN, YELLOW, CYAN, RESET,
     RATING_MULTIPLIERS,
     TMDB_REQUEST_TIMEOUT, TMDB_TV_MOVIE_GENRE_ID, TMDB_ANIMATION_GENRE_ID,
+    MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV,
     get_plex_account_ids, get_tmdb_config, get_tmdb_keywords,
     fetch_watch_history_with_tmdb,
     log_warning, log_error, load_config, clickable_link,
@@ -46,6 +47,7 @@ from utils import (
     fetch_tmdb_details_for_profile,
     get_project_root,
     get_authenticated_trakt_client,
+    get_libraries_for_media_type,
     smart_open_html,
 )
 
@@ -1871,12 +1873,22 @@ def find_similar_content_with_profile(
     return final_recs
 
 
-def load_cache(display_name: str, media_type: str) -> Dict:
-    """Load existing recommendations cache, filtering out items below quality thresholds"""
+def load_cache(display_name: str, media_type: str, lib_id: Optional[str] = None) -> Dict:
+    """Load existing recommendations cache, filtering out items below quality thresholds
+
+    Args:
+        display_name: User's display name
+        media_type: 'movies' or 'shows'
+        lib_id: Optional library id (#157 Phase 3). When provided, the cache
+            filename is qualified with it so multiple libraries of the same
+            media type don't collide. None (default) keeps the legacy
+            filename - required for single-library back-compat.
+    """
     cache_dir = os.path.join(get_project_root(), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
-    cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
+    lib_prefix = f'{lib_id}_' if lib_id else ''
+    cache_file = os.path.join(cache_dir, f'external_recs_{lib_prefix}{safe_name}_{media_type}.json')
 
     if os.path.exists(cache_file):
         with open(cache_file, 'r') as f:
@@ -1911,12 +1923,20 @@ def load_cache(display_name: str, media_type: str) -> Dict:
             return filtered
     return {}
 
-def save_cache(display_name: str, media_type: str, cache_data: Dict) -> None:
-    """Save recommendations cache with version."""
+def save_cache(display_name: str, media_type: str, cache_data: Dict, lib_id: Optional[str] = None) -> None:
+    """Save recommendations cache with version.
+
+    Args:
+        display_name: User's display name
+        media_type: 'movies' or 'shows'
+        cache_data: Cache payload to persist
+        lib_id: Optional library id (#157 Phase 3) - see load_cache()
+    """
     cache_dir = os.path.join(get_project_root(), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     safe_name = display_name.lower().replace(' ', '_')
-    cache_file = os.path.join(cache_dir, f'external_recs_{safe_name}_{media_type}.json')
+    lib_prefix = f'{lib_id}_' if lib_id else ''
+    cache_file = os.path.join(cache_dir, f'external_recs_{lib_prefix}{safe_name}_{media_type}.json')
 
     versioned_cache = {
         'version': EXTERNAL_RECS_CACHE_VERSION,
@@ -1924,6 +1944,24 @@ def save_cache(display_name: str, media_type: str, cache_data: Dict) -> None:
     }
     with open(cache_file, 'w') as f:
         json.dump(versioned_cache, f, indent=2)
+
+def _stamp_library_id(categorized: Dict, library_id: Optional[str]) -> None:
+    """Stamp library_id provenance onto every item in a categorized dict (#157 Phase 3).
+
+    Args:
+        categorized: Dict with 'user_services' (dict of service -> items),
+            'other_services' (dict of service -> items), and 'acquire' (list)
+        library_id: The source library's id, or None
+    """
+    for service_items in categorized.get('user_services', {}).values():
+        for item in service_items:
+            item['library_id'] = library_id
+    for service_items in categorized.get('other_services', {}).values():
+        for item in service_items:
+            item['library_id'] = library_id
+    for item in categorized.get('acquire', []):
+        item['library_id'] = library_id
+
 
 def load_ignore_list(display_name: str) -> Set[str]:
     """Load user's manual ignore list"""
@@ -1935,25 +1973,45 @@ def load_ignore_list(display_name: str) -> Set[str]:
             return set(line.strip() for line in f if line.strip())
     return set()
 
-def process_user(config, plex, username):
-    """Process external recommendations for a single user"""
+def process_user(config, plex, username, movie_library=None, tv_library=None):
+    """Process external recommendations for a single user.
+
+    Args:
+        config: Root configuration dictionary
+        plex: Connected PlexServer instance
+        username: Plex username to process
+        movie_library: Optional normalized movie library dict (#157 Phase 3,
+            see utils.config.get_libraries). None keeps the legacy
+            single-library behavior (config['plex'].movie_library).
+        tv_library: Optional normalized tv library dict (#157 Phase 3).
+            None keeps the legacy single-library behavior
+            (config['plex'].tv_library).
+    """
     user_prefs = config.get('users', {}).get('preferences', {}).get(username, {})
     display_name = user_prefs.get('display_name', username)
 
     print(f"\n{GREEN}Processing external recommendations for: {display_name}{RESET}")
 
     # Get current library contents
-    movie_library = config['plex'].get('movie_library', 'Movies')
-    tv_library = config['plex'].get('tv_library', 'TV Shows')
+    movie_library_name = movie_library['section'] if movie_library else config['plex'].get('movie_library', 'Movies')
+    tv_library_name = tv_library['section'] if tv_library else config['plex'].get('tv_library', 'TV Shows')
 
-    library_movies = get_library_items(plex, movie_library, 'movie')
-    library_shows = get_library_items(plex, tv_library, 'show')
+    # Cache filenames stay legacy (unqualified) unless this install has more
+    # than one library of that media type - back-compat for single-library
+    # installs (#157 Phase 3), matching the internal recommenders' rule.
+    movie_is_multi = bool(movie_library) and len(get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)) > 1
+    tv_is_multi = bool(tv_library) and len(get_libraries_for_media_type(config, MEDIA_TYPE_TV)) > 1
+    movie_cache_lib_id = movie_library['id'] if movie_is_multi else None
+    tv_cache_lib_id = tv_library['id'] if tv_is_multi else None
+
+    library_movies = get_library_items(plex, movie_library_name, 'movie')
+    library_shows = get_library_items(plex, tv_library_name, 'show')
 
     print(f"{CYAN}Library has {len(library_movies['titles'])} movies, {len(library_shows['titles'])} TV shows{RESET}")
 
     # Load existing cache and ignore list
-    movie_cache = load_cache(display_name, 'movies')
-    show_cache = load_cache(display_name, 'shows')
+    movie_cache = load_cache(display_name, 'movies', lib_id=movie_cache_lib_id)
+    show_cache = load_cache(display_name, 'shows', lib_id=tv_cache_lib_id)
     ignore_list = load_ignore_list(display_name)
 
     # Get language filter from config
@@ -2188,8 +2246,8 @@ def process_user(config, plex, username):
         print(f"{YELLOW}Trimmed cache: {trimmed_movies} movies, {trimmed_shows} shows (replaced by better recs){RESET}")
 
     # Save updated caches
-    save_cache(display_name, 'movies', movie_cache)
-    save_cache(display_name, 'shows', show_cache)
+    save_cache(display_name, 'movies', movie_cache, lib_id=movie_cache_lib_id)
+    save_cache(display_name, 'shows', show_cache, lib_id=tv_cache_lib_id)
 
     # Prepare lists for categorization - apply threshold and limits
     all_movies = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
@@ -2231,6 +2289,14 @@ def process_user(config, plex, username):
         'tv'
     )
 
+    # Item provenance (#157 Phase 3): stamp each recommendation with the
+    # library it was sourced from/targets. None when running the legacy
+    # single-library path (movie_library/tv_library not passed).
+    movie_item_library_id = movie_library['id'] if movie_library else None
+    tv_item_library_id = tv_library['id'] if tv_library else None
+    _stamp_library_id(movies_categorized, movie_item_library_id)
+    _stamp_library_id(shows_categorized, tv_item_library_id)
+
     # Generate markdown per user
     project_root = get_project_root()
     output_dir = os.path.join(project_root, 'recommendations', 'external')
@@ -2247,7 +2313,21 @@ def process_user(config, plex, username):
     print(f"{GREEN}Processed: {total_movies} movies, {total_shows} shows{RESET}")
     print(f"\nExternal recommendation process completed for {display_name}!")
 
-    # Return data for combined HTML generation and Trakt sync
+    # Return data for combined HTML generation and Trakt sync.
+    #
+    # library_id (#157 Phase 3 provenance): a single call processes BOTH
+    # movies and shows, which can belong to different libraries (different
+    # ids) once there's more than one library of either media type. Export
+    # routing's _resolve_library_groups() (Phase 2, unchanged) reads this
+    # single field for BOTH Radarr and Sonarr grouping without checking
+    # media_type, so it cannot safely hold two different ids at once -
+    # stamping either one here would misroute the other media type's export
+    # in the common case (one movie library + one TV library, different
+    # ids). We deliberately leave it None so Phase 2's existing per-media-type
+    # fallback (get_libraries_for_media_type(...)[0]) keeps routing
+    # correctly; per-item library_id (see _stamp_library_id above) already
+    # carries the real provenance for anything that inspects individual
+    # recommendations.
     return {
         'username': username,
         'display_name': display_name,
@@ -2255,7 +2335,8 @@ def process_user(config, plex, username):
         'shows_categorized': shows_categorized,
         'movie_profile': movie_profile,
         'show_profile': show_profile,
-        'user_services': user_services
+        'user_services': user_services,
+        'library_id': None
     }
 
 def main():
@@ -2312,9 +2393,28 @@ def main():
     total_users = 0
 
     if run_recommendations:
+        # #157 Phase 3: resolve the primary movie/tv library once up front.
+        # process_user() handles movies and shows together for a user in a
+        # single pass (shared Trakt watchlist fetch, one combined markdown
+        # file per user), so we don't fan this out into a per-library loop -
+        # that would call process_user() N times per user and overwrite each
+        # user's markdown watchlist with partial (movies-only/shows-only)
+        # data. Instead we thread through the first configured library of
+        # each media type, which is exactly today's single library for a
+        # single-library install (byte-identical: one process_user() call
+        # per user, same as before).
+        movie_libraries = get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)
+        tv_libraries = get_libraries_for_media_type(config, MEDIA_TYPE_TV)
+        primary_movie_library = movie_libraries[0] if movie_libraries else None
+        primary_tv_library = tv_libraries[0] if tv_libraries else None
+
         for username in users:
             try:
-                user_data = process_user(config, plex, username)
+                user_data = process_user(
+                    config, plex, username,
+                    movie_library=primary_movie_library,
+                    tv_library=primary_tv_library
+                )
                 if user_data:
                     all_users_data.append(user_data)
             except Exception as e:

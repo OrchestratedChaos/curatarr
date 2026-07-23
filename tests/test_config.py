@@ -223,6 +223,32 @@ class TestAdaptConfigForMediaType:
         result = adapt_config_for_media_type(config, 'movies')
         assert result['add_label'] is False
 
+    def test_libraries_passed_through(self):
+        """#157 Phase 3: the adapted config must carry 'libraries' through so
+        utils/cli.py's per-library loop (which calls
+        get_libraries_for_media_type against the adapted config) sees a
+        real multi-library setup instead of always falling back to the
+        synthesized single-library default."""
+        config = {
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'media_type': 'movie'},
+                {'id': 'movies-4k', 'name': 'Movies 4K', 'media_type': 'movie'},
+            ]
+        }
+        result = adapt_config_for_media_type(config, 'movies')
+        assert result['libraries'] == config['libraries']
+
+    def test_libraries_absent_passes_through_none(self):
+        """No 'libraries' key in root config -> adapted config's 'libraries'
+        is None, so get_libraries_for_media_type falls back to synthesis."""
+        config = {'plex': {'movie_library': 'Movies'}}
+        result = adapt_config_for_media_type(config, 'movies')
+        assert result['libraries'] is None
+
+        libs = get_libraries_for_media_type(result, 'movie')
+        assert len(libs) == 1
+        assert libs[0]['section'] == 'Movies'
+
 
 class TestNegativeSignalsConstants:
     """Tests for negative signals constants"""

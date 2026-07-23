@@ -33,6 +33,7 @@ from utils import (
     init_plex,
     get_configured_users,
     get_tmdb_config,
+    get_libraries_for_media_type,
     check_cache_version,
     load_media_cache,
     save_media_cache,
@@ -373,17 +374,36 @@ class BaseRecommender(ABC):
     library_config_key: str = None  # e.g., 'movie_library_title'
     default_library_name: str = None  # e.g., 'Movies'
 
-    def __init__(self, config_path: str, single_user: str = None):
+    def __init__(self, config_path: str, single_user: str = None, library: Optional[Dict] = None):
         """
         Initialize the recommender.
 
         Args:
             config_path: Path to the config.yml configuration file
             single_user: Optional username for single-user mode
+            library: Optional normalized library dict (see utils.config.get_libraries)
+                for the #157 Phase 3 per-library recommendation loop. When
+                provided, the recommender operates against this library's
+                Plex section. When None, falls back to the legacy
+                library_config_key/default_library_name resolution.
         """
         self.single_user = single_user
         self.config = load_config(config_path)
-        self.library_title = self.config['plex'].get(self.library_config_key, self.default_library_name)
+        self.library = library
+
+        if self.library:
+            self.library_id = self.library['id']
+            self.library_title = self.library['section']
+        else:
+            self.library_id = None
+            self.library_title = self.config['plex'].get(self.library_config_key, self.default_library_name)
+
+        # Sibling libraries of this media type - drives cache filename /
+        # collection naming back-compat: a single library (synthesized or
+        # explicitly configured) keeps today's exact names; only genuine
+        # multi-library installs get library-qualified names (#157 Phase 3).
+        self._sibling_libraries = get_libraries_for_media_type(self.config, self.media_type)
+        self._is_multi_library = bool(self.library) and len(self._sibling_libraries) > 1
 
         # Initialize counters and caches
         self.cached_watched_count = 0
@@ -462,12 +482,42 @@ class BaseRecommender(ABC):
         """
         pass
 
+    def _cache_library_prefix(self) -> str:
+        """
+        Prefix for per-library cache filenames (#157 Phase 3).
+
+        Empty string for a single-library install (back-compat: existing
+        watched-cache files keep their exact legacy names). Only genuine
+        multi-library installs (>1 library of this media type) get a
+        library-id-qualified prefix, so caches don't collide across libraries.
+
+        Returns:
+            "{library_id}_" when multi-library, else ""
+        """
+        if not self._is_multi_library:
+            return ''
+        return f"{self.library_id}_"
+
+    def _library_suffix_for_label(self) -> str:
+        """Plex label suffix - empty unless >1 library shares this media type."""
+        if not self._is_multi_library:
+            return ''
+        return f"_{self.library_id}"
+
+    def _library_suffix_for_collection_name(self) -> str:
+        """Collection display-name suffix - empty unless >1 library shares this media type."""
+        if not self._is_multi_library:
+            return ''
+        name = (self.library or {}).get('name') or self.library_title
+        return f" ({name})"
+
     def _get_user_context(self) -> str:
         """
         Get a safe string representing the current user context for cache filenames.
 
         Returns:
-            Sanitized user context string
+            Sanitized user context string, prefixed with the library id when
+            this install has more than one library of this media type.
         """
         if self.single_user:
             user_ctx = f"plex_{self.single_user}"
@@ -476,7 +526,8 @@ class BaseRecommender(ABC):
         else:
             user_ctx = 'plex_' + '_'.join(self.users['managed_users'])
 
-        return re.sub(r'\W+', '', user_ctx)
+        sanitized = re.sub(r'\W+', '', user_ctx)
+        return f"{self._cache_library_prefix()}{sanitized}"
 
     def _refresh_watched_data(self):
         """Force refresh of watched data from Plex."""
@@ -868,7 +919,7 @@ class BaseRecommender(ABC):
             display_name = username.capitalize()
 
         emoji = "🎬" if self.media_type == 'movie' else "📺"
-        collection_name = f"{emoji} {display_name} - Recommendation"
+        collection_name = f"{emoji} {display_name} - Recommendation{self._library_suffix_for_collection_name()}"
         success = update_plex_collection(section, collection_name, final_items, logger, label_name=label_name)
         if success:
             cleanup_old_collections(section, collection_name, username, emoji, logger)
@@ -900,6 +951,7 @@ class BaseRecommender(ABC):
         try:
             section = self.plex.library.section(self.library_title)
             base_label = self.config.get('collections', {}).get('label_name', 'Recommended')
+            base_label = f"{base_label}{self._library_suffix_for_label()}"
             append_usernames = self.config.get('collections', {}).get('append_usernames', False)
             users = self.users['plex_users'] or self.users['managed_users']
             label_name = build_label_name(base_label, users, self.single_user, append_usernames)

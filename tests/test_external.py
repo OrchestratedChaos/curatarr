@@ -38,6 +38,8 @@ from recommenders.external import (
     is_thin_profile,
     discover_popular_by_genre,
     THIN_PROFILE_THRESHOLD,
+    process_user,
+    _stamp_library_id,
 )
 from utils.trakt import enhance_profile_with_trakt
 from collections import Counter
@@ -1359,6 +1361,282 @@ class TestExternalRecsCacheVersioning:
 
                 assert '12345' in result
                 assert result['12345']['title'] == 'Test Movie'
+
+
+class TestExternalRecsCacheLibraryId:
+    """Tests for per-library external recs cache filenames (#157 Phase 3)."""
+
+    def test_no_lib_id_uses_legacy_filename(self):
+        """lib_id=None (default) keeps the exact legacy filename - single
+        library install byte-identical proof for external recs cache."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
+                save_cache('testuser', 'movies', {'1': {'title': 'A'}})
+
+                expected_path = os.path.join(tmpdir, 'cache', 'external_recs_testuser_movies.json')
+                assert os.path.exists(expected_path)
+
+    def test_lib_id_qualifies_filename(self):
+        """lib_id qualifies the filename so multiple libraries of the same
+        media type don't collide."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
+                save_cache('testuser', 'movies', {'1': {'title': 'A'}}, lib_id='movies-4k')
+
+                expected_path = os.path.join(tmpdir, 'cache', 'external_recs_movies-4k_testuser_movies.json')
+                assert os.path.exists(expected_path)
+
+    def test_distinct_lib_ids_produce_isolated_caches(self):
+        """Two libraries of the same media type get fully isolated caches -
+        writing to one must not affect the other."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
+                save_cache('testuser', 'movies', {'1': {'title': 'Library A movie', 'vote_count': 500}}, lib_id='movies')
+                save_cache('testuser', 'movies', {'2': {'title': 'Library B movie', 'vote_count': 500}}, lib_id='movies-4k')
+
+                cache_a = load_cache('testuser', 'movies', lib_id='movies')
+                cache_b = load_cache('testuser', 'movies', lib_id='movies-4k')
+
+                assert '1' in cache_a and '2' not in cache_a
+                assert '2' in cache_b and '1' not in cache_b
+
+    def test_stamp_library_id_covers_all_categories(self):
+        """_stamp_library_id sets library_id on every item across
+        user_services, other_services, and acquire."""
+        categorized = {
+            'user_services': {'Netflix': [{'tmdb_id': 1}, {'tmdb_id': 2}]},
+            'other_services': {'Hulu': [{'tmdb_id': 3}]},
+            'acquire': [{'tmdb_id': 4}],
+            'all_items': [{'tmdb_id': 1}],  # same objects in real usage
+        }
+
+        _stamp_library_id(categorized, 'movies-4k')
+
+        assert categorized['user_services']['Netflix'][0]['library_id'] == 'movies-4k'
+        assert categorized['user_services']['Netflix'][1]['library_id'] == 'movies-4k'
+        assert categorized['other_services']['Hulu'][0]['library_id'] == 'movies-4k'
+        assert categorized['acquire'][0]['library_id'] == 'movies-4k'
+
+    def test_stamp_library_id_handles_none(self):
+        """_stamp_library_id(None) is valid - legacy/no-library items stay None."""
+        categorized = {'user_services': {}, 'other_services': {}, 'acquire': [{'tmdb_id': 1}]}
+
+        _stamp_library_id(categorized, None)
+
+        assert categorized['acquire'][0]['library_id'] is None
+
+    def test_lib_id_round_trip(self):
+        """save_cache(lib_id=...) then load_cache(lib_id=...) reads back
+        what was written."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('recommenders.external.get_project_root', return_value=tmpdir):
+                cache_data = {'999': {'title': 'Qualified Cache', 'tmdb_id': 999, 'vote_count': 500}}
+                save_cache('testuser', 'movies', cache_data, lib_id='movies-4k')
+
+                result = load_cache('testuser', 'movies', lib_id='movies-4k')
+
+                assert '999' in result
+                assert result['999']['title'] == 'Qualified Cache'
+
+
+def _process_user_load_cache_side_effect(display_name, media_type, lib_id=None):
+    """Shared fixture data for TestProcessUserLibraryProvenance - one
+    already-cached, above-threshold item per media type so discovery
+    (movie_deficit/show_deficit) is skipped and only the caching/
+    categorization/provenance path under test runs."""
+    if media_type == 'movies':
+        return {'100': {
+            'tmdb_id': 100, 'title': 'Cached Movie', 'year': 2020,
+            'rating': 7.5, 'vote_count': 500, 'score': 0.9, 'original_language': 'en'
+        }}
+    return {'200': {
+        'tmdb_id': 200, 'title': 'Cached Show', 'year': 2019,
+        'rating': 8.0, 'vote_count': 300, 'score': 0.9, 'original_language': 'en'
+    }}
+
+
+def _process_user_categorize_side_effect(items, tmdb_api_key, user_services, media_type):
+    """Fixture standing in for categorize_by_streaming_service - returns one
+    item so _stamp_library_id has something to stamp."""
+    item = {'tmdb_id': 999 if media_type == 'movie' else 888, 'title': f'{media_type}-item'}
+    return {'user_services': {}, 'other_services': {'Netflix': [item]}, 'acquire': [], 'all_items': [item]}
+
+
+class TestProcessUserLibraryProvenance:
+    """Tests for process_user library params and item provenance (#157 Phase 3)."""
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_legacy_no_library_params(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile, mock_enhance,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_categorize, mock_markdown
+    ):
+        """No movie_library/tv_library passed (legacy callers): resolves
+        section names from config['plex'], cache lib_id stays None, item
+        library_id stamps are None, and the top-level library_id is None."""
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = set()
+        mock_load_cache.side_effect = _process_user_load_cache_side_effect
+        mock_categorize.side_effect = _process_user_categorize_side_effect
+
+        config = {
+            'plex': {'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'users': {'preferences': {}},
+            'external_recommendations': {'movie_limit': 1, 'show_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [],
+            'trakt': {},
+        }
+
+        result = process_user(config, Mock(), 'alice')
+
+        # Section names resolved from legacy config['plex'] keys
+        get_items_calls = mock_get_items.call_args_list
+        assert get_items_calls[0][0][1] == 'Movies'
+        assert get_items_calls[1][0][1] == 'TV Shows'
+
+        # Cache filenames stay legacy (lib_id=None)
+        assert mock_load_cache.call_args_list[0].kwargs['lib_id'] is None
+        assert mock_load_cache.call_args_list[1].kwargs['lib_id'] is None
+        assert mock_save_cache.call_args_list[0].kwargs['lib_id'] is None
+        assert mock_save_cache.call_args_list[1].kwargs['lib_id'] is None
+
+        # Top-level library_id always None (see _stamp_library_id / return docstring)
+        assert result['library_id'] is None
+
+        # Item-level provenance stamps are None (no library resolved)
+        movie_item = result['movies_categorized']['other_services']['Netflix'][0]
+        show_item = result['shows_categorized']['other_services']['Netflix'][0]
+        assert movie_item['library_id'] is None
+        assert show_item['library_id'] is None
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_multi_library_params_qualify_cache_and_stamp_items(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile, mock_enhance,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_categorize, mock_markdown
+    ):
+        """movie_library/tv_library passed with a genuinely multi-library
+        movie config (2 movie libraries) but a single tv library:
+        - movie cache filenames get lib-qualified (movie_is_multi)
+        - tv cache filenames stay legacy (only 1 tv library, despite
+          tv_library being passed) - per-media-type independence
+        - every returned item is stamped with its real library id
+        """
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = set()
+        mock_load_cache.side_effect = _process_user_load_cache_side_effect
+        mock_categorize.side_effect = _process_user_categorize_side_effect
+
+        movie_library = {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'}
+        tv_library = {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'}
+
+        config = {
+            'plex': {'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'users': {'preferences': {}},
+            'external_recommendations': {'movie_limit': 1, 'show_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [],
+            'trakt': {},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                movie_library,
+                tv_library,
+            ],
+        }
+
+        result = process_user(config, Mock(), 'alice', movie_library=movie_library, tv_library=tv_library)
+
+        # Section names resolved from the passed library dicts
+        get_items_calls = mock_get_items.call_args_list
+        assert get_items_calls[0][0][1] == 'Movies 4K'
+        assert get_items_calls[1][0][1] == 'TV Shows'
+
+        # Movie cache qualified (2 movie libraries); tv cache stays legacy (1 tv library)
+        assert mock_load_cache.call_args_list[0].kwargs['lib_id'] == 'movies-4k'
+        assert mock_load_cache.call_args_list[1].kwargs['lib_id'] is None
+        assert mock_save_cache.call_args_list[0].kwargs['lib_id'] == 'movies-4k'
+        assert mock_save_cache.call_args_list[1].kwargs['lib_id'] is None
+
+        # Top-level library_id stays None even in multi-library mode (see
+        # process_user's return docstring: a single call spans both movie
+        # and tv libraries, which can have different ids, and Phase 2's
+        # _resolve_library_groups isn't media-type-aware for non-None ids)
+        assert result['library_id'] is None
+
+        # Item-level provenance carries the real library ids
+        movie_item = result['movies_categorized']['other_services']['Netflix'][0]
+        show_item = result['shows_categorized']['other_services']['Netflix'][0]
+        assert movie_item['library_id'] == 'movies-4k'
+        assert show_item['library_id'] == 'tv-shows'
+
+
+class TestMainLibraryResolution:
+    """Tests for main() resolving primary movie/tv libraries (#157 Phase 3)."""
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_single_library_install_calls_process_user_once_per_user(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        """Single-library install (no 'libraries:' config): process_user is
+        called once per user (same call count as before Phase 3), with the
+        synthesized movie/tv libraries threaded through."""
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = {
+            'plex': {'url': 'http://x', 'token': 'y', 'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'users': {'list': 'alice, bob'},
+            'huntarr': {'sequel_huntarr': False, 'horizon_huntarr': False},
+        }
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_process_user.return_value = {
+            'username': 'x', 'display_name': 'x',
+            'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'movie_profile': {}, 'show_profile': {}, 'user_services': [], 'library_id': None
+        }
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()
+
+        assert mock_process_user.call_count == 2
+        for call in mock_process_user.call_args_list:
+            assert call.kwargs['movie_library']['id'] == 'movies'
+            assert call.kwargs['tv_library']['id'] == 'tv-shows'
 
 
 class TestTVMovieGenreDetection:

@@ -122,15 +122,16 @@ class PlexMovieRecommender(BaseRecommender):
             'language': weights_config.get('language', weights_config.get('language_weight', 0.0)),
         }
 
-    def __init__(self, config_path: str, single_user: str = None):
+    def __init__(self, config_path: str, single_user: str = None, library: Optional[Dict] = None):
         """Initialize the movie recommender.
 
         Args:
             config_path: Path to the config.yml configuration file
             single_user: Optional username to generate recommendations for a single user
+            library: Optional normalized library dict (#157 Phase 3 per-library loop)
         """
         # Initialize base class (config, plex, display options, weights, etc.)
-        super().__init__(config_path, single_user)
+        super().__init__(config_path, single_user, library=library)
 
         # Movie-specific initialization
         self.cached_unwatched_count = 0
@@ -562,14 +563,14 @@ def adapt_root_config_to_legacy(root_config):
 # ------------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------------
-def process_recommendations(config, config_path, log_retention_days, single_user=None):
+def process_recommendations(config, config_path, log_retention_days, single_user=None, library=None):
     original_stdout = sys.stdout
     log_dir = os.path.join(get_project_root(), 'logs')
     setup_log_file(log_dir, log_retention_days, single_user, 'recommendations')
 
     try:
         # Create recommender with single user context
-        recommender = PlexMovieRecommender(config_path, single_user=single_user)
+        recommender = PlexMovieRecommender(config_path, single_user=single_user, library=library)
         
         # Check for debug mode
         if config.get('general', {}).get('debug', False):
@@ -621,7 +622,8 @@ def main():
         media_type='Movie',
         description='Movie Recommendations for Plex',
         adapt_config_func=adapt_root_config_to_legacy,
-        process_func=process_recommendations
+        process_func=process_recommendations,
+        media_type_key='movie'
     )
 
 if __name__ == "__main__":
