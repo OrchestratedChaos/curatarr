@@ -41,6 +41,7 @@ Your Plex library has thousands of titles. Your users have watched maybe 10% of 
 
 ### For You (Simple & Robust)
 - **One command** — `./run.sh` handles everything
+- **Multi-library support** — Each Plex library gets its own Sonarr/Radarr root folder, quality profile, tags, monitor/search, and optionally its own *arr instance; recommendations run per-library so Movies, TV, Anime, and Kids each follow their own rules
 - **Modular config** — Main settings plus optional integration files
 - **Auto-updates** — Applies SSH-signed release updates from GitHub on each run (optional)
 - **Smart caching** — Auto-clears incompatible caches after updates
@@ -132,6 +133,9 @@ hand-editing YAML:
   decay, rating multipliers, negative signals, external recommendation limits,
   and the Sonarr/Radarr/Trakt auto-sync safety toggles (surfaced with a warning -
   turning auto-sync on starts writing to your download clients on every run).
+- **Libraries** (`/config/libraries`) - manage multiple Plex libraries, each
+  with its own Sonarr/Radarr root folder, quality profile, tags, monitor/search
+  behavior, and optionally its own *arr instance.
 
 Secrets (tokens/API keys) are never shown once saved - fields show a
 "configured" / "not set" status, and you only need to enter a new value to
