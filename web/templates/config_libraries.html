@@ -20,6 +20,7 @@
 <form method="post" action="{{ url_for('config_libraries_save') }}" class="config-form">
   <input type="hidden" name="library_count" value="{{ libraries|length }}">
 
+  <div class="table-scroll">
   <table class="status-table">
     <thead>
       <tr>
@@ -82,6 +83,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 
   <fieldset>
     <legend>Add a library</legend>

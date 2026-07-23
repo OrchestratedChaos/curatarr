@@ -19,6 +19,7 @@
 
 <h2>Logs</h2>
 {% if logs %}
+<div class="table-scroll">
 <table class="status-table">
   <thead><tr><th>Log file</th><th>Modified</th><th>Size</th></tr></thead>
   <tbody>
@@ -31,6 +32,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p>No logs yet.</p>
 {% endif %}
