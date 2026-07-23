@@ -123,3 +123,75 @@ never apply a tag whose version isn't strictly greater than its current
 - 2FA enforced on all maintainer GitHub accounts.
 - The release-signing private key stays off any server; only the
   maintainer's own machine(s) hold it.
+- A repository ruleset restricts creating/updating/deleting `v*` tags to
+  the repository Admin role - see "Tag protection ruleset" below. This
+  closes the "attacker with mere push/write access crafts a `vX.Y.Z` tag
+  whose tree has a tampered `release.yml`" gap: SHA-pinning the actions
+  used by the workflows (below) stops that tampered tree from pulling in
+  a different version of a third-party action, and the ruleset stops
+  that tag from being pushable in the first place by anyone who isn't
+  already a trusted maintainer.
+
+## CI/CD supply-chain hardening
+
+- **Actions are pinned to full commit SHAs**, not floating major tags, in
+  every workflow (`release.yml`, `tests.yml`, `auto-close-prs.yml`) -
+  e.g. `uses: actions/checkout@<sha> # v7`. A floating `@v7` tag can be
+  moved to point at different code by the action's maintainer (or by
+  whoever compromises their account); a commit SHA can't be silently
+  repointed. The trailing `# vN` comment is just a human-readable label -
+  bump both together when intentionally upgrading an action, by
+  resolving the new tag to its commit SHA (e.g. `gh api
+  repos/actions/checkout/git/refs/tags/v8 --jq .object.sha`, following
+  one more level via `gh api repos/<owner>/<repo>/git/tags/<sha>` if that
+  returns an annotated tag object instead of a commit).
+- **Runtime Python dependencies are hash-pinned.** `requirements.txt`
+  stays the human-edited `==`-pinned source of truth; `requirements.lock`
+  is a generated, fully-hashed (direct + transitive, macOS/Linux/Windows)
+  lock that `run.sh`/`run.ps1` install with `pip install
+  --require-hashes`, so a compromised package index or a MITM'd download
+  can't silently substitute a different build of a dependency during the
+  auto-updater's install step. Regenerate after any `requirements.txt`
+  change - see the comment at the top of `requirements.lock` for the
+  exact command (uses [`uv`](https://docs.astral.sh/uv/)). Build-only
+  dependencies (`build-requirements.txt`, PyInstaller, CI-only) are not
+  hash-pinned - they never run on an end user's machine.
+- **Fingerprint parsing is anchored, not "first match anywhere".** Both
+  `run.sh`/`run.ps1`'s `select_verified_release`/`Select-VerifiedRelease`
+  and `release.yml`'s tag-verification step capture only what `git
+  verify-tag` writes to **stderr** (its own signature-status line;
+  `-v`/verbose tag-body output, which would go to stdout, is never
+  requested) and then extract the fingerprint anchored to git's own
+  `with <algo> key SHA256:...` phrase - not just the first `SHA256:`
+  token anywhere in the captured text. This means a fingerprint that
+  ended up elsewhere in that text (e.g. injected into a tag message)
+  can never be picked up in place of the actually-verified signing key.
+
+### Tag protection ruleset
+
+Applied via the API (`gh api --method POST
+repos/OrchestratedChaos/curatarr/rulesets`) targeting `tag` refs matching
+`refs/tags/v*`, with `creation`/`update`/`deletion` rules and a
+`RepositoryRole` (Admin, `actor_id: 5`) bypass so the maintainer can still
+cut releases. To recreate or inspect it by hand instead:
+
+1. Repo Settings -> Rules -> Rulesets -> New ruleset -> New tag ruleset.
+2. Target: `Include by pattern` -> `refs/tags/v*`.
+3. Enforcement status: Active.
+4. Rules: check "Restrict creations", "Restrict updates", "Restrict
+   deletions".
+5. Bypass list: add the "Admin" repository role (or the specific
+   maintainer account) so releases can still be cut; leave it empty and
+   *nobody* - including the maintainer - could push a release tag.
+6. Save. Verify with `gh api repos/OrchestratedChaos/curatarr/rulesets`.
+
+**Follow-up option (not implemented):** move the signature/fingerprint
+verification step itself into a separate reusable workflow
+(`.github/workflows/verify-release-tag.yml`) called with
+`uses: OrchestratedChaos/curatarr/.github/workflows/verify-release-tag.yml@main`
+from `release.yml`. Because the `@main` reference always resolves to the
+version of that file on the **default branch** (protected, PR-reviewed),
+not whatever's in the triggering tag's own tree, this would remove even
+the need to trust that a given tag's tree hasn't tampered with the
+verification logic itself - on top of, not instead of, the tag ruleset
+above.
