@@ -794,3 +794,281 @@ class TestBaseCacheTVShowBackfill:
 
         # Should not error - backfill isn't called for TV
         assert result is False  # Cache was up to date
+
+
+# ------------------------------------------------------------------------
+# #157 Phase 3: per-library recommendation loop - library threading,
+# cache-key back-compat, and collection/label naming.
+# ------------------------------------------------------------------------
+
+SINGLE_MOVIE_LIBRARY_CONFIG = {
+    'plex': {'url': 'http://localhost', 'token': 'abc', 'movie_library': 'Movies'},
+    'general': {},
+    'weights': {'genre': 0.5, 'actor': 0.5},
+}
+
+MULTI_MOVIE_LIBRARY_CONFIG = {
+    'plex': {'url': 'http://localhost', 'token': 'abc'},
+    'general': {},
+    'weights': {'genre': 0.5, 'actor': 0.5},
+    'libraries': [
+        {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+        {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'},
+    ],
+}
+
+LIB_MOVIES_4K = {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'}
+LIB_MOVIES = {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'}
+
+
+class TestBaseRecommenderLibraryInit:
+    """Tests for BaseRecommender.__init__ library threading (#157 Phase 3)."""
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_no_library_uses_legacy_resolution(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        """library=None (default) keeps the legacy library_config_key lookup."""
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender('/path/to/config.yml')
+
+        assert recommender.library is None
+        assert recommender.library_id is None
+        assert recommender.library_title == 'Movies'
+        assert recommender._is_multi_library is False
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_synthesized_single_library_passed_stays_single(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        """Even when the (single, synthesized) library object IS passed
+        through (as the new cli.py matrix loop always does), a single
+        library for this media type must NOT trigger multi-library
+        naming/cache behavior."""
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        synthesized = {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'}
+        recommender = ConcreteRecommender('/path/to/config.yml', library=synthesized)
+
+        assert recommender.library == synthesized
+        assert recommender.library_id == 'movies'
+        assert recommender.library_title == 'Movies'
+        assert recommender._is_multi_library is False
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_multi_library_sets_library_fields(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        """When >1 library shares this media type, the given library's
+        section/id are used and multi-library mode is flagged."""
+        mock_load.return_value = MULTI_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender('/path/to/config.yml', library=LIB_MOVIES_4K)
+
+        assert recommender.library_id == 'movies-4k'
+        assert recommender.library_title == 'Movies 4K'
+        assert recommender._is_multi_library is True
+
+
+class TestBaseRecommenderCacheLibraryPrefix:
+    """Tests for per-library cache filename back-compat (#157 Phase 3)."""
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_single_library_user_context_unprefixed(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        """Single-library install (legacy, no library passed): user context
+        has no library prefix, so watched_cache_{user}.json is unchanged."""
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': ['jason'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender('/path/to/config.yml')
+
+        assert recommender._get_user_context() == 'plex_jason'
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_synthesized_single_library_passed_stays_unprefixed(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        """Same as above but library IS passed (matrix loop always passes
+        one) - still unprefixed because it's the sole library for the
+        media type. This is the single-library byte-identical proof for
+        cache filenames."""
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': ['jason'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        synthesized = {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'}
+        recommender = ConcreteRecommender('/path/to/config.yml', library=synthesized)
+
+        assert recommender._get_user_context() == 'plex_jason'
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_multi_library_user_context_prefixed(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        """Multi-library install: user context gets a library-id prefix, so
+        watched caches for different libraries never collide."""
+        mock_load.return_value = MULTI_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': ['jason'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        movies_recommender = ConcreteRecommender('/path/to/config.yml', library=LIB_MOVIES)
+        movies_4k_recommender = ConcreteRecommender('/path/to/config.yml', library=LIB_MOVIES_4K)
+
+        assert movies_recommender._get_user_context() == 'movies_plex_jason'
+        assert movies_4k_recommender._get_user_context() == 'movies-4k_plex_jason'
+        # Distinct filenames - no cross-library cache collision
+        assert movies_recommender._get_user_context() != movies_4k_recommender._get_user_context()
+
+
+class TestBaseRecommenderCollectionNaming:
+    """Tests for per-library collection/label naming (#157 Phase 3)."""
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_single_library_no_suffix(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender('/path/to/config.yml')
+
+        assert recommender._library_suffix_for_collection_name() == ''
+        assert recommender._library_suffix_for_label() == ''
+        assert recommender._cache_library_prefix() == ''
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_multi_library_adds_suffixes(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        mock_load.return_value = MULTI_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender('/path/to/config.yml', library=LIB_MOVIES_4K)
+
+        assert recommender._library_suffix_for_collection_name() == ' (Movies 4K)'
+        assert recommender._library_suffix_for_label() == '_movies-4k'
+        assert recommender._cache_library_prefix() == 'movies-4k_'
+
+    @patch('recommenders.base.cleanup_old_collections')
+    @patch('recommenders.base.update_plex_collection')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_sync_plex_collection_single_library_name_unchanged(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup
+    ):
+        """Single-library install: collection name is byte-identical to
+        pre-Phase-3 (no suffix)."""
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender('/path/to/config.yml')
+        section = Mock()
+
+        recommender._sync_plex_collection(section, 'Recommended_alice', [Mock()])
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "🎬 Alice - Recommendation"
+        mock_cleanup.assert_called_once()
+        assert mock_cleanup.call_args[0][1] == "🎬 Alice - Recommendation"
+
+    @patch('recommenders.base.cleanup_old_collections')
+    @patch('recommenders.base.update_plex_collection')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_sync_plex_collection_multi_library_adds_suffix(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup
+    ):
+        """Multi-library install: collection name is suffixed with the
+        library name so same-named collections across libraries are
+        distinguishable."""
+        mock_load.return_value = MULTI_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender('/path/to/config.yml', library=LIB_MOVIES_4K)
+        section = Mock()
+
+        recommender._sync_plex_collection(section, 'Recommended_alice', [Mock()])
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "🎬 Alice - Recommendation (Movies 4K)"
+
+    @patch('recommenders.base.build_label_name')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_manage_plex_labels_qualifies_label_for_multi_library(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_build_label
+    ):
+        """Multi-library install: the internal Plex label is qualified with
+        the library id so labeling doesn't collide across libraries."""
+        mock_load.return_value = MULTI_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {'plex_users': ['alice'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+        mock_build_label.return_value = 'Recommended_movies-4k_alice'
+
+        recommender = ConcreteRecommender('/path/to/config.yml', library=LIB_MOVIES_4K)
+        recommender.plex = Mock()
+        # Short-circuit deep inside manage_plex_labels right after label_name
+        # is built, by making item-finding raise - we only care about the
+        # base_label passed into build_label_name.
+        recommender._find_plex_items_for_recs = Mock(side_effect=RuntimeError("stop"))
+
+        try:
+            recommender.manage_plex_labels([{'title': 'Test', 'year': 2020}])
+        except Exception:
+            pass
+
+        assert mock_build_label.called
+        base_label_arg = mock_build_label.call_args[0][0]
+        assert base_label_arg == 'Recommended_movies-4k'

@@ -8,7 +8,10 @@ from unittest.mock import Mock, patch, MagicMock
 from collections import Counter
 import json
 
-from recommenders.movie import MovieCache, PlexMovieRecommender, format_movie_output, adapt_root_config_to_legacy
+from recommenders.movie import (
+    MovieCache, PlexMovieRecommender, format_movie_output, adapt_root_config_to_legacy,
+    process_recommendations, main,
+)
 
 
 class TestMovieCache:
@@ -125,6 +128,64 @@ class TestPlexMovieRecommenderInit:
         recommender = PlexMovieRecommender('/path/to/config.yml')
 
         mock_cache.assert_called_once()
+
+class TestPlexMovieRecommenderLibraryParam:
+    """Tests for PlexMovieRecommender library threading (#157 Phase 3)."""
+
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_library_forwarded_to_base(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test that the library param reaches BaseRecommender and sets
+        library_id/library_title from the library dict, not the legacy
+        movie_library config key."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc', 'movie_library': 'Movies'},
+            'general': {},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'keyword': 0.2},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'},
+            ],
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+        mock_cache.return_value = Mock(cache={'movies': {}})
+
+        library = {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'}
+        recommender = PlexMovieRecommender('/path/to/config.yml', library=library)
+
+        assert recommender.library_id == 'movies-4k'
+        assert recommender.library_title == 'Movies 4K'
+
+    @patch('recommenders.movie.MovieCache')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_no_library_keeps_legacy_title(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """library=None (default) resolves library_title from the legacy
+        movie_library config key, unchanged from before Phase 3."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc', 'movie_library': 'Movies'},
+            'general': {},
+            'weights': {'genre': 0.3, 'director': 0.2, 'actor': 0.2, 'language': 0.1, 'keyword': 0.2},
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+        mock_cache.return_value = Mock(cache={'movies': {}})
+
+        recommender = PlexMovieRecommender('/path/to/config.yml')
+
+        assert recommender.library_id is None
+        assert recommender.library_title == 'Movies'
+
 
 class TestPlexMovieRecommenderWeights:
     """Tests for PlexMovieRecommender weight loading."""
@@ -376,6 +437,53 @@ class TestAdaptRootConfigToLegacy:
         result = adapt_root_config_to_legacy(config)
 
         assert isinstance(result, dict)
+
+
+class TestProcessRecommendationsLibraryParam:
+    """Tests for process_recommendations library forwarding (#157 Phase 3)."""
+
+    @patch('recommenders.movie.PlexMovieRecommender')
+    @patch('recommenders.movie.teardown_log_file')
+    @patch('recommenders.movie.setup_log_file')
+    def test_forwards_library_to_recommender(self, mock_setup_log, mock_teardown, mock_recommender_cls):
+        """process_recommendations passes library through to
+        PlexMovieRecommender's constructor unchanged."""
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': []}
+        mock_instance.config = {'general': {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        library = {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'}
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0, single_user='alice', library=library)
+
+        mock_recommender_cls.assert_called_once_with('/path/to/config.yml', single_user='alice', library=library)
+
+    @patch('recommenders.movie.PlexMovieRecommender')
+    @patch('recommenders.movie.teardown_log_file')
+    @patch('recommenders.movie.setup_log_file')
+    def test_defaults_library_to_none(self, mock_setup_log, mock_teardown, mock_recommender_cls):
+        """process_recommendations defaults library=None (legacy callers)."""
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': []}
+        mock_instance.config = {'general': {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0, single_user='alice')
+
+        mock_recommender_cls.assert_called_once_with('/path/to/config.yml', single_user='alice', library=None)
+
+
+class TestMainMediaTypeKey:
+    """Tests for main() passing media_type_key (#157 Phase 3)."""
+
+    @patch('recommenders.movie.run_recommender_main')
+    def test_main_passes_movie_media_type_key(self, mock_run_main):
+        main()
+
+        assert mock_run_main.call_count == 1
+        _, kwargs = mock_run_main.call_args
+        assert kwargs['media_type_key'] == 'movie'
+        assert kwargs['process_func'] is process_recommendations
 
 
 class TestPlexMovieRecommenderWatchedCount:

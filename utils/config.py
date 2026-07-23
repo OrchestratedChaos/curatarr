@@ -420,6 +420,12 @@ def adapt_config_for_media_type(root_config: Dict, media_type: str = 'movies') -
         'rating_multipliers': root_config.get('rating_multipliers', {}),
         'general': root_config.get('general', {}),
         'cache_dir': root_config.get('cache_dir', 'cache'),
+        # #157 Phase 3: pass through the raw multi-library config so
+        # get_libraries()/get_libraries_for_media_type() (called against this
+        # adapted config from utils/cli.py's per-library recommendation loop)
+        # see the real 'libraries' block instead of always falling back to
+        # the synthesized single-library default.
+        'libraries': root_config.get('libraries'),
     }
 
     # Add media-specific settings

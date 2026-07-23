@@ -442,7 +442,7 @@ class TestRunRecommenderMain:
         self, mock_setup_log, mock_parse_args, mock_root, mock_open, mock_yaml
     ):
         """Test exits with code 1 if config cannot be loaded."""
-        mock_parse_args.return_value = Mock(username=None, debug=False)
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
         mock_root.return_value = '/fake/root'
         mock_open.side_effect = FileNotFoundError("No config")
 
@@ -467,7 +467,7 @@ class TestRunRecommenderMain:
         mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test exits with code 1 if no users configured."""
-        mock_parse_args.return_value = Mock(username=None, debug=False)
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
         mock_root.return_value = '/fake/root'
         mock_yaml.return_value = {'plex': {'token': 'abc'}}  # No users
         mock_migrate.return_value = {}
@@ -494,7 +494,7 @@ class TestRunRecommenderMain:
         mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test calls process_func for each configured user."""
-        mock_parse_args.return_value = Mock(username=None, debug=False)
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
         mock_root.return_value = '/fake/root'
         mock_yaml.return_value = {
             'plex': {'token': 'abc'},
@@ -528,7 +528,7 @@ class TestRunRecommenderMain:
         mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test processes only specified user in single user mode."""
-        mock_parse_args.return_value = Mock(username='bob', debug=False)
+        mock_parse_args.return_value = Mock(username='bob', debug=False, library_id=None)
         mock_root.return_value = '/fake/root'
         mock_yaml.return_value = {
             'plex': {'token': 'abc'},
@@ -562,7 +562,7 @@ class TestRunRecommenderMain:
         mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test enables debug logging when --debug flag is set."""
-        mock_parse_args.return_value = Mock(username=None, debug=True)
+        mock_parse_args.return_value = Mock(username=None, debug=True, library_id=None)
         mock_root.return_value = '/fake/root'
         mock_yaml.return_value = {
             'plex': {'token': 'abc'},
@@ -601,7 +601,7 @@ class TestRunRecommenderMain:
         """Test run_recommender_main invokes rename migration and re-reads
         config.yml when a rename was migrated, so downstream processing
         sees the updated usernames."""
-        mock_parse_args.return_value = Mock(username=None, debug=False)
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
         mock_root.return_value = '/fake/root'
         mock_yaml.side_effect = [
             {'plex': {'token': 'abc'}, 'users': {'list': 'oldname'}},
@@ -636,7 +636,7 @@ class TestRunRecommenderMain:
         mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):
         """Test config.yml is only read once when no rename was detected."""
-        mock_parse_args.return_value = Mock(username=None, debug=False)
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
         mock_root.return_value = '/fake/root'
         mock_yaml.return_value = {'plex': {'token': 'abc'}, 'users': {'list': 'alice'}}
         mock_migrate.return_value = {}
@@ -649,3 +649,202 @@ class TestRunRecommenderMain:
         run_recommender_main('Movie', 'Test', mock_adapt, mock_process)
 
         assert mock_yaml.call_count == 1
+
+
+class TestRunRecommenderMainLibraryMatrixLoop:
+    """Tests for the #157 Phase 3 per-library (library x user) matrix loop."""
+
+    @patch('utils.cli.migrate_renamed_plex_users')
+    @patch('utils.cli.print_runtime')
+    @patch('utils.cli.resolve_admin_username')
+    @patch('utils.cli.setup_logging')
+    @patch('utils.cli.yaml.safe_load')
+    @patch('builtins.open', create=True)
+    @patch('utils.cli.get_project_root')
+    @patch('utils.cli.argparse.ArgumentParser.parse_args')
+    def test_single_library_install_matches_legacy_call_count(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml,
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """Regression: no 'libraries:' config (synthesized single library)
+        produces exactly one process_func call per user, with the
+        synthesized library passed as the 5th positional arg - same call
+        count as before Phase 3."""
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
+        mock_root.return_value = '/fake/root'
+        mock_yaml.return_value = {
+            'plex': {'token': 'abc', 'movie_library': 'Movies'},
+            'users': {'list': 'alice, bob'}
+        }
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(return_value={
+            'plex': {'token': 'abc', 'movie_library': 'Movies'},
+            'users': {'list': 'alice, bob'},
+            'general': {}
+        })
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main('Movie', 'Test', mock_adapt, mock_process, media_type_key='movie')
+
+        assert mock_process.call_count == 2
+        for call in mock_process.call_args_list:
+            library = call[0][4]
+            assert library is not None
+            assert library['id'] == 'movies'
+            assert library['section'] == 'Movies'
+
+    @patch('utils.cli.migrate_renamed_plex_users')
+    @patch('utils.cli.print_runtime')
+    @patch('utils.cli.resolve_admin_username')
+    @patch('utils.cli.setup_logging')
+    @patch('utils.cli.yaml.safe_load')
+    @patch('builtins.open', create=True)
+    @patch('utils.cli.get_project_root')
+    @patch('utils.cli.argparse.ArgumentParser.parse_args')
+    def test_two_libraries_two_users_yields_four_calls(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml,
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """2 libraries x 2 users = 4 process_func invocations, each with the
+        correct library object."""
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
+        mock_root.return_value = '/fake/root'
+        root_cfg = {
+            'plex': {'token': 'abc'},
+            'users': {'list': 'alice, bob'},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'},
+                {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'},
+            ],
+        }
+        mock_yaml.return_value = root_cfg
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, 'general': {}})
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main('Movie', 'Test', mock_adapt, mock_process, media_type_key='movie')
+
+        assert mock_process.call_count == 4
+        seen = set()
+        for call in mock_process.call_args_list:
+            resolved_user = call[0][3]
+            library = call[0][4]
+            seen.add((library['id'], resolved_user))
+        assert seen == {
+            ('movies', 'alice'), ('movies', 'bob'),
+            ('movies-4k', 'alice'), ('movies-4k', 'bob'),
+        }
+
+    @patch('utils.cli.migrate_renamed_plex_users')
+    @patch('utils.cli.print_runtime')
+    @patch('utils.cli.resolve_admin_username')
+    @patch('utils.cli.setup_logging')
+    @patch('utils.cli.yaml.safe_load')
+    @patch('builtins.open', create=True)
+    @patch('utils.cli.get_project_root')
+    @patch('utils.cli.argparse.ArgumentParser.parse_args')
+    def test_media_type_key_selects_tv_libraries(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml,
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """media_type_key='tv' only loops over tv libraries, not movie ones."""
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
+        mock_root.return_value = '/fake/root'
+        root_cfg = {
+            'plex': {'token': 'abc'},
+            'users': {'list': 'alice'},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'},
+                {'id': 'anime', 'name': 'Anime', 'section': 'Anime', 'media_type': 'tv'},
+            ],
+        }
+        mock_yaml.return_value = root_cfg
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, 'general': {}})
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main('TV Show', 'Test', mock_adapt, mock_process, media_type_key='tv')
+
+        assert mock_process.call_count == 2
+        lib_ids = {call[0][4]['id'] for call in mock_process.call_args_list}
+        assert lib_ids == {'tv-shows', 'anime'}
+
+    @patch('utils.cli.migrate_renamed_plex_users')
+    @patch('utils.cli.print_runtime')
+    @patch('utils.cli.resolve_admin_username')
+    @patch('utils.cli.setup_logging')
+    @patch('utils.cli.yaml.safe_load')
+    @patch('builtins.open', create=True)
+    @patch('utils.cli.get_project_root')
+    @patch('utils.cli.argparse.ArgumentParser.parse_args')
+    def test_library_flag_filters_to_single_library(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml,
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """--library <id> restricts processing to a single library."""
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id='movies-4k')
+        mock_root.return_value = '/fake/root'
+        root_cfg = {
+            'plex': {'token': 'abc'},
+            'users': {'list': 'alice'},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                {'id': 'movies-4k', 'name': 'Movies 4K', 'section': 'Movies 4K', 'media_type': 'movie'},
+            ],
+        }
+        mock_yaml.return_value = root_cfg
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, 'general': {}})
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main('Movie', 'Test', mock_adapt, mock_process, media_type_key='movie')
+
+        assert mock_process.call_count == 1
+        assert mock_process.call_args[0][4]['id'] == 'movies-4k'
+
+    @patch('utils.cli.migrate_renamed_plex_users')
+    @patch('utils.cli.print_runtime')
+    @patch('utils.cli.resolve_admin_username')
+    @patch('utils.cli.setup_logging')
+    @patch('utils.cli.yaml.safe_load')
+    @patch('builtins.open', create=True)
+    @patch('utils.cli.get_project_root')
+    @patch('utils.cli.argparse.ArgumentParser.parse_args')
+    def test_library_flag_unknown_id_exits(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml,
+        mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """--library <unknown id> exits with an error instead of silently
+        processing every library."""
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id='nope')
+        mock_root.return_value = '/fake/root'
+        mock_yaml.return_value = {
+            'plex': {'token': 'abc'},
+            'users': {'list': 'alice'}
+        }
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, 'general': {}})
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_recommender_main('Movie', 'Test', mock_adapt, mock_process, media_type_key='movie')
+
+        assert exc_info.value.code == 1
+        mock_process.assert_not_called()

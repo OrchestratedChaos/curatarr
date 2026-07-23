@@ -8,7 +8,10 @@ from unittest.mock import Mock, patch, MagicMock
 from collections import Counter
 import json
 
-from recommenders.tv import ShowCache, PlexTVRecommender, format_show_output, adapt_root_config_to_legacy
+from recommenders.tv import (
+    ShowCache, PlexTVRecommender, format_show_output, adapt_root_config_to_legacy,
+    process_recommendations, main,
+)
 
 
 class TestShowCache:
@@ -189,6 +192,72 @@ class TestPlexTVRecommenderInit:
         recommender = PlexTVRecommender('/path/to/config.yml')
 
         assert recommender.library_title == 'My TV Shows'
+
+
+class TestPlexTVRecommenderLibraryParam:
+    """Tests for PlexTVRecommender library threading (#157 Phase 3)."""
+
+    @patch('recommenders.tv.ShowCache')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_library_forwarded_to_base(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """Test that the library param reaches BaseRecommender and sets
+        library_id/library_title from the library dict, not the legacy
+        tv_library config key."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc', 'tv_library': 'TV Shows'},
+            'general': {},
+            'weights': {},
+            'libraries': [
+                {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'},
+                {'id': 'anime', 'name': 'Anime', 'section': 'Anime', 'media_type': 'tv'},
+            ],
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={'shows': {}})
+
+        library = {'id': 'anime', 'name': 'Anime', 'section': 'Anime', 'media_type': 'tv'}
+        recommender = PlexTVRecommender('/path/to/config.yml', library=library)
+
+        assert recommender.library_id == 'anime'
+        assert recommender.library_title == 'Anime'
+
+    @patch('recommenders.tv.ShowCache')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_no_library_keeps_legacy_title(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache):
+        """library=None (default) resolves library_title from the legacy
+        tv_library config key, unchanged from before Phase 3."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc', 'tv_library': 'TV Shows'},
+            'general': {},
+            'weights': {}
+        }
+        mock_users.return_value = {'plex_users': ['user1'], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={'shows': {}})
+
+        recommender = PlexTVRecommender('/path/to/config.yml')
+
+        assert recommender.library_id is None
+        assert recommender.library_title == 'TV Shows'
 
 
 class TestPlexTVRecommenderWeights:
@@ -935,3 +1004,50 @@ class TestExtractGenresFromShow:
 
         assert 'drama' in result
         assert 'thriller' in result
+
+
+class TestProcessRecommendationsLibraryParam:
+    """Tests for process_recommendations library forwarding (#157 Phase 3)."""
+
+    @patch('recommenders.tv.PlexTVRecommender')
+    @patch('recommenders.tv.teardown_log_file')
+    @patch('recommenders.tv.setup_log_file')
+    def test_forwards_library_to_recommender(self, mock_setup_log, mock_teardown, mock_recommender_cls):
+        """process_recommendations passes library through to
+        PlexTVRecommender's constructor unchanged."""
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': []}
+        mock_instance.config = {'general': {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        library = {'id': 'anime', 'name': 'Anime', 'section': 'Anime', 'media_type': 'tv'}
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0, single_user='alice', library=library)
+
+        mock_recommender_cls.assert_called_once_with('/path/to/config.yml', 'alice', library=library)
+
+    @patch('recommenders.tv.PlexTVRecommender')
+    @patch('recommenders.tv.teardown_log_file')
+    @patch('recommenders.tv.setup_log_file')
+    def test_defaults_library_to_none(self, mock_setup_log, mock_teardown, mock_recommender_cls):
+        """process_recommendations defaults library=None (legacy callers)."""
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {'plex_recommendations': []}
+        mock_instance.config = {'general': {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({'general': {}}, '/path/to/config.yml', 0, single_user='alice')
+
+        mock_recommender_cls.assert_called_once_with('/path/to/config.yml', 'alice', library=None)
+
+
+class TestMainMediaTypeKey:
+    """Tests for main() passing media_type_key (#157 Phase 3)."""
+
+    @patch('recommenders.tv.run_recommender_main')
+    def test_main_passes_tv_media_type_key(self, mock_run_main):
+        main()
+
+        assert mock_run_main.call_count == 1
+        _, kwargs = mock_run_main.call_args
+        assert kwargs['media_type_key'] == 'tv'
+        assert kwargs['process_func'] is process_recommendations

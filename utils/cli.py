@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional
 import yaml
 from plexapi.myplex import MyPlexAccount
 
-from .config import __version__
+from .config import __version__, get_libraries_for_media_type
 from .display import (
     CYAN, GREEN, RESET,
     TeeLogger,
@@ -176,16 +176,26 @@ def run_recommender_main(
     media_type: str,
     description: str,
     adapt_config_func: Callable[[Dict], Dict],
-    process_func: Callable[[Dict, str, int, Optional[str]], None]
+    process_func: Callable[[Dict, str, int, Optional[str], Optional[Dict]], None],
+    media_type_key: str = 'movie'
 ):
     """
     Common main entry point for recommenders.
+
+    Loops library-outer, user-inner (#157 Phase 3): for each configured
+    library matching media_type_key, process every user against that
+    library. Single-library installs (no 'libraries:' config, or exactly
+    one library of this media type) synthesize a single library entry, so
+    this collapses back to the original one-loop-per-user behavior.
 
     Args:
         media_type: 'Movie' or 'TV Show' for display
         description: argparse description
         adapt_config_func: Function to adapt root config to media-specific format
-        process_func: Function to process recommendations for a user
+        process_func: Function to process recommendations for a user. Receives
+            (user_config, config_path, log_retention_days, resolved_user, library)
+        media_type_key: 'movie' or 'tv' - selects which libraries to loop over
+            (see utils.config.get_libraries_for_media_type)
     """
     # Ensure UTF-8 output
     if sys.stdout.encoding.lower() != 'utf-8':
@@ -195,6 +205,8 @@ def run_recommender_main(
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('username', nargs='?', help='Process recommendations for only this user')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--library', dest='library_id', default=None,
+                         help='Process recommendations for only this library id')
     args = parser.parse_args()
 
     start_time = datetime.now()
@@ -245,18 +257,37 @@ def run_recommender_main(
         log_error("No users configured. Please configure plex_users or managed_users in config.yml")
         sys.exit(1)
 
-    # Process each user
+    # Resolve libraries for this media type (#157 Phase 3). A single-library
+    # install (no 'libraries:' config, or exactly one explicit library of
+    # this media type) always resolves to exactly one entry here, so the
+    # loop below collapses to the original one-pass-per-user behavior.
+    libraries = get_libraries_for_media_type(base_config, media_type_key)
+
+    if args.library_id:
+        libraries = [lib for lib in libraries if lib.get('id') == args.library_id]
+        if not libraries:
+            log_error(f"Library '{args.library_id}' not found for media type '{media_type_key}'")
+            sys.exit(1)
+
+    multi_library = len(libraries) > 1
+
+    # Process each library x user
     plex_token = base_config.get('plex', {}).get('token', '')
-    for user in all_users:
-        print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
-        print("-" * 50)
+    for library in libraries:
+        if multi_library:
+            print(f"\n{CYAN}=== Library: {library['name']} ==={RESET}")
+            print("-" * 50)
 
-        resolved_user = resolve_admin_username(user, plex_token)
-        user_config = update_config_for_user(base_config, resolved_user)
+        for user in all_users:
+            print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
+            print("-" * 50)
 
-        process_func(user_config, config_path, log_retention_days, resolved_user)
+            resolved_user = resolve_admin_username(user, plex_token)
+            user_config = update_config_for_user(base_config, resolved_user)
 
-        print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
-        print("-" * 50)
+            process_func(user_config, config_path, log_retention_days, resolved_user, library)
+
+            print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
+            print("-" * 50)
 
     print_runtime(start_time)
