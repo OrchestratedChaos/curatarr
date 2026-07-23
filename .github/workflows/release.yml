@@ -138,6 +138,11 @@ jobs:
   # match), so this job only runs at all once that one has succeeded.
   # No independent re-verification here on purpose - one gate, not two
   # that could drift out of sync.
+  #
+  # macOS is deliberately NOT in this matrix - see build-macos-universal
+  # below. It needs a different toolchain (a universal2 Python instead
+  # of actions/setup-python's single-arch macOS builds), so it can't
+  # share these steps.
   # ---------------------------------------------------------------------
   build-binaries:
     name: Build binary (${{ matrix.asset_name }})
@@ -150,14 +155,11 @@ jobs:
           - os: windows-latest
             asset_name: curatarr-windows-x86_64.exe
             dist_name: curatarr.exe
-          - os: macos-latest
-            asset_name: curatarr-macos-arm64
-            dist_name: curatarr
-          - os: macos-13
-            asset_name: curatarr-macos-x86_64
-            dist_name: curatarr
           - os: ubuntu-latest
             asset_name: curatarr-linux-x86_64
+            dist_name: curatarr
+          - os: ubuntu-24.04-arm
+            asset_name: curatarr-linux-arm64
             dist_name: curatarr
     steps:
       - name: Checkout
@@ -211,4 +213,143 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" \
             "$ASSET_NAME" \
             "$ASSET_NAME.sha256" \
+            --clobber
+
+  # ---------------------------------------------------------------------
+  # macOS universal2 binary - one file that runs natively on both Intel
+  # and Apple Silicon Macs, replacing the old two-job split (a
+  # macos-latest arm64-only build + a macos-13 Intel-only build that had
+  # started stalling on GitHub's macos-13 runner capacity).
+  #
+  # This can't reuse the build-binaries matrix above because
+  # actions/setup-python's macOS Python builds are single-arch only -
+  # separate darwin-arm64 and darwin-x64 downloads, never a universal2
+  # one (see actions/python-versions' versions-manifest.json) - so a
+  # universal2 PyInstaller build needs python.org's own official
+  # universal2 installer instead, installed system-wide (GitHub-hosted
+  # runners have passwordless sudo) so its hardcoded
+  # /Library/Frameworks/Python.framework install-name references
+  # resolve correctly.
+  #
+  # A handful of curatarr's macOS dependencies also don't publish a
+  # macosx_*_universal2 wheel on PyPI - only separate x86_64/arm64 ones
+  # (pyyaml, ruamel.yaml.clib, and markupsafe, as of the versions
+  # pinned in requirements.txt/requirements-ui.txt - checked directly
+  # against PyPI's JSON API when this job was written). Those three get
+  # downloaded as both single-arch wheels and fused into a real
+  # universal2 wheel with `delocate-merge` (from the `delocate` package)
+  # before the PyInstaller build runs. If a future dependency bump adds
+  # another compiled-extension package without a universal2 wheel, this
+  # job will fail loudly at the PyInstaller step (single-arch .so bundled
+  # into a universal2 EXE) rather than silently shipping a broken
+  # binary - see the "Verify the binary is truly universal2" step below,
+  # which is exactly the same lipo check used to prove this locally.
+  #
+  # Verified locally on Apple Silicon (M1) before this job was written:
+  # `lipo -archs dist/curatarr` -> "x86_64 arm64", a native arm64 launch
+  # served HTTP 200, and `arch -x86_64 ./dist/curatarr` (Rosetta) also
+  # served HTTP 200 (confirmed via `vmmap` showing "Code Type: X86-64
+  # (translated)").
+  # ---------------------------------------------------------------------
+  build-macos-universal:
+    name: Build binary (curatarr-macos-universal)
+    needs: release
+    runs-on: macos-latest
+    env:
+      # Latest 3.12.x for which python.org still publishes a macOS
+      # universal2 installer (.pkg) - 3.12.11+ dropped it, source-only.
+      # SHA256 pinned against the exact file downloaded from
+      # python.org's own https:// (defense in depth beyond TLS, same
+      # pinning convention as requirements.lock). Bump deliberately.
+      PYTHON_VERSION: "3.12.10"
+      PYTHON_PKG_SHA256: "8373e58da4ea146b3eb1c1f9834f19a319440b6b679b06050b1f9ee3237aa8e4"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install python.org universal2 Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sL -o python-universal2.pkg \
+            "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-macos11.pkg"
+          echo "${PYTHON_PKG_SHA256}  python-universal2.pkg" | shasum -a 256 -c -
+          sudo installer -pkg python-universal2.pkg -target /
+
+          PY_BIN="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+          echo "PYTHON_BIN=$PY_BIN" >> "$GITHUB_ENV"
+          "$PY_BIN" --version
+          echo "python3.12 archs: $(lipo -archs "$PY_BIN")"
+
+      - name: Create venv and install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON_BIN" -m venv .venv-universal2
+          source .venv-universal2/bin/activate
+          python -m pip install --upgrade pip
+          pip install delocate
+          pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt
+
+      - name: Fuse single-arch-only wheels into universal2
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv-universal2/bin/activate
+          mkdir -p fuse/arm64 fuse/x86_64 fuse/out
+
+          # Single-arch-only-on-PyPI deps that need delocate-merge fusing
+          # into a universal2 wheel - see the job comment above.
+          THIN_WHEEL_DEPS=(pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3)
+
+          pip download --no-deps --only-binary=:all: --python-version 312 \
+            --implementation cp --platform macosx_11_0_arm64 \
+            -d fuse/arm64 "${THIN_WHEEL_DEPS[@]}"
+          pip download --no-deps --only-binary=:all: --python-version 312 \
+            --implementation cp --platform macosx_10_13_x86_64 \
+            -d fuse/x86_64 "${THIN_WHEEL_DEPS[@]}"
+
+          for arm_whl in fuse/arm64/*.whl; do
+            base="$(basename "$arm_whl")"
+            prefix="${base%-macosx_*}"
+            x86_whl="$(ls fuse/x86_64/${prefix}-macosx_*x86_64.whl)"
+            echo "fusing: $arm_whl + $x86_whl"
+            delocate-merge "$arm_whl" "$x86_whl" -w fuse/out
+          done
+
+          pip install --force-reinstall --no-deps fuse/out/*.whl
+
+      - name: Build binary with PyInstaller (universal2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv-universal2/bin/activate
+          PYINSTALLER_TARGET_ARCH=universal2 pyinstaller --clean --noconfirm curatarr.spec
+
+      - name: Verify the binary is truly universal2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHES="$(lipo -archs dist/curatarr)"
+          echo "dist/curatarr archs: $ARCHES"
+          echo "$ARCHES" | grep -q x86_64
+          echo "$ARCHES" | grep -q arm64
+
+      - name: Rename binary and compute SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv dist/curatarr curatarr-macos-universal
+          shasum -a 256 curatarr-macos-universal > curatarr-macos-universal.sha256
+          cat curatarr-macos-universal.sha256
+
+      - name: Upload binary to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$GITHUB_REF_NAME" \
+            curatarr-macos-universal \
+            curatarr-macos-universal.sha256 \
             --clobber
