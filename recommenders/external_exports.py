@@ -19,7 +19,7 @@ from utils import (
     create_mdblist_client, MDBListAPIError,
     create_simkl_client, SimklAPIError, SimklAuthError,
     MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV,
-    get_libraries, get_libraries_for_media_type, get_effective_arr_config,
+    get_libraries_for_media_type, get_effective_arr_config,
 )
 
 logger = logging.getLogger('curatarr')
@@ -309,6 +309,13 @@ def _resolve_library_groups(
     keeps single-library installs routing identically to the pre-Phase-2
     flow while the plumbing is ready for Phase 3.
 
+    #157 Phase 3.5: an explicit library_id is now resolved against
+    get_libraries_for_media_type(config, media_type) instead of the
+    unfiltered get_libraries(config) - media-type-aware, so a movie
+    library's id can never resolve inside export_to_sonarr's TV grouping
+    (or a TV library's id inside export_to_radarr's movie grouping) and
+    silently build a client against the wrong *arr instance.
+
     Args:
         config: Root configuration dictionary
         users_to_export: Filtered per-user recommendation payloads
@@ -324,8 +331,8 @@ def _resolve_library_groups(
 
     resolved = []
     for library_id, group_users in groups.items():
+        candidates = get_libraries_for_media_type(config, media_type)
         if library_id is None:
-            candidates = get_libraries_for_media_type(config, media_type)
             if not candidates:
                 log_warning(
                     f"Export: no '{media_type}' library configured - skipping "
@@ -335,7 +342,7 @@ def _resolve_library_groups(
             library = candidates[0]
         else:
             library = next(
-                (lib for lib in get_libraries(config) if lib.get('id') == library_id),
+                (lib for lib in candidates if lib.get('id') == library_id),
                 None
             )
             if library is None:

@@ -703,6 +703,100 @@ class TestExportToSonarrPerLibraryRouting:
         assert kwargs['tag_ids'] == ['tag-Curatarr']            # falls back to global
 
 
+class TestResolveLibraryGroupsMediaTypeAware:
+    """Tests for #157 Phase 3.5: _resolve_library_groups resolves an
+    explicit library_id against the media-type-filtered library list, so a
+    library_id belonging to the wrong media type can never leak into the
+    wrong *arr's routing (e.g. a tv library id building a Radarr client)."""
+
+    @patch('recommenders.external_exports.create_radarr_client_from')
+    @patch('recommenders.external_exports.create_radarr_client')
+    def test_tv_library_id_skipped_by_radarr_export(self, mock_create, mock_create_from):
+        """A tv library_id never resolves in export_to_radarr's grouping -
+        no Radarr client is built for it."""
+        mock_create.return_value = _mock_radarr_client()
+
+        config = {
+            'radarr': {
+                'enabled': True, 'auto_sync': True, 'user_mode': 'combined',
+                'url': 'http://radarr:7878', 'api_key': 'global-key',
+            },
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'media_type': 'movie', 'arr': {}},
+                {'id': 'tv-shows', 'name': 'TV Shows', 'media_type': 'tv', 'arr': {}},
+            ],
+        }
+        all_users_data = [
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'tv-shows',
+                'movies_categorized': {'acquire': [{'tmdb_id': 100}], 'user_services': {}, 'other_services': {}},
+            },
+        ]
+
+        export_to_radarr(config, all_users_data, 'tmdb-key')
+
+        mock_create_from.assert_not_called()
+
+    @patch('recommenders.external_exports.create_sonarr_client_from')
+    @patch('recommenders.external_exports.create_sonarr_client')
+    def test_movie_library_id_skipped_by_sonarr_export(self, mock_create, mock_create_from):
+        """A movie library_id never resolves in export_to_sonarr's grouping -
+        no Sonarr client is built for it."""
+        mock_create.return_value = _mock_sonarr_client()
+
+        config = {
+            'sonarr': {
+                'enabled': True, 'auto_sync': True, 'user_mode': 'combined',
+                'url': 'http://sonarr:8989', 'api_key': 'global-key',
+            },
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'media_type': 'movie', 'arr': {}},
+                {'id': 'tv-shows', 'name': 'TV Shows', 'media_type': 'tv', 'arr': {}},
+            ],
+        }
+        all_users_data = [
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'movies',
+                'shows_categorized': {'acquire': [{'tvdb_id': 100}], 'user_services': {}, 'other_services': {}},
+            },
+        ]
+
+        export_to_sonarr(config, all_users_data, 'tmdb-key')
+
+        mock_create_from.assert_not_called()
+
+    @patch('recommenders.external_exports.create_radarr_client_from')
+    @patch('recommenders.external_exports.create_radarr_client')
+    def test_movie_library_id_still_routes_by_radarr_export(self, mock_create, mock_create_from):
+        """Sanity check paired with the skip test above: a correctly-typed
+        movie library_id still resolves and routes normally."""
+        mock_create.return_value = _mock_radarr_client()
+        client = _mock_radarr_client()
+        mock_create_from.return_value = client
+
+        config = {
+            'radarr': {
+                'enabled': True, 'auto_sync': True, 'user_mode': 'combined',
+                'url': 'http://radarr:7878', 'api_key': 'global-key',
+            },
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'media_type': 'movie', 'arr': {}},
+                {'id': 'tv-shows', 'name': 'TV Shows', 'media_type': 'tv', 'arr': {}},
+            ],
+        }
+        all_users_data = [
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'movies',
+                'movies_categorized': {'acquire': [{'tmdb_id': 100}], 'user_services': {}, 'other_services': {}},
+            },
+        ]
+
+        export_to_radarr(config, all_users_data, 'tmdb-key')
+
+        mock_create_from.assert_called_once_with('http://radarr:7878', 'global-key')
+        client.add_movie.assert_called_once()
+
+
 class TestExportToMdblist:
     """Tests for export_to_mdblist function"""
 

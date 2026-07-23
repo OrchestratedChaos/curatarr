@@ -2328,6 +2328,12 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     # correctly; per-item library_id (see _stamp_library_id above) already
     # carries the real provenance for anything that inspects individual
     # recommendations.
+    #
+    # This function is only ever called by main() for the single-per-media-
+    # type case (see the fan_out branch below and its docstring on
+    # process_user_movie_library/process_user_tv_library) - it is
+    # deliberately left untouched by #157 Phase 3.5 so that path stays
+    # byte-identical to Phase 3.
     return {
         'username': username,
         'display_name': display_name,
@@ -2338,6 +2344,488 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
         'user_services': user_services,
         'library_id': None
     }
+
+
+def _empty_categorized() -> Dict:
+    """A freshly-allocated, empty categorize_by_streaming_service()-shaped
+    dict (#157 Phase 3.5) - used to fill in the "other" media type's slot
+    when a fan-out run only covers one media type."""
+    return {'user_services': {}, 'other_services': {}, 'acquire': [], 'all_items': []}
+
+
+def process_user_movie_library(config, plex, username, library):
+    """Process external MOVIE recommendations for one user against ONE
+    movie library (#157 Phase 3.5 fan-out).
+
+    process_user() handles movies and shows together against a single
+    "primary" library per media type and can't safely fan out to more (see
+    its docstring) - main() uses this function instead once a config has
+    more than one movie library, calling it once per (movie library, user)
+    so each library gets its own discovery pass, its own qualified cache
+    files, its own qualified markdown watchlist, and items stamped with
+    this library's real id for #157 Phase 2 export routing.
+
+    Args:
+        config: Root configuration dictionary
+        plex: Connected PlexServer instance
+        username: Plex username to process
+        library: Normalized movie library dict (see utils.config.get_libraries)
+
+    Returns:
+        Dict shaped like process_user()'s return value: shows_categorized is
+        an empty categorized dict, show_profile is None, and library_id is
+        this library's real id (never None - unlike process_user()).
+    """
+    user_prefs = config.get('users', {}).get('preferences', {}).get(username, {})
+    display_name = user_prefs.get('display_name', username)
+
+    print(f"\n{GREEN}Processing external movie recommendations for: {display_name} ({library['name']}){RESET}")
+
+    movie_library_name = library['section']
+
+    # Cache/markdown filenames stay legacy (unqualified) unless this install
+    # has more than one movie library - same back-compat rule as
+    # process_user()/the internal recommenders (#157 Phase 3).
+    is_multi = len(get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)) > 1
+    cache_lib_id = library['id'] if is_multi else None
+
+    library_movies = get_library_items(plex, movie_library_name, 'movie')
+    print(f"{CYAN}Library has {len(library_movies['titles'])} movies{RESET}")
+
+    movie_cache = load_cache(display_name, 'movies', lib_id=cache_lib_id)
+    ignore_list = load_ignore_list(display_name)
+
+    external_config = config.get('external_recommendations', {})
+    language_filter = external_config.get('language')
+
+    if language_filter:
+        filtered_movies = 0
+        for tmdb_id, item in list(movie_cache.items()):
+            item_lang = item.get('original_language', '')
+            if item_lang != language_filter:
+                del movie_cache[tmdb_id]
+                filtered_movies += 1
+        if filtered_movies:
+            print(f"{CYAN}Filtered {filtered_movies} movies (not {language_filter.upper()}){RESET}")
+
+    removed_movies = []
+    for tmdb_id, item in list(movie_cache.items()):
+        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_movies):
+            removed_movies.append(tmdb_id)
+            del movie_cache[tmdb_id]
+            print(f"  Removed movie from cache: {item.get('title')} (in library)")
+    if removed_movies:
+        print(f"{GREEN}Removed {len(removed_movies)} movies (now in library){RESET}")
+
+    removed_ignored = 0
+    for tmdb_id, item in list(movie_cache.items()):
+        if item['title'] in ignore_list:
+            del movie_cache[tmdb_id]
+            removed_ignored += 1
+    if removed_ignored:
+        print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
+
+    movie_profile = load_user_profile_from_cache(config, username, 'movie')
+    if not movie_profile:
+        movie_profile = build_user_profile(plex, config, username, 'movie')
+
+    tmdb_api_key = get_tmdb_config(config)['api_key']
+    trakt_config = config.get('trakt', {})
+    export_config = trakt_config.get('export', {})
+    user_mode = export_config.get('user_mode', 'mapping')
+    plex_users = export_config.get('plex_users', [])
+
+    should_enhance = True
+    if user_mode == 'mapping' and plex_users:
+        plex_users_lower = [u.lower() for u in plex_users]
+        if username.lower() not in plex_users_lower:
+            should_enhance = False
+
+    if should_enhance:
+        cache_dir = os.path.join(get_project_root(), config.get('cache_dir', 'cache'))
+        if movie_profile:
+            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, cache_dir, 'movie')
+
+    movie_limit = external_config.get('movie_limit', 50)
+    min_relevance = external_config.get('min_relevance_score', 0.65)
+
+    exclude_genres = user_prefs.get('exclude_genres', [])
+    if exclude_genres:
+        print(f"Excluding genres: {', '.join(exclude_genres)}")
+
+    quality_movies = [m for m in movie_cache.values() if m.get('score', 0) >= min_relevance]
+    movie_deficit = max(0, movie_limit - len(quality_movies))
+
+    cached_movie_ids = {int(tid) for tid in movie_cache.keys()}
+
+    import_config = trakt_config.get('import', {})
+    exclude_movie_imdb_ids = set()
+
+    if movie_deficit > 0 and import_config.get('exclude_watchlist', True):
+        trakt_client = get_authenticated_trakt_client(config)
+        if trakt_client:
+            print("Loading Trakt watchlist for exclusion...")
+            exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids('movies')
+            if exclude_movie_imdb_ids:
+                print(f"Excluding {len(exclude_movie_imdb_ids)} movies from Trakt watchlist")
+
+    if movie_deficit == 0:
+        print(f"{GREEN}Movie cache healthy ({len(quality_movies)} quality items), skipping discovery{RESET}")
+        new_movies = []
+    else:
+        print(f"{CYAN}Movie cache needs {movie_deficit} items, discovering...{RESET}")
+        new_movies = find_similar_content_with_profile(
+            tmdb_api_key,
+            movie_profile,
+            library_movies,
+            'movie',
+            limit=movie_deficit,
+            exclude_genres=exclude_genres,
+            min_relevance_score=min_relevance,
+            config=config,
+            exclude_imdb_ids=exclude_movie_imdb_ids,
+            exclude_cached_ids=cached_movie_ids
+        )
+
+    for movie in new_movies:
+        tmdb_id = str(movie['tmdb_id'])
+        if tmdb_id in movie_cache:
+            old_score = movie_cache[tmdb_id].get('score', 0)
+            movie_cache[tmdb_id]['score'] = movie['score']
+            movie_cache[tmdb_id]['rating'] = movie['rating']
+            movie_cache[tmdb_id]['vote_count'] = movie.get('vote_count', 0)
+            if abs(movie['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
+                print(f"    Updated score: {movie['title']} {old_score:.1%} -> {movie['score']:.1%}")
+        else:
+            movie_cache[tmdb_id] = {
+                'tmdb_id': movie['tmdb_id'],
+                'title': movie['title'],
+                'year': movie['year'],
+                'rating': movie['rating'],
+                'vote_count': movie.get('vote_count', 0),
+                'score': movie['score'],
+                'original_language': movie.get('original_language', ''),
+                'added_date': datetime.now().isoformat()
+            }
+
+    trimmed_movies = 0
+    if len(movie_cache) > movie_limit:
+        sorted_movies = sorted(movie_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        keep_ids = {tmdb_id for tmdb_id, _ in sorted_movies[:movie_limit]}
+        for tmdb_id in list(movie_cache.keys()):
+            if tmdb_id not in keep_ids:
+                del movie_cache[tmdb_id]
+                trimmed_movies += 1
+    if trimmed_movies:
+        print(f"{YELLOW}Trimmed cache: {trimmed_movies} movies (replaced by better recs){RESET}")
+
+    save_cache(display_name, 'movies', movie_cache, lib_id=cache_lib_id)
+
+    all_movies = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
+    high_movies = [m for m in all_movies if m['score'] >= min_relevance]
+    low_movies = [m for m in all_movies if m['score'] < min_relevance]
+    movies_list = high_movies[:movie_limit]
+    if len(movies_list) < movie_limit:
+        movies_list.extend(low_movies[:movie_limit - len(movies_list)])
+
+    print(f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance*100)}% threshold){RESET}")
+
+    user_services = config.get('streaming_services', [])
+
+    print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
+    movies_categorized = categorize_by_streaming_service(movies_list, tmdb_api_key, user_services, 'movie')
+
+    # Item provenance (#157 Phase 3 stamping, Phase 3.5 fan-out): every item
+    # from a scoped single-library run always carries this library's real id.
+    _stamp_library_id(movies_categorized, library['id'])
+
+    shows_categorized = _empty_categorized()
+
+    project_root = get_project_root()
+    output_dir = os.path.join(project_root, 'recommendations', 'external')
+    library_suffix = f"_{library['id']}" if is_multi else ''
+    generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir, library_suffix=library_suffix)
+
+    total_movies = sum(len(items) for items in movies_categorized['user_services'].values()) + \
+                   sum(len(items) for items in movies_categorized['other_services'].values()) + \
+                   len(movies_categorized['acquire'])
+
+    print(f"{GREEN}Processed: {total_movies} movies (library: {library['name']}){RESET}")
+    print(f"\nExternal movie recommendation process completed for {display_name} ({library['name']})!")
+
+    return {
+        'username': username,
+        'display_name': display_name,
+        'movies_categorized': movies_categorized,
+        'shows_categorized': shows_categorized,
+        'movie_profile': movie_profile,
+        'show_profile': None,
+        'user_services': user_services,
+        'library_id': library['id']
+    }
+
+
+def process_user_tv_library(config, plex, username, library):
+    """Process external TV recommendations for one user against ONE tv
+    library (#157 Phase 3.5 fan-out). TV sibling of process_user_movie_library
+    - see its docstring for the rationale.
+
+    Args:
+        config: Root configuration dictionary
+        plex: Connected PlexServer instance
+        username: Plex username to process
+        library: Normalized tv library dict (see utils.config.get_libraries)
+
+    Returns:
+        Dict shaped like process_user()'s return value: movies_categorized is
+        an empty categorized dict, movie_profile is None, and library_id is
+        this library's real id (never None - unlike process_user()).
+    """
+    user_prefs = config.get('users', {}).get('preferences', {}).get(username, {})
+    display_name = user_prefs.get('display_name', username)
+
+    print(f"\n{GREEN}Processing external TV recommendations for: {display_name} ({library['name']}){RESET}")
+
+    tv_library_name = library['section']
+
+    is_multi = len(get_libraries_for_media_type(config, MEDIA_TYPE_TV)) > 1
+    cache_lib_id = library['id'] if is_multi else None
+
+    library_shows = get_library_items(plex, tv_library_name, 'show')
+    print(f"{CYAN}Library has {len(library_shows['titles'])} TV shows{RESET}")
+
+    show_cache = load_cache(display_name, 'shows', lib_id=cache_lib_id)
+    ignore_list = load_ignore_list(display_name)
+
+    external_config = config.get('external_recommendations', {})
+    language_filter = external_config.get('language')
+
+    if language_filter:
+        filtered_shows = 0
+        for tmdb_id, item in list(show_cache.items()):
+            item_lang = item.get('original_language', '')
+            if item_lang != language_filter:
+                del show_cache[tmdb_id]
+                filtered_shows += 1
+        if filtered_shows:
+            print(f"{CYAN}Filtered {filtered_shows} shows (not {language_filter.upper()}){RESET}")
+
+    removed_shows = []
+    for tmdb_id, item in list(show_cache.items()):
+        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_shows):
+            removed_shows.append(tmdb_id)
+            del show_cache[tmdb_id]
+            print(f"  Removed show from cache: {item.get('title')} (in library)")
+    if removed_shows:
+        print(f"{GREEN}Removed {len(removed_shows)} shows (now in library){RESET}")
+
+    removed_ignored = 0
+    for tmdb_id, item in list(show_cache.items()):
+        if item['title'] in ignore_list:
+            del show_cache[tmdb_id]
+            removed_ignored += 1
+    if removed_ignored:
+        print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
+
+    show_profile = load_user_profile_from_cache(config, username, 'tv')
+    if not show_profile:
+        show_profile = build_user_profile(plex, config, username, 'show')
+
+    tmdb_api_key = get_tmdb_config(config)['api_key']
+    trakt_config = config.get('trakt', {})
+    export_config = trakt_config.get('export', {})
+    user_mode = export_config.get('user_mode', 'mapping')
+    plex_users = export_config.get('plex_users', [])
+
+    should_enhance = True
+    if user_mode == 'mapping' and plex_users:
+        plex_users_lower = [u.lower() for u in plex_users]
+        if username.lower() not in plex_users_lower:
+            should_enhance = False
+
+    if should_enhance:
+        cache_dir = os.path.join(get_project_root(), config.get('cache_dir', 'cache'))
+        if show_profile:
+            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, cache_dir, 'tv')
+
+    show_limit = external_config.get('show_limit', 20)
+    min_relevance = external_config.get('min_relevance_score', 0.65)
+
+    exclude_genres = user_prefs.get('exclude_genres', [])
+    if exclude_genres:
+        print(f"Excluding genres: {', '.join(exclude_genres)}")
+
+    quality_shows = [s for s in show_cache.values() if s.get('score', 0) >= min_relevance]
+    show_deficit = max(0, show_limit - len(quality_shows))
+
+    cached_show_ids = {int(tid) for tid in show_cache.keys()}
+
+    import_config = trakt_config.get('import', {})
+    exclude_show_imdb_ids = set()
+
+    if show_deficit > 0 and import_config.get('exclude_watchlist', True):
+        trakt_client = get_authenticated_trakt_client(config)
+        if trakt_client:
+            print("Loading Trakt watchlist for exclusion...")
+            exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids('shows')
+            if exclude_show_imdb_ids:
+                print(f"Excluding {len(exclude_show_imdb_ids)} shows from Trakt watchlist")
+
+    if show_deficit == 0:
+        print(f"{GREEN}Show cache healthy ({len(quality_shows)} quality items), skipping discovery{RESET}")
+        new_shows = []
+    else:
+        print(f"{CYAN}Show cache needs {show_deficit} items, discovering...{RESET}")
+        new_shows = find_similar_content_with_profile(
+            tmdb_api_key,
+            show_profile,
+            library_shows,
+            'tv',
+            limit=show_deficit,
+            exclude_genres=exclude_genres,
+            min_relevance_score=min_relevance,
+            config=config,
+            exclude_imdb_ids=exclude_show_imdb_ids,
+            exclude_cached_ids=cached_show_ids
+        )
+
+    for show in new_shows:
+        tmdb_id = str(show['tmdb_id'])
+        if tmdb_id in show_cache:
+            old_score = show_cache[tmdb_id].get('score', 0)
+            show_cache[tmdb_id]['score'] = show['score']
+            show_cache[tmdb_id]['rating'] = show['rating']
+            show_cache[tmdb_id]['vote_count'] = show.get('vote_count', 0)
+            if abs(show['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
+                print(f"    Updated score: {show['title']} {old_score:.1%} -> {show['score']:.1%}")
+        else:
+            show_cache[tmdb_id] = {
+                'tmdb_id': show['tmdb_id'],
+                'title': show['title'],
+                'year': show['year'],
+                'rating': show['rating'],
+                'vote_count': show.get('vote_count', 0),
+                'score': show['score'],
+                'original_language': show.get('original_language', ''),
+                'added_date': datetime.now().isoformat()
+            }
+
+    trimmed_shows = 0
+    if len(show_cache) > show_limit:
+        sorted_shows = sorted(show_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        keep_ids = {tmdb_id for tmdb_id, _ in sorted_shows[:show_limit]}
+        for tmdb_id in list(show_cache.keys()):
+            if tmdb_id not in keep_ids:
+                del show_cache[tmdb_id]
+                trimmed_shows += 1
+    if trimmed_shows:
+        print(f"{YELLOW}Trimmed cache: {trimmed_shows} shows (replaced by better recs){RESET}")
+
+    save_cache(display_name, 'shows', show_cache, lib_id=cache_lib_id)
+
+    all_shows = sorted(show_cache.values(), key=lambda x: x['score'], reverse=True)
+    high_shows = [s for s in all_shows if s['score'] >= min_relevance]
+    low_shows = [s for s in all_shows if s['score'] < min_relevance]
+    shows_list = high_shows[:show_limit]
+    if len(shows_list) < show_limit:
+        shows_list.extend(low_shows[:show_limit - len(shows_list)])
+
+    print(f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance*100)}% threshold){RESET}")
+
+    user_services = config.get('streaming_services', [])
+
+    print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
+    shows_categorized = categorize_by_streaming_service(shows_list, tmdb_api_key, user_services, 'tv')
+
+    # Item provenance (#157 Phase 3 stamping, Phase 3.5 fan-out): every item
+    # from a scoped single-library run always carries this library's real id.
+    _stamp_library_id(shows_categorized, library['id'])
+
+    movies_categorized = _empty_categorized()
+
+    project_root = get_project_root()
+    output_dir = os.path.join(project_root, 'recommendations', 'external')
+    library_suffix = f"_{library['id']}" if is_multi else ''
+    generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir, library_suffix=library_suffix)
+
+    total_shows = sum(len(items) for items in shows_categorized['user_services'].values()) + \
+                  sum(len(items) for items in shows_categorized['other_services'].values()) + \
+                  len(shows_categorized['acquire'])
+
+    print(f"{GREEN}Processed: {total_shows} shows (library: {library['name']}){RESET}")
+    print(f"\nExternal TV recommendation process completed for {display_name} ({library['name']})!")
+
+    return {
+        'username': username,
+        'display_name': display_name,
+        'movies_categorized': movies_categorized,
+        'shows_categorized': shows_categorized,
+        'movie_profile': None,
+        'show_profile': show_profile,
+        'user_services': user_services,
+        'library_id': library['id']
+    }
+
+
+def _merge_categorized(categorized_list: List[Dict]) -> Dict:
+    """Merge multiple categorize_by_streaming_service()-shaped dicts into one
+    (#157 Phase 3.5 fan-out).
+
+    Used to rebuild a single combined view of a user's recommendations
+    across all of their libraries of a media type, for the consumers that
+    have no per-library routing concept: the combined watchlist.html tabs
+    and the Trakt/MDBList/Simkl exports (only Sonarr/Radarr route by
+    library_id - see main()'s arr_export_data).
+
+    Args:
+        categorized_list: List of categorize_by_streaming_service() results
+
+    Returns:
+        A single merged categorized dict, 'all_items' re-sorted by score
+    """
+    merged = _empty_categorized()
+    for categorized in categorized_list:
+        for service, items in categorized.get('user_services', {}).items():
+            merged['user_services'].setdefault(service, []).extend(items)
+        for service, items in categorized.get('other_services', {}).items():
+            merged['other_services'].setdefault(service, []).extend(items)
+        merged['acquire'].extend(categorized.get('acquire', []))
+        merged['all_items'].extend(categorized.get('all_items', []))
+    merged['all_items'].sort(key=lambda x: x.get('score', 0), reverse=True)
+    return merged
+
+
+def _merge_user_runs(username: str, movie_runs: List[Dict], tv_runs: List[Dict]) -> Dict:
+    """Merge one user's per-library fan-out results (#157 Phase 3.5) into a
+    single combined entry for watchlist.html / Trakt / MDBList / Simkl - see
+    _merge_categorized().
+
+    Args:
+        username: Plex username
+        movie_runs: This user's process_user_movie_library() results (0+)
+        tv_runs: This user's process_user_tv_library() results (0+)
+
+    Returns:
+        Dict shaped like process_user()'s return value, library_id=None
+        (combines multiple libraries, same reasoning as process_user()'s
+        return docstring)
+    """
+    source = movie_runs[0] if movie_runs else tv_runs[0]
+
+    movies_categorized = _merge_categorized([r['movies_categorized'] for r in movie_runs]) if movie_runs else _empty_categorized()
+    shows_categorized = _merge_categorized([r['shows_categorized'] for r in tv_runs]) if tv_runs else _empty_categorized()
+
+    return {
+        'username': username,
+        'display_name': source['display_name'],
+        'movies_categorized': movies_categorized,
+        'shows_categorized': shows_categorized,
+        'movie_profile': movie_runs[0]['movie_profile'] if movie_runs else None,
+        'show_profile': tv_runs[0]['show_profile'] if tv_runs else None,
+        'user_services': source['user_services'],
+        'library_id': None
+    }
+
 
 def main():
     import argparse
@@ -2386,40 +2874,89 @@ def main():
         log_error(f"Error connecting to Plex: {e}")
         sys.exit(1)
 
-    # Process each user and collect data for combined HTML
+    # Process each user and collect data for combined HTML.
+    #
+    # all_users_data: exactly one entry per user (merged across that user's
+    # libraries when fanned out - see _merge_user_runs) - feeds
+    # generate_combined_html, the movie/show "shared" counts below, and the
+    # Trakt/MDBList/Simkl exports, none of which have a per-library routing
+    # concept.
+    #
+    # arr_export_data: one entry per (user, library) - feeds ONLY the
+    # Sonarr/Radarr exports (#157 Phase 2's _resolve_library_groups routes
+    # by each entry's library_id). In the non-fan-out path these are the
+    # exact same list (library_id is None on every entry either way, so
+    # routing is unaffected).
     all_users_data = []
+    arr_export_data = []
     movie_counts = {}  # tmdb_id -> count
     show_counts = {}
     total_users = 0
 
     if run_recommendations:
-        # #157 Phase 3: resolve the primary movie/tv library once up front.
-        # process_user() handles movies and shows together for a user in a
-        # single pass (shared Trakt watchlist fetch, one combined markdown
-        # file per user), so we don't fan this out into a per-library loop -
-        # that would call process_user() N times per user and overwrite each
-        # user's markdown watchlist with partial (movies-only/shows-only)
-        # data. Instead we thread through the first configured library of
-        # each media type, which is exactly today's single library for a
-        # single-library install (byte-identical: one process_user() call
-        # per user, same as before).
+        # #157 Phase 3: resolve the movie/tv libraries for this run.
         movie_libraries = get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)
         tv_libraries = get_libraries_for_media_type(config, MEDIA_TYPE_TV)
-        primary_movie_library = movie_libraries[0] if movie_libraries else None
-        primary_tv_library = tv_libraries[0] if tv_libraries else None
 
-        for username in users:
-            try:
-                user_data = process_user(
-                    config, plex, username,
-                    movie_library=primary_movie_library,
-                    tv_library=primary_tv_library
-                )
-                if user_data:
-                    all_users_data.append(user_data)
-            except Exception as e:
-                log_error(f"Error processing {username}: {e}")
-                traceback.print_exc()
+        # #157 Phase 3.5: only configs with 2+ libraries of the SAME media
+        # type fan out into per-library runs (below). A single-library
+        # install, or a one-movie-library + one-tv-library install, takes
+        # the untouched Phase 3 path: process_user() handles movies and
+        # shows together for a user in a single pass (shared Trakt
+        # watchlist fetch, one combined markdown file per user) - exactly
+        # one process_user() call per user, same output filenames, same
+        # external API call volume as before Phase 3.5.
+        fan_out = len(movie_libraries) > 1 or len(tv_libraries) > 1
+
+        if not fan_out:
+            primary_movie_library = movie_libraries[0] if movie_libraries else None
+            primary_tv_library = tv_libraries[0] if tv_libraries else None
+
+            for username in users:
+                try:
+                    user_data = process_user(
+                        config, plex, username,
+                        movie_library=primary_movie_library,
+                        tv_library=primary_tv_library
+                    )
+                    if user_data:
+                        all_users_data.append(user_data)
+                except Exception as e:
+                    log_error(f"Error processing {username}: {e}")
+                    traceback.print_exc()
+
+            arr_export_data = all_users_data
+        else:
+            # Fan out: run movie recs once per movie library and tv recs
+            # once per tv library, independently (not a movie x tv cross
+            # product) - each library gets its own discovery pass and its
+            # own real library_id. Entries must stay media-type-pure (never
+            # mix a movie library's id with a tv library's id on one entry)
+            # so #157 Phase 2's library_id-keyed Sonarr/Radarr grouping can't
+            # misroute - so even a media type with exactly one library (the
+            # *other* type is what triggered fan-out) gets its own scoped
+            # run here rather than reusing the combined process_user().
+            for username in users:
+                try:
+                    movie_runs = []
+                    for library in movie_libraries:
+                        data = process_user_movie_library(config, plex, username, library)
+                        if data:
+                            arr_export_data.append(data)
+                            movie_runs.append(data)
+
+                    tv_runs = []
+                    for library in tv_libraries:
+                        data = process_user_tv_library(config, plex, username, library)
+                        if data:
+                            arr_export_data.append(data)
+                            tv_runs.append(data)
+
+                    if movie_runs or tv_runs:
+                        all_users_data.append(_merge_user_runs(username, movie_runs, tv_runs))
+                except Exception as e:
+                    log_error(f"Error processing {username}: {e}")
+                    traceback.print_exc()
 
         # Build shared counts: how many users want each item
         total_users = len(all_users_data)
@@ -2484,12 +3021,16 @@ def main():
     if external_config.get('auto_open_html', False) and html_file:
         smart_open_html(html_file)
 
-    # Export to external services (if configured and auto_sync enabled)
+    # Export to external services (if configured and auto_sync enabled).
+    # Sonarr/Radarr route by library_id (#157 Phase 2/3.5) so they get the
+    # per-library arr_export_data; Trakt/MDBList/Simkl have no per-library
+    # routing concept so they get the merged-per-user all_users_data (see
+    # the arr_export_data/all_users_data docstring above).
     if all_users_data and run_recommendations:
         print(f"\n{GREEN}=== Checking External Service Exports ==={RESET}")
         export_to_trakt(config, all_users_data, tmdb_api_key)
-        export_to_sonarr(config, all_users_data, tmdb_api_key)
-        export_to_radarr(config, all_users_data, tmdb_api_key)
+        export_to_sonarr(config, arr_export_data, tmdb_api_key)
+        export_to_radarr(config, arr_export_data, tmdb_api_key)
         export_to_mdblist(config, all_users_data, tmdb_api_key)
         export_to_simkl(config, all_users_data, tmdb_api_key)
 

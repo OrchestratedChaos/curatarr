@@ -144,7 +144,8 @@ def generate_markdown(
     display_name: str,
     movies_categorized: Dict,
     shows_categorized: Dict,
-    output_dir: str
+    output_dir: str,
+    library_suffix: str = ''
 ) -> str:
     """
     Generate markdown watchlist file with streaming service grouping
@@ -152,6 +153,12 @@ def generate_markdown(
     Args:
         movies_categorized: dict with 'user_services', 'other_services', 'acquire' keys
         shows_categorized: dict with 'user_services', 'other_services', 'acquire' keys
+        library_suffix: Optional filename suffix (#157 Phase 3.5), e.g.
+            "_movies-4k". Empty string (default) keeps the exact legacy
+            filename - required for single-library back-compat. Only the
+            filename is qualified; the ignore-file instructions below still
+            reference the unqualified, per-user ignore list (it's shared
+            across a user's libraries, not per-library).
 
     Returns:
         Path to the generated markdown file
@@ -159,7 +166,7 @@ def generate_markdown(
     os.makedirs(output_dir, exist_ok=True)
     # Use display_name for filename, sanitized for filesystem
     safe_name = display_name.lower().replace(' ', '_')
-    output_file = os.path.join(output_dir, f'{safe_name}_watchlist.md')
+    output_file = os.path.join(output_dir, f'{safe_name}{library_suffix}_watchlist.md')
 
     now = datetime.now()
 

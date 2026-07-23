@@ -428,6 +428,39 @@ class TestGenerateMarkdown:
             assert 'Movies to Watch' not in content
             assert 'TV Shows to Watch' not in content
 
+    def test_default_filename_has_no_library_suffix(self):
+        """#157 Phase 3.5 HARD invariant: no library_suffix arg (or '') keeps
+        the exact legacy filename - required for single-library back-compat."""
+        movies_categorized = {'user_services': {}, 'other_services': {}, 'acquire': []}
+        shows_categorized = {'user_services': {}, 'other_services': {}, 'acquire': []}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_markdown(
+                'testuser', 'TestUser', movies_categorized, shows_categorized, tmpdir
+            )
+
+            assert os.path.basename(result) == 'testuser_watchlist.md'
+
+    def test_library_suffix_qualifies_filename(self):
+        """#157 Phase 3.5: a non-empty library_suffix produces a
+        library-qualified filename, so per-library fan-out runs for the same
+        user don't overwrite each other."""
+        movies_categorized = {'user_services': {}, 'other_services': {}, 'acquire': []}
+        shows_categorized = {'user_services': {}, 'other_services': {}, 'acquire': []}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_markdown(
+                'testuser', 'TestUser', movies_categorized, shows_categorized, tmpdir,
+                library_suffix='_kids-movies'
+            )
+
+            assert os.path.basename(result) == 'testuser_kids-movies_watchlist.md'
+            # Ignore-file instructions still reference the unqualified name -
+            # the ignore list is shared across a user's libraries
+            with open(result) as f:
+                content = f.read()
+            assert 'testuser_ignore.txt' in content
+
 
 class TestHtmlEscaping:
     """Tests for the XSS fix: TMDB-derived (and locally-configured)
