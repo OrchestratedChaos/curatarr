@@ -339,3 +339,51 @@ class TestForeignLockfile:
         finally:
             helper.kill()
             helper.wait()
+
+
+class TestWindowsSubprocessCreationFlags:
+    """Tests for suppressing a recommender subprocess's own console
+    window under the windowed (console=False, see curatarr.spec) build
+    - on real Windows, a console-subsystem child (powershell.exe for the
+    'full' engine, or the re-invoked frozen exe for the others) would
+    otherwise flash a console window even though its stdout/stderr are
+    already piped back to this process.
+
+    subprocess.CREATE_NO_WINDOW only exists as an attribute on win32
+    Python builds, so _build_command reads it via getattr(...,
+    default=0) - these tests force os.name to exercise both branches
+    without needing an actual Windows interpreter."""
+
+    def test_windows_popen_requests_create_no_window(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setattr(job_runner_mod.os, 'name', 'nt')
+        captured = {}
+
+        def _capture_and_boom(cmd, **kwargs):
+            captured.update(kwargs)
+            raise FileNotFoundError("[Errno 2] No such file or directory")
+
+        monkeypatch.setattr(job_runner_mod.subprocess, 'Popen', _capture_and_boom)
+        manager = _manager(curatarr_web_root)
+
+        with pytest.raises(JobError):
+            manager.start('movie', 'alice', ['alice', 'bob'])
+
+        assert captured.get('creationflags') == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        assert 'start_new_session' not in captured
+
+    def test_posix_popen_omits_creationflags(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setattr(job_runner_mod.os, 'name', 'posix')
+        captured = {}
+
+        def _capture_and_boom(cmd, **kwargs):
+            captured.update(kwargs)
+            raise FileNotFoundError("[Errno 2] No such file or directory")
+
+        monkeypatch.setattr(job_runner_mod.subprocess, 'Popen', _capture_and_boom)
+        manager = _manager(curatarr_web_root)
+
+        with pytest.raises(JobError):
+            manager.start('movie', 'alice', ['alice', 'bob'])
+
+        assert 'creationflags' not in captured
+        assert captured.get('start_new_session') is True

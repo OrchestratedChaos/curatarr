@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.27] - 2026-07-23
+
+### Changed
+- **Windows binary launches with no console window**: `curatarr-windows-x86_64.exe` is now built windowed (`console=False` in `curatarr.spec`) - double-clicking it opens straight into the browser with no black console flash, logging instead to `%APPDATA%\curatarr\logs\curatarr.log`. Running it from an existing Command Prompt/PowerShell still prints normally (`curatarr_app.py` attaches to that parent console on startup), and `--debug`/`CURATARR_DEBUG=1` allocates a console for troubleshooting. Recommender subprocesses the web UI spawns (`web/job_runner.py`) now also pass `CREATE_NO_WINDOW` on Windows so they don't flash their own console windows either. macOS/Linux binaries are unaffected
+
 ## [2.8.26] - 2026-07-23
 
 ### Changed

@@ -25,8 +25,13 @@ Each asset has a matching `<asset>.sha256` file with its checksum.
    protected your PC" because the binary isn't code-signed yet (see
    [Unsigned binaries](#unsigned-binaries)) - click **More info**, then
    **Run anyway**.
-3. A console window opens (that's the server log) and your browser
-   opens to `http://127.0.0.1:8787`.
+3. No console window opens - it launches straight into your browser at
+   `http://127.0.0.1:8787`. The server log instead goes to
+   `%APPDATA%\curatarr\logs\curatarr.log` (see
+   [Where data lives](#where-data-lives) below). Running it from an
+   existing Command Prompt/PowerShell window still prints there as
+   normal, and `curatarr.exe --debug` (or setting `CURATARR_DEBUG=1`)
+   opens a console too, for troubleshooting.
 
 ### macOS
 

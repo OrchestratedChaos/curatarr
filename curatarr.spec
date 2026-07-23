@@ -21,9 +21,17 @@ Notes:
   docs/BINARIES.md's "Building it yourself" section for the universal2
   prerequisites (a universal2 Python + universal2 wheels/fused wheels
   for pyyaml, ruamel.yaml.clib and markupsafe).
+- console is False only on Windows (windowed/no-console double-click
+  launch - curatarr_app.py handles attaching to a parent console when
+  run from cmd/PowerShell, allocating one for --debug, and file logging
+  otherwise - see that module's docstring). macOS/Linux keep console=True,
+  unchanged from before: the console flag mainly governs the Windows EXE
+  subsystem, and this spec never wraps macOS in a windowed .app BUNDLE,
+  so flipping it there wouldn't suppress a Terminal launch anyway.
 """
 
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_submodules
 
@@ -70,7 +78,7 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=sys.platform != 'win32',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=os.environ.get('PYINSTALLER_TARGET_ARCH') or None,
