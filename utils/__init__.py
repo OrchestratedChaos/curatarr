@@ -224,6 +224,7 @@ from .sonarr import (
     SonarrAPIError,
     SonarrClient,
     create_sonarr_client,
+    create_sonarr_client_from,
 )
 
 # Radarr utilities
@@ -231,6 +232,7 @@ from .radarr import (
     RadarrAPIError,
     RadarrClient,
     create_radarr_client,
+    create_radarr_client_from,
 )
 
 # MDBList utilities
@@ -413,10 +415,12 @@ __all__ = [
     'SonarrAPIError',
     'SonarrClient',
     'create_sonarr_client',
+    'create_sonarr_client_from',
     # Radarr
     'RadarrAPIError',
     'RadarrClient',
     'create_radarr_client',
+    'create_radarr_client_from',
     # MDBList
     'MDBListAPIError',
     'MDBListClient',

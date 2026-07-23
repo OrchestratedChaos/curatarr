@@ -262,6 +262,28 @@ class SonarrClient(BaseAPIClient):
         return self._make_request("POST", "series", data=data)
 
 
+def create_sonarr_client_from(url: Optional[str], api_key: Optional[str]) -> Optional[SonarrClient]:
+    """
+    Create a Sonarr client from an explicit URL/API key pair.
+
+    Thin factory used for per-library Sonarr instance resolution (see
+    utils.config.get_effective_arr_config, #157 Phase 2). create_sonarr_client()
+    wraps this with the legacy global-config lookup.
+
+    Args:
+        url: Sonarr base URL
+        api_key: Sonarr API key
+
+    Returns:
+        SonarrClient if url/api_key are present and api_key isn't the
+        placeholder, None otherwise
+    """
+    if not url or not api_key or api_key == 'YOUR_SONARR_API_KEY':
+        return None
+
+    return SonarrClient(url, api_key)
+
+
 def create_sonarr_client(config: Dict) -> Optional[SonarrClient]:
     """
     Create a Sonarr client from config.
@@ -277,10 +299,4 @@ def create_sonarr_client(config: Dict) -> Optional[SonarrClient]:
     if not sonarr_config.get('enabled', False):
         return None
 
-    url = sonarr_config.get('url')
-    api_key = sonarr_config.get('api_key')
-
-    if not url or not api_key or api_key == 'YOUR_SONARR_API_KEY':
-        return None
-
-    return SonarrClient(url, api_key)
+    return create_sonarr_client_from(sonarr_config.get('url'), sonarr_config.get('api_key'))

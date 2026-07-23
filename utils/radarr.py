@@ -256,6 +256,28 @@ class RadarrClient(BaseAPIClient):
         return self._make_request("POST", "movie", data=data)
 
 
+def create_radarr_client_from(url: Optional[str], api_key: Optional[str]) -> Optional[RadarrClient]:
+    """
+    Create a Radarr client from an explicit URL/API key pair.
+
+    Thin factory used for per-library Radarr instance resolution (see
+    utils.config.get_effective_arr_config, #157 Phase 2). create_radarr_client()
+    wraps this with the legacy global-config lookup.
+
+    Args:
+        url: Radarr base URL
+        api_key: Radarr API key
+
+    Returns:
+        RadarrClient if url/api_key are present and api_key isn't the
+        placeholder, None otherwise
+    """
+    if not url or not api_key or api_key == 'YOUR_RADARR_API_KEY':
+        return None
+
+    return RadarrClient(url, api_key)
+
+
 def create_radarr_client(config: Dict) -> Optional[RadarrClient]:
     """
     Create a Radarr client from config.
@@ -271,10 +293,6 @@ def create_radarr_client(config: Dict) -> Optional[RadarrClient]:
     if not radarr_config.get('enabled', False):
         return None
 
-    url = radarr_config.get('url')
-    api_key = radarr_config.get('api_key')
-
-    if not url or not api_key or api_key == 'YOUR_RADARR_API_KEY':
-        return None
+    return create_radarr_client_from(radarr_config.get('url'), radarr_config.get('api_key'))
 
     return RadarrClient(url, api_key)
