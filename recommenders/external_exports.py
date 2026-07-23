@@ -14,10 +14,12 @@ from utils import (
     CYAN, GREEN, RESET,
     print_status, log_warning, log_error, clickable_link,
     get_authenticated_trakt_client, TraktAPIError, TraktAuthError,
-    create_sonarr_client, SonarrAPIError,
-    create_radarr_client, RadarrAPIError,
+    create_sonarr_client, create_sonarr_client_from, SonarrAPIError,
+    create_radarr_client, create_radarr_client_from, RadarrAPIError,
     create_mdblist_client, MDBListAPIError,
     create_simkl_client, SimklAPIError, SimklAuthError,
+    MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV,
+    get_libraries, get_libraries_for_media_type, get_effective_arr_config,
 )
 
 logger = logging.getLogger('curatarr')
@@ -294,6 +296,60 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
             log_error(f"Failed to export {display_name} to Trakt: {e}")
 
 
+def _resolve_library_groups(
+    config: Dict, users_to_export: List[Dict], media_type: str
+) -> List[Any]:
+    """
+    Group users_to_export by library_id and resolve each group's library.
+
+    #157 Phase 2: per-library *arr export routing. Recommendations don't
+    carry library_id until Phase 3, so users without one fall back to the
+    media-type's library (get_libraries_for_media_type) - currently a single
+    synthesized/configured library - and the whole group routes to it. This
+    keeps single-library installs routing identically to the pre-Phase-2
+    flow while the plumbing is ready for Phase 3.
+
+    Args:
+        config: Root configuration dictionary
+        users_to_export: Filtered per-user recommendation payloads
+        media_type: MEDIA_TYPE_MOVIE or MEDIA_TYPE_TV
+
+    Returns:
+        List of (library, group_users) tuples for groups whose library
+        could be resolved. Unresolvable groups are logged and dropped.
+    """
+    groups: Dict[Optional[str], List[Dict]] = {}
+    for user_data in users_to_export:
+        groups.setdefault(user_data.get('library_id'), []).append(user_data)
+
+    resolved = []
+    for library_id, group_users in groups.items():
+        if library_id is None:
+            candidates = get_libraries_for_media_type(config, media_type)
+            if not candidates:
+                log_warning(
+                    f"Export: no '{media_type}' library configured - skipping "
+                    f"{len(group_users)} user(s) with no library_id"
+                )
+                continue
+            library = candidates[0]
+        else:
+            library = next(
+                (lib for lib in get_libraries(config) if lib.get('id') == library_id),
+                None
+            )
+            if library is None:
+                log_warning(
+                    f"Export: library_id '{library_id}' not found in config - "
+                    f"skipping {len(group_users)} user(s)' recommendations"
+                )
+                continue
+
+        resolved.append((library, group_users))
+
+    return resolved
+
+
 def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str) -> None:
     """
     Export TV recommendations to Sonarr.
@@ -365,147 +421,172 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
     else:
         users_to_export = all_users_data
 
-    # Get Sonarr settings from config
-    root_folder = sonarr_config.get('root_folder', '/tv')
-    quality_profile_name = sonarr_config.get('quality_profile', 'HD-1080p')
-    tag_name = sonarr_config.get('tag', 'Curatarr')
+    # Sonarr settings not yet part of the per-library arr schema (Phase 1
+    # doesn't cover these - see utils/config.py _ARR_ROUTING_FIELDS); stay
+    # global for all libraries until a future phase adds them.
     append_usernames = sonarr_config.get('append_usernames', False)
-    monitored = sonarr_config.get('monitor', False)
-    search_for_series = sonarr_config.get('search_for_series', False)
-    series_type = sonarr_config.get('series_type', 'standard')
     season_folder = sonarr_config.get('season_folder', True)
 
-    # Get quality profile ID
-    quality_profile_id = sonarr_client.get_quality_profile_id(quality_profile_name)
-    if not quality_profile_id:
-        available = [p['name'] for p in sonarr_client.get_quality_profiles()]
-        log_error(f"Quality profile '{quality_profile_name}' not found. Available: {available}")
-        return
+    # Per-library routing (#157 Phase 2): group users by library_id,
+    # resolve each group's effective Sonarr instance/routing, and process
+    # groups independently.
+    library_groups = _resolve_library_groups(config, users_to_export, MEDIA_TYPE_TV)
 
-    # Validate root folder
-    valid_root = sonarr_client.get_root_folder_path(root_folder)
-    if not valid_root:
-        available = [f['path'] for f in sonarr_client.get_root_folders()]
-        log_error(f"Root folder '{root_folder}' not found. Available: {available}")
-        return
-
-    # Collect all shows to add (handle combined mode)
-    if user_mode == 'combined':
-        all_show_tvdb_ids = []
-        for user_data in users_to_export:
-            # Collect TVDB IDs (flatten nested structure)
-            for show in flatten_categorized(user_data['shows_categorized']):
-                tvdb_id = show.get('tvdb_id')
-                if tvdb_id:
-                    all_show_tvdb_ids.append(tvdb_id)
-        # Deduplicate
-        all_show_tvdb_ids = list(dict.fromkeys(all_show_tvdb_ids))
-
-        if not all_show_tvdb_ids:
-            print_status("  No show recommendations to add", "info")
-            return
-
-        print(f"  Combined mode: Processing {len(all_show_tvdb_ids)} show recommendations...")
-
-        # Get or create tag
-        tag_id = sonarr_client.get_or_create_tag(tag_name)
-
-        added = 0
-        skipped = 0
-        failed = 0
-
-        for tvdb_id in all_show_tvdb_ids:
-            if sonarr_client.series_exists(tvdb_id):
-                skipped += 1
-                continue
-
-            # Look up series
-            series_data = sonarr_client.lookup_series(tvdb_id)
-            if not series_data:
-                logger.debug(f"Could not find series for TVDB ID: {tvdb_id}")
-                failed += 1
-                continue
-
-            try:
-                sonarr_client.add_series(
-                    tvdb_id=tvdb_id,
-                    title=series_data['title'],
-                    root_folder_path=valid_root,
-                    quality_profile_id=quality_profile_id,
-                    monitored=monitored,
-                    season_folder=season_folder,
-                    series_type=series_type,
-                    tag_ids=[tag_id],
-                    search_for_missing_episodes=search_for_series
-                )
-                added += 1
-                print(f"  {GREEN}Added: {series_data['title']}{RESET}")
-            except SonarrAPIError as e:
-                logger.debug(f"Failed to add {series_data['title']}: {e}")
-                failed += 1
-
-        print_status(f"  Combined: {added} added, {skipped} already exist, {failed} failed", "success")
-        return
-
-    # Per-user or mapping mode
-    for user_data in users_to_export:
-        display_name = user_data['display_name']
-        shows_categorized = user_data['shows_categorized']
-
-        # Collect TVDB IDs for shows (flatten nested structure)
-        show_tvdb_ids = []
-        for show in flatten_categorized(shows_categorized):
-            tvdb_id = show.get('tvdb_id')
-            if tvdb_id:
-                show_tvdb_ids.append(tvdb_id)
-        # Deduplicate
-        show_tvdb_ids = list(dict.fromkeys(show_tvdb_ids))
-
-        if not show_tvdb_ids:
-            print_status(f"  {display_name}: No show recommendations to add", "info")
+    for library, group_users in library_groups:
+        eff = get_effective_arr_config(config, library)
+        arr_client = create_sonarr_client_from(eff.get('url'), eff.get('api_key'))
+        if not arr_client:
+            log_warning(
+                f"Sonarr export: library '{library['name']}' has no Sonarr instance "
+                "configured - skipping"
+            )
             continue
 
-        print(f"  {display_name}: Processing {len(show_tvdb_ids)} show recommendations...")
+        # Get Sonarr settings for this library
+        root_folder = eff.get('root_folder') or '/tv'
+        quality_profile_name = eff.get('quality_profile') or 'HD-1080p'
+        tag_name = eff.get('tag') or 'Curatarr'
+        monitored = eff.get('monitor', False)
+        search_for_series = eff.get('search', False)
+        series_type = eff.get('series_type') or 'standard'
 
-        # Get or create tag (optionally with username)
-        user_tag = f"{tag_name}-{display_name}" if append_usernames else tag_name
-        tag_id = sonarr_client.get_or_create_tag(user_tag)
+        # Get quality profile ID
+        quality_profile_id = arr_client.get_quality_profile_id(quality_profile_name)
+        if not quality_profile_id:
+            available = [p['name'] for p in arr_client.get_quality_profiles()]
+            log_error(
+                f"Quality profile '{quality_profile_name}' not found for library "
+                f"'{library['name']}'. Available: {available}"
+            )
+            continue
 
-        added = 0
-        skipped = 0
-        failed = 0
+        # Validate root folder
+        valid_root = arr_client.get_root_folder_path(root_folder)
+        if not valid_root:
+            available = [f['path'] for f in arr_client.get_root_folders()]
+            log_error(
+                f"Root folder '{root_folder}' not found for library "
+                f"'{library['name']}'. Available: {available}"
+            )
+            continue
 
-        for tvdb_id in show_tvdb_ids:
-            if sonarr_client.series_exists(tvdb_id):
-                skipped += 1
+        # Collect all shows to add (handle combined mode)
+        if user_mode == 'combined':
+            all_show_tvdb_ids = []
+            for user_data in group_users:
+                # Collect TVDB IDs (flatten nested structure)
+                for show in flatten_categorized(user_data['shows_categorized']):
+                    tvdb_id = show.get('tvdb_id')
+                    if tvdb_id:
+                        all_show_tvdb_ids.append(tvdb_id)
+            # Deduplicate
+            all_show_tvdb_ids = list(dict.fromkeys(all_show_tvdb_ids))
+
+            if not all_show_tvdb_ids:
+                print_status("  No show recommendations to add", "info")
                 continue
 
-            # Look up series
-            series_data = sonarr_client.lookup_series(tvdb_id)
-            if not series_data:
-                logger.debug(f"Could not find series for TVDB ID: {tvdb_id}")
-                failed += 1
+            print(f"  Combined mode: Processing {len(all_show_tvdb_ids)} show recommendations...")
+
+            # Get or create tag
+            tag_id = arr_client.get_or_create_tag(tag_name)
+
+            added = 0
+            skipped = 0
+            failed = 0
+
+            for tvdb_id in all_show_tvdb_ids:
+                if arr_client.series_exists(tvdb_id):
+                    skipped += 1
+                    continue
+
+                # Look up series
+                series_data = arr_client.lookup_series(tvdb_id)
+                if not series_data:
+                    logger.debug(f"Could not find series for TVDB ID: {tvdb_id}")
+                    failed += 1
+                    continue
+
+                try:
+                    arr_client.add_series(
+                        tvdb_id=tvdb_id,
+                        title=series_data['title'],
+                        root_folder_path=valid_root,
+                        quality_profile_id=quality_profile_id,
+                        monitored=monitored,
+                        season_folder=season_folder,
+                        series_type=series_type,
+                        tag_ids=[tag_id],
+                        search_for_missing_episodes=search_for_series
+                    )
+                    added += 1
+                    print(f"  {GREEN}Added: {series_data['title']}{RESET}")
+                except SonarrAPIError as e:
+                    logger.debug(f"Failed to add {series_data['title']}: {e}")
+                    failed += 1
+
+            print_status(f"  Combined: {added} added, {skipped} already exist, {failed} failed", "success")
+            continue
+
+        # Per-user or mapping mode
+        for user_data in group_users:
+            display_name = user_data['display_name']
+            shows_categorized = user_data['shows_categorized']
+
+            # Collect TVDB IDs for shows (flatten nested structure)
+            show_tvdb_ids = []
+            for show in flatten_categorized(shows_categorized):
+                tvdb_id = show.get('tvdb_id')
+                if tvdb_id:
+                    show_tvdb_ids.append(tvdb_id)
+            # Deduplicate
+            show_tvdb_ids = list(dict.fromkeys(show_tvdb_ids))
+
+            if not show_tvdb_ids:
+                print_status(f"  {display_name}: No show recommendations to add", "info")
                 continue
 
-            try:
-                sonarr_client.add_series(
-                    tvdb_id=tvdb_id,
-                    title=series_data['title'],
-                    root_folder_path=valid_root,
-                    quality_profile_id=quality_profile_id,
-                    monitored=monitored,
-                    season_folder=season_folder,
-                    series_type=series_type,
-                    tag_ids=[tag_id],
-                    search_for_missing_episodes=search_for_series
-                )
-                added += 1
-                print(f"    {GREEN}Added: {series_data['title']}{RESET}")
-            except SonarrAPIError as e:
-                logger.debug(f"Failed to add {series_data['title']}: {e}")
-                failed += 1
+            print(f"  {display_name}: Processing {len(show_tvdb_ids)} show recommendations...")
 
-        print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
+            # Get or create tag (optionally with username)
+            user_tag = f"{tag_name}-{display_name}" if append_usernames else tag_name
+            tag_id = arr_client.get_or_create_tag(user_tag)
+
+            added = 0
+            skipped = 0
+            failed = 0
+
+            for tvdb_id in show_tvdb_ids:
+                if arr_client.series_exists(tvdb_id):
+                    skipped += 1
+                    continue
+
+                # Look up series
+                series_data = arr_client.lookup_series(tvdb_id)
+                if not series_data:
+                    logger.debug(f"Could not find series for TVDB ID: {tvdb_id}")
+                    failed += 1
+                    continue
+
+                try:
+                    arr_client.add_series(
+                        tvdb_id=tvdb_id,
+                        title=series_data['title'],
+                        root_folder_path=valid_root,
+                        quality_profile_id=quality_profile_id,
+                        monitored=monitored,
+                        season_folder=season_folder,
+                        series_type=series_type,
+                        tag_ids=[tag_id],
+                        search_for_missing_episodes=search_for_series
+                    )
+                    added += 1
+                    print(f"    {GREEN}Added: {series_data['title']}{RESET}")
+                except SonarrAPIError as e:
+                    logger.debug(f"Failed to add {series_data['title']}: {e}")
+                    failed += 1
+
+            print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
 
 
 def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str) -> None:
@@ -579,144 +660,169 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
     else:
         users_to_export = all_users_data
 
-    # Get Radarr settings from config
-    root_folder = radarr_config.get('root_folder', '/movies')
-    quality_profile_name = radarr_config.get('quality_profile', 'HD-1080p')
-    minimum_availability = radarr_config.get('minimum_availability', 'released')
-    tag_name = radarr_config.get('tag', 'Curatarr')
+    # Radarr settings not yet part of the per-library arr schema (Phase 1
+    # doesn't cover these - see utils/config.py _ARR_ROUTING_FIELDS); stay
+    # global for all libraries until a future phase adds them.
     append_usernames = radarr_config.get('append_usernames', False)
-    monitored = radarr_config.get('monitor', False)
-    search_for_movie = radarr_config.get('search_for_movie', False)
 
-    # Get quality profile ID
-    quality_profile_id = radarr_client.get_quality_profile_id(quality_profile_name)
-    if not quality_profile_id:
-        available = [p['name'] for p in radarr_client.get_quality_profiles()]
-        log_error(f"Quality profile '{quality_profile_name}' not found. Available: {available}")
-        return
+    # Per-library routing (#157 Phase 2): group users by library_id,
+    # resolve each group's effective Radarr instance/routing, and process
+    # groups independently.
+    library_groups = _resolve_library_groups(config, users_to_export, MEDIA_TYPE_MOVIE)
 
-    # Validate root folder
-    valid_root = radarr_client.get_root_folder_path(root_folder)
-    if not valid_root:
-        available = [f['path'] for f in radarr_client.get_root_folders()]
-        log_error(f"Root folder '{root_folder}' not found. Available: {available}")
-        return
-
-    # Collect all movies to add (handle combined mode)
-    if user_mode == 'combined':
-        all_movie_tmdb_ids = []
-        for user_data in users_to_export:
-            # Collect TMDB IDs (flatten nested structure)
-            for movie in flatten_categorized(user_data['movies_categorized']):
-                tmdb_id = movie.get('tmdb_id')
-                if tmdb_id:
-                    all_movie_tmdb_ids.append(tmdb_id)
-        # Deduplicate
-        all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
-
-        if not all_movie_tmdb_ids:
-            print_status("  No movie recommendations to add", "info")
-            return
-
-        print(f"  Combined mode: Processing {len(all_movie_tmdb_ids)} movie recommendations...")
-
-        # Get or create tag
-        tag_id = radarr_client.get_or_create_tag(tag_name)
-
-        added = 0
-        skipped = 0
-        failed = 0
-
-        for tmdb_id in all_movie_tmdb_ids:
-            if radarr_client.movie_exists(tmdb_id):
-                skipped += 1
-                continue
-
-            # Look up movie
-            movie_data = radarr_client.lookup_movie(tmdb_id)
-            if not movie_data:
-                logger.debug(f"Could not find movie for TMDB ID: {tmdb_id}")
-                failed += 1
-                continue
-
-            try:
-                radarr_client.add_movie(
-                    tmdb_id=tmdb_id,
-                    title=movie_data['title'],
-                    root_folder_path=valid_root,
-                    quality_profile_id=quality_profile_id,
-                    monitored=monitored,
-                    minimum_availability=minimum_availability,
-                    tag_ids=[tag_id],
-                    search_for_movie=search_for_movie
-                )
-                added += 1
-                print(f"  {GREEN}Added: {movie_data['title']}{RESET}")
-            except RadarrAPIError as e:
-                logger.debug(f"Failed to add {movie_data['title']}: {e}")
-                failed += 1
-
-        print_status(f"  Combined: {added} added, {skipped} already exist, {failed} failed", "success")
-        return
-
-    # Per-user or mapping mode
-    for user_data in users_to_export:
-        display_name = user_data['display_name']
-        movies_categorized = user_data['movies_categorized']
-
-        # Collect TMDB IDs for movies (flatten nested structure)
-        movie_tmdb_ids = []
-        for movie in flatten_categorized(movies_categorized):
-            tmdb_id = movie.get('tmdb_id')
-            if tmdb_id:
-                movie_tmdb_ids.append(tmdb_id)
-        # Deduplicate
-        movie_tmdb_ids = list(dict.fromkeys(movie_tmdb_ids))
-
-        if not movie_tmdb_ids:
-            print_status(f"  {display_name}: No movie recommendations to add", "info")
+    for library, group_users in library_groups:
+        eff = get_effective_arr_config(config, library)
+        arr_client = create_radarr_client_from(eff.get('url'), eff.get('api_key'))
+        if not arr_client:
+            log_warning(
+                f"Radarr export: library '{library['name']}' has no Radarr instance "
+                "configured - skipping"
+            )
             continue
 
-        print(f"  {display_name}: Processing {len(movie_tmdb_ids)} movie recommendations...")
+        # Get Radarr settings for this library
+        root_folder = eff.get('root_folder') or '/movies'
+        quality_profile_name = eff.get('quality_profile') or 'HD-1080p'
+        minimum_availability = eff.get('minimum_availability') or 'released'
+        tag_name = eff.get('tag') or 'Curatarr'
+        monitored = eff.get('monitor', False)
+        search_for_movie = eff.get('search', False)
 
-        # Get or create tag (optionally with username)
-        user_tag = f"{tag_name}-{display_name}" if append_usernames else tag_name
-        tag_id = radarr_client.get_or_create_tag(user_tag)
+        # Get quality profile ID
+        quality_profile_id = arr_client.get_quality_profile_id(quality_profile_name)
+        if not quality_profile_id:
+            available = [p['name'] for p in arr_client.get_quality_profiles()]
+            log_error(
+                f"Quality profile '{quality_profile_name}' not found for library "
+                f"'{library['name']}'. Available: {available}"
+            )
+            continue
 
-        added = 0
-        skipped = 0
-        failed = 0
+        # Validate root folder
+        valid_root = arr_client.get_root_folder_path(root_folder)
+        if not valid_root:
+            available = [f['path'] for f in arr_client.get_root_folders()]
+            log_error(
+                f"Root folder '{root_folder}' not found for library "
+                f"'{library['name']}'. Available: {available}"
+            )
+            continue
 
-        for tmdb_id in movie_tmdb_ids:
-            if radarr_client.movie_exists(tmdb_id):
-                skipped += 1
+        # Collect all movies to add (handle combined mode)
+        if user_mode == 'combined':
+            all_movie_tmdb_ids = []
+            for user_data in group_users:
+                # Collect TMDB IDs (flatten nested structure)
+                for movie in flatten_categorized(user_data['movies_categorized']):
+                    tmdb_id = movie.get('tmdb_id')
+                    if tmdb_id:
+                        all_movie_tmdb_ids.append(tmdb_id)
+            # Deduplicate
+            all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
+
+            if not all_movie_tmdb_ids:
+                print_status("  No movie recommendations to add", "info")
                 continue
 
-            # Look up movie
-            movie_data = radarr_client.lookup_movie(tmdb_id)
-            if not movie_data:
-                logger.debug(f"Could not find movie for TMDB ID: {tmdb_id}")
-                failed += 1
+            print(f"  Combined mode: Processing {len(all_movie_tmdb_ids)} movie recommendations...")
+
+            # Get or create tag
+            tag_id = arr_client.get_or_create_tag(tag_name)
+
+            added = 0
+            skipped = 0
+            failed = 0
+
+            for tmdb_id in all_movie_tmdb_ids:
+                if arr_client.movie_exists(tmdb_id):
+                    skipped += 1
+                    continue
+
+                # Look up movie
+                movie_data = arr_client.lookup_movie(tmdb_id)
+                if not movie_data:
+                    logger.debug(f"Could not find movie for TMDB ID: {tmdb_id}")
+                    failed += 1
+                    continue
+
+                try:
+                    arr_client.add_movie(
+                        tmdb_id=tmdb_id,
+                        title=movie_data['title'],
+                        root_folder_path=valid_root,
+                        quality_profile_id=quality_profile_id,
+                        monitored=monitored,
+                        minimum_availability=minimum_availability,
+                        tag_ids=[tag_id],
+                        search_for_movie=search_for_movie
+                    )
+                    added += 1
+                    print(f"  {GREEN}Added: {movie_data['title']}{RESET}")
+                except RadarrAPIError as e:
+                    logger.debug(f"Failed to add {movie_data['title']}: {e}")
+                    failed += 1
+
+            print_status(f"  Combined: {added} added, {skipped} already exist, {failed} failed", "success")
+            continue
+
+        # Per-user or mapping mode
+        for user_data in group_users:
+            display_name = user_data['display_name']
+            movies_categorized = user_data['movies_categorized']
+
+            # Collect TMDB IDs for movies (flatten nested structure)
+            movie_tmdb_ids = []
+            for movie in flatten_categorized(movies_categorized):
+                tmdb_id = movie.get('tmdb_id')
+                if tmdb_id:
+                    movie_tmdb_ids.append(tmdb_id)
+            # Deduplicate
+            movie_tmdb_ids = list(dict.fromkeys(movie_tmdb_ids))
+
+            if not movie_tmdb_ids:
+                print_status(f"  {display_name}: No movie recommendations to add", "info")
                 continue
 
-            try:
-                radarr_client.add_movie(
-                    tmdb_id=tmdb_id,
-                    title=movie_data['title'],
-                    root_folder_path=valid_root,
-                    quality_profile_id=quality_profile_id,
-                    monitored=monitored,
-                    minimum_availability=minimum_availability,
-                    tag_ids=[tag_id],
-                    search_for_movie=search_for_movie
-                )
-                added += 1
-                print(f"    {GREEN}Added: {movie_data['title']}{RESET}")
-            except RadarrAPIError as e:
-                logger.debug(f"Failed to add {movie_data['title']}: {e}")
-                failed += 1
+            print(f"  {display_name}: Processing {len(movie_tmdb_ids)} movie recommendations...")
 
-        print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
+            # Get or create tag (optionally with username)
+            user_tag = f"{tag_name}-{display_name}" if append_usernames else tag_name
+            tag_id = arr_client.get_or_create_tag(user_tag)
+
+            added = 0
+            skipped = 0
+            failed = 0
+
+            for tmdb_id in movie_tmdb_ids:
+                if arr_client.movie_exists(tmdb_id):
+                    skipped += 1
+                    continue
+
+                # Look up movie
+                movie_data = arr_client.lookup_movie(tmdb_id)
+                if not movie_data:
+                    logger.debug(f"Could not find movie for TMDB ID: {tmdb_id}")
+                    failed += 1
+                    continue
+
+                try:
+                    arr_client.add_movie(
+                        tmdb_id=tmdb_id,
+                        title=movie_data['title'],
+                        root_folder_path=valid_root,
+                        quality_profile_id=quality_profile_id,
+                        monitored=monitored,
+                        minimum_availability=minimum_availability,
+                        tag_ids=[tag_id],
+                        search_for_movie=search_for_movie
+                    )
+                    added += 1
+                    print(f"    {GREEN}Added: {movie_data['title']}{RESET}")
+                except RadarrAPIError as e:
+                    logger.debug(f"Failed to add {movie_data['title']}: {e}")
+                    failed += 1
+
+            print_status(f"  {display_name}: {added} added, {skipped} already exist, {failed} failed", "success")
 
 
 def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: str) -> None:

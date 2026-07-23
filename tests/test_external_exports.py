@@ -315,6 +315,180 @@ class TestExportToRadarr:
         mock_create.assert_called_once()
 
 
+def _mock_radarr_client():
+    """MagicMock RadarrClient that echoes routing args back so tests can
+    assert exactly what each per-library group resolved."""
+    client = MagicMock()
+    client.test_connection.return_value = None
+    client.get_movies.return_value = []
+    client.get_quality_profile_id.side_effect = lambda name: f"qp-{name}"
+    client.get_quality_profiles.return_value = []
+    client.get_root_folder_path.side_effect = lambda path: path
+    client.get_root_folders.return_value = []
+    client.get_or_create_tag.side_effect = lambda name: f"tag-{name}"
+    client.movie_exists.return_value = False
+    client.lookup_movie.side_effect = lambda tmdb_id: {'title': f'Movie {tmdb_id}'}
+    client.add_movie.return_value = {}
+    return client
+
+
+class TestExportToRadarrPerLibraryRouting:
+    """Tests for #157 Phase 2: per-library Radarr export routing"""
+
+    @patch('recommenders.external_exports.create_radarr_client_from')
+    @patch('recommenders.external_exports.create_radarr_client')
+    def test_single_library_no_library_id_matches_legacy_routing(self, mock_create, mock_create_from):
+        """No library_id on recs -> routes via the single synthesized/global library,
+        producing identical routing to the pre-Phase-2 flat-config flow."""
+        client = _mock_radarr_client()
+        mock_create.return_value = client
+        mock_create_from.return_value = client
+
+        config = {
+            'radarr': {
+                'enabled': True,
+                'auto_sync': True,
+                'user_mode': 'combined',
+                'url': 'http://radarr:7878',
+                'api_key': 'global-key',
+                'root_folder': '/movies',
+                'quality_profile': 'HD-1080p',
+                'tag': 'Curatarr',
+                'monitor': True,
+                'search_for_movie': True,
+                'minimum_availability': 'released',
+            }
+        }
+        all_users_data = [
+            {
+                'username': 'jason',
+                'display_name': 'Jason',
+                'movies_categorized': {'acquire': [{'tmdb_id': 100}], 'user_services': {}, 'other_services': {}},
+            }
+        ]
+
+        export_to_radarr(config, all_users_data, 'tmdb-key')
+
+        # Preflight client still created once from the global block (unchanged safety gate)
+        mock_create.assert_called_once_with(config)
+        # Per-library client resolves to the same global block via the no-library_id fallback
+        mock_create_from.assert_called_once_with('http://radarr:7878', 'global-key')
+
+        client.add_movie.assert_called_once()
+        _, kwargs = client.add_movie.call_args
+        assert kwargs['root_folder_path'] == '/movies'
+        assert kwargs['quality_profile_id'] == 'qp-HD-1080p'
+        assert kwargs['tag_ids'] == ['tag-Curatarr']
+        assert kwargs['monitored'] is True
+        assert kwargs['minimum_availability'] == 'released'
+        assert kwargs['search_for_movie'] is True
+
+    @patch('recommenders.external_exports.create_radarr_client_from')
+    @patch('recommenders.external_exports.create_radarr_client')
+    def test_two_library_ids_build_two_clients_with_own_routing(self, mock_create, mock_create_from):
+        """Recs tagged with two different library_ids route through two independently
+        -resolved clients, each with its own root_folder/quality_profile/tag."""
+        mock_create.return_value = _mock_radarr_client()
+
+        movies_client = _mock_radarr_client()
+        kids_client = _mock_radarr_client()
+        mock_create_from.side_effect = [movies_client, kids_client]
+
+        config = {
+            'radarr': {
+                'enabled': True,
+                'auto_sync': True,
+                'user_mode': 'combined',
+                'url': 'http://radarr:7878',
+                'api_key': 'global-key',
+            },
+            'libraries': [
+                {
+                    'id': 'movies', 'name': 'Movies', 'media_type': 'movie',
+                    'arr': {'root_folder': '/movies', 'quality_profile': 'HD-1080p', 'tag': 'Curatarr'},
+                },
+                {
+                    'id': 'kids-movies', 'name': 'Kids Movies', 'media_type': 'movie',
+                    'arr': {'root_folder': '/kids-movies', 'quality_profile': 'SD', 'tag': 'Curatarr-Kids'},
+                },
+            ],
+        }
+        all_users_data = [
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'movies',
+                'movies_categorized': {'acquire': [{'tmdb_id': 100}], 'user_services': {}, 'other_services': {}},
+            },
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'kids-movies',
+                'movies_categorized': {'acquire': [{'tmdb_id': 200}], 'user_services': {}, 'other_services': {}},
+            },
+        ]
+
+        export_to_radarr(config, all_users_data, 'tmdb-key')
+
+        assert mock_create_from.call_count == 2
+
+        movies_client.add_movie.assert_called_once()
+        _, movies_kwargs = movies_client.add_movie.call_args
+        assert movies_kwargs['root_folder_path'] == '/movies'
+        assert movies_kwargs['quality_profile_id'] == 'qp-HD-1080p'
+        assert movies_kwargs['tag_ids'] == ['tag-Curatarr']
+
+        kids_client.add_movie.assert_called_once()
+        _, kids_kwargs = kids_client.add_movie.call_args
+        assert kids_kwargs['root_folder_path'] == '/kids-movies'
+        assert kids_kwargs['quality_profile_id'] == 'qp-SD'
+        assert kids_kwargs['tag_ids'] == ['tag-Curatarr-Kids']
+
+    @patch('recommenders.external_exports.create_radarr_client_from')
+    @patch('recommenders.external_exports.create_radarr_client')
+    def test_library_instance_override_with_field_fallback(self, mock_create, mock_create_from):
+        """Per-library arr.instance overrides url/api_key; omitted arr.* fields
+        fall back to the global radarr block."""
+        mock_create.return_value = _mock_radarr_client()
+        library_client = _mock_radarr_client()
+        mock_create_from.return_value = library_client
+
+        config = {
+            'radarr': {
+                'enabled': True,
+                'auto_sync': True,
+                'user_mode': 'combined',
+                'url': 'http://radarr:7878',
+                'api_key': 'global-key',
+                'root_folder': '/movies',
+                'quality_profile': 'HD-1080p',
+                'tag': 'Curatarr',
+            },
+            'libraries': [
+                {
+                    'id': 'kids-movies', 'name': 'Kids Movies', 'media_type': 'movie',
+                    'arr': {
+                        'root_folder': '/kids-movies',
+                        'instance': {'url': 'http://kids-radarr:7878', 'api_key': 'kids-key'},
+                    },
+                },
+            ],
+        }
+        all_users_data = [
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'kids-movies',
+                'movies_categorized': {'acquire': [{'tmdb_id': 300}], 'user_services': {}, 'other_services': {}},
+            },
+        ]
+
+        export_to_radarr(config, all_users_data, 'tmdb-key')
+
+        # Instance override used to build the per-library client
+        mock_create_from.assert_called_once_with('http://kids-radarr:7878', 'kids-key')
+
+        library_client.add_movie.assert_called_once()
+        _, kwargs = library_client.add_movie.call_args
+        assert kwargs['root_folder_path'] == '/kids-movies'   # library override
+        assert kwargs['quality_profile_id'] == 'qp-HD-1080p'  # falls back to global
+        assert kwargs['tag_ids'] == ['tag-Curatarr']            # falls back to global
+
+
 class TestExportToSonarr:
     """Tests for export_to_sonarr function"""
 
@@ -351,6 +525,182 @@ class TestExportToSonarr:
         export_to_sonarr(config, [], 'api_key')
 
         mock_create.assert_called_once()
+
+
+def _mock_sonarr_client():
+    """MagicMock SonarrClient that echoes routing args back so tests can
+    assert exactly what each per-library group resolved."""
+    client = MagicMock()
+    client.test_connection.return_value = None
+    client.get_series.return_value = []
+    client.get_quality_profile_id.side_effect = lambda name: f"qp-{name}"
+    client.get_quality_profiles.return_value = []
+    client.get_root_folder_path.side_effect = lambda path: path
+    client.get_root_folders.return_value = []
+    client.get_or_create_tag.side_effect = lambda name: f"tag-{name}"
+    client.series_exists.return_value = False
+    client.lookup_series.side_effect = lambda tvdb_id: {'title': f'Show {tvdb_id}'}
+    client.add_series.return_value = {}
+    return client
+
+
+class TestExportToSonarrPerLibraryRouting:
+    """Tests for #157 Phase 2: per-library Sonarr export routing"""
+
+    @patch('recommenders.external_exports.create_sonarr_client_from')
+    @patch('recommenders.external_exports.create_sonarr_client')
+    def test_single_library_no_library_id_matches_legacy_routing(self, mock_create, mock_create_from):
+        """No library_id on recs -> routes via the single synthesized/global library,
+        producing identical routing to the pre-Phase-2 flat-config flow."""
+        client = _mock_sonarr_client()
+        mock_create.return_value = client
+        mock_create_from.return_value = client
+
+        config = {
+            'sonarr': {
+                'enabled': True,
+                'auto_sync': True,
+                'user_mode': 'combined',
+                'url': 'http://sonarr:8989',
+                'api_key': 'global-key',
+                'root_folder': '/tv',
+                'quality_profile': 'HD-1080p',
+                'tag': 'Curatarr',
+                'monitor': True,
+                'search_for_series': True,
+                'series_type': 'standard',
+                'season_folder': True,
+            }
+        }
+        all_users_data = [
+            {
+                'username': 'jason',
+                'display_name': 'Jason',
+                'shows_categorized': {'acquire': [{'tvdb_id': 100}], 'user_services': {}, 'other_services': {}},
+            }
+        ]
+
+        export_to_sonarr(config, all_users_data, 'tmdb-key')
+
+        # Preflight client still created once from the global block (unchanged safety gate)
+        mock_create.assert_called_once_with(config)
+        # Per-library client resolves to the same global block via the no-library_id fallback
+        mock_create_from.assert_called_once_with('http://sonarr:8989', 'global-key')
+
+        client.add_series.assert_called_once()
+        _, kwargs = client.add_series.call_args
+        assert kwargs['root_folder_path'] == '/tv'
+        assert kwargs['quality_profile_id'] == 'qp-HD-1080p'
+        assert kwargs['tag_ids'] == ['tag-Curatarr']
+        assert kwargs['monitored'] is True
+        assert kwargs['search_for_missing_episodes'] is True
+        assert kwargs['season_folder'] is True
+        assert kwargs['series_type'] == 'standard'
+
+    @patch('recommenders.external_exports.create_sonarr_client_from')
+    @patch('recommenders.external_exports.create_sonarr_client')
+    def test_two_library_ids_build_two_clients_with_own_routing(self, mock_create, mock_create_from):
+        """Recs tagged with two different library_ids route through two independently
+        -resolved clients, each with its own root_folder/quality_profile/tag."""
+        mock_create.return_value = _mock_sonarr_client()
+
+        tv_client = _mock_sonarr_client()
+        anime_client = _mock_sonarr_client()
+        mock_create_from.side_effect = [tv_client, anime_client]
+
+        config = {
+            'sonarr': {
+                'enabled': True,
+                'auto_sync': True,
+                'user_mode': 'combined',
+                'url': 'http://sonarr:8989',
+                'api_key': 'global-key',
+            },
+            'libraries': [
+                {
+                    'id': 'tv-shows', 'name': 'TV Shows', 'media_type': 'tv',
+                    'arr': {'root_folder': '/tv', 'quality_profile': 'HD-1080p', 'tag': 'Curatarr'},
+                },
+                {
+                    'id': 'anime', 'name': 'Anime', 'media_type': 'tv',
+                    'arr': {'root_folder': '/anime', 'quality_profile': '4K', 'tag': 'Curatarr-Anime'},
+                },
+            ],
+        }
+        all_users_data = [
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'tv-shows',
+                'shows_categorized': {'acquire': [{'tvdb_id': 100}], 'user_services': {}, 'other_services': {}},
+            },
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'anime',
+                'shows_categorized': {'acquire': [{'tvdb_id': 200}], 'user_services': {}, 'other_services': {}},
+            },
+        ]
+
+        export_to_sonarr(config, all_users_data, 'tmdb-key')
+
+        assert mock_create_from.call_count == 2
+
+        tv_client.add_series.assert_called_once()
+        _, tv_kwargs = tv_client.add_series.call_args
+        assert tv_kwargs['root_folder_path'] == '/tv'
+        assert tv_kwargs['quality_profile_id'] == 'qp-HD-1080p'
+        assert tv_kwargs['tag_ids'] == ['tag-Curatarr']
+
+        anime_client.add_series.assert_called_once()
+        _, anime_kwargs = anime_client.add_series.call_args
+        assert anime_kwargs['root_folder_path'] == '/anime'
+        assert anime_kwargs['quality_profile_id'] == 'qp-4K'
+        assert anime_kwargs['tag_ids'] == ['tag-Curatarr-Anime']
+
+    @patch('recommenders.external_exports.create_sonarr_client_from')
+    @patch('recommenders.external_exports.create_sonarr_client')
+    def test_library_instance_override_with_field_fallback(self, mock_create, mock_create_from):
+        """Per-library arr.instance overrides url/api_key; omitted arr.* fields
+        fall back to the global sonarr block."""
+        mock_create.return_value = _mock_sonarr_client()
+        library_client = _mock_sonarr_client()
+        mock_create_from.return_value = library_client
+
+        config = {
+            'sonarr': {
+                'enabled': True,
+                'auto_sync': True,
+                'user_mode': 'combined',
+                'url': 'http://sonarr:8989',
+                'api_key': 'global-key',
+                'root_folder': '/tv',
+                'quality_profile': 'HD-1080p',
+                'tag': 'Curatarr',
+            },
+            'libraries': [
+                {
+                    'id': 'anime', 'name': 'Anime', 'media_type': 'tv',
+                    'arr': {
+                        'root_folder': '/anime',
+                        'instance': {'url': 'http://anime-sonarr:8989', 'api_key': 'anime-key'},
+                    },
+                },
+            ],
+        }
+        all_users_data = [
+            {
+                'username': 'jason', 'display_name': 'Jason', 'library_id': 'anime',
+                'shows_categorized': {'acquire': [{'tvdb_id': 300}], 'user_services': {}, 'other_services': {}},
+            },
+        ]
+
+        export_to_sonarr(config, all_users_data, 'tmdb-key')
+
+        # Instance override used to build the per-library client
+        mock_create_from.assert_called_once_with('http://anime-sonarr:8989', 'anime-key')
+
+        library_client.add_series.assert_called_once()
+        _, kwargs = library_client.add_series.call_args
+        assert kwargs['root_folder_path'] == '/anime'          # library override
+        assert kwargs['quality_profile_id'] == 'qp-HD-1080p'   # falls back to global
+        assert kwargs['tag_ids'] == ['tag-Curatarr']            # falls back to global
 
 
 class TestExportToMdblist:
