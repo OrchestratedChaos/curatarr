@@ -39,7 +39,12 @@ from recommenders.external import (
     discover_popular_by_genre,
     THIN_PROFILE_THRESHOLD,
     process_user,
+    process_user_movie_library,
+    process_user_tv_library,
     _stamp_library_id,
+    _merge_categorized,
+    _merge_user_runs,
+    _empty_categorized,
 )
 from utils.trakt import enhance_profile_with_trakt
 from collections import Counter
@@ -1637,6 +1642,447 @@ class TestMainLibraryResolution:
         for call in mock_process_user.call_args_list:
             assert call.kwargs['movie_library']['id'] == 'movies'
             assert call.kwargs['tv_library']['id'] == 'tv-shows'
+
+        # arr exports get the exact same list as the combined/Trakt exports
+        # in the non-fan-out path (library_id is None on every entry either
+        # way - see main()'s arr_export_data docstring)
+        assert mock_sonarr.call_args[0][1] is mock_radarr.call_args[0][1]
+        assert mock_sonarr.call_args[0][1] == mock_trakt.call_args[0][1]
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user_tv_library')
+    @patch('recommenders.external.process_user_movie_library')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_one_movie_one_tv_library_install_calls_process_user_once_per_user(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_process_movie_lib, mock_process_tv_lib,
+        mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        """#157 Phase 3.5 HARD invariant: an explicit 'libraries:' config with
+        exactly one movie library and one tv library is NOT a fan-out - it
+        takes the exact same combined process_user() path as a synthesized
+        single-library install (byte-identical call count/routing). The new
+        per-library fan-out functions are never called."""
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = {
+            'plex': {'url': 'http://x', 'token': 'y'},
+            'users': {'list': 'alice, bob'},
+            'huntarr': {'sequel_huntarr': False, 'horizon_huntarr': False},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'},
+            ],
+        }
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_process_user.return_value = {
+            'username': 'x', 'display_name': 'x',
+            'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': []},
+            'movie_profile': {}, 'show_profile': {}, 'user_services': [], 'library_id': None
+        }
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()
+
+        assert mock_process_user.call_count == 2
+        for call in mock_process_user.call_args_list:
+            assert call.kwargs['movie_library']['id'] == 'movies'
+            assert call.kwargs['tv_library']['id'] == 'tv-shows'
+
+        mock_process_movie_lib.assert_not_called()
+        mock_process_tv_lib.assert_not_called()
+
+        assert mock_sonarr.call_args[0][1] is mock_radarr.call_args[0][1]
+        assert mock_sonarr.call_args[0][1] == mock_trakt.call_args[0][1]
+
+
+class TestFanOutMultiLibrary:
+    """Tests for #157 Phase 3.5: external recommendation fan-out for configs
+    with 2+ libraries of the same media type."""
+
+    def _fake_movie_data(self, username, library_id):
+        return {
+            'username': username, 'display_name': username,
+            'movies_categorized': {
+                'user_services': {}, 'other_services': {},
+                'acquire': [{'tmdb_id': 100 if library_id == 'movies' else 200, 'library_id': library_id}],
+                'all_items': [{'tmdb_id': 100 if library_id == 'movies' else 200, 'library_id': library_id, 'score': 0.9}],
+            },
+            'shows_categorized': _empty_categorized(),
+            'movie_profile': {'lib': library_id}, 'show_profile': None,
+            'user_services': [], 'library_id': library_id,
+        }
+
+    def _fake_tv_data(self, username, library_id):
+        return {
+            'username': username, 'display_name': username,
+            'movies_categorized': _empty_categorized(),
+            'shows_categorized': {
+                'user_services': {}, 'other_services': {},
+                'acquire': [{'tmdb_id': 300, 'library_id': library_id}],
+                'all_items': [{'tmdb_id': 300, 'library_id': library_id, 'score': 0.8}],
+            },
+            'movie_profile': None, 'show_profile': {'lib': library_id},
+            'user_services': [], 'library_id': library_id,
+        }
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user_tv_library')
+    @patch('recommenders.external.process_user_movie_library')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_two_movie_libraries_one_user_fans_out_to_two_runs(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_process_movie_lib, mock_process_tv_lib,
+        mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        """2 movie libraries x 1 user -> 2 process_user_movie_library() calls
+        (one per library), 2 arr_export_data entries each carrying its own
+        real library_id, and the combined process_user() is never called."""
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = {
+            'plex': {'url': 'http://x', 'token': 'y'},
+            'users': {'list': 'alice'},
+            'huntarr': {'sequel_huntarr': False, 'horizon_huntarr': False},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                {'id': 'kids-movies', 'name': 'Kids Movies', 'section': 'Kids Movies', 'media_type': 'movie'},
+            ],
+        }
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_process_movie_lib.side_effect = lambda config, plex, username, library: self._fake_movie_data(username, library['id'])
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()
+
+        mock_process_user.assert_not_called()
+        mock_process_tv_lib.assert_not_called()
+        assert mock_process_movie_lib.call_count == 2
+        called_lib_ids = {call.args[3]['id'] for call in mock_process_movie_lib.call_args_list}
+        assert called_lib_ids == {'movies', 'kids-movies'}
+
+        # arr_export_data: 2 destinations, each with its own real library_id
+        arr_export_data = mock_radarr.call_args[0][1]
+        assert len(arr_export_data) == 2
+        assert {d['library_id'] for d in arr_export_data} == {'movies', 'kids-movies'}
+        assert mock_sonarr.call_args[0][1] == arr_export_data
+
+        # all_users_data (combined/Trakt view): one merged entry for alice
+        all_users_data = mock_trakt.call_args[0][1]
+        assert len(all_users_data) == 1
+        merged = all_users_data[0]
+        assert merged['library_id'] is None
+        assert len(merged['movies_categorized']['acquire']) == 2
+        acquired_tmdb_ids = {item['tmdb_id'] for item in merged['movies_categorized']['acquire']}
+        assert acquired_tmdb_ids == {100, 200}
+
+    @patch('recommenders.external.export_to_simkl')
+    @patch('recommenders.external.export_to_mdblist')
+    @patch('recommenders.external.export_to_radarr')
+    @patch('recommenders.external.export_to_sonarr')
+    @patch('recommenders.external.export_to_trakt')
+    @patch('recommenders.external.generate_combined_html')
+    @patch('recommenders.external.find_horizon_movies')
+    @patch('recommenders.external.find_missing_sequels')
+    @patch('recommenders.external.process_user_tv_library')
+    @patch('recommenders.external.process_user_movie_library')
+    @patch('recommenders.external.process_user')
+    @patch('recommenders.external.PlexServer')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.load_config')
+    @patch('recommenders.external.get_project_root')
+    @patch('sys.argv', ['external.py'])
+    def test_mixed_two_movie_one_tv_routes_per_media_type(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_plex_server,
+        mock_process_user, mock_process_movie_lib, mock_process_tv_lib,
+        mock_sequels, mock_horizon, mock_html,
+        mock_trakt, mock_sonarr, mock_radarr, mock_mdblist, mock_simkl
+    ):
+        """2 movie libraries + 1 tv library x 1 user: movies fan out to 2
+        scoped runs, tv still gets its own scoped (not combined) run since
+        entries must stay media-type-pure. 3 total arr_export_data entries,
+        movies routed via export_to_radarr's group, tv via export_to_sonarr's."""
+        mock_root.return_value = '/fake/root'
+        mock_load_config.return_value = {
+            'plex': {'url': 'http://x', 'token': 'y'},
+            'users': {'list': 'alice'},
+            'huntarr': {'sequel_huntarr': False, 'horizon_huntarr': False},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                {'id': 'kids-movies', 'name': 'Kids Movies', 'section': 'Kids Movies', 'media_type': 'movie'},
+                {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'},
+            ],
+        }
+        mock_get_tmdb.return_value = {'api_key': 'key', 'use_keywords': True}
+        mock_plex_server.return_value = Mock()
+        mock_process_movie_lib.side_effect = lambda config, plex, username, library: self._fake_movie_data(username, library['id'])
+        mock_process_tv_lib.side_effect = lambda config, plex, username, library: self._fake_tv_data(username, library['id'])
+        mock_html.return_value = None
+
+        from recommenders.external import main
+        main()
+
+        mock_process_user.assert_not_called()
+        assert mock_process_movie_lib.call_count == 2
+        assert mock_process_tv_lib.call_count == 1
+        assert mock_process_tv_lib.call_args.args[3]['id'] == 'tv-shows'
+
+        arr_export_data = mock_radarr.call_args[0][1]
+        assert len(arr_export_data) == 3
+        assert {d['library_id'] for d in arr_export_data} == {'movies', 'kids-movies', 'tv-shows'}
+
+        all_users_data = mock_trakt.call_args[0][1]
+        assert len(all_users_data) == 1
+        merged = all_users_data[0]
+        assert len(merged['movies_categorized']['acquire']) == 2
+        assert len(merged['shows_categorized']['acquire']) == 1
+
+
+class TestMergeHelpers:
+    """Tests for #157 Phase 3.5 fan-out merge helpers."""
+
+    def test_merge_categorized_combines_and_resorts(self):
+        cat_a = {
+            'user_services': {'Netflix': [{'tmdb_id': 1, 'score': 0.5}]},
+            'other_services': {}, 'acquire': [], 'all_items': [{'tmdb_id': 1, 'score': 0.5}],
+        }
+        cat_b = {
+            'user_services': {'Netflix': [{'tmdb_id': 2, 'score': 0.9}]},
+            'other_services': {'Hulu': [{'tmdb_id': 3, 'score': 0.6}]},
+            'acquire': [{'tmdb_id': 4, 'score': 0.1}],
+            'all_items': [{'tmdb_id': 2, 'score': 0.9}, {'tmdb_id': 3, 'score': 0.6}],
+        }
+
+        merged = _merge_categorized([cat_a, cat_b])
+
+        assert len(merged['user_services']['Netflix']) == 2
+        assert merged['other_services']['Hulu'][0]['tmdb_id'] == 3
+        assert merged['acquire'][0]['tmdb_id'] == 4
+        # Re-sorted by score descending across both inputs
+        assert [item['tmdb_id'] for item in merged['all_items']] == [2, 3, 1]
+
+    def test_merge_categorized_empty_list(self):
+        assert _merge_categorized([]) == _empty_categorized()
+
+    def test_merge_user_runs_movies_only(self):
+        movie_run = {
+            'display_name': 'Alice', 'user_services': ['netflix'],
+            'movies_categorized': {'user_services': {}, 'other_services': {}, 'acquire': [{'tmdb_id': 1}], 'all_items': [{'tmdb_id': 1, 'score': 0.5}]},
+            'movie_profile': {'genres': {}},
+        }
+
+        merged = _merge_user_runs('alice', [movie_run], [])
+
+        assert merged['username'] == 'alice'
+        assert merged['display_name'] == 'Alice'
+        assert merged['library_id'] is None
+        assert merged['movie_profile'] == {'genres': {}}
+        assert merged['show_profile'] is None
+        assert merged['shows_categorized'] == _empty_categorized()
+        assert len(merged['movies_categorized']['acquire']) == 1
+
+    def test_merge_user_runs_shows_only(self):
+        tv_run = {
+            'display_name': 'Alice', 'user_services': ['netflix'],
+            'shows_categorized': {'user_services': {}, 'other_services': {}, 'acquire': [{'tmdb_id': 1}], 'all_items': [{'tmdb_id': 1, 'score': 0.5}]},
+            'show_profile': {'genres': {}},
+        }
+
+        merged = _merge_user_runs('alice', [], [tv_run])
+
+        assert merged['movie_profile'] is None
+        assert merged['show_profile'] == {'genres': {}}
+        assert merged['movies_categorized'] == _empty_categorized()
+        assert len(merged['shows_categorized']['acquire']) == 1
+
+
+def _fanout_load_cache_side_effect(display_name, media_type, lib_id=None):
+    """Same fixture shape as _process_user_load_cache_side_effect but for
+    the single-media-type fan-out functions - one already-cached,
+    above-threshold item so discovery is skipped."""
+    if media_type == 'movies':
+        return {'100': {
+            'tmdb_id': 100, 'title': 'Cached Movie', 'year': 2020,
+            'rating': 7.5, 'vote_count': 500, 'score': 0.9, 'original_language': 'en'
+        }}
+    return {'200': {
+        'tmdb_id': 200, 'title': 'Cached Show', 'year': 2019,
+        'rating': 8.0, 'vote_count': 300, 'score': 0.9, 'original_language': 'en'
+    }}
+
+
+def _fanout_categorize_side_effect(items, tmdb_api_key, user_services, media_type):
+    item = {'tmdb_id': 999 if media_type == 'movie' else 888, 'title': f'{media_type}-item'}
+    return {'user_services': {}, 'other_services': {'Netflix': [item]}, 'acquire': [], 'all_items': [item]}
+
+
+class TestProcessUserMovieLibrary:
+    """Tests for process_user_movie_library() (#157 Phase 3.5 fan-out)."""
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_qualifies_cache_and_filename_when_multi_library(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile, mock_enhance,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_categorize, mock_markdown
+    ):
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = set()
+        mock_load_cache.side_effect = _fanout_load_cache_side_effect
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'kids-movies', 'name': 'Kids Movies', 'section': 'Kids Movies', 'media_type': 'movie'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'movie_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [], 'trakt': {},
+            'libraries': [
+                {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'},
+                library,
+            ],
+        }
+
+        result = process_user_movie_library(config, Mock(), 'alice', library)
+
+        assert mock_get_items.call_args[0][1] == 'Kids Movies'
+        assert mock_load_cache.call_args.kwargs['lib_id'] == 'kids-movies'
+        assert mock_save_cache.call_args.kwargs['lib_id'] == 'kids-movies'
+
+        assert result['library_id'] == 'kids-movies'
+        assert result['show_profile'] is None
+        assert result['shows_categorized'] == _empty_categorized()
+        movie_item = result['movies_categorized']['other_services']['Netflix'][0]
+        assert movie_item['library_id'] == 'kids-movies'
+
+        # Markdown filename qualified with the library id (>1 movie library)
+        assert mock_markdown.call_args.kwargs['library_suffix'] == '_kids-movies'
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_legacy_filename_when_single_library_of_this_type(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile, mock_enhance,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_categorize, mock_markdown
+    ):
+        """Mixed fan-out (movies multi, tv single) still in progress: this
+        media type has only ONE library, so its cache/filename stay legacy
+        (unqualified) even though this function is being used - #157 Phase
+        3.5's per-media-type independence rule."""
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = set()
+        mock_load_cache.side_effect = _fanout_load_cache_side_effect
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'movies', 'name': 'Movies', 'section': 'Movies', 'media_type': 'movie'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'movie_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [], 'trakt': {},
+            'libraries': [library],
+        }
+
+        result = process_user_movie_library(config, Mock(), 'alice', library)
+
+        assert mock_load_cache.call_args.kwargs['lib_id'] is None
+        assert mock_save_cache.call_args.kwargs['lib_id'] is None
+        assert mock_markdown.call_args.kwargs['library_suffix'] == ''
+        assert result['library_id'] == 'movies'
+
+
+class TestProcessUserTvLibrary:
+    """Tests for process_user_tv_library() (#157 Phase 3.5 fan-out)."""
+
+    @patch('recommenders.external.generate_markdown')
+    @patch('recommenders.external.categorize_by_streaming_service')
+    @patch('recommenders.external.save_cache')
+    @patch('recommenders.external.load_cache')
+    @patch('recommenders.external.load_ignore_list')
+    @patch('recommenders.external.enhance_profile_with_trakt')
+    @patch('recommenders.external.load_user_profile_from_cache')
+    @patch('recommenders.external.get_tmdb_config')
+    @patch('recommenders.external.get_library_items')
+    def test_qualifies_cache_and_filename_when_multi_library(
+        self, mock_get_items, mock_get_tmdb, mock_load_profile, mock_enhance,
+        mock_load_ignore, mock_load_cache, mock_save_cache, mock_categorize, mock_markdown
+    ):
+        mock_get_items.return_value = {'titles': set(), 'tmdb_ids': set()}
+        mock_get_tmdb.return_value = {'api_key': 'fake_key', 'use_keywords': True}
+        mock_load_profile.return_value = {'genres': {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = set()
+        mock_load_cache.side_effect = _fanout_load_cache_side_effect
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {'id': 'anime', 'name': 'Anime', 'section': 'Anime', 'media_type': 'tv'}
+        config = {
+            'plex': {}, 'users': {'preferences': {}},
+            'external_recommendations': {'show_limit': 1, 'min_relevance_score': 0.65},
+            'streaming_services': [], 'trakt': {},
+            'libraries': [
+                {'id': 'tv-shows', 'name': 'TV Shows', 'section': 'TV Shows', 'media_type': 'tv'},
+                library,
+            ],
+        }
+
+        result = process_user_tv_library(config, Mock(), 'alice', library)
+
+        assert mock_get_items.call_args[0][1] == 'Anime'
+        assert mock_load_cache.call_args.kwargs['lib_id'] == 'anime'
+        assert mock_save_cache.call_args.kwargs['lib_id'] == 'anime'
+
+        assert result['library_id'] == 'anime'
+        assert result['movie_profile'] is None
+        assert result['movies_categorized'] == _empty_categorized()
+        show_item = result['shows_categorized']['other_services']['Netflix'][0]
+        assert show_item['library_id'] == 'anime'
+        assert mock_markdown.call_args.kwargs['library_suffix'] == '_anime'
 
 
 class TestTVMovieGenreDetection:
