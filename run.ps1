@@ -41,7 +41,7 @@ function Check-Dependencies {
     if (-not $python) {
         Write-Red "X Python 3 not found"
         Write-Host ""
-        Write-Host "Please install Python 3.8+ from:"
+        Write-Host "Please install Python 3.10+ from:"
         Write-Host "  https://www.python.org/downloads/"
         Write-Host ""
         Write-Host "IMPORTANT: Check 'Add Python to PATH' during installation"
@@ -100,6 +100,59 @@ function Check-Dependencies {
 # AUTO-UPDATE FROM GITHUB (SSH-signed release tags only)
 # ------------------------------------------------------------------------
 
+# ConvertTo-VersionTuple: parses a dotted numeric version string (e.g.
+# "2.8.21") into an [int[]] tuple. Returns $null if any component isn't a
+# plain integer (mirrors the Python `except ValueError: return None` /
+# `sys.exit(1)` fail-closed behavior this replaces).
+function ConvertTo-VersionTuple {
+    param([string]$VersionString)
+
+    $parts = $VersionString.Trim().Split('.')
+    $tuple = New-Object 'System.Collections.Generic.List[int]'
+    foreach ($part in $parts) {
+        $n = 0
+        if (-not [int]::TryParse($part, [ref]$n)) {
+            return $null
+        }
+        $tuple.Add($n)
+    }
+    return ,$tuple.ToArray()
+}
+
+# Compare-VersionTuple: lexicographically compares two int[] version
+# tuples, same semantics as Python tuple comparison (element-wise, then
+# shorter-is-less on an equal-length common prefix). Returns -1, 0, or 1.
+function Compare-VersionTuple {
+    param([int[]]$A, [int[]]$B)
+
+    $minLen = [Math]::Min($A.Length, $B.Length)
+    for ($i = 0; $i -lt $minLen; $i++) {
+        if ($A[$i] -lt $B[$i]) { return -1 }
+        if ($A[$i] -gt $B[$i]) { return 1 }
+    }
+    if ($A.Length -lt $B.Length) { return -1 }
+    if ($A.Length -gt $B.Length) { return 1 }
+    return 0
+}
+
+# Sort-VersionsDescending: newest-first sort of {Tag, Version} objects by
+# their Version tuple. A plain O(n^2) selection sort — candidate counts
+# are a handful of release tags, and this avoids any PS-5.1 quirks around
+# casting scriptblocks to typed Comparison delegates.
+function Sort-VersionsDescending {
+    param([array]$Items)
+
+    $arr = @($Items)
+    for ($i = 0; $i -lt $arr.Count; $i++) {
+        for ($j = $i + 1; $j -lt $arr.Count; $j++) {
+            if ((Compare-VersionTuple $arr[$j].Version $arr[$i].Version) -gt 0) {
+                $tmp = $arr[$i]; $arr[$i] = $arr[$j]; $arr[$j] = $tmp
+            }
+        }
+    }
+    return $arr
+}
+
 # Select-VerifiedRelease: walks release tags (vX.Y.Z) newest-first,
 # skipping any that aren't strictly newer than $currentVersion. For each
 # remaining candidate, verifies it is a signed annotated tag whose
@@ -109,8 +162,29 @@ function Check-Dependencies {
 # $script:ReleaseSignerFingerprint. Returns the first (newest) tag that
 # passes both checks, or $null if no candidate qualifies (fail-closed) or
 # verification tooling is unavailable.
+#
+# Version parsing/sorting/comparison is done natively in PowerShell
+# (ConvertTo-VersionTuple / Compare-VersionTuple / Sort-VersionsDescending
+# above) rather than by shelling out to `python -c "<here-string>"`.
+# Windows PowerShell 5.1's native-argument marshalling strips the embedded
+# double quotes (e.g. `t.lstrip("v")`) out of a here-string passed as a
+# single argument, which turned every such call into a Python
+# SyntaxError — meaning this function silently and permanently returned
+# no candidates on stock Windows PowerShell 5.1. Native PowerShell parsing
+# removes that fragile boundary entirely for this step.
 function Select-VerifiedRelease {
-    param($pythonCmd, $currentVersion)
+    param($currentVersion)
+
+    # git writes the tag/signature verification status to stderr by
+    # design (parsed below). Merging that into the success stream via
+    # `2>&1` turns each line into an ErrorRecord; under the script-wide
+    # $ErrorActionPreference = "Stop" (needed elsewhere for real command
+    # failures) PowerShell treats encountering that ErrorRecord as a
+    # terminating error, aborting this function on git's normal, expected
+    # output instead of letting it be parsed. Scope a local override so
+    # only this function's own git-verify-tag output is captured rather
+    # than treated as fatal.
+    $ErrorActionPreference = "Continue"
 
     if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
         Write-Yellow "ssh-keygen not available - cannot verify signed releases."
@@ -127,41 +201,30 @@ function Select-VerifiedRelease {
         return $null
     }
 
-    # Sort candidates newest-first by numeric version (portable; mirrors
-    # run.sh's approach so behavior is identical cross-platform). Non
-    # vX.Y.Z tags are dropped here too.
-    $sortScript = @'
-import sys
-def key(t):
-    try:
-        return tuple(int(p) for p in t.lstrip("v").split("."))
-    except ValueError:
-        return None
-tags = [(key(t), t) for t in sys.argv[1:]]
-tags = [t for t in tags if t[0] is not None]
-tags.sort(key=lambda t: t[0], reverse=True)
-print("\n".join(t[1] for t in tags))
-'@
-    $sorted = @(& $pythonCmd -c $sortScript @candidates)
+    $currentTuple = ConvertTo-VersionTuple $currentVersion
+    if (-not $currentTuple) {
+        return $null
+    }
 
-    $cmpScript = @'
-import sys
-def parse(v):
-    return tuple(int(p) for p in v.strip().split("."))
-try:
-    a = parse(sys.argv[1])
-    b = parse(sys.argv[2])
-except ValueError:
-    sys.exit(1)
-sys.exit(0 if a > b else 1)
-'@
+    # Parse candidates and drop anything that isn't a plain vX.Y.Z numeric
+    # tag (mirrors run.sh's select_verified_release so behavior is
+    # identical cross-platform).
+    $parsed = @(
+        foreach ($tag in $candidates) {
+            if ([string]::IsNullOrWhiteSpace($tag)) { continue }
+            $tuple = ConvertTo-VersionTuple ($tag.TrimStart('v'))
+            if ($tuple) {
+                [PSCustomObject]@{ Tag = $tag; Version = $tuple }
+            }
+        }
+    )
+    if ($parsed.Count -eq 0) { return $null }
 
-    foreach ($tag in $sorted) {
-        if ([string]::IsNullOrWhiteSpace($tag)) { continue }
-        $tagVersion = $tag.TrimStart('v')
+    $sorted = Sort-VersionsDescending $parsed
 
-        $null = & $pythonCmd -c $cmpScript $tagVersion $currentVersion 2>$null
-        if ($LASTEXITCODE -ne 0) { continue }
+    foreach ($candidate in $sorted) {
+        if ((Compare-VersionTuple $candidate.Version $currentTuple) -le 0) { continue }
+        $tag = $candidate.Tag
 
         $verifyOutput = git -c "gpg.ssh.allowedSignersFile=$script:AllowedSignersFile" verify-tag --raw $tag 2>&1
         if ($LASTEXITCODE -ne 0) { continue }
@@ -223,7 +286,7 @@ function Check-ForUpdates {
                     return
                 }
 
-                $selectedTag = Select-VerifiedRelease -pythonCmd $pythonCmd -currentVersion $currentVersion
+                $selectedTag = Select-VerifiedRelease -currentVersion $currentVersion
 
                 if (-not $selectedTag) {
                     Write-Green "OK No verified signed release available - staying on current version v$currentVersion"
