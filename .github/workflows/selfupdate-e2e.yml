@@ -76,13 +76,18 @@ jobs:
       - name: Tamper - bad signature (must refuse, old server keeps serving)
         if: always()
         shell: bash
+        env:
+          MANIFEST: ${{ runner.temp }}/selfupdate-e2e/fixtures/manifest.json
         run: |
           set -euo pipefail
-          MANIFEST="$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json"
-          RELEASE_DIR=$(python -c "import json; print(json.load(open('$MANIFEST'))['releases']['bad_sig']['dir'])")
-          OLD_BINARY=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_binary'])")
-          OLD_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_version'])")
-          NEW_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['new_version'])")
+          # NOT python -c "...open('$MANIFEST')..." - confirmed via a
+          # real CI run that interpolating a raw Windows path (e.g.
+          # D:\a\_temp\...) into a Python string LITERAL via bash
+          # substitution lets Python's own escape processing corrupt it
+          # (\a becomes a literal BEL character) - reading the path via
+          # os.environ instead never touches Python's string-literal
+          # escape handling at all.
+          eval "$(python scripts/selfupdate_e2e/print_manifest_env.py bad_sig)"
           python scripts/selfupdate_e2e/run_scenario.py \
             --scenario bad_sig \
             --old-binary "$OLD_BINARY" --release-dir "$RELEASE_DIR" \
@@ -94,13 +99,11 @@ jobs:
       - name: Tamper - bad hash (must refuse, old server keeps serving)
         if: always()
         shell: bash
+        env:
+          MANIFEST: ${{ runner.temp }}/selfupdate-e2e/fixtures/manifest.json
         run: |
           set -euo pipefail
-          MANIFEST="$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json"
-          RELEASE_DIR=$(python -c "import json; print(json.load(open('$MANIFEST'))['releases']['bad_hash']['dir'])")
-          OLD_BINARY=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_binary'])")
-          OLD_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_version'])")
-          NEW_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['new_version'])")
+          eval "$(python scripts/selfupdate_e2e/print_manifest_env.py bad_hash)"
           python scripts/selfupdate_e2e/run_scenario.py \
             --scenario bad_hash \
             --old-binary "$OLD_BINARY" --release-dir "$RELEASE_DIR" \
@@ -112,13 +115,11 @@ jobs:
       - name: Rollback - new binary never boots (must restore + relaunch old)
         if: always()
         shell: bash
+        env:
+          MANIFEST: ${{ runner.temp }}/selfupdate-e2e/fixtures/manifest.json
         run: |
           set -euo pipefail
-          MANIFEST="$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json"
-          RELEASE_DIR=$(python -c "import json; print(json.load(open('$MANIFEST'))['releases']['rollback']['dir'])")
-          OLD_BINARY=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_binary'])")
-          OLD_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_version'])")
-          NEW_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['new_version'])")
+          eval "$(python scripts/selfupdate_e2e/print_manifest_env.py rollback)"
           python scripts/selfupdate_e2e/run_scenario.py \
             --scenario rollback \
             --old-binary "$OLD_BINARY" --release-dir "$RELEASE_DIR" \
