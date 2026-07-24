@@ -233,17 +233,28 @@ jobs:
   #
   # A handful of curatarr's macOS dependencies also don't publish a
   # macosx_*_universal2 wheel on PyPI - only separate x86_64/arm64 ones
-  # (pyyaml, ruamel.yaml.clib, and markupsafe, as of the versions
+  # (pyyaml, ruamel.yaml.clib, markupsafe, and cffi, as of the versions
   # pinned in requirements.txt/requirements-ui.txt - checked directly
-  # against PyPI's JSON API when this job was written). Those three get
-  # downloaded as both single-arch wheels and fused into a real
-  # universal2 wheel with `delocate-merge` (from the `delocate` package)
-  # before the PyInstaller build runs. If a future dependency bump adds
-  # another compiled-extension package without a universal2 wheel, this
-  # job will fail loudly at the PyInstaller step (single-arch .so bundled
-  # into a universal2 EXE) rather than silently shipping a broken
-  # binary - see the "Verify the binary is truly universal2" step below,
-  # which is exactly the same lipo check used to prove this locally.
+  # against PyPI's JSON API). Those get downloaded as both single-arch
+  # wheels and fused into a real universal2 wheel with `delocate-merge`
+  # (from the `delocate` package) before the PyInstaller build runs. If
+  # a future dependency bump adds another compiled-extension package
+  # without a universal2 wheel, this job will fail loudly at the
+  # PyInstaller step (single-arch .so bundled into a universal2 EXE)
+  # rather than silently shipping a broken binary - see the "Verify the
+  # binary is truly universal2" step below, which is exactly the same
+  # lipo check used to prove this locally.
+  #
+  # cffi is transitive (pulled in by cryptography, added in v2.8.29 for
+  # the self-update signature verifier) and was missed here the first
+  # time - it doesn't ship a universal2 wheel either, only thin
+  # cp<NN>-cp<NN> per-Python-version x86_64/arm64 wheels (unlike
+  # cryptography itself, which is NOT in this list: 48.0.1, the version
+  # pinned in requirements.txt, ships a real prebuilt universal2 wheel
+  # already - no fuse needed for it). This is exactly what broke the
+  # v2.8.29 release: the job DID fail loudly as designed, just on
+  # cryptography's own single-arch (49.0.0 dropped macOS x86_64
+  # entirely) rather than on this transitive dep - see PR #190.
   #
   # Verified locally on Apple Silicon (M1) before this job was written:
   # `lipo -archs dist/curatarr` -> "x86_64 arm64", a native arm64 launch
@@ -300,14 +311,24 @@ jobs:
 
           # Single-arch-only-on-PyPI deps that need delocate-merge fusing
           # into a universal2 wheel - see the job comment above.
-          THIN_WHEEL_DEPS=(pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3)
+          THIN_WHEEL_DEPS=(pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3 cffi==2.1.0)
 
           pip download --no-deps --only-binary=:all: --python-version 312 \
             --implementation cp --platform macosx_11_0_arm64 \
             -d fuse/arm64 "${THIN_WHEEL_DEPS[@]}"
+
+          # x86_64 wheels for these deps use different minimum-macOS-version
+          # platform tags depending on the package - checked directly
+          # against PyPI (pip's --platform match is an EXACT tag match,
+          # not a compatibility range, so a single shared tag can't fetch
+          # all of them): pyyaml/ruamel.yaml.clib/markupsafe publish
+          # macosx_10_13_x86_64; cffi publishes macosx_10_15_x86_64.
           pip download --no-deps --only-binary=:all: --python-version 312 \
             --implementation cp --platform macosx_10_13_x86_64 \
-            -d fuse/x86_64 "${THIN_WHEEL_DEPS[@]}"
+            -d fuse/x86_64 pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3
+          pip download --no-deps --only-binary=:all: --python-version 312 \
+            --implementation cp --platform macosx_10_15_x86_64 \
+            -d fuse/x86_64 cffi==2.1.0
 
           for arm_whl in fuse/arm64/*.whl; do
             base="$(basename "$arm_whl")"
