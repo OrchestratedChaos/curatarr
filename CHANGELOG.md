@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.31] - 2026-07-24
+
+### Changed
+- **Update notice now shown for every `general.update_mode`, including `off`**: an opted-out install silently missing every update forever was a bug, not a feature - `off` only ever meant "don't apply automatically", never "don't tell me". The web UI's dismissible banner (`web/app.py`'s `_update_banner_context`) and the CLI's advisory notice (`utils/cli.py`'s `print_update_notice`) both now check for a newer release regardless of mode; `utils/update_check.py`'s `get_latest_version()` no longer special-cases `update_mode: off` to skip the network entirely - every mode uses the exact same ~12h-cached fetch path. Nothing about *applying* updates changed: `force` still auto-applies (source installs only), `notify`/`off` are still manual either way, and `run.sh`/`run.ps1`'s own interactive `Update available: vX. Update now? [y/N]` launch prompt is still skipped for `off` (that's now the only thing `off` actually disables)
+- **Update dismissal is now a 7-day snooze, not effectively permanent**: the web banner's dismiss button used to set a cookie that suppressed one specific version string for a full year; it's now server-side state (`utils/update_dismissal.py`, new - a small `cache/dismissed_update.json`, same convention `utils/update_check.py`'s own cache file uses) snoozed for exactly 7 days, after which the same version is offered again if you're still on it. A release newer than the one dismissed always overrides an active snooze immediately - dismissal is scoped to the exact version string, never "any future update". Server-side (rather than cookie) storage is also what lets the CLI notice respect the same dismissal the web UI wrote, and vice versa - the old per-version cookie (`UPDATE_DISMISS_COOKIE`) is removed
+
 ## [2.8.30] - 2026-07-24
 
 ### Added

@@ -868,16 +868,48 @@ class TestPrintUpdateNotice:
     users - see docstring)."""
 
     @patch('utils.cli.update_available')
-    def test_off_mode_never_calls_update_available(self, mock_update_available, capsys):
+    def test_off_mode_no_newer_version_prints_nothing(self, mock_update_available, capsys):
+        mock_update_available.return_value = ('2.8.28', '2.8.28', False)
         print_update_notice('off')
-        mock_update_available.assert_not_called()
+        mock_update_available.assert_called_once_with(update_mode='off')
         assert capsys.readouterr().out == ''
+
+    @patch('utils.cli.update_available')
+    def test_off_mode_still_prints_when_a_newer_version_exists(self, mock_update_available, capsys, monkeypatch):
+        """As of v2.8.31, 'off' only means "don't auto-apply" - it must
+        NOT suppress the notice itself (that was the bug this fixed)."""
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        mock_update_available.return_value = ('2.9.0', '2.8.28', True)
+        print_update_notice('off')
+        out = capsys.readouterr().out
+        assert 'Update available: v2.9.0' in out
 
     @patch('utils.cli.update_available')
     def test_no_newer_version_prints_nothing(self, mock_update_available, capsys):
         mock_update_available.return_value = ('2.8.28', '2.8.28', False)
         print_update_notice('notify')
         assert capsys.readouterr().out == ''
+
+    @patch('utils.cli.is_dismissed')
+    @patch('utils.cli.update_available')
+    def test_dismissed_version_prints_nothing(self, mock_update_available, mock_is_dismissed, capsys):
+        """Respects the same 7-day snooze the web UI's dismiss button
+        writes (utils.update_dismissal) - see tests/test_update_dismissal.py
+        for the snooze-window/version-override unit tests themselves."""
+        mock_update_available.return_value = ('2.9.0', '2.8.28', True)
+        mock_is_dismissed.return_value = True
+        print_update_notice('notify')
+        mock_is_dismissed.assert_called_once_with('2.9.0')
+        assert capsys.readouterr().out == ''
+
+    @patch('utils.cli.is_dismissed')
+    @patch('utils.cli.update_available')
+    def test_non_dismissed_version_still_prints(self, mock_update_available, mock_is_dismissed, capsys, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        mock_update_available.return_value = ('2.9.0', '2.8.28', True)
+        mock_is_dismissed.return_value = False
+        print_update_notice('notify')
+        assert 'Update available: v2.9.0' in capsys.readouterr().out
 
     @patch('utils.cli.update_available')
     def test_source_notify_mode_points_at_run_sh(self, mock_update_available, capsys, monkeypatch):

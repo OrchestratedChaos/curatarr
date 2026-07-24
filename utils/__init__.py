@@ -68,6 +68,14 @@ from .update_check import (
     update_available,
 )
 
+# Update-dismissal (7-day snooze) state - shared by the web banner and
+# the CLI notice (see module docstring)
+from .update_dismissal import (
+    DISMISS_SNOOZE_DAYS,
+    record_dismissal,
+    is_dismissed,
+)
+
 # In-binary self-update utilities (frozen/PyInstaller binaries only -
 # see module docstring; source installs keep using run.sh/run.ps1)
 from .self_update import (
@@ -366,6 +374,10 @@ __all__ = [
     'parse_version',
     'get_latest_version',
     'update_available',
+    # Update dismissal (7-day snooze)
+    'DISMISS_SNOOZE_DAYS',
+    'record_dismissal',
+    'is_dismissed',
     # Display
     'RED',
     'GREEN',
