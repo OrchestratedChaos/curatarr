@@ -501,9 +501,16 @@ def _relaunch_ui(project_root: str, port: int) -> None:
         subprocess.Popen(
             cmd, cwd=project_root, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            # NOT DETACHED_PROCESS - confirmed via real end-to-end
+            # testing (see utils/self_update_handoff.py's identical
+            # comment, and this repo's v2.8.29 PR description) that a
+            # powershell.exe child launched with DETACHED_PROCESS
+            # starts and exits immediately without running any of the
+            # script's content - CREATE_NO_WINDOW is the flag that
+            # actually keeps it invisible AND working.
             creationflags=(
                 getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
-                | getattr(subprocess, 'DETACHED_PROCESS', 0x00000008)
+                | getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
             ),
         )
     else:

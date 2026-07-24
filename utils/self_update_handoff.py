@@ -387,9 +387,24 @@ def write_and_launch_handoff_script(
         close_fds=True,
     )
     if os.name == 'nt':
+        # NOT DETACHED_PROCESS - confirmed via real end-to-end testing
+        # (see this repo's v2.8.29 PR description) that a
+        # powershell.exe launched with DETACHED_PROCESS starts and
+        # exits almost immediately WITHOUT running any of the script's
+        # content at all (no file it should have written ever
+        # appears, no error either - it just silently never executes).
+        # A plain python.exe/curatarr.exe child is unaffected by the
+        # same flag (confirmed too - that's exactly what spawns this
+        # worker process itself, via web/update_apply.py's
+        # _spawn_worker, which works fine); this looks specific to
+        # PowerShell's own console-host startup apparently requiring
+        # SOME console to exist, even hidden, which DETACHED_PROCESS
+        # denies it outright. CREATE_NO_WINDOW allocates a console but
+        # keeps it invisible - PowerShell runs correctly under it, and
+        # nothing becomes visible on the user's desktop either way.
         popen_kwargs['creationflags'] = (
             getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
-            | getattr(subprocess, 'DETACHED_PROCESS', 0x00000008)
+            | getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
         )
     else:
         popen_kwargs['start_new_session'] = True
