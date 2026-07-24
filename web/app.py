@@ -207,17 +207,15 @@ def create_app(project_root: str = None) -> Flask:
         frontend (base.html) polls /healthz to detect the server coming
         back up on the new version.
         """
-        # Refuse to even attempt an update while a recommender run is
-        # in flight: that job's subprocess is itself another instance
-        # of this same binary (frozen) sharing PyInstaller onefile
-        # extraction state with this server process (see
-        # utils.self_update.fresh_extraction_temp_dir's docstring) -
-        # killing/swapping this server out from under it could crash
-        # the running job. web/job_runner.py's own LOCK_FILENAME is
-        # checked again, cross-process, by the detached worker itself
-        # right before it shuts anything down (see
-        # web/update_apply.py's _run_worker) as a race-safe second
-        # gate - this route-level check is just the immediate,
+        # Refuse to even attempt an update while a recommender run is in
+        # flight: that job's subprocess is itself another instance of
+        # this same binary (frozen), and killing/swapping this server
+        # out from under it while it's running is simply not something
+        # to risk. web/job_runner.py's own LOCK_FILENAME is checked
+        # again, cross-process, by the detached worker itself right
+        # before it shuts anything down (see web/update_apply.py's
+        # _run_worker / _recommender_job_in_progress) as a race-safe
+        # second gate - this route-level check is just the immediate,
         # synchronous "no" for the common case of a user clicking
         # Update now while a run they can see is still going.
         if app.job_manager.is_running():

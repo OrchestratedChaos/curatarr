@@ -43,9 +43,23 @@ never "run something unverified")
    trusted as the source of truth for what the downloaded asset's
    SHA256 should be. The asset's actual SHA256 is computed locally and
    compared - any mismatch raises HashMismatchError, again fail closed.
-5. Only after BOTH of the above succeed does swap_binary() touch the
-   filesystem at all. See that function's docstring for the atomic,
-   per-OS swap mechanics and their own fail-safe/rollback guarantees.
+5. Only after BOTH of the above succeed does anything touch the
+   filesystem at the target path. Everything above (steps 1-4) lives
+   entirely in this module and is IDENTICAL regardless of caller. What
+   happens with the resulting verified binary differs by caller:
+     - CLI (`curatarr --self-update`): perform_self_update() swaps it
+       into place IN-PROCESS (swap_binary()) and returns - safe here
+       specifically because the CLI never relaunches anything
+       afterward (see that function's docstring).
+     - Web UI "Update now" (frozen binaries): download_and_verify_update()
+       is called directly, and the resulting VerifiedUpdate is handed
+       off to a plain EXTERNAL script (utils/self_update_handoff.py)
+       that does the actual swap+relaunch AFTER this process exits -
+       see that module's docstring for why the swap+relaunch could not
+       safely stay in-process for this caller (PyInstaller onefile
+       extraction-directory state racing/inheriting across a
+       spawned-from-within-a-frozen-process relaunch, confirmed via
+       real end-to-end testing - see the v2.8.29 PR history).
 
 Why pure Python (the `cryptography` package), not shelling out to
 `ssh-keygen -Y verify`
@@ -683,9 +697,11 @@ def _swap_windows(current_path: str, new_binary_path: str) -> None:
     then move the verified new binary into current's place. If the
     second step fails after the first succeeded, the rename is undone
     (current_path restored to the ORIGINAL binary) before raising - a
-    failed swap must never leave current_path missing. See
-    relaunch_binary()'s _binary_to_relaunch for the very-last-resort
-    fallback if even that rollback fails."""
+    failed swap must never leave current_path missing. In the
+    extremely unlikely case that the rollback ITSELF also fails,
+    SwapError's message points at where the original binary can still
+    be recovered from (`<current_path>.old`) - see cleanup_stale_old_binary
+    for the normal (successful-swap) cleanup of that same sidecar path."""
     old_path = _old_sidecar_path(current_path)
     try:
         if os.path.isfile(old_path):
@@ -729,40 +745,33 @@ def swap_binary(current_path: str, new_binary_path: str) -> None:
         _swap_posix(current_path, new_binary_path)
 
 
-def _binary_to_relaunch(current_path: str) -> str:
-    """Whatever's actually a working file right now: current_path after
-    a successful swap (or when no swap was even attempted, e.g.
-    verification failed first), or its `.old` sidecar in the
-    last-resort case where a Windows swap's own rollback also failed
-    (see _swap_windows) - the true "never leave the user without a
-    working app" fallback."""
-    if os.path.isfile(current_path):
-        return current_path
-    old_path = _old_sidecar_path(current_path)
-    if os.path.isfile(old_path):
-        return old_path
-    raise SwapError(f"No working binary found at {current_path} or {old_path} - cannot relaunch")
-
-
 # PyInstaller onefile internals: on first launch, the bootloader
 # extracts the bundled archive to a temp dir, sets _MEIPASS2 (pointing
 # at it) in ITS OWN environment, then re-execs itself - the resulting
 # CHILD process (the one that actually runs this Python code) inherits
 # that _MEIPASS2, uses it as sys._MEIPASS, and skips re-extracting.
-# That's fine for the process it was set for, but if THIS process (the
-# self-update worker or CLI, both already running with _MEIPASS2 in
-# os.environ) spawns ANOTHER, INDEPENDENT curatarr.exe instance while
-# blindly inheriting os.environ, the new instance's bootloader sees
-# _MEIPASS2 ALREADY set and skips ITS OWN extraction too - reusing a
-# temp directory that may belong to a DIFFERENT build (post-swap) or
-# may already be gone (cleaned up when the just-killed old server's own
-# parent bootloader process exited) - confirmed via a real end-to-end
-# test: without stripping this, the relaunched process crashed inside
-# werkzeug's own package-metadata lookup because it was running against
-# the wrong/missing extraction directory. Every spawn of a fresh,
-# independent curatarr.exe instance (this module's relaunch_binary, and
-# web/update_apply.py's _spawn_worker) must sanitize this out so the
-# new process always does its own clean extraction.
+# That's fine for the process it was set for, but if THIS process
+# spawns ANOTHER, INDEPENDENT curatarr.exe instance while blindly
+# inheriting os.environ, the new instance's bootloader sees _MEIPASS2
+# ALREADY set and skips ITS OWN extraction too - reusing a temp
+# directory that may belong to a DIFFERENT build or may already be torn
+# apart by another process's cleanup.
+#
+# This was investigated extensively (see the v2.8.29 PR history) as the
+# suspected cause of a relaunched-process crash inside werkzeug's own
+# package-metadata lookup - stripping this alone, and later also giving
+# spawned processes their own fresh TEMP/TMP, did NOT fully resolve it,
+# which is what motivated the bigger architectural fix: the web UI's
+# "Update now" flow no longer launches the new binary from within any
+# frozen process at all - see utils/self_update_handoff.py's module
+# docstring for the full replacement design (a plain external script,
+# fully decoupled from any PyInstaller onefile runtime, does the actual
+# swap+relaunch after the frozen worker has exited). Kept here anyway,
+# applied to the worker's own spawn (web/update_apply.py's
+# _spawn_worker) as defense-in-depth: real end-to-end testing never
+# established this alone was harmful, and it costs nothing to keep
+# stripping a variable that has no legitimate reason to be inherited by
+# an unrelated, independent process.
 _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP = ('_MEIPASS2',)
 
 
@@ -774,134 +783,52 @@ def sanitize_frozen_relaunch_env(env: dict) -> dict:
     return {k: v for k, v in env.items() if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP}
 
 
-def fresh_extraction_temp_dir() -> str:
-    """A guaranteed-unique directory under the system temp root, meant
-    to be pointed at by TEMP/TMP for any freshly-spawned, independent
-    curatarr.exe instance involved in a self-update - the worker
-    (web/update_apply.py's _spawn_worker) AND the final relaunch (this
-    module's relaunch_binary) both use this, and for the SAME
-    underlying reason.
-
-    Confirmed via a real end-to-end test on Windows that stripping
-    _MEIPASS2 alone (sanitize_frozen_relaunch_env above) is NOT
-    sufficient: PyInstaller onefile's bootloader can still resolve
-    MULTIPLE independent processes to the SAME extraction-directory
-    identity if it derives that identity from something tied to the
-    executable's PATH rather than random per-launch entropy. The
-    specific failure chain observed: the worker (spawned from the OLD
-    server, at that point still the same on-disk exe/path) shared its
-    _MEIPASS extraction with the old server. When the old server was
-    then force-killed (see _shut_down_old_server), its own parent
-    bootloader process's exit-time cleanup tore apart that SHARED
-    extraction directory - files disappearing out from under the
-    worker WHILE IT WAS STILL RUNNING AND USING THEM. The result was a
-    hard PyInstaller bootloader error dialog ("Failed to execute
-    script" / `pyi_rth_multiprocessing` failing with `[Errno 2] No such
-    file or directory: ...\\_MEI*\\base_library.zip...`) - a modal
-    MessageBox the bootloader itself shows directly, NOT a standard
-    Windows Error Reporting crash that
-    curatarr_app.py's_suppress_windows_crash_dialogs() (SetErrorMode)
-    can suppress, since it isn't routed through the OS's WER path at
-    all.
-
-    Giving the worker its OWN extraction directory from the moment it's
-    spawned - decoupled from the old server's before that old server is
-    ever killed - closes this off entirely: nothing the old server's
-    death does to ITS OWN extraction directory can ever affect the
-    worker's. The final relaunch gets the same treatment for the
-    earlier-observed, related reason (a relaunch immediately after a
-    binary swap could otherwise still inherit a stale/wrong extraction
-    tied to the pre-swap build). Both sidestep whatever the exact reuse
-    mechanism is, rather than relying on understanding (or trusting the
-    stability of) PyInstaller's internals across versions.
-
-    PyInstaller's bootloader cleans up its own extracted subdirectory
-    within this on normal process exit; this function's directory
-    itself is deliberately left for the OS's own temp-cleanup policies
-    rather than actively removed here (there is no reliable point in a
-    detached/relaunched process's lifecycle to clean it up from the
-    OUTSIDE).
-    """
-    # tempfile.mkdtemp() itself already guarantees a fresh, collision-free
-    # name (unlike a hand-rolled pid+timestamp scheme, which two calls
-    # within the same millisecond could collide on).
-    return tempfile.mkdtemp(prefix=f'curatarr-relaunch-{os.getpid()}-')
-
-
-def relaunch_binary(port: Optional[int] = None) -> None:
-    """
-    Spawn a fresh, DETACHED process from whatever's the working binary
-    right now (see _binary_to_relaunch) and return immediately - mirrors
-    web/update_apply.py's _relaunch_ui detachment flags exactly (see
-    that module's docstring for why start_new_session / DETACHED_PROCESS
-    matter: without them, this process exiting moments later would also
-    tear down a still-attached child).
-
-    `port` is only passed by the web "Update now" flow
-    (web/update_apply.py's frozen worker branch, via its own
-    _relaunch_ui) so the relaunched process re-binds the UI on the SAME
-    port the old one used (CURATARR_UI_PORT) and skips auto-opening a
-    new browser tab (CURATARR_SKIP_BROWSER_OPEN - see web/app.py's
-    main()); the web UI always binds 127.0.0.1 regardless (see that
-    same main()), so there's no separate host to pass through. A bare
-    CLI `--self-update` run passes neither; the relaunched process just
-    starts normally.
-    """
-    current_path = current_binary_path()
-    exe_path = _binary_to_relaunch(current_path)
-
-    env = sanitize_frozen_relaunch_env(os.environ)
-    # See fresh_extraction_temp_dir's docstring - without this, a
-    # relaunch right after a binary swap can inherit a PyInstaller
-    # onefile extraction directory belonging to the PRE-swap build.
-    fresh_temp = fresh_extraction_temp_dir()
-    env['TEMP'] = fresh_temp
-    env['TMP'] = fresh_temp
-    if port is not None:
-        env['CURATARR_UI_PORT'] = str(port)
-        env['CURATARR_SKIP_BROWSER_OPEN'] = '1'
-
-    popen_kwargs = dict(
-        env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-        close_fds=True,
-    )
-    if os.name == 'nt':
-        popen_kwargs['creationflags'] = (
-            getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
-            | getattr(subprocess, 'DETACHED_PROCESS', 0x00000008)
-        )
-    else:
-        popen_kwargs['start_new_session'] = True
-
-    subprocess.Popen([exe_path], **popen_kwargs)
-
-
 # =============================================================================
-# Orchestration - the one function everything above exists to support.
+# Orchestration
 # =============================================================================
 
-def perform_self_update(force_refresh: bool = True) -> str:
-    """
-    The full download -> verify -> swap sequence (module docstring).
-    Returns the applied version string (no leading 'v') on success.
+class VerifiedUpdate(NamedTuple):
+    """A downloaded, signature+hash-verified (but not yet applied)
+    update, as returned by download_and_verify_update(). `asset_path`
+    is a real file sitting in the SAME directory as the running
+    executable (see that function's docstring for why) - the caller
+    owns it from this point on: either swap it in directly
+    (perform_self_update, the CLI path) or hand it off to the external
+    swap+relaunch script (the web "Update now" path - see
+    utils/self_update_handoff.py). Either way, if the caller doesn't
+    consume `asset_path` (move/rename it away), IT is responsible for
+    removing it - this function never leaves it behind on its own
+    success path, only hands over ownership."""
+    version: str
+    asset_path: str
+    asset_name: str
 
-    Raises one of this module's *Error subclasses on ANY failure -
-    callers must treat every one identically: do NOT swap anything,
-    keep/relaunch the CURRENT binary (see relaunch_binary, which works
-    the same regardless of whether an update was actually applied).
-    Either every verification step below succeeds and swap_binary()
-    runs, or nothing on disk changes at all - there is no partial-update
-    state.
+
+def download_and_verify_update(force_refresh: bool = True) -> VerifiedUpdate:
+    """
+    Steps 1-4 of the self-update chain (module docstring): determine the
+    target version, pick this platform's asset, download it plus
+    SHA256SUMS.txt/.sig, and verify the pinned-key signature and hash.
+    Deliberately stops BEFORE touching the currently-running executable
+    at all - what happens next (an in-process swap for the CLI, or a
+    hand-off to an external script for the web-triggered relaunch flow)
+    is entirely up to the caller.
+
+    Raises one of this module's *Error subclasses on ANY failure - a
+    caller must treat every one identically: nothing was touched on
+    disk except a now-cleaned-up temp download, keep running the
+    current binary.
 
     The verified asset is downloaded directly into the SAME directory as
     the running executable (never the system temp dir) specifically so
-    the final swap is always a same-volume os.replace()/os.rename() -
-    Windows' MoveFileEx (which os.replace/os.rename use under the hood)
-    refuses a cross-volume replace outright, and %TEMP% is not
-    guaranteed to be on the same drive as wherever the user put
+    a subsequent same-volume os.replace()/os.rename() swap is always
+    possible - Windows' MoveFileEx (which os.replace/os.rename use
+    under the hood) refuses a cross-volume replace outright, and %TEMP%
+    is not guaranteed to be on the same drive as wherever the user put
     curatarr.exe (see docs/BINARIES.md: "put it in a folder of its
-    own").
+    own"). SHA256SUMS.txt/.sig never need to survive past this
+    function returning, so they stay in an ordinary auto-cleaned temp
+    directory.
     """
     if not getattr(sys, 'frozen', False):
         raise NotFrozenError(
@@ -935,17 +862,48 @@ def perform_self_update(force_refresh: bool = True) -> str:
         try:
             _download_to_file(release_asset_url(target_version, asset_name), asset_path)
             verify_downloaded_asset(asset_path, sums_path, sig_path, asset_name)
-            swap_binary(current_path, asset_path)
-        finally:
-            # swap_binary() (on success) moves asset_path away via
-            # os.replace(); on a verification failure raised BEFORE
-            # swap_binary() ever ran, it's still sitting here - clean up
-            # defensively either way so a failed update never litters
-            # the install directory with a stray .tmp file.
+        except Exception:
             if os.path.isfile(asset_path):
                 try:
                     os.remove(asset_path)
                 except OSError:
                     pass
+            raise
 
-    return target_version
+    return VerifiedUpdate(version=target_version, asset_path=asset_path, asset_name=asset_name)
+
+
+def perform_self_update(force_refresh: bool = True) -> str:
+    """
+    The CLI's `--self-update` path (curatarr_app.py's
+    _run_self_update_cli): download+verify (see
+    download_and_verify_update), then swap the verified binary into
+    place IN-PROCESS, and return the applied version string. Safe to do
+    the swap in-process here specifically because the CLI never
+    relaunches anything afterward (the process just exits - see
+    _run_self_update_cli's docstring) - there is no subsequent spawn of
+    a new curatarr.exe instance from within this one to race a
+    PyInstaller onefile extraction directory against, which is what
+    made the WEB UI's relaunch flow unsafe to do this way (see
+    utils/self_update_handoff.py's module docstring).
+
+    Raises one of this module's *Error subclasses on ANY failure - do
+    NOT swap anything, keep running the current binary. Either every
+    verification step succeeds and swap_binary() runs, or nothing on
+    disk changes at all - there is no partial-update state.
+    """
+    verified = download_and_verify_update(force_refresh=force_refresh)
+    try:
+        swap_binary(current_binary_path(), verified.asset_path)
+    finally:
+        # swap_binary() (on success) moves asset_path away via
+        # os.replace(); if it raised before doing so, it's still
+        # sitting here - clean up defensively either way so a failed
+        # update never litters the install directory with a stray
+        # .tmp file.
+        if os.path.isfile(verified.asset_path):
+            try:
+                os.remove(verified.asset_path)
+            except OSError:
+                pass
+    return verified.version

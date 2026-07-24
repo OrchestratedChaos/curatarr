@@ -837,27 +837,6 @@ class TestCleanupStaleOldBinary:
             assert not (tmp_path / 'curatarr.exe.old').exists()
 
 
-# =============================================================================
-# Relaunch
-# =============================================================================
-
-class TestBinaryToRelaunch:
-    def test_current_path_when_it_exists(self, tmp_path):
-        current = tmp_path / 'curatarr.exe'
-        current.write_bytes(b'x')
-        assert self_update._binary_to_relaunch(str(current)) == str(current)
-
-    def test_falls_back_to_old_sidecar(self, tmp_path):
-        current = tmp_path / 'curatarr.exe'
-        old = tmp_path / 'curatarr.exe.old'
-        old.write_bytes(b'x')
-        assert self_update._binary_to_relaunch(str(current)) == str(old)
-
-    def test_raises_when_neither_exists(self, tmp_path):
-        current = tmp_path / 'curatarr.exe'
-        with pytest.raises(self_update.SwapError, match='No working binary'):
-            self_update._binary_to_relaunch(str(current))
-
 
 class TestSanitizeFrozenRelaunchEnv:
     """PyInstaller onefile's internal _MEIPASS2 bootloader hand-off var
@@ -885,108 +864,21 @@ class TestSanitizeFrozenRelaunchEnv:
         assert '_MEIPASS2' in env  # original untouched - a copy was returned
 
 
-class TestFreshExtractionTempDir:
-    """Regression test for the real end-to-end failure this fixes - see
-    fresh_extraction_temp_dir's docstring: sanitizing _MEIPASS2 alone
-    wasn't enough, because PyInstaller onefile could still resolve to
-    the SAME extraction directory identity for an independent process,
-    reusing (partially torn-apart) files from the pre-swap build."""
-
-    def test_returns_a_directory_that_exists(self):
-        result = self_update.fresh_extraction_temp_dir()
-        assert os.path.isdir(result)
-
-    def test_two_calls_return_different_directories(self):
-        first = self_update.fresh_extraction_temp_dir()
-        second = self_update.fresh_extraction_temp_dir()
-        assert first != second
-
-    def test_directory_is_under_the_system_temp_root(self):
-        result = self_update.fresh_extraction_temp_dir()
-        assert result.startswith(tempfile.gettempdir())
-
-
-class TestRelaunchBinary:
-    @patch('utils.self_update.subprocess.Popen')
-    def test_sets_fresh_temp_and_tmp_env_vars(self, mock_popen, tmp_path):
-        """Regression test for the real end-to-end swap+relaunch
-        failure - see fresh_extraction_temp_dir's docstring."""
-        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
-            (tmp_path / 'curatarr').write_bytes(b'x')
-            self_update.relaunch_binary()
-        _, kwargs = mock_popen.call_args
-        assert kwargs['env']['TEMP'] == kwargs['env']['TMP']
-        assert os.path.isdir(kwargs['env']['TEMP'])
-        assert kwargs['env']['TEMP'].startswith(tempfile.gettempdir())
-
-    @patch('utils.self_update.subprocess.Popen')
-    def test_relaunches_current_binary_with_no_port(self, mock_popen, tmp_path):
-        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
-            (tmp_path / 'curatarr').write_bytes(b'x')
-            self_update.relaunch_binary()
-        args, kwargs = mock_popen.call_args
-        assert args[0] == [str(tmp_path / 'curatarr')]
-        assert 'CURATARR_UI_PORT' not in kwargs['env']
-
-    @patch('utils.self_update.subprocess.Popen')
-    def test_sets_port_env_and_skips_browser_open_when_port_given(self, mock_popen, tmp_path):
-        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
-            (tmp_path / 'curatarr').write_bytes(b'x')
-            self_update.relaunch_binary(port=8787)
-        _, kwargs = mock_popen.call_args
-        assert kwargs['env']['CURATARR_UI_PORT'] == '8787'
-        assert kwargs['env']['CURATARR_SKIP_BROWSER_OPEN'] == '1'
-
-    @patch('utils.self_update.subprocess.Popen')
-    def test_strips_meipass2_from_the_real_process_environment(self, mock_popen, tmp_path, monkeypatch):
-        """Regression test for the real end-to-end failure this fixes -
-        see sanitize_frozen_relaunch_env's docstring."""
-        monkeypatch.setenv('_MEIPASS2', r'C:\Temp\_MEIstale')
-        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
-            (tmp_path / 'curatarr').write_bytes(b'x')
-            self_update.relaunch_binary()
-        _, kwargs = mock_popen.call_args
-        assert '_MEIPASS2' not in kwargs['env']
-
-    @patch('utils.self_update.subprocess.Popen')
-    def test_relaunches_old_sidecar_when_current_missing(self, mock_popen, tmp_path):
-        old = tmp_path / 'curatarr.old'
-        old.write_bytes(b'x')
-        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
-            self_update.relaunch_binary()
-        args, _ = mock_popen.call_args
-        assert args[0] == [str(old)]
-
-    @patch('utils.self_update.subprocess.Popen')
-    def test_posix_uses_start_new_session(self, mock_popen, tmp_path, monkeypatch):
-        monkeypatch.setattr(self_update.os, 'name', 'posix')
-        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
-            (tmp_path / 'curatarr').write_bytes(b'x')
-            self_update.relaunch_binary()
-        _, kwargs = mock_popen.call_args
-        assert kwargs.get('start_new_session') is True
-        assert 'creationflags' not in kwargs
-
-    @patch('utils.self_update.subprocess.Popen')
-    def test_windows_uses_creationflags(self, mock_popen, tmp_path, monkeypatch):
-        monkeypatch.setattr(self_update.os, 'name', 'nt')
-        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr.exe')):
-            (tmp_path / 'curatarr.exe').write_bytes(b'x')
-            self_update.relaunch_binary()
-        _, kwargs = mock_popen.call_args
-        assert 'creationflags' in kwargs
-        assert 'start_new_session' not in kwargs
-
-
 # =============================================================================
 # Orchestration
 # =============================================================================
 
-class TestPerformSelfUpdate:
+class TestDownloadAndVerifyUpdate:
+    """download_and_verify_update() - steps 1-4 of the self-update
+    chain, shared by BOTH perform_self_update() (CLI, in-process swap)
+    and web/update_apply.py's frozen worker (hands the result off to
+    the external script - see utils/self_update_handoff.py). Stops
+    before touching the currently-running executable at all."""
+
     def test_raises_not_frozen_for_source_install(self, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', False, raising=False)
         with pytest.raises(self_update.NotFrozenError):
-            self_update.perform_self_update()
+            self_update.download_and_verify_update()
 
     def test_full_success_path_calls_everything_in_order(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
@@ -1007,19 +899,17 @@ class TestPerformSelfUpdate:
         def _fake_verify(asset_path, sums_path, sig_path, asset_name):
             calls.append(('verify', asset_name))
 
-        def _fake_swap(current_path, new_path):
-            calls.append(('swap', current_path))
-            os.replace(new_path, current_path)
-
         monkeypatch.setattr(self_update, '_download_to_file', _fake_download)
         monkeypatch.setattr(self_update, 'verify_downloaded_asset', _fake_verify)
-        monkeypatch.setattr(self_update, 'swap_binary', _fake_swap)
 
-        result = self_update.perform_self_update()
+        result = self_update.download_and_verify_update()
 
-        assert result == '2.9.0'
-        assert calls[-2] == ('verify', 'curatarr-linux-x86_64')
-        assert calls[-1] == ('swap', str(current_exe))
+        assert isinstance(result, self_update.VerifiedUpdate)
+        assert result.version == '2.9.0'
+        assert result.asset_name == 'curatarr-linux-x86_64'
+        assert os.path.dirname(result.asset_path) == str(tmp_path)
+        assert os.path.isfile(result.asset_path)
+        assert calls[-1] == ('verify', 'curatarr-linux-x86_64')
         # Downloaded SHA256SUMS.txt and .sig, plus the asset itself.
         download_urls = [c[1] for c in calls if c[0] == 'download']
         assert any('SHA256SUMS.txt.sig' in u for u in download_urls)
@@ -1027,8 +917,8 @@ class TestPerformSelfUpdate:
         assert any('curatarr-linux-x86_64' in u for u in download_urls)
 
     def test_asset_temp_file_downloaded_next_to_the_running_exe(self, tmp_path, monkeypatch):
-        """Not the system temp dir - see perform_self_update's docstring
-        for why (cross-volume os.replace() would fail on Windows)."""
+        """Not the system temp dir - see this function's docstring for
+        why (cross-volume os.replace() would fail on Windows)."""
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         exe_dir = tmp_path / 'install_dir'
         exe_dir.mkdir()
@@ -1049,13 +939,12 @@ class TestPerformSelfUpdate:
 
         monkeypatch.setattr(self_update, '_download_to_file', _fake_download)
         monkeypatch.setattr(self_update, 'verify_downloaded_asset', lambda *a, **k: None)
-        monkeypatch.setattr(self_update, 'swap_binary', lambda current, new: os.replace(new, current))
 
-        self_update.perform_self_update()
+        self_update.download_and_verify_update()
 
         assert seen_asset_dirs == [str(exe_dir)]
 
-    def test_verification_failure_never_calls_swap_and_cleans_up_temp_file(self, tmp_path, monkeypatch):
+    def test_verification_failure_cleans_up_temp_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
         current_exe.write_bytes(b'old binary')
@@ -1071,13 +960,10 @@ class TestPerformSelfUpdate:
             self_update, 'verify_downloaded_asset',
             Mock(side_effect=self_update.HashMismatchError('mismatch')),
         )
-        swap_mock = Mock()
-        monkeypatch.setattr(self_update, 'swap_binary', swap_mock)
 
         with pytest.raises(self_update.HashMismatchError):
-            self_update.perform_self_update()
+            self_update.download_and_verify_update()
 
-        swap_mock.assert_not_called()
         # Original binary on disk is completely untouched.
         assert current_exe.read_bytes() == b'old binary'
         # No stray .tmp files left behind in the install directory.
@@ -1097,7 +983,7 @@ class TestPerformSelfUpdate:
         monkeypatch.setattr(self_update, '_download_to_file', download_mock)
 
         with pytest.raises(self_update.NoUpdateAvailableError):
-            self_update.perform_self_update()
+            self_update.download_and_verify_update()
 
         download_mock.assert_not_called()
 
@@ -1122,7 +1008,7 @@ class TestPerformSelfUpdate:
         )
         with patch('utils.self_update.os.remove', side_effect=OSError('cannot clean up')):
             with pytest.raises(self_update.HashMismatchError):
-                self_update.perform_self_update()
+                self_update.download_and_verify_update()
 
     def test_unwritable_install_dir_raises_swap_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
@@ -1137,4 +1023,107 @@ class TestPerformSelfUpdate:
         )
         with patch('utils.self_update.tempfile.mkstemp', side_effect=OSError('permission denied')):
             with pytest.raises(self_update.SwapError, match='Cannot write'):
+                self_update.download_and_verify_update()
+
+
+class TestPerformSelfUpdate:
+    """perform_self_update() - the CLI's `--self-update` path: calls
+    download_and_verify_update() (tested thoroughly above) then swaps
+    the result into place IN-PROCESS. Safe here specifically because
+    the CLI never relaunches anything afterward - see this function's
+    own docstring."""
+
+    def test_raises_not_frozen_for_source_install(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with pytest.raises(self_update.NotFrozenError):
+            self_update.perform_self_update()
+
+    def test_success_path_swaps_and_returns_version(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'new binary')
+
+        verified = self_update.VerifiedUpdate(
+            version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        )
+        monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+
+        result = self_update.perform_self_update()
+
+        assert result == '2.9.0'
+        assert current_exe.read_bytes() == b'new binary'
+        assert not asset_path.exists()  # consumed by the swap
+
+    def test_download_and_verify_failure_propagates_without_swapping(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(
+            self_update, 'download_and_verify_update',
+            Mock(side_effect=self_update.HashMismatchError('mismatch')),
+        )
+        swap_mock = Mock()
+        monkeypatch.setattr(self_update, 'swap_binary', swap_mock)
+
+        with pytest.raises(self_update.HashMismatchError):
+            self_update.perform_self_update()
+
+        swap_mock.assert_not_called()
+
+    def test_swap_failure_still_cleans_up_the_verified_temp_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'new binary')
+
+        verified = self_update.VerifiedUpdate(
+            version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        )
+        monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        monkeypatch.setattr(
+            self_update, 'swap_binary', Mock(side_effect=self_update.SwapError('disk full')),
+        )
+
+        with pytest.raises(self_update.SwapError):
+            self_update.perform_self_update()
+
+        assert not asset_path.exists()
+
+    def test_swap_failure_cleanup_itself_failing_does_not_mask_the_real_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'new binary')
+
+        verified = self_update.VerifiedUpdate(
+            version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        )
+        monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        monkeypatch.setattr(self_update, 'swap_binary', Mock(side_effect=self_update.SwapError('disk full')))
+
+        with patch('utils.self_update.os.remove', side_effect=OSError('cannot clean up')):
+            with pytest.raises(self_update.SwapError, match='disk full'):
                 self_update.perform_self_update()
+        assert current_exe.read_bytes() == b'old binary'
+
+    def test_passes_force_refresh_through(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'new binary')
+
+        mock_download = Mock(return_value=self_update.VerifiedUpdate(
+            version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        ))
+        monkeypatch.setattr(self_update, 'download_and_verify_update', mock_download)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+
+        self_update.perform_self_update(force_refresh=False)
+
+        mock_download.assert_called_once_with(force_refresh=False)

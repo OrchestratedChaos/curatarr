@@ -88,8 +88,10 @@ from .self_update import (
     verify_downloaded_asset,
     swap_binary,
     cleanup_stale_old_binary,
-    relaunch_binary,
     current_binary_path,
+    sanitize_frozen_relaunch_env,
+    VerifiedUpdate,
+    download_and_verify_update,
     perform_self_update,
 )
 
@@ -352,8 +354,10 @@ __all__ = [
     'verify_downloaded_asset',
     'swap_binary',
     'cleanup_stale_old_binary',
-    'relaunch_binary',
     'current_binary_path',
+    'sanitize_frozen_relaunch_env',
+    'VerifiedUpdate',
+    'download_and_verify_update',
     'perform_self_update',
     # Update check
     'GITHUB_RELEASES_API',

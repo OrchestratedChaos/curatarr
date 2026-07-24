@@ -28,21 +28,38 @@ Two halves live in this one file:
 
 Why a detached subprocess at all, instead of doing this in-process:
 the sequence needs to (a) shut the current server down to free the
-port, (b) run the actual update (git pull, or - for a frozen binary -
-download+verify+swap the exe itself), (c) start a brand new server -
-step (a) obviously can't be done by the process that's shutting itself
-down and then expected to keep executing Python afterward. A separate,
-detached process is the only way this can "outlive" the restart. For a
-frozen binary this additionally lets step (b)'s binary swap happen
-safely: on Windows in particular, the CURRENTLY-RUNNING web server
-process is what's spawning this worker, and it's the worker (a
-freshly-started, separate process using the STILL-OLD exe on disk at
-spawn time) that ends up renaming/replacing that exe file - never the
-long-lived server process trying to replace the file it's actively
-serving requests from.
+port, (b) run the actual update, (c) start a brand new server - step
+(a) obviously can't be done by the process that's shutting itself down
+and then expected to keep executing Python afterward. A separate,
+detached process is the only way this can "outlive" the restart.
 
-SECURITY: neither this module nor the worker it spawns EVER decides
-what code gets checked out/installed on its own authority.
+What "run the actual update" means differs sharply by install type:
+  - Source installs (unchanged since v2.8.28): the worker shells out to
+    run.sh's/run.ps1's own --apply-verified-update mode (git pull +
+    verify), then relaunches run-ui.sh/run-ui.ps1 directly in-process -
+    see _relaunch_and_verify. A source install's worker is a plain
+    python.exe process, not a frozen PyInstaller build, so there is no
+    onefile-extraction hazard to worry about here.
+  - Frozen binaries: the worker itself only downloads+verifies the new
+    binary (utils.self_update.download_and_verify_update - the
+    cryptographically sensitive part, needs Python + the `cryptography`
+    package). It does NOT swap the binary or relaunch anything itself.
+    Both of those are handed off ENTIRELY to a plain external script
+    (PowerShell/sh - see utils/self_update_handoff.py) that runs
+    completely independently of any frozen Python process. This split
+    exists because earlier iterations that DID swap+relaunch in-process
+    (spawning a new curatarr.exe instance directly from within this
+    frozen worker) kept hitting PyInstaller onefile extraction-directory
+    corruption/inheritance issues under real end-to-end testing on
+    Windows, regardless of how much the environment was sanitized - see
+    utils/self_update_handoff.py's module docstring for the full story
+    and why an external script sidesteps it entirely (a genuinely fresh,
+    top-level launch of curatarr.exe was confirmed reliable in every
+    test; a frozen process launching another instance of itself was
+    not).
+
+SECURITY: neither this module nor anything it spawns EVER decides what
+code gets checked out/installed on its own authority.
   - Source installs: both the precondition check
     (check_verified_update) and the worker's actual apply step shell
     out to run.sh's/run.ps1's own
@@ -57,16 +74,19 @@ what code gets checked out/installed on its own authority.
     notice and the banner itself already use) - it decides nothing
     about what bytes end up on disk, only "is it worth spawning a
     worker at all". The ACTUAL trust boundary is entirely inside
-    utils.self_update.perform_self_update(), called by the worker: a
-    pinned-key SSHSIG signature check on SHA256SUMS.txt, THEN a SHA256
-    hash check of the downloaded binary against that now-trusted sums
-    file, and ONLY THEN a swap - see that module's docstring. A race
-    between this file's cheap advisory check and the worker's real
-    verification is not a security gap (same reasoning as the source
-    path's own comment on this): worst case, the worker's
-    perform_self_update() raises NoUpdateAvailableError/
-    SignatureVerificationError/HashMismatchError, nothing gets swapped,
-    and the CURRENT binary relaunches unchanged.
+    utils.self_update.download_and_verify_update(), called by the
+    worker: a pinned-key SSHSIG signature check on SHA256SUMS.txt, THEN
+    a SHA256 hash check of the downloaded binary against that
+    now-trusted sums file. Only once that succeeds does the worker even
+    write/launch the hand-off script - which itself never downloads or
+    verifies anything new, it only moves an ALREADY-verified file into
+    place. A race between this file's cheap advisory check and the
+    worker's real verification is not a security gap (same reasoning as
+    the source path's own comment on this): worst case, the worker's
+    download_and_verify_update() raises NoUpdateAvailableError/
+    SignatureVerificationError/HashMismatchError, nothing gets written,
+    no script gets launched, and the CURRENT (old) server just keeps
+    running untouched.
 This file only ever decides WHEN to call into one of those two trust
 chains, never WHAT to trust - the version number utils/update_check.py
 surfaces is advisory-only and never reaches either checkout/swap
@@ -80,11 +100,12 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional
 
-from utils import self_update
+from utils import self_update, self_update_handoff
 from utils.update_check import update_available
 
 logger = logging.getLogger('curatarr')
@@ -121,6 +142,13 @@ class UpdateAlreadyInProgressError(Exception):
 
 class UpdateNotAvailableError(Exception):
     """The precondition check found no verified newer release."""
+
+
+def _fresh_worker_temp_dir() -> str:
+    """A guaranteed-unique directory under the system temp root, used
+    as the frozen self-update worker's own TEMP/TMP - see the frozen
+    branch of UpdateManager._spawn_worker for why."""
+    return tempfile.mkdtemp(prefix=f'curatarr-worker-{os.getpid()}-')
 
 
 def _updater_script(project_root: str) -> str:
@@ -289,21 +317,22 @@ class UpdateManager:
             # wrongly skip its own extraction and reuse a stale/wrong
             # temp directory.
             #
-            # Beyond that: this worker gets its OWN fresh TEMP/TMP too,
-            # not just a sanitized copy of ours - see
-            # utils.self_update.fresh_extraction_temp_dir's docstring
-            # for the real crash this fixes. Without it, the worker
-            # could still end up sharing an extraction-directory
-            # identity with THIS (soon to be force-killed) server
-            # process; when _shut_down_old_server kills it moments
-            # later, that process's own bootloader cleanup can tear
-            # apart a SHARED extraction directory out from under the
-            # still-running worker, crashing it with a hard PyInstaller
-            # bootloader error dialog. A worker with its own extraction
+            # Beyond that: this worker also gets its own fresh TEMP/TMP,
+            # not just a sanitized copy of ours - defense-in-depth
+            # against the same class of PyInstaller onefile
+            # extraction-directory issue that motivated moving the
+            # actual swap+relaunch out of any frozen process entirely
+            # (see utils/self_update_handoff.py's module docstring): if
+            # this worker somehow shared an extraction identity with
+            # THIS (soon to be force-killed) server process, that
+            # process's own bootloader cleanup could tear apart a
+            # shared extraction directory out from under the
+            # still-running worker. A worker with its own extraction
             # from the start can never be affected by what happens to
-            # the old server's.
+            # the old server's - it only needs to survive long enough
+            # to download+verify the update and hand off to the script.
             worker_env = self_update.sanitize_frozen_relaunch_env(os.environ)
-            fresh_temp = self_update.fresh_extraction_temp_dir()
+            fresh_temp = _fresh_worker_temp_dir()
             worker_env['TEMP'] = fresh_temp
             worker_env['TMP'] = fresh_temp
             popen_kwargs['env'] = worker_env
@@ -448,24 +477,17 @@ def _shut_down_old_server(pid: int, timeout: float) -> None:
 def _relaunch_ui(project_root: str, port: int) -> None:
     """Start a fresh, detached UI server on the given port - old code
     if the apply step below failed or found nothing, new code if it
-    succeeded (whatever's currently checked out/on-disk either way).
+    succeeded (whatever's currently checked out either way).
 
-    Frozen binary: delegates straight to
-    utils.self_update.relaunch_binary(), which spawns whatever's
-    currently a WORKING executable at (or next to, if a Windows swap's
-    own rollback somehow also failed) the running exe's path - see that
-    function's docstring. There's no run-ui.sh/run-ui.ps1 next to a
-    downloaded standalone binary to invoke.
-
-    Source install (unchanged): runs run-ui.sh/run-ui.ps1 rather than
+    Source installs only - runs run-ui.sh/run-ui.ps1 rather than
     `python -m web.app` directly so dependency install runs again for
     any new requirements a just-applied release might need - same
     reasoning as run.sh's own force-mode restart (`exec "$0" "$@"`).
+    Frozen binaries never reach this function at all: _run_worker's
+    frozen branch hands the entire swap+relaunch off to an external
+    script instead (see utils/self_update_handoff.py's module
+    docstring for why) and returns before ever getting here.
     """
-    if getattr(sys, 'frozen', False):
-        self_update.relaunch_binary(port=port)
-        return
-
     script = os.path.join(project_root, 'run-ui.ps1' if os.name == 'nt' else 'run-ui.sh')
     env = dict(os.environ)
     env['CURATARR_UI_PORT'] = str(port)
@@ -504,23 +526,23 @@ def _port_is_listening(port: int, timeout: float = 0.3) -> bool:
 
 
 def _relaunch_and_verify(project_root: str, port: int) -> None:
-    """Calls _relaunch_ui and then actively confirms the relaunched
-    process actually started accepting connections on `port`, retrying
-    a full fresh spawn (up to RELAUNCH_MAX_ATTEMPTS times) if it
-    doesn't within RELAUNCH_VERIFY_TIMEOUT_SECONDS.
+    """Calls _relaunch_ui (source installs only - see that function's
+    docstring) and then actively confirms the relaunched process
+    actually started accepting connections on `port`, retrying a full
+    fresh spawn (up to RELAUNCH_MAX_ATTEMPTS times) if it doesn't
+    within RELAUNCH_VERIFY_TIMEOUT_SECONDS.
 
-    Why this exists (frozen binaries especially): _relaunch_ui's
-    subprocess.Popen() is fire-and-forget by design (see that
-    function's docstring - a DETACHED process this one intentionally
-    doesn't wait on). That's normally fine, but a frozen relaunch's
-    startup time isn't perfectly deterministic - PyInstaller onefile
-    extraction, antivirus scanning a freshly-written exe, general OS
-    scheduling noise - and a single spawn that silently never came up
-    (for any of those reasons, or one not yet fully understood) would
-    otherwise leave a dead port with no second chance, exactly the
-    outcome this whole self-update design exists to prevent. This is a
-    generic reliability net, independent of - and in addition to -
-    utils.self_update's own swap-time fail-safes.
+    Why this exists: _relaunch_ui's subprocess.Popen() is
+    fire-and-forget by design (see that function's docstring - a
+    DETACHED process this one intentionally doesn't wait on). That's
+    normally fine, but a relaunch's startup time isn't perfectly
+    deterministic (dependency install, antivirus scanning a freshly
+    checked-out script, general OS scheduling noise), and a single
+    spawn that silently never came up would otherwise leave a dead port
+    with no second chance, exactly the outcome this whole self-update
+    design exists to prevent. This is a generic reliability net,
+    independent of - and in addition to - run.sh's/run.ps1's own
+    apply-time fail-safes.
 
     Never raises - the caller (_run_worker) already treats "relaunch
     ultimately failed" as a logged, non-fatal outcome; there is nothing
@@ -556,21 +578,67 @@ def _relaunch_and_verify(project_root: str, port: int) -> None:
     )
 
 
-def _apply_binary_self_update() -> None:
-    """Frozen-binary apply step: the ACTUAL trust boundary for a binary
-    install (see this module's docstring) - downloads the platform
-    asset + SHA256SUMS.txt + .sig, verifies the pinned-key SSHSIG
-    signature and the resulting hash, and only then swaps the running
-    executable. Any failure (no update, download, verification, or
-    swap) is caught here and logged - never re-raised - so the
-    unconditional relaunch below always runs regardless of outcome,
-    exactly like the source install's own subprocess.run() try/except
-    immediately below this function."""
+def _run_frozen_verify_and_handoff(project_root: str, old_pid: int, port: int) -> None:
+    """The ENTIRE frozen-binary apply step. Only downloads+verifies the
+    new binary itself (utils.self_update.download_and_verify_update -
+    the cryptographically sensitive part) - never swaps or relaunches
+    anything in-process. See this module's docstring and
+    utils/self_update_handoff.py's module docstring for why: an
+    external, plain script now owns the swap+relaunch entirely,
+    completely decoupled from this (frozen) process.
+
+    Never raises - every failure mode is caught and logged here, and
+    every one of them means the SAME thing: don't touch the old server,
+    it just keeps running/serving exactly as it was. There is nothing
+    to roll back in any of these cases because nothing was ever
+    touched - unlike the old in-process design, the old server isn't
+    even signaled to shut down until AFTER a verified update is
+    actually ready to apply.
+    """
     try:
-        applied_version = self_update.perform_self_update()
-        print(f"[update-worker] apply result: UPDATED:v{applied_version}", flush=True)
+        verified = self_update.download_and_verify_update()
     except Exception as e:
-        print(f"[update-worker] apply result: FAILED:{e}", flush=True)
+        print(f"[update-worker] verify failed - old server left running: {e}", flush=True)
+        return
+
+    # Race-safe re-check: download+verify can take a while (a real
+    # binary download), and a recommender run could have started during
+    # that window even though none was running when this worker began -
+    # see _recommender_job_in_progress's docstring.
+    if _recommender_job_in_progress(project_root):
+        print(
+            "[update-worker] a recommender run started during download/verify - "
+            "aborting, old server left untouched",
+            flush=True,
+        )
+        if os.path.isfile(verified.asset_path):
+            try:
+                os.remove(verified.asset_path)
+            except OSError:
+                pass
+        return
+
+    print(f"[update-worker] verified v{verified.version} - shutting down old server...", flush=True)
+    _shut_down_old_server(old_pid, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+
+    print("[update-worker] handing off swap+relaunch to an external script...", flush=True)
+    try:
+        self_update_handoff.write_and_launch_handoff_script(
+            old_pid=old_pid,
+            current_exe_path=self_update.current_binary_path(),
+            verified_asset_path=verified.asset_path,
+            port=port,
+            target_version=verified.version,
+        )
+    except Exception as e:
+        # The old server is ALREADY down at this point (see
+        # _shut_down_old_server above) - if the hand-off itself somehow
+        # fails to even launch, there is no relaunch fallback available
+        # to this (frozen) worker (see this module's docstring for why:
+        # no run-ui.sh/run-ui.ps1 to fall back to). This is logged as
+        # the true last-resort case; the verified download is left in
+        # place so an operator can at least see what was downloaded.
+        print(f"[update-worker] FATAL: could not launch hand-off script: {e}", flush=True)
 
 
 def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
@@ -580,22 +648,28 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
     process was started, so this doubles as the operator-visible log of
     what happened if something goes wrong.
 
-    Crash-hardening: everything from "shutting down old server" through
-    "applying the update" runs under one outer try/except - ANY
-    unexpected exception, not just the ones the per-step try/excepts
-    already anticipate, is caught, logged, and treated exactly like a
-    failed apply: fall through to the unconditional relaunch below.
-    This process must NEVER exit via an unhandled exception - besides
-    leaving the port dead, curatarr.spec builds Windows as
-    console=False/windowed (no console for a traceback to even print
-    to) and curatarr_app.py additionally calls
+    Crash-hardening: this process must NEVER exit via an unhandled
+    exception - besides leaving the port dead, curatarr.spec builds
+    Windows as console=False/windowed (no console for a traceback to
+    even print to) and curatarr_app.py additionally calls
     _suppress_windows_crash_dialogs() as the very first thing on every
     frozen Windows launch specifically so a lower-level native fault
     can't pop a modal Windows Error Reporting dialog on the user's
     desktop either - see that function's docstring. Between the two,
     there is no path from "something went wrong in here" to anything
-    visible on the user's desktop other than this log file and,
-    moments later, the relaunched (old or new) binary working again.
+    visible on the user's desktop other than this log file.
+
+    Frozen binaries: _run_frozen_verify_and_handoff does the ENTIRE job
+    (verify, shutdown, hand off to the external script) and never
+    raises - this function just calls it and returns; there is nothing
+    left for THIS process to relaunch, that's the external script's job
+    now (see this module's docstring).
+
+    Source installs (unchanged): shuts down the old server, shells out
+    to run.sh's/run.ps1's own --apply-verified-update, then relaunches
+    run-ui.sh/run-ui.ps1 directly in-process (_relaunch_and_verify) -
+    a source install's worker is a plain python.exe process, so none of
+    the frozen-binary hand-off machinery applies to it.
     """
     print(f"[update-worker] starting, old pid={old_pid}, target={host}:{port}", flush=True)
 
@@ -619,47 +693,49 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
             )
             return
 
+        if getattr(sys, 'frozen', False):
+            try:
+                _run_frozen_verify_and_handoff(project_root, old_pid, port)
+            except Exception as e:
+                # Last-resort: _run_frozen_verify_and_handoff already
+                # catches everything it anticipates - this is only for
+                # something totally unexpected slipping past that. There
+                # is nothing further this worker can safely do for a
+                # frozen binary (no run-ui.sh/ps1 to fall back to, and
+                # falling through to the source-only relaunch code below
+                # would be wrong for a binary install) - log it and stop.
+                print(f"[update-worker] UNEXPECTED ERROR in frozen apply/hand-off: {e}", flush=True)
+            print("[update-worker] worker exiting (frozen path complete)", flush=True)
+            return
+
         print("[update-worker] shutting down old server...", flush=True)
         _shut_down_old_server(old_pid, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
 
-        if getattr(sys, 'frozen', False):
-            print("[update-worker] applying self-update (binary download+verify+swap)...", flush=True)
-            try:
-                # Belt-and-suspenders on top of _apply_binary_self_update()'s
-                # own internal try/except (mirrors the source branch's
-                # subprocess.run() try/except immediately below) - the
-                # relaunch after this block must be unconditional no matter
-                # what, even if something here raised in a way that helper's
-                # own handling didn't anticipate.
-                _apply_binary_self_update()
-            except Exception as e:
-                print(f"[update-worker] apply step raised: {e}", flush=True)
+        script = _updater_script(project_root)
+        if os.name == 'nt':
+            apply_cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script, '-ApplyVerifiedUpdate']
         else:
-            script = _updater_script(project_root)
-            if os.name == 'nt':
-                apply_cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script, '-ApplyVerifiedUpdate']
-            else:
-                apply_cmd = ['bash', script, '--apply-verified-update']
+            apply_cmd = ['bash', script, '--apply-verified-update']
 
-            print("[update-worker] applying verified update...", flush=True)
-            try:
-                result = subprocess.run(
-                    apply_cmd, cwd=project_root, capture_output=True, text=True, timeout=APPLY_TIMEOUT_SECONDS,
-                )
-                output = (result.stdout or '').strip()
-                print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)
-                if result.stderr:
-                    print(f"[update-worker] apply stderr: {result.stderr.strip()}", flush=True)
-            except Exception as e:
-                # Whatever happened, fall through to relaunching below anyway -
-                # an apply step that couldn't even run is exactly the same
-                # "stay on the current version" outcome as NO_UPDATE/FAILED.
-                print(f"[update-worker] apply step raised: {e}", flush=True)
+        print("[update-worker] applying verified update...", flush=True)
+        try:
+            result = subprocess.run(
+                apply_cmd, cwd=project_root, capture_output=True, text=True, timeout=APPLY_TIMEOUT_SECONDS,
+            )
+            output = (result.stdout or '').strip()
+            print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)
+            if result.stderr:
+                print(f"[update-worker] apply stderr: {result.stderr.strip()}", flush=True)
+        except Exception as e:
+            # Whatever happened, fall through to relaunching below anyway -
+            # an apply step that couldn't even run is exactly the same
+            # "stay on the current version" outcome as NO_UPDATE/FAILED.
+            print(f"[update-worker] apply step raised: {e}", flush=True)
     except Exception as e:
-        # Last-resort catch-all - see this function's docstring. Nothing
-        # above this point (the shutdown wait, an apply step's own
-        # try/except somehow not catching everything, etc.) may ever
-        # skip the unconditional relaunch below.
+        # Last-resort catch-all for the SOURCE path above (the frozen
+        # branch already returns before reaching here either way) -
+        # nothing above this point may ever skip the unconditional
+        # relaunch below.
         print(f"[update-worker] UNEXPECTED ERROR (still relaunching): {e}", flush=True)
 
     print(f"[update-worker] relaunching UI on port {port}...", flush=True)

@@ -1,20 +1,24 @@
 """Tests for the web UI's "Update now" flow: web/update_apply.py
 (UpdateManager + the detached worker's decision logic) and the
 /update/apply, /healthz routes in web/app.py. Covers BOTH the source
-install path (git-based, unchanged since v2.8.28) and, as of v2.8.29,
-the frozen-binary path (utils.self_update-based - see that module and
-web/update_apply.py's own docstrings for the full trust chain of each).
+install path (git-based, unchanged since v2.8.28) and the frozen-binary
+path (utils.self_update-based - see that module's and this file's
+module docstrings for the full trust chain and hand-off architecture).
 
 What's covered: the precondition-check gate for both install types (no
 verified/known release -> no restart, error returned), single-run
-locking/concurrency, /healthz, and the worker's own decision logic
-(always relaunches regardless of apply outcome - never a dead port,
-whether the apply step is a git pull or a self_update.perform_self_update()
-call) with every subprocess/signal/sleep call mocked out. The frozen
-path's actual download/verify/swap logic (the real security boundary)
-is unit-tested separately and thoroughly in tests/test_self_update.py -
-here it's only ever mocked, since this file's job is proving the
-worker calls it and always relaunches regardless of what it does.
+locking/concurrency, /healthz, the job-in-progress quiesce gate, and
+the worker's own decision logic - source installs always relaunch
+regardless of apply outcome (never a dead port); frozen binaries verify
+then hand off to an external script and stop, never relaunching
+in-process themselves (see _run_frozen_verify_and_handoff) - with every
+subprocess/signal/sleep call mocked out. The frozen path's actual
+download/verify logic (the real security boundary) is unit-tested
+separately and thoroughly in tests/test_self_update.py, and the
+hand-off script's own content/launch mechanics in
+tests/test_self_update_handoff.py - here both are only ever mocked,
+since this file's job is proving the worker calls into them correctly
+and never lets an unhandled exception escape.
 
 What's NOT covered (by design - matches this repo's existing precedent
 for OS-process-boundary code, e.g. curatarr_app.py's
@@ -45,8 +49,8 @@ from web.update_apply import (
     UpdateAlreadyInProgressError,
     UpdateManager,
     UpdateNotAvailableError,
-    _apply_binary_self_update,
     _check_update_available_for_binary,
+    _fresh_worker_temp_dir,
     _parse_binary_worker_args,
     _parse_worker_args,
     _pid_alive,
@@ -54,6 +58,7 @@ from web.update_apply import (
     _recommender_job_in_progress,
     _relaunch_and_verify,
     _relaunch_ui,
+    _run_frozen_verify_and_handoff,
     _run_worker,
     _shut_down_old_server,
     check_verified_update,
@@ -342,21 +347,38 @@ class TestRecommenderJobInProgress:
 
 
 class TestRunWorkerAbortsWhenJobInProgress:
-    """The worker's own re-check (see _recommender_job_in_progress) -
-    if a job is in flight, the old server must be left COMPLETELY
-    untouched: no shutdown, no apply, no relaunch."""
+    """The worker's own top-level re-check (see
+    _recommender_job_in_progress) - applies BEFORE the frozen/source
+    branch decision, so if a job is in flight, the old server is left
+    COMPLETELY untouched regardless of install type: no shutdown, no
+    apply/verify/hand-off, no relaunch."""
 
     @patch('web.update_apply._relaunch_and_verify')
-    @patch('web.update_apply._apply_binary_self_update')
+    @patch('web.update_apply._run_frozen_verify_and_handoff')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply._recommender_job_in_progress', return_value=True)
     @patch('web.update_apply.time.sleep')
-    def test_job_in_progress_skips_everything(
-        self, mock_sleep, mock_job_check, mock_shutdown, mock_apply, mock_relaunch
+    def test_job_in_progress_skips_everything_frozen(
+        self, mock_sleep, mock_job_check, mock_shutdown, mock_frozen_apply, mock_relaunch, monkeypatch
     ):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
         mock_shutdown.assert_not_called()
-        mock_apply.assert_not_called()
+        mock_frozen_apply.assert_not_called()
+        mock_relaunch.assert_not_called()
+
+    @patch('web.update_apply._relaunch_and_verify')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=True)
+    @patch('web.update_apply.time.sleep')
+    def test_job_in_progress_skips_everything_source(
+        self, mock_sleep, mock_job_check, mock_shutdown, mock_relaunch, monkeypatch
+    ):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with patch('web.update_apply.subprocess.run') as mock_run:
+            _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+            mock_run.assert_not_called()
+        mock_shutdown.assert_not_called()
         mock_relaunch.assert_not_called()
 
     @patch('web.update_apply._relaunch_and_verify')
@@ -370,17 +392,32 @@ class TestRunWorkerAbortsWhenJobInProgress:
         assert 'aborting' in out
 
     @patch('web.update_apply._relaunch_and_verify')
-    @patch('web.update_apply._apply_binary_self_update')
-    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._run_frozen_verify_and_handoff')
     @patch('web.update_apply._recommender_job_in_progress', return_value=False)
     @patch('web.update_apply.time.sleep')
-    def test_no_job_in_progress_proceeds_normally(
-        self, mock_sleep, mock_job_check, mock_shutdown, mock_apply, mock_relaunch, monkeypatch
+    def test_no_job_in_progress_proceeds_normally_frozen(
+        self, mock_sleep, mock_job_check, mock_frozen_apply, mock_relaunch, monkeypatch
     ):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+        mock_frozen_apply.assert_called_once_with('/fake/root', 12345, 8787)
+        # The external hand-off script owns the relaunch for a frozen
+        # binary - _run_worker itself must not ALSO relaunch.
+        mock_relaunch.assert_not_called()
+
+    @patch('web.update_apply._relaunch_and_verify')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=False)
+    @patch('web.update_apply.time.sleep')
+    def test_no_job_in_progress_proceeds_normally_source(
+        self, mock_sleep, mock_job_check, mock_shutdown, mock_relaunch, monkeypatch
+    ):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with patch('web.update_apply.subprocess.run') as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout='UPDATED:v2.9.0\n', stderr='')
+            _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+            mock_run.assert_called_once()
         mock_shutdown.assert_called_once()
-        mock_apply.assert_called_once()
         mock_relaunch.assert_called_once()
 
 
@@ -417,6 +454,12 @@ class TestShutDownOldServer:
 
 
 class TestRelaunchUi:
+    """_relaunch_ui - source installs ONLY (see this module's docstring
+    and _relaunch_ui's own): the frozen path never calls this function
+    at all - _run_worker's frozen branch hands the entire swap+relaunch
+    off to an external script instead (see
+    utils/self_update_handoff.py)."""
+
     @patch('web.update_apply.subprocess.Popen')
     def test_spawns_run_ui_with_expected_env(self, mock_popen):
         _relaunch_ui('/fake/root', 9999)
@@ -425,6 +468,17 @@ class TestRelaunchUi:
         assert kwargs['env']['CURATARR_UI_PORT'] == '9999'
         assert kwargs['env']['CURATARR_SKIP_BROWSER_OPEN'] == '1'
         assert kwargs['cwd'] == '/fake/root'
+
+    @patch('web.update_apply.subprocess.Popen')
+    def test_behavior_is_unaffected_by_sys_frozen(self, mock_popen, monkeypatch):
+        """Regression guard: _relaunch_ui must not branch on
+        sys.frozen at all anymore - it's only ever called for source
+        installs in the first place."""
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        _relaunch_ui('/fake/root', 9999)
+        assert mock_popen.call_count == 1
+        cmd = mock_popen.call_args[0][0]
+        assert 'run-ui.ps1' in cmd[-1] or 'run-ui.sh' in cmd[-1]
 
 
 class TestRunWorkerNeverPropagatesUnhandledException:
@@ -768,87 +822,153 @@ class TestCheckUpdateAvailableForBinary:
         assert mock_update_available.call_args.kwargs['force_refresh'] is True
 
 
-class TestApplyBinarySelfUpdate:
-    """Unit tests for the frozen apply step - mocks
-    utils.self_update.perform_self_update() entirely (its own real
-    logic is tests/test_self_update.py's job); this just proves the
-    worker's print()-based logging/outcome-handling wraps it correctly
-    and NEVER lets an update failure raise out (see _run_worker's
-    "always relaunches" guarantee, tested below)."""
+class TestRunFrozenVerifyAndHandoff:
+    """Unit tests for _run_frozen_verify_and_handoff - the ENTIRE frozen
+    apply step (verify, quiesce re-check, shutdown, hand off to the
+    external script - see this module's docstring for why it never
+    swaps or relaunches anything itself). Mocks
+    utils.self_update.download_and_verify_update() and
+    utils.self_update_handoff.write_and_launch_handoff_script() entirely
+    (their own real logic is tests/test_self_update.py's and
+    tests/test_self_update_handoff.py's job respectively); this just
+    proves the wiring: what gets called, in what order, and that
+    nothing here EVER raises out (see _run_worker's crash-hardening,
+    tested below)."""
 
-    @patch('web.update_apply.self_update.perform_self_update', return_value='2.9.0')
-    def test_success_logs_updated(self, mock_perform, capsys):
-        _apply_binary_self_update()
-        assert 'UPDATED:v2.9.0' in capsys.readouterr().out
+    def _verified(self, version='2.9.0', asset_path='/fake/root/.curatarr-update-x.tmp'):
+        return self_update.VerifiedUpdate(version=version, asset_path=asset_path, asset_name='curatarr-linux-x86_64')
 
+    @patch('web.update_apply.self_update_handoff.write_and_launch_handoff_script')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=False)
+    @patch('web.update_apply.self_update.download_and_verify_update')
+    @patch('web.update_apply.self_update.current_binary_path', return_value='/fake/root/curatarr')
+    def test_success_shuts_down_old_server_then_hands_off(
+        self, mock_current_path, mock_download, mock_job_check, mock_shutdown, mock_handoff,
+    ):
+        mock_download.return_value = self._verified()
+        _run_frozen_verify_and_handoff('/fake/root', 12345, 8787)
+
+        mock_shutdown.assert_called_once_with(12345, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+        mock_handoff.assert_called_once_with(
+            old_pid=12345,
+            current_exe_path='/fake/root/curatarr',
+            verified_asset_path='/fake/root/.curatarr-update-x.tmp',
+            port=8787,
+            target_version='2.9.0',
+        )
+
+    @patch('web.update_apply.self_update_handoff.write_and_launch_handoff_script')
+    @patch('web.update_apply._shut_down_old_server')
     @patch(
-        'web.update_apply.self_update.perform_self_update',
+        'web.update_apply.self_update.download_and_verify_update',
         side_effect=self_update.HashMismatchError('bad hash'),
     )
-    def test_verification_failure_logs_failed_and_does_not_raise(self, mock_perform, capsys):
-        _apply_binary_self_update()  # must not raise
-        assert 'FAILED:bad hash' in capsys.readouterr().out
+    def test_verify_failure_never_shuts_down_or_hands_off(self, mock_download, mock_shutdown, mock_handoff, capsys):
+        _run_frozen_verify_and_handoff('/fake/root', 12345, 8787)  # must not raise
 
-    @patch('web.update_apply.self_update.perform_self_update', side_effect=Exception('unexpected'))
-    def test_unexpected_exception_logs_failed_and_does_not_raise(self, mock_perform, capsys):
-        _apply_binary_self_update()  # must not raise
-        assert 'FAILED:unexpected' in capsys.readouterr().out
+        mock_shutdown.assert_not_called()
+        mock_handoff.assert_not_called()
+        assert 'old server left running' in capsys.readouterr().out
+
+    @patch('web.update_apply.self_update_handoff.write_and_launch_handoff_script')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=True)
+    @patch('web.update_apply.self_update.download_and_verify_update')
+    def test_job_started_during_download_aborts_without_touching_old_server(
+        self, mock_download, mock_job_check, mock_shutdown, mock_handoff, tmp_path, capsys,
+    ):
+        """Race-safe re-check: a job could start DURING the download -
+        even though none was running when the worker began (that
+        earlier check is _run_worker's job, tested separately)."""
+        asset_path = tmp_path / 'verified-asset.tmp'
+        asset_path.write_bytes(b'x')
+        mock_download.return_value = self._verified(asset_path=str(asset_path))
+
+        _run_frozen_verify_and_handoff('/fake/root', 12345, 8787)  # must not raise
+
+        mock_shutdown.assert_not_called()
+        mock_handoff.assert_not_called()
+        assert not asset_path.exists()  # unused verified download cleaned up
+        assert 'aborting' in capsys.readouterr().out
+
+    @patch('web.update_apply.self_update_handoff.write_and_launch_handoff_script')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=True)
+    @patch('web.update_apply.self_update.download_and_verify_update')
+    def test_job_started_during_download_cleanup_failure_does_not_raise(
+        self, mock_download, mock_job_check, mock_shutdown, mock_handoff, tmp_path,
+    ):
+        asset_path = tmp_path / 'verified-asset.tmp'
+        asset_path.write_bytes(b'x')
+        mock_download.return_value = self._verified(asset_path=str(asset_path))
+
+        with patch('web.update_apply.os.remove', side_effect=OSError('locked')):
+            _run_frozen_verify_and_handoff('/fake/root', 12345, 8787)  # must not raise
+
+    @patch('web.update_apply.self_update_handoff.write_and_launch_handoff_script', side_effect=Exception('boom'))
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=False)
+    @patch('web.update_apply.self_update.download_and_verify_update')
+    @patch('web.update_apply.self_update.current_binary_path', return_value='/fake/root/curatarr')
+    def test_handoff_failure_does_not_raise_out(
+        self, mock_current_path, mock_download, mock_job_check, mock_shutdown, mock_handoff,
+    ):
+        mock_download.return_value = self._verified()
+        _run_frozen_verify_and_handoff('/fake/root', 12345, 8787)  # must not raise
 
 
 class TestRunWorkerFrozenBranch:
-    """_run_worker's frozen branch: calls _apply_binary_self_update()
-    instead of shelling out to run.sh/run.ps1, but keeps the exact same
-    "always relaunch regardless of outcome" guarantee as the source
-    path (see TestRunWorkerAlwaysRelaunches above for that same
-    guarantee on the source side)."""
+    """_run_worker's frozen branch: calls _run_frozen_verify_and_handoff
+    and then returns - unlike the source path, it never falls through
+    to _relaunch_and_verify (the external hand-off script owns the
+    relaunch entirely for frozen binaries - see this module's
+    docstring)."""
 
     @patch('web.update_apply._relaunch_and_verify')
-    @patch('web.update_apply._apply_binary_self_update')
-    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._run_frozen_verify_and_handoff')
     @patch('web.update_apply.time.sleep')
-    def test_frozen_calls_apply_binary_self_update_not_subprocess(
-        self, mock_sleep, mock_shutdown, mock_apply, mock_relaunch, monkeypatch
+    def test_frozen_calls_verify_and_handoff_not_source_apply(
+        self, mock_sleep, mock_verify_and_handoff, mock_relaunch, monkeypatch
     ):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        with patch('web.update_apply.subprocess.run') as mock_subprocess_run:
+        with patch('web.update_apply.subprocess.run') as mock_subprocess_run, \
+                patch('web.update_apply._shut_down_old_server') as mock_shutdown:
             _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
             mock_subprocess_run.assert_not_called()
-        mock_apply.assert_called_once_with()
-        mock_relaunch.assert_called_once_with('/fake/root', 8787)
+            # _shut_down_old_server is called FROM WITHIN
+            # _run_frozen_verify_and_handoff (mocked out here), never
+            # directly by _run_worker for the frozen path.
+            mock_shutdown.assert_not_called()
+        mock_verify_and_handoff.assert_called_once_with('/fake/root', 12345, 8787)
 
     @patch('web.update_apply._relaunch_and_verify')
-    @patch('web.update_apply._apply_binary_self_update', side_effect=Exception('should never escape anyway'))
-    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._run_frozen_verify_and_handoff')
     @patch('web.update_apply.time.sleep')
-    def test_frozen_still_relaunches_even_if_apply_helper_itself_raises(
-        self, mock_sleep, mock_shutdown, mock_apply, mock_relaunch, monkeypatch
+    def test_frozen_never_falls_through_to_relaunch(self, mock_sleep, mock_verify_and_handoff, mock_relaunch, monkeypatch):
+        """The external hand-off script owns the relaunch entirely for
+        a frozen binary - _run_worker itself must never ALSO try to
+        relaunch (that would be wrong: there's no run-ui.sh/ps1 next to
+        a binary install)."""
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+        mock_relaunch.assert_not_called()
+
+    @patch('web.update_apply._relaunch_and_verify')
+    @patch('web.update_apply._run_frozen_verify_and_handoff', side_effect=Exception('should never escape anyway'))
+    @patch('web.update_apply.time.sleep')
+    def test_unexpected_exception_in_frozen_path_does_not_raise_and_does_not_relaunch(
+        self, mock_sleep, mock_verify_and_handoff, mock_relaunch, monkeypatch, capsys
     ):
-        """Belt-and-suspenders on top of _apply_binary_self_update's own
-        internal try/except: even if something outside that (e.g. the
-        print() call itself) somehow raised, _run_worker's own
-        exception handling around the apply step must still guarantee a
-        relaunch - never a dead port."""
+        """Belt-and-suspenders on top of _run_frozen_verify_and_handoff's
+        own internal error handling: even if something outside that
+        somehow raised, _run_worker must still not crash - and, unlike
+        the source path, must NOT fall back to _relaunch_and_verify
+        (wrong for a binary install)."""
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)  # must not raise
-        mock_relaunch.assert_called_once_with('/fake/root', 8787)
-
-
-class TestRelaunchUiFrozenBranch:
-    @patch('web.update_apply.self_update.relaunch_binary')
-    def test_frozen_delegates_to_self_update_relaunch_binary(self, mock_relaunch_binary, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        with patch('web.update_apply.subprocess.Popen') as mock_popen:
-            _relaunch_ui('/fake/root', 8787)
-            mock_popen.assert_not_called()
-        mock_relaunch_binary.assert_called_once_with(port=8787)
-
-    @patch('web.update_apply.subprocess.Popen')
-    def test_source_unaffected_still_spawns_run_ui(self, mock_popen, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', False, raising=False)
-        with patch('web.update_apply.self_update.relaunch_binary') as mock_relaunch_binary:
-            _relaunch_ui('/fake/root', 8787)
-            mock_relaunch_binary.assert_not_called()
-        mock_popen.assert_called_once()
+        mock_relaunch.assert_not_called()
+        assert 'UNEXPECTED ERROR in frozen apply/hand-off' in capsys.readouterr().out
 
 
 class TestSpawnWorkerFrozenCommand:
@@ -893,8 +1013,9 @@ class TestSpawnWorkerFrozenCommand:
         later - crashing the still-running worker with a hard
         bootloader error dialog (`pyi_rth_multiprocessing` failing to
         find files under a now-gone `_MEI*` directory). See
-        utils.self_update.fresh_extraction_temp_dir's docstring for the
-        full chain."""
+        _fresh_worker_temp_dir's docstring and this module's own for
+        the full chain and why the actual swap+relaunch was moved out
+        of any frozen process entirely as the more thorough fix."""
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         manager = UpdateManager(str(tmp_path), str(tmp_path / 'logs'))
         manager._spawn_worker('127.0.0.1', 8787)
