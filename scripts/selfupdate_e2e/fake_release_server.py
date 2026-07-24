@@ -20,6 +20,26 @@ TAG_VERSION = sys.argv[2]
 PORT = int(sys.argv[3])
 
 
+class FastBindThreadingHTTPServer(ThreadingHTTPServer):
+    """HTTPServer.server_bind() calls socket.getfqdn(host) to set
+    self.server_name - a reverse DNS lookup that's completely
+    irrelevant for a loopback-only test server, but confirmed (via
+    direct testing - see this repo's v2.8.29 PR description) to HANG
+    for 30+ seconds, sometimes effectively indefinitely, in some
+    sandboxed/CI network configurations, even for 127.0.0.1. That kept
+    this server "alive" (process running) but never actually reaching
+    the LISTEN state, so every client request timed out - looking
+    exactly like the self-update logic was broken when it never was.
+    Skips the FQDN lookup entirely; nothing here ever needs it."""
+
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write(f"[fake-release-server] {self.address_string()} - {fmt % args}\n")
@@ -56,6 +76,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
+    server = FastBindThreadingHTTPServer(('127.0.0.1', PORT), Handler)
     print(f"[fake-release-server] serving {RELEASE_DIR} as v{TAG_VERSION} on 127.0.0.1:{PORT}", flush=True)
     server.serve_forever()
