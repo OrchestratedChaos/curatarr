@@ -66,7 +66,7 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 - **One command** — `./run.sh` handles everything
 - **Multi-library support** — Each Plex library gets its own Sonarr/Radarr root folder, quality profile, tags, monitor/search, and optionally its own *arr instance; recommendations run per-library so Movies, TV, Anime, and Kids each follow their own rules
 - **Modular config** — Main settings plus optional integration files
-- **Update notifications** — Notifies (CLI + web UI) when a newer signed release exists; set `update_mode: force` to auto-apply on each run instead
+- **Update notifications** — Notifies (CLI + dismissible web UI banner) when a newer signed release exists, for every `update_mode` including `off`; set `update_mode: force` to auto-apply on each run instead
 - **Smart caching** — Auto-clears incompatible caches after updates
 - **Auto-scheduling** — Optional daily cron job
 - **Clean logs** — Know exactly what happened
@@ -356,7 +356,19 @@ logging:
   behavior). Binaries never auto-apply anything regardless of this setting -
   `force` on a binary install just behaves like `notify` (banner + CLI
   notice only; use the **Update now** button or `--self-update` to apply).
-- `off` — never check for updates.
+- `off` — same CLI notice and web UI banner as `notify` above: `off` never
+  means "don't tell me", only "don't ask me and don't apply automatically"
+  (an opted-out install silently missing every update forever was
+  considered a bug, not a feature). The one thing `off` actually disables is
+  `run.sh`/`run.ps1`'s interactive `Update available: vX. Update now? [y/N]`
+  prompt on launch (source installs only) - the dismissible banner, its
+  **Update now** button, and the CLI notice all still work exactly like
+  `notify`.
+
+Either way, the web UI banner's dismiss button (**×**) doesn't hide a
+version forever - it snoozes that specific version for 7 days, after which
+it's shown again if you're still on it. A release newer than the one you
+dismissed is never held back by an existing snooze; it shows immediately.
 
 `general.auto_update` (legacy) is still read as a fallback if `update_mode`
 isn't set: `true` behaves like `force`, `false` behaves like `off`. Existing
@@ -721,8 +733,9 @@ python -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
 - Plex connection failed → Check URL and token
 - No recommendations → User needs more watch history
 - "Cache outdated" message → Normal after updates, rebuilds automatically
-- Want to disable update checks/notifications entirely → Set `general.update_mode: off` in config/config.yml
+- Want to stop `run.sh`/`run.ps1`'s interactive "Update now? [y/N]" prompt on launch → Set `general.update_mode: off` in config/config.yml (the dismissible CLI/web notices still appear either way - see `general.update_mode` above)
 - Want updates auto-applied instead of just notified → Set `general.update_mode: force`
+- Want a specific update's notice to stop appearing for a while → Click the **×** on the web UI banner (snoozes that version for 7 days)
 
 ### Docker
 See [docs/DOCKER.md](docs/DOCKER.md#troubleshooting) for the full Docker

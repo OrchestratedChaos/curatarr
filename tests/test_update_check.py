@@ -196,20 +196,47 @@ class TestGetLatestVersionFailOpen:
 
 
 class TestGetLatestVersionOffMode:
-    """update_mode='off' must skip the network entirely."""
+    """As of v2.8.31, update_mode='off' no longer skips the network -
+    'off' only ever meant "don't auto-apply", never "don't tell me an
+    update exists" (see get_latest_version's own docstring for why this
+    changed: an opted-out install silently missing updates forever was
+    the bug). 'off' now uses the exact same cache/fetch path as
+    'notify'/'force', with no special-casing at all."""
 
     @patch('utils.update_check.requests.get')
-    def test_off_mode_never_calls_network(self, mock_get):
-        result = get_latest_version(update_mode='off')
-        assert result is None
-        mock_get.assert_not_called()
+    def test_off_mode_fetches_same_as_notify(self, mock_get):
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_get.return_value = mock_response
+
+        result = get_latest_version(update_mode='off', force_refresh=True)
+
+        assert result == '2.9.0'
+        mock_get.assert_called_once()
 
     @patch('utils.update_check.requests.get')
-    def test_off_mode_ignores_existing_cache(self, mock_get, tmp_path):
+    def test_off_mode_uses_existing_fresh_cache_without_a_network_call(self, mock_get, tmp_path):
         _seed_cache(tmp_path, {'latest': '9.9.9', 'checked_at': time.time()})
+
         result = get_latest_version(update_mode='off')
-        assert result is None
+
+        assert result == '9.9.9'
         mock_get.assert_not_called()
+
+    @patch('utils.update_check.requests.get')
+    def test_off_mode_refetches_on_stale_cache(self, mock_get, tmp_path):
+        stale_time = time.time() - (UPDATE_CHECK_INTERVAL_HOURS + 1) * 3600
+        _seed_cache(tmp_path, {'latest': '2.9.0', 'checked_at': stale_time})
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'tag_name': 'v2.10.0'}
+        mock_get.return_value = mock_response
+
+        result = get_latest_version(update_mode='off')
+
+        assert result == '2.10.0'
+        mock_get.assert_called_once()
 
 
 class TestGetLatestVersionSuccess:

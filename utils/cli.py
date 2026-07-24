@@ -22,6 +22,7 @@ from .display import (
 )
 from .helpers import cleanup_old_logs, get_project_root
 from .update_check import GITHUB_RELEASES_PAGE, update_available
+from .update_dismissal import is_dismissed
 from .user_migration import migrate_renamed_plex_users
 
 
@@ -176,21 +177,28 @@ def print_update_notice(update_mode: str) -> None:
     curatarr_app.py's `--self-update` dispatch) - this notice's
     frozen-branch message points at that flag first.
 
+    As of v2.8.31, this prints for EVERY update_mode, including 'off' -
+    'off' only ever meant "don't auto-apply", never "don't tell me" (see
+    utils.config.get_update_mode's docstring); staying silent about a
+    pending update by default was the actual bug this fixed. Respects
+    the same 7-day dismissal snooze the web UI's banner writes (see
+    utils.update_dismissal) - dismissing a version in the web UI also
+    quiets this CLI notice for that same version/window, and vice versa
+    isn't possible (the CLI has no dismiss action of its own, it only
+    ever reads state the web UI wrote).
+
     Fails open by construction: utils.update_check.update_available()
     never raises, so a broken/offline check just means no notice gets
-    printed - it can never block or break a run. update_mode == 'off'
-    is handled by update_available() itself (skips the network call
-    entirely), checked again here for clarity at the call site.
+    printed - it can never block or break a run.
 
     Args:
         update_mode: 'notify' | 'force' | 'off' (see
             utils.config.get_update_mode)
     """
-    if update_mode == 'off':
-        return
-
     latest, current, is_newer = update_available(update_mode=update_mode)
     if not is_newer:
+        return
+    if is_dismissed(latest):
         return
 
     if os.environ.get('RUNNING_IN_DOCKER') == 'true':

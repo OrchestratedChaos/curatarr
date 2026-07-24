@@ -179,16 +179,20 @@ def get_latest_version(update_mode: str = 'notify', force_refresh: bool = False)
     Never raises.
 
     Args:
-        update_mode: 'notify' | 'force' | 'off'. 'off' skips the network
-            entirely and returns None without even reading the cache -
-            a user who disabled update checks shouldn't have this
-            module touch the network at all.
+        update_mode: 'notify' | 'force' | 'off' - accepted for call-site
+            symmetry with update_available()/print_update_notice(), but
+            no longer changes fetch behavior: as of v2.8.31, EVERY mode
+            (including 'off') uses this exact same cache/fetch path, so
+            an opted-out ('off') install still learns a newer release
+            exists (via the dismissible web banner / CLI notice - see
+            web/app.py's _update_banner_context and utils.cli's
+            print_update_notice) even though it will never auto-apply
+            one. 'off' only ever meant "don't APPLY updates automatically",
+            never "don't tell me one exists" - see utils.config.
+            get_update_mode's docstring for the mode's actual contract.
         force_refresh: bypass the on-disk cache/interval (used by tests
             and by anything that explicitly wants a fresh check).
     """
-    if update_mode == 'off':
-        return None
-
     if not force_refresh:
         cache = _read_cache()
         if cache and isinstance(cache.get('checked_at'), (int, float)):

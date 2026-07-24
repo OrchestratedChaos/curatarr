@@ -36,7 +36,16 @@ from flask import (
 from flask.testing import FlaskClient
 from werkzeug.datastructures import Headers
 
-from utils import __version__, get_project_root, get_update_mode, get_users_from_config, load_config, update_available
+from utils import (
+    __version__,
+    get_project_root,
+    get_update_mode,
+    get_users_from_config,
+    is_dismissed,
+    load_config,
+    record_dismissal,
+    update_available,
+)
 
 from .config_app import register_config_routes
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
@@ -49,13 +58,6 @@ from .update_apply import (
 )
 
 DEFAULT_PORT = 8787
-
-# Cookie used to persist a per-version dismissal of the update banner
-# (see create_app()'s _update_banner_context / update_dismiss). One
-# year is effectively "until the next release the user hasn't seen",
-# since dismissal is keyed to the specific 'latest' version string.
-UPDATE_DISMISS_COOKIE = 'curatarr_update_dismissed'
-UPDATE_DISMISS_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 # How long the SSE stream waits for a new line before sending a
 # keepalive comment - see run_stream()'s generate().
@@ -139,6 +141,18 @@ def create_app(project_root: str = None) -> Flask:
         through every route individually - this covers config_app.py's
         routes too since they render through this same Flask app.
 
+        As of v2.8.31, the banner renders for EVERY general.update_mode,
+        including 'off' - 'off' only ever meant "don't auto-apply", not
+        "don't tell me" (see utils.config.get_update_mode's docstring),
+        so an opted-out install silently missing updates was the actual
+        bug this fixed. It's still hidden when there's genuinely nothing
+        to show (no config loaded yet, no newer version known, or the
+        offered version is within its 7-day dismiss snooze - see
+        utils.update_dismissal). 'force' still shows it too - run.sh/
+        run.ps1 (not this banner) is what auto-applies in force mode, so
+        a force-mode source install can still have a pending update this
+        banner is the only place it surfaces (e.g. between runs).
+
         Fails open just like utils.update_check: any exception here
         (config missing/unreadable, network error, whatever) just means
         no banner, never a 500 - a broken update check must never break
@@ -148,18 +162,21 @@ def create_app(project_root: str = None) -> Flask:
             config = _load_config()
             # No config at all (missing/unreadable) is already a degraded
             # state the app can't really run normally in - skip the check
-            # rather than defaulting to 'notify', which would mean an
-            # HTTP call on every single page render for an install that
-            # can't even load its config yet.
-            update_mode = get_update_mode(config) if config else 'off'
-            if update_mode == 'off':
+            # entirely (never even calls update_available) rather than
+            # defaulting to some mode, which would mean an HTTP call on
+            # every single page render for an install that can't even
+            # load its config yet.
+            if not config:
                 return {'update_banner': None}
+            update_mode = get_update_mode(config)
             latest, current, is_newer = update_available(update_mode=update_mode)
             if not is_newer:
                 return {'update_banner': None}
-            # Dismissal is per-version: bumping to a newer release than
-            # the one that was dismissed shows the banner again.
-            if request.cookies.get(UPDATE_DISMISS_COOKIE) == latest:
+            # 7-day dismiss snooze, keyed to the exact version offered -
+            # see utils.update_dismissal.is_dismissed's docstring for why
+            # a newer release than the one dismissed always overrides an
+            # active snooze instead of also being suppressed.
+            if is_dismissed(latest):
                 return {'update_banner': None}
             return {
                 'update_banner': {
@@ -180,24 +197,21 @@ def create_app(project_root: str = None) -> Flask:
 
     @app.post('/update/dismiss')
     def update_dismiss():
-        """Persist a per-version banner dismissal as a cookie (no server-
-        side state needed - this is purely a display preference, not a
-        security-relevant setting). Redirects back to wherever the
-        dismiss button was clicked from."""
+        """Snooze the update banner for this version for 7 days (see
+        utils.update_dismissal) - server-side state, not a cookie (as of
+        v2.8.31): this app is single-tenant/localhost-only with no other
+        session boundary (see this module's docstring), and server-side
+        state is what lets utils.cli's print_update_notice respect the
+        same dismissal, which a browser cookie never could. Redirects
+        back to wherever the dismiss button was clicked from."""
         version = request.form.get('version', '')
         next_url = request.form.get('next') or url_for('dashboard')
         # Only ever redirect to a same-app relative path - never let an
         # attacker-controlled 'next' turn this into an open redirect.
         if not next_url.startswith('/') or next_url.startswith('//'):
             next_url = url_for('dashboard')
-        response = redirect(next_url, code=303)
-        if version:
-            response.set_cookie(
-                UPDATE_DISMISS_COOKIE, version,
-                max_age=UPDATE_DISMISS_COOKIE_MAX_AGE,
-                httponly=True, samesite='Lax',
-            )
-        return response
+        record_dismissal(version)
+        return redirect(next_url, code=303)
 
     @app.post('/update/apply')
     def update_apply_route():

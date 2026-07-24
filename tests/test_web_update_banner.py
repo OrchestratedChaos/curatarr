@@ -5,10 +5,20 @@ its gating by general.update_mode.
 The version-check itself (utils/update_check.py) is unit-tested
 separately in tests/test_update_check.py - these tests mock
 web.app.update_available so no test here ever touches the network.
+
+As of v2.8.31, the banner renders for EVERY update_mode (including
+'off') whenever a newer version is known - dismissal is a server-side
+7-day snooze (utils/update_dismissal.py), not a permanent-per-version
+browser cookie. The snooze/version-override mechanics themselves are
+unit-tested in tests/test_update_dismissal.py; TestDismiss below covers
+this file's own concern: the /update/dismiss route + banner context
+processor actually wiring into that module correctly.
 """
 
+import json
 import os
 import sys
+import time
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +36,22 @@ def client(curatarr_web_root):
     return app.test_client(), app, curatarr_web_root
 
 
+@pytest.fixture(autouse=True)
+def _isolated_dismissal_dir(tmp_path, monkeypatch):
+    """Overrides tests/conftest.py's suite-wide
+    _isolated_update_dismissal_dir (which hands every call a FRESH
+    throwaway tmp dir, fine for tests that never care about dismissal
+    state) with a single STABLE directory for the duration of each test
+    here - this file's TestDismiss tests write a dismissal via one
+    request and need a later request to actually see it, which requires
+    utils.update_dismissal.get_project_root() to keep resolving to the
+    same place across calls within a test. Same layering
+    tests/test_update_check.py's own _isolated_cache_dir documents.
+    """
+    monkeypatch.setattr('utils.update_dismissal.get_project_root', lambda: str(tmp_path))
+    return tmp_path
+
+
 def _write_config(root, update_mode=None):
     config_path = module_path(root, 'config')
     general = f'general:\n  update_mode: {update_mode}\n' if update_mode else ''
@@ -37,14 +63,40 @@ def _write_config(root, update_mode=None):
         )
 
 
+def _seed_dismissal(root, version, dismissed_at):
+    """Directly writes utils.update_dismissal's on-disk state (matches
+    that module's own project_root/cache/dismissed_update.json
+    convention - see _isolated_dismissal_dir above for why `root` here
+    is the same directory utils.update_dismissal.get_project_root() is
+    patched to resolve to) - lets snooze-boundary tests control the
+    dismissed_at timestamp precisely without waiting real days or
+    monkeypatching the global time module."""
+    path = os.path.join(str(root), 'cache', 'dismissed_update.json')
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump({'version': version, 'dismissed_at': dismissed_at}, f)
+
+
 class TestBannerGating:
-    def test_hidden_when_update_mode_off(self, client):
+    def test_shown_when_update_mode_off_and_newer_version_available(self, client):
+        """As of v2.8.31, 'off' only means "don't auto-apply" - it must
+        NOT suppress the banner itself (that was the bug this fixed:
+        opted-out users silently missing updates forever)."""
         c, app, root = client
         _write_config(root, update_mode='off')
 
-        with patch('web.app.update_available') as mock_update_available:
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
             resp = c.get('/')
-            mock_update_available.assert_not_called()
+
+        assert b'update-banner' in resp.data
+        assert b'v2.9.0' in resp.data
+
+    def test_hidden_when_update_mode_off_and_no_newer_version(self, client):
+        c, app, root = client
+        _write_config(root, update_mode='off')
+
+        with patch('web.app.update_available', return_value=('2.8.28', '2.8.28', False)):
+            resp = c.get('/')
 
         assert b'update-banner' not in resp.data
 
@@ -54,6 +106,21 @@ class TestBannerGating:
 
         with patch('web.app.update_available', return_value=('2.8.28', '2.8.28', False)):
             resp = c.get('/')
+
+        assert b'update-banner' not in resp.data
+
+    def test_hidden_when_config_missing_never_calls_update_available(self, client):
+        """Distinct from the update_mode='off' case above: a config that
+        can't even be loaded must still skip update_available() entirely
+        (see test_broken_config_fails_open_no_banner_no_500 below for the
+        "config exists but is invalid YAML" variant) - there's simply no
+        update_mode to resolve yet."""
+        c, app, root = client
+        os.remove(module_path(root, 'config'))
+
+        with patch('web.app.update_available') as mock_update_available:
+            resp = c.get('/')
+            mock_update_available.assert_not_called()
 
         assert b'update-banner' not in resp.data
 
@@ -191,15 +258,24 @@ class TestBannerContent:
 
 
 class TestDismiss:
-    def test_dismiss_sets_cookie_and_redirects(self, client):
+    def test_dismiss_persists_server_side_and_redirects(self, client):
+        """As of v2.8.31, dismissal is server-side state (utils/
+        update_dismissal.py), not a cookie - see that module's docstring
+        for why (this app has no other session boundary, and the CLI
+        notice needs to see the same dismissal a browser cookie never
+        could)."""
         c, app, root = client
         _write_config(root, update_mode='notify')
 
         resp = c.post('/update/dismiss', data={'version': '2.9.0', 'next': '/'})
 
         assert resp.status_code == 303
-        set_cookie = resp.headers.get('Set-Cookie', '')
-        assert 'curatarr_update_dismissed=2.9.0' in set_cookie
+        # No cookie at all - server-side is the sole source of truth now.
+        assert 'curatarr_update_dismissed' not in resp.headers.get('Set-Cookie', '')
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = c.get('/')
+        assert b'update-banner' not in resp.data
 
     def test_dismiss_redirects_to_next(self, client):
         c, app, root = client
@@ -221,7 +297,7 @@ class TestDismiss:
     def test_dismissed_version_suppresses_banner(self, client):
         c, app, root = client
         _write_config(root, update_mode='notify')
-        c.set_cookie('curatarr_update_dismissed', '2.9.0')
+        c.post('/update/dismiss', data={'version': '2.9.0', 'next': '/'})
 
         with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
             resp = c.get('/')
@@ -231,10 +307,82 @@ class TestDismiss:
     def test_dismissing_older_version_does_not_suppress_a_newer_one(self, client):
         c, app, root = client
         _write_config(root, update_mode='notify')
-        c.set_cookie('curatarr_update_dismissed', '2.9.0')
+        c.post('/update/dismiss', data={'version': '2.9.0', 'next': '/'})
 
         with patch('web.app.update_available', return_value=('2.10.0', '2.8.28', True)):
             resp = c.get('/')
 
         assert b'update-banner' in resp.data
         assert b'v2.10.0' in resp.data
+
+    def test_dismiss_works_when_update_mode_is_off(self, client):
+        """The dismiss button is reachable from an 'off'-mode banner too
+        (it now renders one - see TestBannerGating above), and must
+        snooze it exactly the same way."""
+        c, app, root = client
+        _write_config(root, update_mode='off')
+        c.post('/update/dismiss', data={'version': '2.9.0', 'next': '/'})
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = c.get('/')
+
+        assert b'update-banner' not in resp.data
+
+
+class TestDismissSnooze:
+    """7-day snooze window + persistence-across-app-instances - the
+    banner-level integration of utils/update_dismissal.py's contract
+    (unit-tested in isolation, including the exact 7-day boundary, in
+    tests/test_update_dismissal.py). Seeds the on-disk dismissal state
+    directly (_seed_dismissal) rather than going through a real 7-day
+    wait or monkeypatching the global time module."""
+
+    def test_dismissal_within_snooze_window_hides_banner(self, client):
+        c, app, root = client
+        _write_config(root, update_mode='notify')
+        _seed_dismissal(root, '2.9.0', time.time() - 6 * 24 * 60 * 60)  # 6 days ago
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = c.get('/')
+
+        assert b'update-banner' not in resp.data
+
+    def test_dismissal_expires_after_seven_days(self, client):
+        c, app, root = client
+        _write_config(root, update_mode='notify')
+        _seed_dismissal(root, '2.9.0', time.time() - (7 * 24 * 60 * 60 + 1))  # just over 7 days ago
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = c.get('/')
+
+        assert b'update-banner' in resp.data
+        assert b'v2.9.0' in resp.data
+
+    def test_newer_version_overrides_an_active_snooze(self, client):
+        c, app, root = client
+        _write_config(root, update_mode='notify')
+        _seed_dismissal(root, '2.9.0', time.time() - 60)  # dismissed 1 minute ago, well within snooze
+
+        with patch('web.app.update_available', return_value=('2.10.0', '2.8.28', True)):
+            resp = c.get('/')
+
+        assert b'update-banner' in resp.data
+        assert b'v2.10.0' in resp.data
+
+    def test_dismissal_persists_across_a_fresh_app_instance(self, client):
+        """Proves the dismissal is genuine server-side/on-disk state, not
+        anything cached in-process on the Flask app object - a brand new
+        create_app() call (i.e. a server restart) against the same
+        project root must still see it."""
+        c, app, root = client
+        _write_config(root, update_mode='notify')
+        c.post('/update/dismiss', data={'version': '2.9.0', 'next': '/'})
+
+        fresh_app = create_app(project_root=root)
+        fresh_app.testing = True
+        fresh_client = fresh_app.test_client()
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = fresh_client.get('/')
+
+        assert b'update-banner' not in resp.data

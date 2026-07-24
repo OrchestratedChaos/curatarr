@@ -1,6 +1,6 @@
 """Shared fixtures for the whole tests/ suite (web/ Flask UI fixtures,
 plus a couple of suite-wide safety nets - see _no_real_update_check_network
-below)."""
+and _isolated_update_dismissal_dir below)."""
 
 import os
 import sys
@@ -44,6 +44,26 @@ def _no_real_update_check_network(tmp_path_factory, monkeypatch):
     )
     monkeypatch.setattr('utils.update_check._fetch_latest_version', lambda: None)
 
+
+@pytest.fixture(autouse=True)
+def _isolated_update_dismissal_dir(tmp_path_factory, monkeypatch):
+    """Same reasoning as _no_real_update_check_network above, for the
+    update-dismissal state (utils/update_dismissal.py) added in v2.8.31:
+    its get_project_root() also always resolves to the real repo/data
+    dir regardless of a test's Flask app project_root override. Without
+    this, any test that exercises a dismissed/snoozed banner would write
+    a REAL dismissed_update.json into the repo root. Tests that actually
+    need dismissal state to persist across calls within a single test
+    (tests/test_update_dismissal.py, the snooze tests in tests/
+    test_web_update_banner.py) override this per-test with a stable
+    tmp_path, same layering _no_real_update_check_network documents for
+    the update-check cache above.
+    """
+    monkeypatch.setattr(
+        'utils.update_dismissal.get_project_root',
+        lambda: str(tmp_path_factory.mktemp('update_dismissal')),
+    )
+
 _FAKE_MOVIE_PY = '''\
 import os
 import sys
@@ -85,11 +105,15 @@ users:
     alice:
       display_name: "Alice A"
 general:
-  # Off by default in this shared fixture so the update-banner context
-  # processor (web/app.py) doesn't make a real network call on every
-  # single web test's template render - tests that specifically exercise
-  # the update banner (tests/test_web_update_banner.py) write their own
-  # config.yml with a non-off update_mode.
+  # Off by default in this shared fixture, purely as a reasonable
+  # default value - unlike before v2.8.31, this no longer skips the
+  # update-banner context processor's update_available() call (every
+  # mode, including 'off', calls it now); the real reason no test here
+  # accidentally renders a banner is _no_real_update_check_network above
+  # patching _fetch_latest_version to always return None regardless of
+  # mode. Tests that specifically exercise the update banner (tests/
+  # test_web_update_banner.py) write their own config.yml with whatever
+  # update_mode they need.
   update_mode: off
 libraries:
   - id: movies
