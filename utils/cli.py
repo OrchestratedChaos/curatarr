@@ -193,7 +193,19 @@ def print_update_notice(update_mode: str) -> None:
     if not is_newer:
         return
 
-    if getattr(sys, 'frozen', False):
+    if os.environ.get('RUNNING_IN_DOCKER') == 'true':
+        # Container image - there's no on-disk .git to check out
+        # against and no frozen binary to swap; the run.sh/run.ps1 and
+        # curatarr --self-update paths below are both gated off in
+        # Docker (see run.sh's --check-verified-update/
+        # --apply-verified-update and web/update_apply.py's
+        # UpdateManager.begin_update). Updating means pulling a new
+        # image tag instead - see docs/DOCKER.md.
+        print(
+            f"{YELLOW}Update available: v{latest} (you have v{current}) - "
+            f"pull the new image: docker pull ghcr.io/orchestratedchaos/curatarr:v{latest}{RESET}"
+        )
+    elif getattr(sys, 'frozen', False):
         # Binary install - self-update in place (verified download/
         # swap - see utils/self_update.py), or download manually.
         print(

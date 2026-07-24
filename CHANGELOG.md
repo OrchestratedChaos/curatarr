@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.30] - 2026-07-24
+
+### Added
+- **Docker support** (#188): a production-quality, multi-arch (`linux/amd64` + `linux/arm64`) image published to `ghcr.io/orchestratedchaos/curatarr`, replacing the old CLI-only image. One image now serves both the web UI (default `CMD`, `EXPOSE 8787`, `HEALTHCHECK` against `/healthz`) and one-shot recommender runs for scheduling (`docker run curatarr recommend [movie|tv|external|full]`) - see the new `docs/DOCKER.md` and `docker-compose.yml` template. The web UI runs on [waitress](https://docs.pylonsproject.org/projects/waitress/) (a production, multi-threaded WSGI server - `web/docker_server.py`, `requirements-docker.lock`) rather than Flask's dev server; the native app (`run-ui.sh`/`run-ui.ps1`, standalone binaries) is untouched and still uses Flask's dev server bound to `127.0.0.1` only. Multi-stage build installs from the hash-locked `requirements.lock`/`requirements-ui.lock`/`requirements-docker.lock` (`pip install --require-hashes`) with no build toolchain in the final layer, and runs as a non-root user (uid/gid 1000). Config/cache/logs/recommendations are separated from the app's own code via a new `CURATARR_CONFIG_DIR` environment variable override in `utils.helpers.get_project_root()` (unset for every existing source/frozen install - purely additive), pointed at `/data` - same `config/`, `cache/`, `logs/`, `recommendations/` layout a frozen binary already uses at `~/.curatarr`, individually mountable (`docker-compose.yml` maps each to its own host directory, e.g. `./config:/data/config`)
+- `.github/workflows/docker.yml`: builds and pushes the image via `docker buildx` on every signed release tag (tagged with the version + `latest`, independently re-verified against the same pinned release-signing key `release.yml` uses) and as `:edge` on pushes to `main`
+- `CURATARR_ALLOWED_HOSTS` environment variable (`web/security.py`) - opt-in, additive extension of the web UI's Host-header allowlist, needed to reach the UI from anything other than `localhost`/`127.0.0.1` (e.g. a LAN IP or reverse-proxy hostname) when running in a container bound to `0.0.0.0`. Unset by default, so the native app's existing localhost-only enforcement (and its test coverage) is completely unchanged
+
+### Changed
+- Self-update is now an explicit, intentional no-op inside a container (`RUNNING_IN_DOCKER=true`, set by the Dockerfile): `run.sh --check-verified-update`/`--apply-verified-update` refuse up front, `web/update_apply.py`'s "Update now" gate refuses before ever shelling out to either, and the web UI's update banner and CLI update notice both point at `docker pull` instead of a button/command that would just fail
+
 ## [2.8.29] - 2026-07-23
 
 ### Added

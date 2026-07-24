@@ -170,6 +170,59 @@ class TestPreconditionCheckGate:
         assert app.update_manager.is_in_progress() is False
 
 
+class TestRunningInDockerRefusesSelfUpdate:
+    """RUNNING_IN_DOCKER=true (set by the Dockerfile) must refuse
+    self-update before EITHER the source or frozen-binary precondition
+    check ever runs - a container has no on-disk .git to check out
+    against and isn't a frozen binary to swap in place; it updates via
+    `docker pull` instead (see docs/DOCKER.md). Belt-and-suspenders with
+    web/app.py's update banner, which doesn't even render a button when
+    this is set (see tests/test_web_update_banner.py) - this is the
+    backstop for anyone hitting the route directly."""
+
+    def test_refuses_even_when_source_precondition_would_pass(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setenv('RUNNING_IN_DOCKER', 'true')
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with patch('web.update_apply.check_verified_update', return_value='v2.9.0') as mock_check, \
+                patch.object(UpdateManager, '_spawn_worker') as mock_spawn:
+            resp = c.post('/update/apply')
+        assert resp.status_code == 404
+        assert 'docker pull' in resp.get_json()['error']
+        mock_check.assert_not_called()
+        mock_spawn.assert_not_called()
+
+    def test_refuses_even_when_frozen_precondition_would_pass(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setenv('RUNNING_IN_DOCKER', 'true')
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        with patch('web.update_apply._check_update_available_for_binary', return_value='v2.9.0') as mock_check, \
+                patch.object(UpdateManager, '_spawn_worker') as mock_spawn:
+            resp = c.post('/update/apply')
+        assert resp.status_code == 404
+        assert 'docker pull' in resp.get_json()['error']
+        mock_check.assert_not_called()
+        mock_spawn.assert_not_called()
+
+    def test_leaves_lock_released(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setenv('RUNNING_IN_DOCKER', 'true')
+        c.post('/update/apply')
+        assert app.update_manager.is_in_progress() is False
+
+    def test_unset_is_unaffected(self, client, monkeypatch):
+        """Sanity check: everything above is opt-in via the env var, not
+        a change to default behavior."""
+        c, app, root = client
+        monkeypatch.delenv('RUNNING_IN_DOCKER', raising=False)
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with patch('web.update_apply.check_verified_update', return_value='v2.9.0'), \
+                patch.object(UpdateManager, '_spawn_worker') as mock_spawn:
+            resp = c.post('/update/apply')
+        assert resp.status_code == 202
+        mock_spawn.assert_called_once()
+
+
 class TestRefusesToUpdateWhileJobRunning:
     """A recommender run's subprocess is itself another instance of
     this same binary (frozen), sharing PyInstaller onefile extraction

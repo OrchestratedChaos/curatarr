@@ -143,3 +143,42 @@ class TestIsAllowedHost:
         # the app only ever binds 127.0.0.1 - a request claiming a LAN
         # Host is either misconfigured or a rebinding attempt either way.
         assert is_allowed_host("192.168.1.50:8787") is False
+
+
+class TestIsAllowedHostDockerOverride:
+    """Tests for the CURATARR_ALLOWED_HOSTS additive override (see
+    web/docker_server.py's module docstring for why this exists: a
+    container bound to 0.0.0.0 and reached via a LAN IP or reverse-proxy
+    hostname sends that value in its Host header, which the hardcoded
+    127.0.0.1/localhost allowlist would otherwise always reject)."""
+
+    def test_unset_does_not_change_default_behavior(self, monkeypatch):
+        monkeypatch.delenv('CURATARR_ALLOWED_HOSTS', raising=False)
+        assert is_allowed_host("192.168.1.50:8787") is False
+        assert is_allowed_host("localhost:8787") is True
+
+    def test_listed_host_is_allowed(self, monkeypatch):
+        monkeypatch.setenv('CURATARR_ALLOWED_HOSTS', '192.168.1.50:8787')
+        assert is_allowed_host("192.168.1.50:8787") is True
+
+    def test_comma_separated_list_supported(self, monkeypatch):
+        monkeypatch.setenv(
+            'CURATARR_ALLOWED_HOSTS', '192.168.1.50:8787, curatarr.example.lan',
+        )
+        assert is_allowed_host("192.168.1.50:8787") is True
+        assert is_allowed_host("curatarr.example.lan") is True
+
+    def test_case_insensitive_match(self, monkeypatch):
+        monkeypatch.setenv('CURATARR_ALLOWED_HOSTS', 'Curatarr.Example.LAN')
+        assert is_allowed_host("curatarr.example.lan") is True
+
+    def test_unlisted_host_still_rejected(self, monkeypatch):
+        monkeypatch.setenv('CURATARR_ALLOWED_HOSTS', '192.168.1.50:8787')
+        assert is_allowed_host("evil.example.com") is False
+
+    def test_default_localhost_still_allowed_alongside_override(self, monkeypatch):
+        """The override is additive - it never replaces the hardcoded
+        default."""
+        monkeypatch.setenv('CURATARR_ALLOWED_HOSTS', '192.168.1.50:8787')
+        assert is_allowed_host("localhost:8787") is True
+        assert is_allowed_host("127.0.0.1") is True

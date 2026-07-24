@@ -1,20 +1,60 @@
-version: '3.8'
+# Curatarr - Docker Compose template. See docs/DOCKER.md for full setup,
+# scheduling, and troubleshooting instructions.
+#
+# Quick start:
+#   mkdir -p config && ./setup.sh   # or: cp config/config.example.yml config/config.yml
+#   docker compose up -d
+#   open http://localhost:8787
 
 services:
+  # Long-running web UI - dashboard, run-with-live-log, results, and
+  # config screens. This is the main service; `docker compose up -d`
+  # starts just this one.
   curatarr:
-    build: .
+    image: ghcr.io/orchestratedchaos/curatarr:latest
+    # build: .   # uncomment to build from source instead of the published image
     container_name: curatarr
-    restart: "no"
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
     volumes:
-      # Config directory (required) - contains config.yml, tuning.yml, trakt.yml, etc.
-      - ./config:/app/config:rw
-      # Persistent cache (speeds up subsequent runs)
-      - ./cache:/app/cache
-      # Logs
-      - ./logs:/app/logs
-      # External recommendations output
-      - ./recommendations:/app/recommendations
+      # config.yml/tuning.yml/trakt.yml/etc. - the one thing you need
+      # to back up. Same host-side layout setup.sh already writes to.
+      - ./config:/data/config
+      # TMDB/Trakt metadata cache - large but fully rebuildable, so
+      # it's a separate mount from config on purpose (nothing stops
+      # you from skipping this one - cache then just lives under
+      # ./config/cache inside the container instead, still persisted,
+      # just not visible on the host as its own directory).
+      - ./cache:/data/cache
+      - ./logs:/data/logs
+      - ./recommendations:/data/recommendations
     environment:
       - TZ=${TZ:-America/New_York}
-    # Optional: run on a schedule using external scheduler (cron/Task Scheduler)
-    # or use Docker restart policies with a wrapper script
+      # Set this to whatever host/LAN IP or hostname you actually
+      # access the UI through if it's not localhost/127.0.0.1 (e.g.
+      # behind a reverse proxy, or reached from another device on your
+      # network) - unset means the UI only accepts requests whose Host
+      # header is localhost/127.0.0.1, same as the native app. See
+      # docs/DOCKER.md "Accessing from another machine".
+      # - CURATARR_ALLOWED_HOSTS=192.168.1.50:8787
+
+  # Optional: one-shot recommendation run, for scheduling instead of
+  # (or in addition to) triggering runs from the web UI. Not started by
+  # a plain `docker compose up` - only runs when explicitly targeted:
+  #   docker compose run --rm curatarr-recommend
+  # See docs/DOCKER.md "Scheduling" for a host-cron example that does
+  # exactly this on a timer - the clean MVP for scheduled runs, so this
+  # image doesn't need to bundle its own cron daemon.
+  curatarr-recommend:
+    image: ghcr.io/orchestratedchaos/curatarr:latest
+    container_name: curatarr-recommend
+    profiles: ["schedule"]
+    volumes:
+      - ./config:/data/config
+      - ./cache:/data/cache
+      - ./logs:/data/logs
+      - ./recommendations:/data/recommendations
+    environment:
+      - TZ=${TZ:-America/New_York}
+    command: ["recommend", "full"]

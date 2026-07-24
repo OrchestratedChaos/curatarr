@@ -707,6 +707,16 @@ main() {
 #   the web UI's precondition check, called BEFORE it decides whether
 #   to start applying anything.
 if [ "${1:-}" = "--check-verified-update" ]; then
+    # Docker images update via `docker pull`, not a git checkout inside
+    # the container - explicit, intentional no-op (belt-and-suspenders
+    # with the `[ ! -d ".git" ]` check below, which would fail closed
+    # anyway since the image never bakes in a .git dir - see
+    # .dockerignore) rather than relying on that alone. See
+    # web/update_apply.py's UpdateManager.begin_update for the other
+    # half of this gate.
+    if [ "$RUNNING_IN_DOCKER" = "true" ]; then
+        exit 1
+    fi
     if [ ! -d ".git" ]; then
         exit 1
     fi
@@ -731,6 +741,12 @@ fi
 #   old code on NO_UPDATE/FAILED, new code on UPDATED - so a failed
 #   apply here can never leave the UI down).
 if [ "${1:-}" = "--apply-verified-update" ]; then
+    # See the matching guard in --check-verified-update above - Docker
+    # images update via `docker pull`, never a git checkout in-place.
+    if [ "$RUNNING_IN_DOCKER" = "true" ]; then
+        echo "FAILED:self-update is not supported in Docker - pull the new image instead"
+        exit 1
+    fi
     if [ ! -d ".git" ]; then
         echo "FAILED:not a git repository"
         exit 1

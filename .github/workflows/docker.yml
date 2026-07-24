@@ -1,0 +1,116 @@
+name: Docker
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: orchestratedchaos/curatarr
+  # Pinned fingerprint of the maintainer's release-signing key - same
+  # constant release.yml uses. Checked in addition to `git verify-tag`
+  # succeeding, so that widening .github/allowed_signers to a new key
+  # can't silently widen trust here either.
+  RELEASE_SIGNER_FINGERPRINT: "SHA256:yrqOXw6sWZGPKON9mJJvjhsBKTgMzsn3VTGdNL5mxKU"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      # A versioned/`:latest` image is only ever published for a tag
+      # that passes the exact same signed-tag verification release.yml
+      # requires before it will even create a GitHub Release for that
+      # tag - independently re-verified here (not just trusted via
+      # `needs:`) since this is a separate workflow/trust boundary.
+      # Skipped entirely for a plain `main` push (":edge" build below),
+      # which never gets published as `latest` or a version tag.
+      - name: Verify tag is signed by the trusted release key
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          git config gpg.ssh.allowedSignersFile .github/allowed_signers
+
+          VERIFY_OUTPUT="$(git verify-tag "$GITHUB_REF_NAME" 2>&1 1>/dev/null)"
+          VERIFY_EXIT=$?
+          echo "$VERIFY_OUTPUT"
+
+          if [ "$VERIFY_EXIT" -ne 0 ]; then
+            echo "::error::git verify-tag failed for $GITHUB_REF_NAME - refusing to publish an image for an unsigned or untrusted tag"
+            exit 1
+          fi
+
+          TAG_FPR="$(printf '%s\n' "$VERIFY_OUTPUT" | grep -oE 'with [A-Za-z0-9-]+ key SHA256:[A-Za-z0-9+/=]+' | grep -oE 'SHA256:[A-Za-z0-9+/=]+' | head -1)"
+
+          if [ -z "$TAG_FPR" ] || [ "$TAG_FPR" != "$RELEASE_SIGNER_FINGERPRINT" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME did not verify against the pinned release-signing key fingerprint ($RELEASE_SIGNER_FINGERPRINT)"
+            exit 1
+          fi
+
+          echo "Verified: $GITHUB_REF_NAME is signed by the pinned release-signing key."
+
+      - name: Verify tag version matches utils/config.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' utils/config.py)"
+
+          if [ -z "$CODE_VERSION" ]; then
+            echo "::error::Could not parse __version__ from utils/config.py"
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match utils/config.py __version__ ($CODE_VERSION)"
+            exit 1
+          fi
+
+          echo "Tag version matches __version__ ($CODE_VERSION)."
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags/labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

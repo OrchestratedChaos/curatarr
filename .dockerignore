@@ -1,39 +1,67 @@
-# Git (keep .git for auto-update support in containers)
+# Git - deliberately excluded, not kept. Self-update is a no-op inside
+# the container (RUNNING_IN_DOCKER=true gates run.sh's own
+# --check-verified-update/--apply-verified-update and
+# web/update_apply.py's UpdateManager - update via `docker pull`
+# instead, see docs/DOCKER.md) so there is no reason for the image to
+# ever contain a working tree to check out against, and every reason
+# not to: it would just be unused attack surface / build-context bloat.
+.git/
 .gitignore
+.gitleaks.toml
 
-# Cache and logs (mounted as volumes)
+# Config, cache, logs, recommendations output - all mounted as volumes
+# at runtime (/config, /cache - see Dockerfile), never baked into the
+# image.
+config/*.yml
+config/*.backup.*
 cache/
 logs/
 recommendations/
 
-# Config (mounted as volume)
-config.yml
-
-# Tests
+# Tests and dev tooling
 tests/
 pytest.ini
 .pytest_cache/
+.coverage
+build-requirements.txt
+scripts/
 
-# Python cache
+# Python cache / venvs
 __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
+.venv/
+venv/
 
-# IDE
+# IDE / editor / local Claude config
 .vscode/
 .idea/
+.claude/
+CLAUDE.md
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Documentation
+# Docs (not needed at runtime - shipped in the repo/GitHub, not the image)
+docs/
 *.md
-!requirements.txt
 
-# Windows script (not needed in container)
+# Windows-only scripts (irrelevant to a Linux container)
 run.ps1
+run-ui.ps1
 
-# GitHub
+# PyInstaller binary build (separate distribution channel from Docker)
+curatarr_app.py
+curatarr.spec
+build/
+dist/
+
+# GitHub, CI
 .github/
+
+# Docker build artifacts themselves - never needed inside the image
+Dockerfile
+docker-compose.yml
+.dockerignore

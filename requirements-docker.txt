@@ -1,0 +1,20 @@
+# Extra dependency for the Docker image ONLY - see web/docker_server.py
+# and docs/DOCKER.md. Installed *in addition to* requirements.txt and
+# requirements-ui.txt, only by the Dockerfile. Native installs
+# (run-ui.sh/run-ui.ps1, the PyInstaller binary) never need this: they
+# use web/app.py's own main(), which stays on Flask's dev server bound
+# to 127.0.0.1 - see that module's docstring. Kept out of
+# requirements-ui.txt on purpose so the native UI install/binary don't
+# carry a dependency they'd never use.
+#
+# Pinned to an exact version, same convention as requirements.txt/
+# requirements-ui.txt. The Dockerfile installs from
+# requirements-docker.lock (this file's direct + transitive deps, fully
+# SHA256-hashed) - see the comment at the top of that file for the
+# regenerate command. waitress is pure-Python (no compiled extension),
+# so unlike some other deps here it needs no per-arch wheel handling
+# for the multi-arch (amd64/arm64) Docker build.
+
+# Production WSGI server for the containerized web UI (waitress.serve(),
+# not Flask's single-threaded dev server)
+waitress==3.0.2
