@@ -338,7 +338,11 @@ logging:
 - `notify` (default) — CLI prints a one-line notice and the web UI shows a
   dismissible banner when a newer release exists; nothing is applied
   automatically. Source installs (`run.sh`/`run.ps1`) additionally prompt
-  `Update available: vX. Update now? [y/N]` on each interactive run.
+  `Update available: vX. Update now? [y/N]` on each interactive run, and the
+  web UI banner has an **Update now** button that verifies and applies the
+  same signed release in the background, then reconnects automatically once
+  the server restarts (binaries get a download link instead - no local
+  checkout to update).
 - `force` — source installs (`run.sh`/`run.ps1`) auto-apply verified signed
   releases from GitHub on each run, no prompt (the old `auto_update: true`
   behavior). Binaries never auto-apply anything regardless of this setting -

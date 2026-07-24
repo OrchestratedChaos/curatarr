@@ -25,22 +25,109 @@
     </header>
     <main>
       {% if update_banner %}
-      <div class="banner warn update-banner">
-        <span>
+      <div class="banner warn update-banner" id="update-banner">
+        <span id="update-banner-text">
           Update available: v{{ update_banner.latest }} (you have v{{ update_banner.current }}).
           {% if update_banner.frozen %}
           <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Download v{{ update_banner.latest }}</a>
           {% else %}
-          Run <code>./run.sh</code> (or <code>run.ps1</code>) to update - signed releases are verified before being applied.
+          Signed releases are verified before being applied.
           <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Release notes</a>
           {% endif %}
         </span>
-        <form method="post" action="{{ url_for('update_dismiss') }}" class="update-banner-dismiss">
-          <input type="hidden" name="version" value="{{ update_banner.latest }}">
-          <input type="hidden" name="next" value="{{ request.path }}">
-          <button type="submit" aria-label="Dismiss update notice">&times;</button>
-        </form>
+        <span class="update-banner-actions">
+          {% if not update_banner.frozen %}
+          <button type="button" id="update-now-btn" class="update-now-btn">Update now</button>
+          {% endif %}
+          <form method="post" action="{{ url_for('update_dismiss') }}" class="update-banner-dismiss" id="update-banner-dismiss-form">
+            <input type="hidden" name="version" value="{{ update_banner.latest }}">
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <button type="submit" aria-label="Dismiss update notice">&times;</button>
+          </form>
+        </span>
       </div>
+      {% if not update_banner.frozen %}
+      <script>
+        (function () {
+          // Source-install "Update now" flow: POST /update/apply kicks
+          // off a detached updater (see web/update_apply.py) that kills
+          // THIS server process, applies the verified update (or not -
+          // see that module's docstring), and relaunches on the same
+          // port either way. This page can't know which outcome
+          // happened except by polling /healthz until something answers
+          // again, so it does that instead of assuming success.
+          var btn = document.getElementById('update-now-btn');
+          if (!btn) { return; }
+          var textEl = document.getElementById('update-banner-text');
+          var dismissForm = document.getElementById('update-banner-dismiss-form');
+          var POLL_INTERVAL_MS = 2000;
+          var POLL_TOTAL_MS = 60000;
+          // The worker sleeps this long before touching anything (see
+          // RESPONSE_FLUSH_DELAY_SECONDS) - polling only starts after,
+          // so the very first poll doesn't just hit the still-alive old
+          // server and short-circuit as "done" before anything happened.
+          var INITIAL_DELAY_MS = 2500;
+
+          function setMessage(msg) {
+            textEl.textContent = msg;
+          }
+
+          function resetToIdle(msg) {
+            setMessage(msg);
+            btn.disabled = false;
+            if (dismissForm) { dismissForm.style.display = ''; }
+          }
+
+          function pollHealthz(deadline) {
+            if (Date.now() > deadline) {
+              setMessage('Update is taking longer than expected - check logs/update_apply.log, or restart curatarr manually.');
+              return;
+            }
+            fetch('/healthz', { cache: 'no-store' })
+              .then(function (resp) {
+                if (!resp.ok) { throw new Error('not ok'); }
+                return resp.json();
+              })
+              .then(function () {
+                // Something answered again - old code or new, either
+                // way reload and let the page's own banner logic show
+                // whatever's actually true now.
+                setMessage('Reconnected - reloading...');
+                window.location.reload();
+              })
+              .catch(function () {
+                setTimeout(function () { pollHealthz(deadline); }, POLL_INTERVAL_MS);
+              });
+          }
+
+          btn.addEventListener('click', function () {
+            btn.disabled = true;
+            if (dismissForm) { dismissForm.style.display = 'none'; }
+            setMessage('Starting update...');
+
+            fetch('/update/apply', { method: 'POST' })
+              .then(function (resp) {
+                return resp.json().then(function (data) {
+                  return { ok: resp.ok, data: data };
+                });
+              })
+              .then(function (result) {
+                if (!result.ok) {
+                  resetToIdle((result.data && result.data.error) || 'Could not start the update.');
+                  return;
+                }
+                setMessage('Updating to ' + result.data.tag + '... the page will reconnect automatically. This can take up to a minute.');
+                setTimeout(function () {
+                  pollHealthz(Date.now() + POLL_TOTAL_MS);
+                }, INITIAL_DELAY_MS);
+              })
+              .catch(function () {
+                resetToIdle('Could not reach the server to start the update.');
+              });
+          });
+        })();
+      </script>
+      {% endif %}
       {% endif %}
       {% block content %}{% endblock %}
     </main>

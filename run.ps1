@@ -2,7 +2,13 @@
 # This script handles everything: dependencies, setup, recommendations, scheduled tasks
 
 param(
-    [switch]$Debug
+    [switch]$Debug,
+    # Non-interactive, script-only switches reused by web/update_apply.py
+    # so the web UI's "Update now" button never reimplements signature
+    # verification itself - see the dispatch block near the end of this
+    # file for what each does.
+    [switch]$CheckVerifiedUpdate,
+    [switch]$ApplyVerifiedUpdate
 )
 
 $ErrorActionPreference = "Stop"
@@ -1544,6 +1550,105 @@ function Main {
         } catch {
             # Non-fatal - worst case the notice repeats next run.
         }
+    }
+}
+
+# ------------------------------------------------------------------------
+# WEB UI "UPDATE NOW" SUPPORT (source installs only)
+# ------------------------------------------------------------------------
+# Two non-interactive, script-only entry points reused by
+# web/update_apply.py so the web UI's "Update now" button never
+# reimplements signature verification itself - both shell out to the
+# exact same Select-VerifiedRelease/Compare-VersionTuple this file's
+# own Check-ForUpdates uses. Neither falls through to the normal Main
+# flow below; both exit immediately.
+#
+# -CheckVerifiedUpdate: read-only. Prints the newest verified signed
+#   release tag newer than the running version (nothing if none) and
+#   exits 0/1 accordingly. Never touches the working tree - this is
+#   the web UI's precondition check, called BEFORE it decides whether
+#   to start applying anything.
+if ($CheckVerifiedUpdate) {
+    if (-not (Test-Path ".git")) { exit 1 }
+    $currentVersion = $null
+    $configPyContent = Get-Content "utils/config.py" -Raw
+    if ($configPyContent -match '__version__\s*=\s*"(\d+\.\d+\.\d+)"') {
+        $currentVersion = $Matches[1]
+    }
+    if (-not $currentVersion) { exit 1 }
+    git fetch --tags --force --prune origin --quiet 2>$null
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    $selectedTag = Select-VerifiedRelease -currentVersion $currentVersion
+    if (-not $selectedTag) { exit 1 }
+    Write-Output $selectedTag
+    exit 0
+}
+
+# -ApplyVerifiedUpdate: re-verifies from scratch (never trusts a tag
+#   argument - nothing outside Select-VerifiedRelease ever decides what
+#   gets checked out) and, only if a verified newer release still
+#   exists, checks it out - same stash+checkout+Python-floor-gate
+#   sequence as Check-ForUpdates's force-mode path above. Prints
+#   exactly one of UPDATED:<tag> / NO_UPDATE / FAILED:<reason> and
+#   exits 0 only for UPDATED. Never restarts anything itself - that's
+#   the caller's job (see web/update_apply.py's detached worker, which
+#   always relaunches the UI afterward regardless of this exit code -
+#   old code on NO_UPDATE/FAILED, new code on UPDATED - so a failed
+#   apply here can never leave the UI down).
+if ($ApplyVerifiedUpdate) {
+    if (-not (Test-Path ".git")) {
+        Write-Output "FAILED:not a git repository"
+        exit 1
+    }
+    $currentVersion = $null
+    $configPyContent = Get-Content "utils/config.py" -Raw
+    if ($configPyContent -match '__version__\s*=\s*"(\d+\.\d+\.\d+)"') {
+        $currentVersion = $Matches[1]
+    }
+    if (-not $currentVersion) {
+        Write-Output "FAILED:could not determine current version"
+        exit 1
+    }
+    git fetch --tags --force --prune origin --quiet 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output "FAILED:network error fetching tags"
+        exit 1
+    }
+    $selectedTag = Select-VerifiedRelease -currentVersion $currentVersion
+    if (-not $selectedTag) {
+        Write-Output "NO_UPDATE"
+        exit 1
+    }
+    $candidateLock = git show "${selectedTag}:requirements.lock" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $candidateLock) {
+        $candidateLockText = $candidateLock -join "`n"
+        $candidateFloorMatch = [regex]::Match($candidateLockText, '--python-version (\d+\.\d+)')
+        if ($candidateFloorMatch.Success) {
+            $candidateRequiredPython = $candidateFloorMatch.Groups[1].Value
+            # $pythonCmd is normally established by Check-Dependencies
+            # (called from Main, which this dispatch block runs before
+            # ever reaching) - resolve it locally here the same way.
+            $applyPython = Get-Command python -ErrorAction SilentlyContinue
+            if (-not $applyPython) { $applyPython = Get-Command python3 -ErrorAction SilentlyContinue }
+            $currentPythonVersion = if ($applyPython) { & $applyPython.Source --version 2>&1 } else { "" }
+            $currentPythonNumber = [regex]::Match("$currentPythonVersion", '(\d+\.\d+\.\d+)').Groups[1].Value
+            $currentTuple = ConvertTo-VersionTuple $currentPythonNumber
+            $candidateRequiredTuple = ConvertTo-VersionTuple $candidateRequiredPython
+            if ($currentTuple -and $candidateRequiredTuple -and (Compare-VersionTuple $currentTuple $candidateRequiredTuple) -lt 0) {
+                Write-Output "FAILED:requires Python $candidateRequiredPython+ (have $currentPythonNumber)"
+                exit 1
+            }
+        }
+    }
+    git stash --quiet 2>$null
+    git checkout $selectedTag --quiet 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Output "UPDATED:$selectedTag"
+        exit 0
+    } else {
+        Write-Output "FAILED:git checkout failed"
+        git stash pop --quiet 2>$null
+        exit 1
     }
 }
 

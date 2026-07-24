@@ -36,12 +36,18 @@ from flask import (
 from flask.testing import FlaskClient
 from werkzeug.datastructures import Headers
 
-from utils import get_project_root, get_update_mode, get_users_from_config, load_config, update_available
+from utils import __version__, get_project_root, get_update_mode, get_users_from_config, load_config, update_available
 
 from .config_app import register_config_routes
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
 from .security import redact, register_origin_host_guard
 from .status import find_user_watchlist, get_last_run_status, list_log_files, read_log_tail
+from .update_apply import (
+    UpdateAlreadyInProgressError,
+    UpdateManager,
+    UpdateNotAvailableError,
+    UpdateNotSupportedError,
+)
 
 DEFAULT_PORT = 8787
 
@@ -110,6 +116,7 @@ def create_app(project_root: str = None) -> Flask:
     app.config['LOGS_DIR'] = logs_dir
     app.config['EXTERNAL_DIR'] = external_dir
     app.job_manager = JobManager(project_root, logs_dir)
+    app.update_manager = UpdateManager(project_root, logs_dir)
     app.test_client_class = _BrowserLikeTestClient
 
     register_origin_host_guard(app)
@@ -185,6 +192,39 @@ def create_app(project_root: str = None) -> Flask:
                 httponly=True, samesite='Lax',
             )
         return response
+
+    @app.post('/update/apply')
+    def update_apply_route():
+        """Source-install "Update now": verifies a newer signed release
+        actually exists (see web.update_apply.check_verified_update -
+        shells out to run.sh's/run.ps1's own verification, never
+        reimplemented here), then hands off to a DETACHED worker
+        process that outlives this request/this server process - see
+        web/update_apply.py's module docstring for the full sequence.
+        Returns immediately; the frontend (base.html) polls /healthz
+        to detect the server coming back up on the new version.
+        """
+        host = '127.0.0.1'
+        port = int(os.environ.get('CURATARR_UI_PORT', DEFAULT_PORT))
+        try:
+            tag = app.update_manager.begin_update(host, port)
+        except UpdateNotSupportedError as exc:
+            return jsonify({'error': str(exc)}), 400
+        except UpdateAlreadyInProgressError as exc:
+            return jsonify({'error': str(exc)}), 409
+        except UpdateNotAvailableError as exc:
+            return jsonify({'error': str(exc)}), 404
+        return jsonify({'status': 'started', 'tag': tag}), 202
+
+    @app.get('/healthz')
+    def healthz():
+        """Unauthenticated-by-design (matches every other GET route -
+        this app has no auth boundary beyond binding 127.0.0.1 and the
+        origin/host guard, and a version number isn't sensitive).
+        Polled by base.html's "Update now" flow to detect the server
+        coming back up after a restart, and by whatever launches it
+        (see _wait_for_listening) as a liveness probe."""
+        return jsonify({'version': __version__})
 
     @app.get('/')
     def dashboard():
@@ -317,6 +357,32 @@ def _wait_for_listening(port: int, timeout: float = 15.0) -> bool:
     return False
 
 
+# How long the post-update relaunch (see web/update_apply.py's
+# _relaunch_ui) is willing to retry binding the port if it's still
+# held by the just-terminated old server (e.g. a brief TIME_WAIT-style
+# OS delay between that process exiting and the socket actually being
+# free) - without this, "never leave a dead port" would depend on OS
+# timing the update worker doesn't control.
+BIND_RETRY_ATTEMPTS = 20
+BIND_RETRY_DELAY_SECONDS = 0.5
+
+
+def _run_with_bind_retry(app: Flask, host: str, port: int) -> None:
+    """Wraps app.run() with a short bind-retry loop - see
+    BIND_RETRY_ATTEMPTS above. app.run() blocks for the life of a
+    successful bind (returning only on shutdown), so a retry loop
+    around it only ever actually iterates on an immediate bind failure,
+    never once the server is actually up and serving."""
+    for attempt in range(BIND_RETRY_ATTEMPTS):
+        try:
+            app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+            return
+        except OSError:
+            if attempt == BIND_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(BIND_RETRY_DELAY_SECONDS)
+
+
 def main():
     """Launcher entry point - see run-ui.sh / run-ui.ps1.
 
@@ -348,15 +414,23 @@ def main():
             # still covers a normal interpreter shutdown either way.
             pass
 
-    def _open_when_ready():
-        if _wait_for_listening(port):
-            webbrowser.open(f'http://127.0.0.1:{port}/')
+    # Skipped when this is a post-"Update now" relaunch (see
+    # web/update_apply.py's _relaunch_ui) - the user's existing browser
+    # tab is already open and will reload itself once /healthz comes
+    # back, so auto-opening a second one here would just be an
+    # unexpected extra tab popping up after an update.
+    if os.environ.get('CURATARR_SKIP_BROWSER_OPEN') != '1':
+        def _open_when_ready():
+            if _wait_for_listening(port):
+                webbrowser.open(f'http://127.0.0.1:{port}/')
 
-    threading.Thread(target=_open_when_ready, daemon=True).start()
+        threading.Thread(target=_open_when_ready, daemon=True).start()
 
     # 127.0.0.1 ONLY - never 0.0.0.0. threaded=True so the SSE stream
-    # doesn't block other requests (dashboard/results while a run is live).
-    app.run(host='127.0.0.1', port=port, debug=False, use_reloader=False, threaded=True)
+    # doesn't block other requests (dashboard/results while a run is
+    # live). See _run_with_bind_retry for why this isn't a bare
+    # app.run() call.
+    _run_with_bind_retry(app, '127.0.0.1', port)
 
 
 if __name__ == '__main__':

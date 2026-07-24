@@ -129,9 +129,13 @@ class TestBannerContent:
             resp = c.get('/')
 
         assert b'Download v2.9.0' in resp.data
-        assert b'./run.sh' not in resp.data
+        # Binary installs get the download link, never the source
+        # install's one-click "Update now" button - see
+        # tests/test_web_update_apply.py::TestSourceOnlyGating for the
+        # button-visibility assertions themselves.
+        assert b'update-now-btn' not in resp.data
 
-    def test_source_install_shows_run_sh_instructions(self, client, monkeypatch):
+    def test_source_install_shows_update_now_button(self, client, monkeypatch):
         c, app, root = client
         _write_config(root, update_mode='notify')
         monkeypatch.setattr(sys, 'frozen', False, raising=False)
@@ -139,7 +143,7 @@ class TestBannerContent:
         with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
             resp = c.get('/')
 
-        assert b'./run.sh' in resp.data
+        assert b'update-now-btn' in resp.data
         assert b'Download v2.9.0' not in resp.data
 
 

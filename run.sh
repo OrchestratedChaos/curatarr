@@ -690,5 +690,85 @@ main() {
     fi
 }
 
+# ------------------------------------------------------------------------
+# WEB UI "UPDATE NOW" SUPPORT (source installs only)
+# ------------------------------------------------------------------------
+# Two non-interactive, script-only entry points reused by
+# web/update_apply.py so the web UI's "Update now" button never
+# reimplements signature verification itself - both shell out to the
+# exact same select_verified_release()/version_ge() this file's own
+# check_for_updates() uses. Neither is reachable through the normal
+# main() flow below; both exit immediately instead of falling through
+# to it.
+#
+# --check-verified-update: read-only. Prints the newest verified signed
+#   release tag newer than the running version (nothing if none) and
+#   exits 0/1 accordingly. Never touches the working tree - this is
+#   the web UI's precondition check, called BEFORE it decides whether
+#   to start applying anything.
+if [ "${1:-}" = "--check-verified-update" ]; then
+    if [ ! -d ".git" ]; then
+        exit 1
+    fi
+    CURRENT_VERSION=$(grep -oE '__version__ = "[0-9]+\.[0-9]+\.[0-9]+"' utils/config.py | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+    [ -z "$CURRENT_VERSION" ] && exit 1
+    git fetch --tags --force --prune origin --quiet 2>/dev/null || exit 1
+    SELECTED_TAG=$(select_verified_release "$CURRENT_VERSION") || true
+    [ -z "$SELECTED_TAG" ] && exit 1
+    echo "$SELECTED_TAG"
+    exit 0
+fi
+
+# --apply-verified-update: re-verifies from scratch (never trusts a tag
+#   argument - nothing outside select_verified_release() ever decides
+#   what gets checked out) and, only if a verified newer release still
+#   exists, checks it out - same stash+checkout+Python-floor-gate
+#   sequence as check_for_updates()'s force-mode path above. Prints
+#   exactly one of UPDATED:<tag> / NO_UPDATE / FAILED:<reason> and
+#   exits 0 only for UPDATED. Never restarts anything itself - that's
+#   the caller's job (see web/update_apply.py's detached worker, which
+#   always relaunches the UI afterward regardless of this exit code -
+#   old code on NO_UPDATE/FAILED, new code on UPDATED - so a failed
+#   apply here can never leave the UI down).
+if [ "${1:-}" = "--apply-verified-update" ]; then
+    if [ ! -d ".git" ]; then
+        echo "FAILED:not a git repository"
+        exit 1
+    fi
+    CURRENT_VERSION=$(grep -oE '__version__ = "[0-9]+\.[0-9]+\.[0-9]+"' utils/config.py | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+    if [ -z "$CURRENT_VERSION" ]; then
+        echo "FAILED:could not determine current version"
+        exit 1
+    fi
+    if ! git fetch --tags --force --prune origin --quiet 2>/dev/null; then
+        echo "FAILED:network error fetching tags"
+        exit 1
+    fi
+    SELECTED_TAG=$(select_verified_release "$CURRENT_VERSION") || true
+    if [ -z "$SELECTED_TAG" ]; then
+        echo "NO_UPDATE"
+        exit 1
+    fi
+    CANDIDATE_LOCK=$(git show "${SELECTED_TAG}:requirements.lock" 2>/dev/null) || true
+    CANDIDATE_REQUIRED_PYTHON=""
+    if [ -n "$CANDIDATE_LOCK" ]; then
+        CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+    fi
+    CURRENT_PYTHON=$(python3 --version | awk '{print $2}')
+    if [ -n "$CANDIDATE_REQUIRED_PYTHON" ] && ! version_ge "$CURRENT_PYTHON" "$CANDIDATE_REQUIRED_PYTHON"; then
+        echo "FAILED:requires Python ${CANDIDATE_REQUIRED_PYTHON}+ (have ${CURRENT_PYTHON})"
+        exit 1
+    fi
+    git stash --quiet 2>/dev/null || true
+    if git checkout "$SELECTED_TAG" --quiet 2>/dev/null; then
+        echo "UPDATED:$SELECTED_TAG"
+        exit 0
+    else
+        echo "FAILED:git checkout failed"
+        git stash pop --quiet 2>/dev/null || true
+        exit 1
+    fi
+fi
+
 # Run main function
 main "$@"
