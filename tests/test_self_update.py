@@ -839,13 +839,17 @@ class TestCleanupStaleOldBinary:
 
 
 class TestSanitizeFrozenRelaunchEnv:
-    """PyInstaller onefile's internal _MEIPASS2 bootloader hand-off var
-    must never be inherited by a freshly-spawned, independent
-    curatarr.exe instance - see sanitize_frozen_relaunch_env's docstring
-    for the real end-to-end failure this fixes (confirmed via an actual
-    built binary - the relaunched process crashed inside werkzeug's own
-    package-metadata lookup because it reused a stale/wrong extraction
-    directory)."""
+    """PyInstaller onefile's internal bootloader hand-off variables must
+    never be inherited by a freshly-spawned, independent curatarr.exe
+    instance - see sanitize_frozen_relaunch_env's docstring for the
+    real end-to-end failure this fixes. Originally just _MEIPASS2;
+    confirmed via a real built binary's own inherited environment (see
+    this repo's v2.8.29 PR description) that PyInstaller 6 sets several
+    more - _PYI_ARCHIVE_FILE, _PYI_PARENT_PROCESS_LEVEL,
+    _PYI_APPLICATION_HOME_DIR - and inheriting THOSE causes the exact
+    same class of failure (the relaunched process never finishes Python
+    bootstrap - directly observed as "stdlib dir = ''" in its own
+    diagnostic dump) even with _MEIPASS2 alone stripped."""
 
     def test_strips_meipass2(self):
         env = {'PATH': '/usr/bin', '_MEIPASS2': r'C:\Temp\_MEI123456'}
@@ -853,15 +857,40 @@ class TestSanitizeFrozenRelaunchEnv:
         assert '_MEIPASS2' not in result
         assert result['PATH'] == '/usr/bin'
 
+    def test_strips_pyi_prefixed_vars(self):
+        env = {
+            'PATH': '/usr/bin',
+            '_PYI_ARCHIVE_FILE': '/opt/curatarr/curatarr',
+            '_PYI_PARENT_PROCESS_LEVEL': '1',
+            '_PYI_APPLICATION_HOME_DIR': '/tmp/_MEIstale',
+            '_PYI_SPLASH_IPC': '12345',
+        }
+        result = self_update.sanitize_frozen_relaunch_env(env)
+        assert result == {'PATH': '/usr/bin'}
+
+    def test_strips_pyinstaller_prefixed_vars(self):
+        env = {'PATH': '/usr/bin', '_PYINSTALLER_SETUP': '1'}
+        result = self_update.sanitize_frozen_relaunch_env(env)
+        assert result == {'PATH': '/usr/bin'}
+
+    def test_strips_a_future_unknown_pyi_var_too(self):
+        # Confirms the fix is prefix-based, not a fixed enumeration -
+        # PyInstaller has added _PYI_* variables across versions before
+        # and may again.
+        env = {'PATH': '/usr/bin', '_PYI_SOME_FUTURE_VAR': 'x'}
+        result = self_update.sanitize_frozen_relaunch_env(env)
+        assert result == {'PATH': '/usr/bin'}
+
     def test_noop_when_not_present(self):
         env = {'PATH': '/usr/bin', 'CURATARR_UI_PORT': '8787'}
         result = self_update.sanitize_frozen_relaunch_env(env)
         assert result == env
 
     def test_does_not_mutate_the_original_dict(self):
-        env = {'_MEIPASS2': 'x'}
+        env = {'_MEIPASS2': 'x', '_PYI_ARCHIVE_FILE': 'y'}
         self_update.sanitize_frozen_relaunch_env(env)
         assert '_MEIPASS2' in env  # original untouched - a copy was returned
+        assert '_PYI_ARCHIVE_FILE' in env
 
 
 # =============================================================================

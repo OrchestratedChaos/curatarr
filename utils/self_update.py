@@ -759,19 +759,39 @@ def swap_binary(current_path: str, new_binary_path: str) -> None:
 #
 # This was investigated extensively (see the v2.8.29 PR history) as the
 # suspected cause of a relaunched-process crash inside werkzeug's own
-# package-metadata lookup - stripping this alone, and later also giving
-# spawned processes their own fresh TEMP/TMP, did NOT fully resolve it,
-# which is what motivated the bigger architectural fix: the web UI's
-# "Update now" flow no longer launches the new binary from within any
-# frozen process at all - see utils/self_update_handoff.py's module
-# docstring for the full replacement design (a plain external script,
-# fully decoupled from any PyInstaller onefile runtime, does the actual
-# swap+relaunch after the frozen worker has exited). Kept here anyway,
-# applied to the worker's own spawn (web/update_apply.py's
-# _spawn_worker) as defense-in-depth: real end-to-end testing never
-# established this alone was harmful, and it costs nothing to keep
-# stripping a variable that has no legitimate reason to be inherited by
-# an unrelated, independent process.
+# package-metadata lookup - stripping _MEIPASS2 alone, and later also
+# giving spawned processes their own fresh TEMP/TMP, did NOT fully
+# resolve it, which is what motivated the bigger architectural fix: the
+# web UI's "Update now" flow no longer launches the new binary from
+# within any frozen process at all - see utils/self_update_handoff.py's
+# module docstring for the full replacement design (a plain external
+# script, fully decoupled from any PyInstaller onefile runtime, does
+# the actual swap+relaunch after the frozen worker has exited).
+#
+# CONFIRMED (real end-to-end testing on windows-latest/macos-latest/
+# ubuntu-latest CI, see this repo's v2.8.29 PR description) that
+# _MEIPASS2 alone was never the whole story: PyInstaller 6's bootloader
+# sets several MORE hand-off variables beyond _MEIPASS2 -
+# _PYI_ARCHIVE_FILE, _PYI_PARENT_PROCESS_LEVEL, _PYI_APPLICATION_HOME_DIR
+# (and, only if a splash screen is used, which curatarr's build never
+# does, _PYI_SPLASH_IPC) - and this module never stripped any of them.
+# Directly observed in a real worker process's own inherited
+# environment: _PYI_ARCHIVE_FILE pointing at the OLD binary's path and
+# _PYI_APPLICATION_HOME_DIR pointing at the OLD binary's OWN _MEI
+# extraction directory. A binary that inherits these (the external
+# hand-off script's launch of the NEW binary never stripped them
+# either, since it only ever removed _MEIPASS2 too) sees what looks
+# like "I am a re-exec of an already-extracted parent", skips its own
+# fresh extraction, and ends up with PYTHONHOME pointing at a
+# directory that either belongs to a completely different build or no
+# longer exists - Python's own interpreter then fails to bootstrap
+# (observed directly: "stdlib dir = ''" in the crashed process's own
+# diagnostic dump) before any of this codebase's Python even runs.
+# Every `_PYI_` and `_PYINSTALLER_` prefixed variable is stripped
+# below, not just the specific ones observed, since PyInstaller can add
+# more across versions and none of them have any legitimate reason to
+# be inherited by an unrelated, independent process either way.
+_PYINSTALLER_CHILD_ENV_VAR_PREFIXES = ('_PYI_', '_PYINSTALLER_')
 _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP = ('_MEIPASS2',)
 
 
@@ -780,7 +800,11 @@ def sanitize_frozen_relaunch_env(env: dict) -> dict:
     bootloader hand-off variables removed - see the module-level
     comment above. Safe to call on a non-frozen/non-Windows env too
     (no-op if the vars aren't present)."""
-    return {k: v for k, v in env.items() if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP}
+    return {
+        k: v for k, v in env.items()
+        if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP
+        and not k.startswith(_PYINSTALLER_CHILD_ENV_VAR_PREFIXES)
+    }
 
 
 # =============================================================================

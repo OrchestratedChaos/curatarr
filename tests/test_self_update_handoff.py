@@ -75,6 +75,17 @@ class TestWindowsScriptContent:
         content = self_update_handoff._windows_script_content()
         assert '$PSCommandPath' in content
 
+    def test_strips_pyinstaller_hand_off_vars_when_launching_the_new_binary(self):
+        # Dynamic (Where-Object -like '_PYI_*'/'_PYINSTALLER_*'), not
+        # just a fixed .Remove('_MEIPASS2') - see utils/self_update.py's
+        # sanitize_frozen_relaunch_env docstring for why this now
+        # covers _PYI_*/_PYINSTALLER_* too, not just _MEIPASS2.
+        content = self_update_handoff._windows_script_content()
+        assert '_MEIPASS2' in content
+        assert '_PYI_*' in content
+        assert '_PYINSTALLER_*' in content
+        assert 'staleKeys' in content
+
     @requires_powershell
     def test_is_syntactically_valid_powershell(self, tmp_path):
         script_path = tmp_path / 'generated.ps1'
@@ -113,9 +124,17 @@ class TestPosixScriptContent:
         content = self_update_handoff._posix_script_content()
         assert 'rm -f "$0"' in content
 
-    def test_strips_meipass2_when_launching_the_new_binary(self):
+    def test_strips_pyinstaller_hand_off_vars_when_launching_the_new_binary(self):
+        # Dynamic (env | awk ... | for v in ...; do unset_args="$unset_args -u $v"),
+        # not a fixed '-u _MEIPASS2' string - see utils/self_update.py's
+        # sanitize_frozen_relaunch_env docstring for why this now
+        # covers _PYI_*/_PYINSTALLER_* too, not just _MEIPASS2.
         content = self_update_handoff._posix_script_content()
-        assert '-u _MEIPASS2' in content
+        assert '_MEIPASS2' in content
+        assert '_PYI_' in content
+        assert '_PYINSTALLER_' in content
+        assert 'unset_args' in content
+        assert '-u $v' in content
 
     @requires_posix_shell
     def test_is_syntactically_valid_posix_sh(self, tmp_path):

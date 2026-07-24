@@ -143,7 +143,19 @@ function Start-CuratarrDetached {{
     $psi.UseShellExecute = $false
     $psi.EnvironmentVariables['CURATARR_UI_PORT'] = "$Port"
     $psi.EnvironmentVariables['CURATARR_SKIP_BROWSER_OPEN'] = '1'
-    $psi.EnvironmentVariables.Remove('_MEIPASS2') | Out-Null
+    # PyInstaller onefile bootloader hand-off variables - confirmed via
+    # real end-to-end testing (see this repo's v2.8.29 PR description)
+    # that a launched binary inheriting these (from this SCRIPT's own
+    # environment, itself inherited all the way from the frozen worker
+    # that spawned this script) skips its own fresh extraction and
+    # crashes during Python bootstrap. utils.self_update.
+    # sanitize_frozen_relaunch_env already strips these from this
+    # script's OWN environment before it's launched - this is
+    # deliberate belt-and-suspenders at the actual final launch point.
+    $staleKeys = @($psi.EnvironmentVariables.Keys) | Where-Object {{ $_ -eq '_MEIPASS2' -or $_ -like '_PYI_*' -or $_ -like '_PYINSTALLER_*' }}
+    foreach ($key in $staleKeys) {{
+        $psi.EnvironmentVariables.Remove($key) | Out-Null
+    }}
     return [System.Diagnostics.Process]::Start($psi)
 }}
 
@@ -245,7 +257,22 @@ echo "[handoff] starting - old pid=$OLD_PID target=127.0.0.1:$PORT"
 launch_detached() {{
     exe="$1"
     port="$2"
-    env -u _MEIPASS2 CURATARR_UI_PORT="$port" CURATARR_SKIP_BROWSER_OPEN=1 "$exe" >/dev/null 2>&1 &
+    # PyInstaller onefile bootloader hand-off variables - confirmed via
+    # real end-to-end testing (see this repo's v2.8.29 PR description)
+    # that a launched binary inheriting these (from this SCRIPT's own
+    # environment, itself inherited all the way from the frozen worker
+    # that spawned this script) skips its own fresh extraction and
+    # crashes during Python bootstrap. utils.self_update.
+    # sanitize_frozen_relaunch_env already strips these from this
+    # script's OWN environment before it's launched - this is
+    # deliberate belt-and-suspenders at the actual final launch point.
+    # Built dynamically (not a fixed list) since PyInstaller can add
+    # more _PYI_*/_PYINSTALLER_* variables across versions.
+    unset_args=""
+    for v in $(env | awk -F= '/^_PYI_/{{print $1}} /^_PYINSTALLER_/{{print $1}} /^_MEIPASS2=/{{print $1}}'); do
+        unset_args="$unset_args -u $v"
+    done
+    env $unset_args CURATARR_UI_PORT="$port" CURATARR_SKIP_BROWSER_OPEN=1 "$exe" >/dev/null 2>&1 &
     echo $!
 }}
 
