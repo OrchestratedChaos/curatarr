@@ -72,7 +72,7 @@ jobs:
           # into a universal2 wheel - see release.yml's build-macos-universal
           # job comment. cryptography is NOT in this list - 48.0.1 ships a
           # real prebuilt universal2 wheel (verified in the previous step).
-          THIN_WHEEL_DEPS=(pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3)
+          THIN_WHEEL_DEPS=(pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3 cffi==2.1.0)
 
           pip download --no-deps --only-binary=:all: --python-version 312 \
             --implementation cp --platform macosx_11_0_arm64 \
