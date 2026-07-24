@@ -144,6 +144,19 @@ transit, not that it came from the maintainer. The actual chain:
    itself, leaves the **current** binary running - a self-updater must
    never be able to brick the install it's updating.
 
+The CLI path (`curatarr --self-update`) does the download+verify+swap
+in-process, then exits. The web UI's **Update now** button downloads +
+verifies in-process too, but hands the actual swap and relaunch off to
+a small plain external script (PowerShell on Windows, POSIX `sh`
+elsewhere - see `utils/self_update_handoff.py`'s module docstring),
+fully decoupled from the frozen binary's own runtime: real end-to-end
+testing on real built binaries showed a running frozen process
+launching a fresh instance of itself was fundamentally unreliable, so
+that hand-off script - not the frozen process - waits for the old
+server to exit, swaps the binary, launches the new one fresh, confirms
+it answers `/healthz` with the new version, and automatically restores
++ relaunches the original binary if it never does.
+
 ### Advisory version check (unchanged, still non-authenticating on its own)
 
 The CLI prints a one-line notice after the version banner, and the web
