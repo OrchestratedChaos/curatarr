@@ -155,6 +155,40 @@ class TestBannerContent:
 
         assert b'update-now-btn' in resp.data
 
+    def test_docker_hides_update_now_button_and_points_at_docker_pull(self, client, monkeypatch):
+        """RUNNING_IN_DOCKER=true (set by the Dockerfile) still shows the
+        banner - there IS a newer version - but never a button that
+        would just fail (see web/update_apply.py's UpdateManager.
+        begin_update RUNNING_IN_DOCKER gate); instead it tells the user
+        to `docker pull`."""
+        c, app, root = client
+        _write_config(root, update_mode='notify')
+        monkeypatch.setenv('RUNNING_IN_DOCKER', 'true')
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = c.get('/')
+
+        assert b'update-banner' in resp.data
+        # The <button> element itself must be gone - not just checking
+        # for the bare id substring, which also appears (harmlessly,
+        # guarded by `if (!btn) { return; }`) inside the banner's own
+        # always-rendered <script> block.
+        assert b'id="update-now-btn"' not in resp.data
+        assert b'docker pull' in resp.data
+
+    def test_non_docker_unaffected_by_running_in_docker_unset(self, client, monkeypatch):
+        c, app, root = client
+        _write_config(root, update_mode='notify')
+        monkeypatch.delenv('RUNNING_IN_DOCKER', raising=False)
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = c.get('/')
+
+        assert b'id="update-now-btn"' in resp.data
+        assert b'docker pull' not in resp.data
+
 
 class TestDismiss:
     def test_dismiss_sets_cookie_and_redirects(self, client):

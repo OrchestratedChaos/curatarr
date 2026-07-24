@@ -244,6 +244,19 @@ class UpdateManager:
              apply step (git, or utils.self_update.perform_self_update)
              finds nothing to apply and relaunches the unchanged
              current version, never a security gap.
+          3. RUNNING_IN_DOCKER=true (see Dockerfile) short-circuits
+             straight to UpdateNotAvailableError, before either
+             precondition check above ever runs. A container image has
+             no on-disk .git to check out against and isn't a frozen
+             binary to swap in place - it updates via `docker pull`
+             instead (see docs/DOCKER.md) - so this is an explicit,
+             intentional no-op rather than relying on run.sh's own
+             `[ ! -d ".git" ]` guard to incidentally fail closed for the
+             same reason. web/app.py's _update_banner_context() also
+             checks this flag, so a container's update banner never
+             even offers a non-functional "Update now" button in the
+             first place - this is the belt-and-suspenders backstop for
+             anyone hitting the route directly.
 
         Returns the (advisory, for a frozen binary) tag being applied.
         """
@@ -253,6 +266,12 @@ class UpdateManager:
             self._in_progress = True
 
         try:
+            if os.environ.get('RUNNING_IN_DOCKER') == 'true':
+                raise UpdateNotAvailableError(
+                    "Self-update isn't available in Docker - pull the new "
+                    "image instead, e.g.: docker pull "
+                    "ghcr.io/orchestratedchaos/curatarr:latest"
+                )
             if getattr(sys, 'frozen', False):
                 tag = _check_update_available_for_binary()
             else:

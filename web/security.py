@@ -8,6 +8,7 @@ Everything the UI displays - streamed job output and log tails - is
 passed through :func:`redact` first.
 """
 
+import os
 import re
 from typing import Iterable, List
 
@@ -110,12 +111,41 @@ _ALLOWED_HOST_RE = re.compile(r'^(127\.0\.0\.1|localhost)(:\d+)?$', re.IGNORECAS
 # a save/trigger/test-connection endpoint, never a plain page view.
 STATE_CHANGING_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 
+# Additional exact-match hosts to allow, on top of the hardcoded
+# 127.0.0.1/localhost above - opt-in via CURATARR_ALLOWED_HOSTS
+# (comma-separated host[:port] entries), unset by default so the
+# native app's behavior above is completely unchanged.
+#
+# Why this exists: web/docker_server.py (unlike web/app.py's main(),
+# which is hardcoded to 127.0.0.1 and never touched by this) binds
+# 0.0.0.0 inside a container so `-p 8787:8787` can reach it at all -
+# but a browser on another machine reaching it via the container
+# host's LAN IP or a reverse-proxy hostname sends that same value in
+# its Host header, which the hardcoded allowlist above would otherwise
+# always reject (by design - see is_allowed_host's docstring). This
+# lets a container operator explicitly opt that host/hostname in,
+# without weakening the default (unset) behavior for anyone else,
+# including every native install.
+#
+# Read live (not cached at import) so tests can monkeypatch it and a
+# running container can pick up a changed env var on restart.
+def _extra_allowed_hosts() -> frozenset:
+    raw = os.environ.get('CURATARR_ALLOWED_HOSTS', '')
+    return frozenset(
+        host.strip().lower() for host in raw.split(',') if host.strip()
+    )
+
 
 def is_allowed_host(netloc: str) -> bool:
     """True if *netloc* (a bare ``host`` or ``host:port`` string, e.g.
     from ``request.host`` or ``urlsplit(...).netloc``) is this app's own
-    origin."""
-    return bool(netloc) and bool(_ALLOWED_HOST_RE.match(netloc))
+    origin, or is explicitly opted in via CURATARR_ALLOWED_HOSTS (see
+    above - unset for every native install, so this is additive-only)."""
+    if not netloc:
+        return False
+    if _ALLOWED_HOST_RE.match(netloc):
+        return True
+    return netloc.strip().lower() in _extra_allowed_hosts()
 
 
 def register_origin_host_guard(app) -> None:

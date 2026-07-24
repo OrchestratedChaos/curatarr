@@ -166,6 +166,13 @@ def create_app(project_root: str = None) -> Flask:
                     'latest': latest,
                     'current': current,
                     'frozen': getattr(sys, 'frozen', False),
+                    # Docker images update via `docker pull`, not this
+                    # banner's "Update now" button (see
+                    # web/update_apply.py's UpdateManager.begin_update
+                    # RUNNING_IN_DOCKER gate, which refuses that button
+                    # anyway) - base.html renders a pull-the-new-image
+                    # instruction instead of the button when this is set.
+                    'docker': os.environ.get('RUNNING_IN_DOCKER') == 'true',
                 }
             }
         except Exception:

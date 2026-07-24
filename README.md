@@ -105,15 +105,20 @@ UI deps, so it's unaffected by this.
 git clone https://github.com/OrchestratedChaos/curatarr.git
 cd curatarr
 ./setup.sh              # Interactive setup wizard (recommended)
-docker compose up --build
+docker compose up -d
 ```
 
 Or manually configure:
 ```bash
 cp config/config.example.yml config/config.yml
 # Edit config/config.yml with your details
-docker compose up --build
+docker compose up -d
 ```
+
+Opens the same web UI as below at `http://localhost:8787` - no
+build required, `docker-compose.yml` pulls the published multi-arch
+(amd64/arm64) image from GHCR. See [docs/DOCKER.md](docs/DOCKER.md) for
+volumes, scheduling recommendation runs, and updating.
 
 First run takes 5-10 minutes to analyze your library. After that, it's fast.
 
@@ -627,8 +632,9 @@ curatarr/
 ├── web/                     # Local web UI (Flask, beta)
 ├── curatarr_app.py          # Standalone-binary entry point (see docs/BINARIES.md)
 ├── curatarr.spec            # PyInstaller build spec
-├── Dockerfile               # Docker image definition
-├── docker-compose.yml       # Docker Compose config
+├── Dockerfile               # Docker image definition (see docs/DOCKER.md)
+├── docker-compose.yml       # Docker Compose template
+├── docker-entrypoint.sh     # Docker CMD dispatcher (web UI / one-shot recommend)
 ├── cache/                   # TMDB metadata cache
 ├── logs/                    # Execution logs
 └── recommendations/
@@ -659,8 +665,9 @@ The PowerShell script offers to create a scheduled task automatically. Or manual
 ### Docker (cron on host)
 ```bash
 # Daily at 3 AM
-0 3 * * * cd /path/to/curatarr && docker compose run --rm curatarr >> logs/daily-run.log 2>&1
+0 3 * * * cd /path/to/curatarr && docker compose run --rm curatarr-recommend >> logs/daily-run.log 2>&1
 ```
+See [docs/DOCKER.md](docs/DOCKER.md#scheduling-recommendation-runs) for details.
 
 ---
 
@@ -718,22 +725,13 @@ python -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
 - Want updates auto-applied instead of just notified → Set `general.update_mode: force`
 
 ### Docker
-```bash
-# View logs
-docker compose logs
+See [docs/DOCKER.md](docs/DOCKER.md#troubleshooting) for the full Docker
+troubleshooting guide (logs, healthcheck, permissions, LAN/reverse-proxy
+access). Docker installs update via `docker pull` - see
+[Updating](docs/DOCKER.md#updating) - not `git pull` or the web UI's
+"Update now" button, neither of which apply inside a container.
 
-# Rebuild after code changes
-docker compose build --no-cache
-
-# Check container status
-docker compose ps
-```
-
-**Docker-specific issues:**
-- Connection refused to Plex → Use host IP (not `localhost`), try `host.docker.internal` on Docker Desktop
-- Permission denied on cache/logs → Run `chmod -R 777 cache logs recommendations` on host
-
-**Manual update (if update_mode is `off` or `notify`):**
+**Manual update for a source install (if update_mode is `off` or `notify`):**
 ```bash
 git pull origin main
 ```

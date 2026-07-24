@@ -33,10 +33,24 @@ def get_project_root() -> str:
     Created on first use if it doesn't already exist. See
     docs/BINARIES.md for the full rationale.
 
+    An explicit CURATARR_CONFIG_DIR environment variable overrides both
+    of the above and takes top priority - added for Docker (see
+    Dockerfile / docs/DOCKER.md), where the app's code lives at a fixed
+    WORKDIR but config.yml/cache/logs/recommendations need to live on a
+    separately mounted, persistent volume instead. Created on first use
+    if it doesn't already exist, same as the frozen-binary case above.
+    Unset for every existing source/frozen install, so this is a purely
+    additive, opt-in override - nothing changes for them.
+
     Returns:
-        Absolute path to the project root (or the per-user data dir
-        when running as a frozen binary).
+        Absolute path to the project root (the CURATARR_CONFIG_DIR
+        override, the per-user data dir when running as a frozen
+        binary, or the repo root - in that priority order).
     """
+    override = os.environ.get('CURATARR_CONFIG_DIR')
+    if override:
+        os.makedirs(override, exist_ok=True)
+        return override
     if getattr(sys, 'frozen', False):
         if os.name == 'nt':
             base = os.environ.get('APPDATA') or os.path.expanduser('~')

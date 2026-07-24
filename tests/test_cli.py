@@ -912,3 +912,21 @@ class TestPrintUpdateNotice:
         assert 'download:' in out
         assert 'github.com/OrchestratedChaos/curatarr/releases' in out
         assert 'run.sh' not in out
+
+    @patch('utils.cli.update_available')
+    def test_docker_points_at_pull_not_run_sh_or_self_update(self, mock_update_available, capsys, monkeypatch):
+        """RUNNING_IN_DOCKER wins over both the frozen and source
+        branches - a container is neither: there's no on-disk .git to
+        check out against and no frozen binary to swap (see run.sh's
+        RUNNING_IN_DOCKER-gated --check-verified-update/
+        --apply-verified-update and web/update_apply.py's
+        UpdateManager.begin_update)."""
+        monkeypatch.setenv('RUNNING_IN_DOCKER', 'true')
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        mock_update_available.return_value = ('2.9.0', '2.8.28', True)
+        print_update_notice('notify')
+        out = capsys.readouterr().out
+        assert 'Update available: v2.9.0' in out
+        assert 'docker pull' in out
+        assert 'run.sh' not in out
+        assert '--self-update' not in out

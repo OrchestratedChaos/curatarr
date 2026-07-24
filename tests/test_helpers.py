@@ -382,3 +382,42 @@ class TestGetProjectRoot:
         root = get_project_root()
         assert root == existing
         assert os.path.isfile(os.path.join(existing, 'marker.txt'))
+
+    def test_config_dir_env_override_wins_over_source_checkout(self, tmp_path, monkeypatch):
+        """CURATARR_CONFIG_DIR (see Dockerfile/docs/DOCKER.md) takes
+        priority over the normal non-frozen repo-root behavior."""
+        override = os.path.join(str(tmp_path), 'data')
+        monkeypatch.setenv('CURATARR_CONFIG_DIR', override)
+        root = get_project_root()
+        assert root == override
+        assert os.path.isdir(root)
+
+    @patch('utils.helpers.sys.frozen', True, create=True)
+    def test_config_dir_env_override_wins_over_frozen_binary_dir(self, tmp_path, monkeypatch):
+        """CURATARR_CONFIG_DIR also wins over the frozen-binary per-user
+        data dir - it's the highest-priority override either way."""
+        override = os.path.join(str(tmp_path), 'data')
+        monkeypatch.setenv('CURATARR_CONFIG_DIR', override)
+        monkeypatch.setattr(os, 'name', 'posix')
+        monkeypatch.setenv('HOME', str(tmp_path))
+        root = get_project_root()
+        assert root == override
+        assert root != os.path.join(str(tmp_path), '.curatarr')
+
+    def test_config_dir_env_override_reuses_existing_dir(self, tmp_path, monkeypatch):
+        override = os.path.join(str(tmp_path), 'data')
+        os.makedirs(override)
+        with open(os.path.join(override, 'marker.txt'), 'w') as f:
+            f.write('keep me')
+        monkeypatch.setenv('CURATARR_CONFIG_DIR', override)
+        root = get_project_root()
+        assert root == override
+        assert os.path.isfile(os.path.join(override, 'marker.txt'))
+
+    def test_config_dir_env_unset_is_unaffected(self, monkeypatch):
+        """Unset (the default for every existing install) falls through
+        to the normal repo-root behavior, unchanged."""
+        monkeypatch.delenv('CURATARR_CONFIG_DIR', raising=False)
+        root = get_project_root()
+        assert os.path.isdir(os.path.join(root, 'utils'))
+        assert os.path.isdir(os.path.join(root, 'web'))

@@ -28,7 +28,9 @@
       <div class="banner warn update-banner" id="update-banner">
         <span id="update-banner-text">
           Update available: v{{ update_banner.latest }} (you have v{{ update_banner.current }}).
-          {% if update_banner.frozen %}
+          {% if update_banner.docker %}
+          Running in Docker: update by pulling the new image tag - <code>docker pull ghcr.io/orchestratedchaos/curatarr:v{{ update_banner.latest }}</code> - then recreate the container.
+          {% elif update_banner.frozen %}
           Downloaded binaries are cryptographically verified (signed checksum + hash match) before being applied.
           {% else %}
           Signed releases are verified before being applied.
@@ -36,7 +38,9 @@
           <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Release notes</a>
         </span>
         <span class="update-banner-actions">
+          {% if not update_banner.docker %}
           <button type="button" id="update-now-btn" class="update-now-btn">Update now</button>
+          {% endif %}
           <form method="post" action="{{ url_for('update_dismiss') }}" class="update-banner-dismiss" id="update-banner-dismiss-form">
             <input type="hidden" name="version" value="{{ update_banner.latest }}">
             <input type="hidden" name="next" value="{{ request.path }}">
