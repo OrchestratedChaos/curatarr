@@ -37,7 +37,7 @@ Double-click it and it opens the dashboard at `http://127.0.0.1:8787` in your br
 
 First run, your OS will warn about an unsigned binary - Windows SmartScreen: **More info → Run anyway**; macOS Gatekeeper: right-click → **Open**. Details in [docs/BINARIES.md](docs/BINARIES.md#unsigned-binaries).
 
-Binaries are manual-download - the app itself notifies you (CLI and web UI banner) when a newer release exists, but you grab it from Releases to upgrade. Want the update auto-applied instead? Use a [source install](#quick-start) and set `general.update_mode: force` - `run.sh`/`run.ps1` then apply signed releases automatically.
+Binaries self-update: the app notifies you (CLI and web UI banner) when a newer release exists, and the web UI's **Update now** button (or `curatarr --self-update` from a terminal) downloads it, cryptographically verifies it (signed checksum + hash match - see [docs/BINARIES.md](docs/BINARIES.md#self-updating)), and swaps itself in place. No manual download required, but nothing applies automatically without you clicking/running one of those - for that, use a [source install](#quick-start) and set `general.update_mode: force`.
 
 ---
 
@@ -338,16 +338,19 @@ logging:
 - `notify` (default) — CLI prints a one-line notice and the web UI shows a
   dismissible banner when a newer release exists; nothing is applied
   automatically. Source installs (`run.sh`/`run.ps1`) additionally prompt
-  `Update available: vX. Update now? [y/N]` on each interactive run, and the
-  web UI banner has an **Update now** button that verifies and applies the
-  same signed release in the background, then reconnects automatically once
-  the server restarts (binaries get a download link instead - no local
-  checkout to update).
+  `Update available: vX. Update now? [y/N]` on each interactive run. The web
+  UI banner's **Update now** button works for both install types: source
+  installs verify and apply the same signed release used by `run.sh`/
+  `run.ps1`; binaries download, cryptographically verify (signed checksum +
+  hash match - see [docs/BINARIES.md](docs/BINARIES.md#self-updating)), and
+  swap themselves in place. Either way it reconnects automatically once the
+  server restarts. Binaries can also self-update from the command line:
+  `curatarr --self-update`.
 - `force` — source installs (`run.sh`/`run.ps1`) auto-apply verified signed
   releases from GitHub on each run, no prompt (the old `auto_update: true`
   behavior). Binaries never auto-apply anything regardless of this setting -
-  there's no local checkout to update; `force` on a binary install just
-  behaves like `notify`.
+  `force` on a binary install just behaves like `notify` (banner + CLI
+  notice only; use the **Update now** button or `--self-update` to apply).
 - `off` — never check for updates.
 
 `general.auto_update` (legacy) is still read as a fallback if `update_mode`

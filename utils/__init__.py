@@ -68,6 +68,33 @@ from .update_check import (
     update_available,
 )
 
+# In-binary self-update utilities (frozen/PyInstaller binaries only -
+# see module docstring; source installs keep using run.sh/run.ps1)
+from .self_update import (
+    SelfUpdateError,
+    NotFrozenError,
+    UnsupportedPlatformError,
+    NoUpdateAvailableError,
+    DownloadError,
+    SignatureVerificationError,
+    HashMismatchError,
+    SwapError,
+    PINNED_SIGNING_KEY_FINGERPRINT,
+    select_asset_name,
+    determine_update_target,
+    verify_pinned_signature,
+    parse_sha256sums,
+    sha256_file,
+    verify_downloaded_asset,
+    swap_binary,
+    cleanup_stale_old_binary,
+    current_binary_path,
+    sanitize_frozen_relaunch_env,
+    VerifiedUpdate,
+    download_and_verify_update,
+    perform_self_update,
+)
+
 # Display utilities
 from .display import (
     RED,
@@ -309,6 +336,29 @@ __all__ = [
     'get_libraries_for_media_type',
     'get_effective_arr_config',
     'get_update_mode',
+    # Self-update (frozen binaries only)
+    'SelfUpdateError',
+    'NotFrozenError',
+    'UnsupportedPlatformError',
+    'NoUpdateAvailableError',
+    'DownloadError',
+    'SignatureVerificationError',
+    'HashMismatchError',
+    'SwapError',
+    'PINNED_SIGNING_KEY_FINGERPRINT',
+    'select_asset_name',
+    'determine_update_target',
+    'verify_pinned_signature',
+    'parse_sha256sums',
+    'sha256_file',
+    'verify_downloaded_asset',
+    'swap_binary',
+    'cleanup_stale_old_binary',
+    'current_binary_path',
+    'sanitize_frozen_relaunch_env',
+    'VerifiedUpdate',
+    'download_and_verify_update',
+    'perform_self_update',
     # Update check
     'GITHUB_RELEASES_API',
     'GITHUB_RELEASES_PAGE',

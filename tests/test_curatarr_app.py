@@ -26,7 +26,7 @@ and _configure_windowed_launch()'s not-frozen/not-Windows no-op guard.
 import os
 import runpy
 import sys
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -45,6 +45,144 @@ class TestCuratarrApp:
         calls main() exactly once, matching run-ui.sh / run-ui.ps1."""
         runpy.run_module('curatarr_app', run_name='__main__')
         mock_main.assert_called_once_with()
+
+
+class TestDispatchViaRunpy:
+    """Argv-based dispatch routing at the bottom of curatarr_app.py -
+    exercised via runpy.run_module the same way
+    test_running_as_script_calls_main above does, since functions
+    defined at module top-level get freshly redefined on each re-exec
+    (only imports from OTHER modules - web.app.main, web.update_apply.
+    run_self_update_worker, utils.self_update.cleanup_stale_old_binary -
+    can be usefully mocked here; curatarr_app's own
+    _run_self_update_cli is instead exercised for real, via its actual
+    (safe, deterministic) not-frozen early-exit path)."""
+
+    def test_self_update_worker_flag_dispatches_with_argv(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['curatarr', '--self-update-worker', '--pid', '1', '--host', 'x', '--port', '2'])
+        with patch('web.update_apply.run_self_update_worker') as mock_worker:
+            runpy.run_module('curatarr_app', run_name='__main__')
+        mock_worker.assert_called_once_with(['--pid', '1', '--host', 'x', '--port', '2'])
+
+    def test_self_update_flag_dispatches_to_cli_handler(self, monkeypatch, capsys):
+        """Not frozen in the test environment - _run_self_update_cli's
+        own real (safe, deterministic) not-frozen early-exit path
+        proves dispatch reached it, without needing to mock a
+        same-module function across a runpy re-exec."""
+        monkeypatch.setattr(sys, 'argv', ['curatarr', '--self-update'])
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_module('curatarr_app', run_name='__main__')
+        assert exc_info.value.code == 2
+        assert '--self-update only applies to a downloaded binary' in capsys.readouterr().err
+
+    def test_frozen_normal_launch_cleans_up_stale_binary_before_main(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['curatarr'])
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        with patch('utils.self_update.cleanup_stale_old_binary') as mock_cleanup, \
+                patch('web.app.main') as mock_main, \
+                patch('curatarr_app._configure_windowed_launch'):
+            runpy.run_module('curatarr_app', run_name='__main__')
+        mock_cleanup.assert_called_once_with()
+        mock_main.assert_called_once_with()
+
+    def test_not_frozen_normal_launch_skips_cleanup(self, monkeypatch):
+        monkeypatch.setattr(sys, 'argv', ['curatarr'])
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with patch('utils.self_update.cleanup_stale_old_binary') as mock_cleanup, \
+                patch('web.app.main'):
+            runpy.run_module('curatarr_app', run_name='__main__')
+        mock_cleanup.assert_not_called()
+
+
+class TestRunSelfUpdateCli:
+    """Direct unit tests for _run_self_update_cli() - the `--self-update`
+    CLI flag's handler (see curatarr_app.py's module docstring). The
+    actual download/verify/swap it delegates to is
+    utils.self_update.perform_self_update(), mocked here entirely - its
+    own logic is tests/test_self_update.py's job."""
+
+    def test_not_frozen_prints_clear_message_and_exits_2(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            curatarr_app._run_self_update_cli()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert '--self-update only applies to a downloaded binary' in err
+        assert 'run.sh' in err or 'run.ps1' in err
+
+    def test_success_prints_new_version_and_exits_cleanly(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        with patch('utils.self_update.perform_self_update', return_value='2.9.0'):
+            curatarr_app._run_self_update_cli()  # must not raise/exit non-zero
+        out = capsys.readouterr().out
+        assert 'v2.9.0' in out
+
+    def test_no_update_available_prints_message_and_exits_0(self, monkeypatch, capsys):
+        from utils.self_update import NoUpdateAvailableError
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        with patch('utils.self_update.perform_self_update', side_effect=NoUpdateAvailableError('nothing newer')):
+            with pytest.raises(SystemExit) as exc_info:
+                curatarr_app._run_self_update_cli()
+        assert exc_info.value.code == 0
+        assert 'nothing newer' in capsys.readouterr().out
+
+    def test_verification_failure_prints_error_and_exits_1(self, monkeypatch, capsys):
+        from utils.self_update import HashMismatchError
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        with patch('utils.self_update.perform_self_update', side_effect=HashMismatchError('bad hash')):
+            with pytest.raises(SystemExit) as exc_info:
+                curatarr_app._run_self_update_cli()
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert 'bad hash' in err
+        assert 'left unchanged' in err
+
+
+class TestSuppressWindowsCrashDialogs:
+    """_suppress_windows_crash_dialogs() - SetErrorMode(SEM_FAILCRITICALERRORS
+    | SEM_NOGPFAULTERRORBOX), called first thing on every frozen Windows
+    launch (worker, relaunch, normal UI, CLI alike) so a native-level
+    fault can never pop a modal Windows Error Reporting dialog on the
+    user's desktop - see that function's docstring. Marked
+    `# pragma: no cover` in curatarr_app.py itself (real Windows ctypes
+    API, same category as _attach_or_setup_console - see this file's
+    module docstring), but still exercised here with a faked
+    ctypes.windll so its guard/call/never-raises behavior is proven
+    cross-platform."""
+
+    def test_noop_when_not_frozen(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        curatarr_app._suppress_windows_crash_dialogs()  # must not raise
+
+    def test_noop_when_not_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'posix')
+        curatarr_app._suppress_windows_crash_dialogs()  # must not raise
+
+    def test_calls_set_error_mode_when_frozen_on_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        mock_windll = Mock()
+        monkeypatch.setattr(curatarr_app.ctypes, 'windll', mock_windll, raising=False)
+
+        curatarr_app._suppress_windows_crash_dialogs()
+
+        SEM_FAILCRITICALERRORS = 0x0001
+        SEM_NOGPFAULTERRORBOX = 0x0002
+        mock_windll.kernel32.SetErrorMode.assert_called_once_with(
+            SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+        )
+
+    def test_never_raises_even_if_the_api_call_itself_fails(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        mock_windll = Mock()
+        mock_windll.kernel32.SetErrorMode.side_effect = OSError('no such API')
+        monkeypatch.setattr(curatarr_app.ctypes, 'windll', mock_windll, raising=False)
+
+        curatarr_app._suppress_windows_crash_dialogs()  # must not raise
 
 
 class TestDebugRequested:

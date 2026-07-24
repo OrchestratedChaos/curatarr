@@ -46,7 +46,6 @@ from .update_apply import (
     UpdateAlreadyInProgressError,
     UpdateManager,
     UpdateNotAvailableError,
-    UpdateNotSupportedError,
 )
 
 DEFAULT_PORT = 8787
@@ -195,21 +194,37 @@ def create_app(project_root: str = None) -> Flask:
 
     @app.post('/update/apply')
     def update_apply_route():
-        """Source-install "Update now": verifies a newer signed release
+        """"Update now": source installs verify a newer signed release
         actually exists (see web.update_apply.check_verified_update -
         shells out to run.sh's/run.ps1's own verification, never
-        reimplemented here), then hands off to a DETACHED worker
-        process that outlives this request/this server process - see
-        web/update_apply.py's module docstring for the full sequence.
-        Returns immediately; the frontend (base.html) polls /healthz
-        to detect the server coming back up on the new version.
+        reimplemented here); frozen binaries do a cheap advisory check
+        (see web.update_apply._check_update_available_for_binary) and
+        leave the real cryptographic verification to the worker's call
+        into utils.self_update - see web/update_apply.py's module
+        docstring for the full sequence and trust model of each. Either
+        way, this hands off to a DETACHED worker process that outlives
+        this request/this server process and returns immediately; the
+        frontend (base.html) polls /healthz to detect the server coming
+        back up on the new version.
         """
+        # Refuse to even attempt an update while a recommender run is in
+        # flight: that job's subprocess is itself another instance of
+        # this same binary (frozen), and killing/swapping this server
+        # out from under it while it's running is simply not something
+        # to risk. web/job_runner.py's own LOCK_FILENAME is checked
+        # again, cross-process, by the detached worker itself right
+        # before it shuts anything down (see web/update_apply.py's
+        # _run_worker / _recommender_job_in_progress) as a race-safe
+        # second gate - this route-level check is just the immediate,
+        # synchronous "no" for the common case of a user clicking
+        # Update now while a run they can see is still going.
+        if app.job_manager.is_running():
+            return jsonify({'error': 'A recommender run is currently in progress - wait for it to finish before updating.'}), 409
+
         host = '127.0.0.1'
         port = int(os.environ.get('CURATARR_UI_PORT', DEFAULT_PORT))
         try:
             tag = app.update_manager.begin_update(host, port)
-        except UpdateNotSupportedError as exc:
-            return jsonify({'error': str(exc)}), 400
         except UpdateAlreadyInProgressError as exc:
             return jsonify({'error': str(exc)}), 409
         except UpdateNotAvailableError as exc:
@@ -367,12 +382,44 @@ BIND_RETRY_ATTEMPTS = 20
 BIND_RETRY_DELAY_SECONDS = 0.5
 
 
+def _skip_slow_server_name_lookup() -> None:
+    """Werkzeug's own BaseWSGIServer.server_bind() calls
+    socket.getfqdn(host) to set self.server_name - a reverse DNS lookup
+    that's irrelevant here (this app only ever binds 127.0.0.1 - see
+    main()'s docstring) but confirmed, via real end-to-end self-update
+    testing (see this repo's v2.8.29 PR description), to take 30+
+    seconds on some networks. That delay eats directly into the
+    self-update hand-off script's own health-check window (see
+    utils/self_update_handoff.py's HANDOFF_HEALTH_TIMEOUT_SECONDS) -
+    a perfectly good just-installed update could get spuriously rolled
+    back simply because ITS OWN server took too long to finish binding,
+    not because anything was actually wrong with it. Patches
+    socket.getfqdn globally (idempotent - safe to call more than once)
+    rather than subclassing the server Flask constructs internally,
+    since Flask's own app.run() doesn't expose a server class hook."""
+    import socket as _socket
+
+    if getattr(_socket.getfqdn, '_curatarr_fast_path', False):
+        return
+
+    _real_getfqdn = _socket.getfqdn
+
+    def _fast_getfqdn(name=''):
+        if not name or name in ('127.0.0.1', 'localhost', '::1'):
+            return 'localhost'
+        return _real_getfqdn(name)
+
+    _fast_getfqdn._curatarr_fast_path = True
+    _socket.getfqdn = _fast_getfqdn
+
+
 def _run_with_bind_retry(app: Flask, host: str, port: int) -> None:
     """Wraps app.run() with a short bind-retry loop - see
     BIND_RETRY_ATTEMPTS above. app.run() blocks for the life of a
     successful bind (returning only on shutdown), so a retry loop
     around it only ever actually iterates on an immediate bind failure,
     never once the server is actually up and serving."""
+    _skip_slow_server_name_lookup()
     for attempt in range(BIND_RETRY_ATTEMPTS):
         try:
             app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)

@@ -46,8 +46,18 @@ from .helpers import get_project_root
 
 logger = logging.getLogger('curatarr')
 
-# api.github.com - JSON, used for the actual version lookup.
-GITHUB_RELEASES_API = "https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest"
+# api.github.com - JSON, used for the actual version lookup. Overridable
+# via CURATARR_RELEASES_API_OVERRIDE for testing/staging (e.g. this
+# repo's own real end-to-end self-update test - see
+# tests/test_self_update.py and the v2.8.29 PR description for what
+# exercises this) - never security-relevant since this whole module is
+# already advisory/unauthenticated by design (see module docstring), so
+# redirecting WHERE the version number comes from doesn't change what
+# gets trusted with it.
+GITHUB_RELEASES_API = (
+    os.environ.get('CURATARR_RELEASES_API_OVERRIDE')
+    or "https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest"
+)
 # github.com - human-facing, used for CLI/web "go download it" links.
 GITHUB_RELEASES_PAGE = "https://github.com/OrchestratedChaos/curatarr/releases/latest"
 
@@ -82,13 +92,23 @@ def parse_version(version: Optional[str]) -> Optional[Tuple[int, int, int]]:
     """
     Parse a 'vX.Y.Z' or 'X.Y.Z' string into a comparable (X, Y, Z) tuple.
 
-    Returns None (never raises) for anything that doesn't match a
-    dotted-integer version at the start of the string - callers must
-    treat an unparsable version as "can't compare", not crash.
+    Returns None (never raises) for anything that isn't EXACTLY a
+    dotted-integer version (optionally 'v'-prefixed) - end-anchored, no
+    trailing junk of any kind tolerated (previously only start-anchored,
+    which accepted e.g. a trailing "-rc1" suffix). This is intentionally
+    strict because the parsed value also gets re-serialized and used,
+    downstream, to build a release download URL (see
+    utils.self_update.release_asset_url, fed via _fetch_latest_version()
+    below) - a merely-prefix match here would let a spoofed GitHub
+    tag_name like "2.99.0/../v2.5.0" pass this check (real digits at the
+    start, comparing as newer than the installed version) while still
+    carrying a path-traversal sequence that a caller could put straight
+    into that URL. Callers must treat an unparsable version as "can't
+    compare", not crash.
     """
     if not version:
         return None
-    match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)', version.strip())
+    match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)$', version.strip())
     if not match:
         return None
     return tuple(int(part) for part in match.groups())
@@ -124,6 +144,15 @@ def _fetch_latest_version() -> Optional[str]:
     limit, malformed/unexpected JSON, whatever) is caught here and
     returns None - this must never raise into a caller that isn't
     expecting an update check to be able to fail the whole run.
+
+    SECURITY: never returns the raw `tag_name` (previously only a
+    `.lstrip('vV')` was applied, which let anything GitHub's API
+    returned - including path-traversal characters like "/../" - flow
+    straight through to callers that build a download URL from it).
+    Only the RE-SERIALIZED "%d.%d.%d" from parse_version()'s captured
+    integer groups is ever returned, so the result is always exactly
+    three dotted integers - no slashes, dots beyond the two separators,
+    whitespace, or any other character can ever survive from here on.
     """
     try:
         response = requests.get(
@@ -133,9 +162,10 @@ def _fetch_latest_version() -> Optional[str]:
         )
         response.raise_for_status()
         tag = (response.json() or {}).get('tag_name')
-        if not tag or not parse_version(tag):
+        parsed = parse_version(tag)
+        if not parsed:
             return None
-        return tag.lstrip('vV')
+        return "%d.%d.%d" % parsed
     except Exception as e:
         logger.debug(f"Update check failed (non-fatal): {e}")
         return None

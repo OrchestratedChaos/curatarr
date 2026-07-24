@@ -60,6 +60,87 @@ class TestBaseCacheInit:
         assert cache.recommender is mock_recommender
 
 
+class TestBaseCachePerLibraryFilePath:
+    """Tests for #157 cross-library cache eviction fix.
+
+    BaseCache.cache_path must be qualified with the recommender's
+    per-library prefix (_cache_library_prefix()) so that two same-media-type
+    libraries never share one cache file. Before this fix, cache_path was
+    built from cache_filename alone, so update_cache() on library B would
+    evict library A's entries (and vice versa) because both libraries wrote
+    to the exact same file.
+    """
+
+    def test_single_library_cache_path_unchanged(self, tmp_path):
+        """Back-compat: a single-library recommender (prefix '') keeps the
+        exact legacy filename."""
+        recommender = Mock()
+        recommender._cache_library_prefix.return_value = ''
+
+        cache = ConcreteCache(str(tmp_path), recommender=recommender)
+
+        assert cache.cache_path == os.path.join(str(tmp_path), 'test_cache.json')
+
+    def test_no_recommender_cache_path_unchanged(self, tmp_path):
+        """Back-compat: no recommender passed at all also keeps the legacy
+        path (guards callers that construct a cache without one)."""
+        cache = ConcreteCache(str(tmp_path))
+
+        assert cache.cache_path == os.path.join(str(tmp_path), 'test_cache.json')
+
+    def test_multi_library_caches_use_distinct_files(self, tmp_path):
+        """Two same-media-type libraries get distinct, library-qualified
+        cache files instead of sharing one."""
+        recommender_a = Mock()
+        recommender_a._cache_library_prefix.return_value = 'movies_'
+        recommender_b = Mock()
+        recommender_b._cache_library_prefix.return_value = 'movies-4k_'
+
+        cache_a = ConcreteCache(str(tmp_path), recommender=recommender_a)
+        cache_b = ConcreteCache(str(tmp_path), recommender=recommender_b)
+
+        assert cache_a.cache_path == os.path.join(str(tmp_path), 'movies_test_cache.json')
+        assert cache_b.cache_path == os.path.join(str(tmp_path), 'movies-4k_test_cache.json')
+        assert cache_a.cache_path != cache_b.cache_path
+
+    def test_processing_one_library_does_not_evict_another(self, tmp_path):
+        """Reproduces #157: processing library A must not evict or
+        overwrite library B's cached entries. Each library now owns its own
+        file on disk, so B's cache survives A's update_cache() eviction pass.
+        """
+        recommender_a = Mock()
+        recommender_a._cache_library_prefix.return_value = 'movies_'
+        recommender_b = Mock()
+        recommender_b._cache_library_prefix.return_value = 'movies-4k_'
+
+        # Library B already has a cached item on disk.
+        cache_b = ConcreteCache(str(tmp_path), recommender=recommender_b)
+        cache_b.cache['movies']['b-item'] = {'title': 'B Movie'}
+        cache_b.cache['library_count'] = 1
+        cache_b._save_cache()
+
+        # Process library A, which only contains one item distinct from B's.
+        mock_item = Mock()
+        mock_item.ratingKey = 'a-item'
+        mock_item.title = 'A Movie'
+        mock_item.year = 2024
+
+        mock_plex = Mock()
+        mock_section = Mock()
+        mock_section.all.return_value = [mock_item]
+        mock_plex.library.section.return_value = mock_section
+
+        cache_a = ConcreteCache(str(tmp_path), recommender=recommender_a)
+        cache_a.update_cache(mock_plex, 'Movies')
+
+        assert 'a-item' in cache_a.cache['movies']
+
+        # Library B's on-disk cache file is untouched by A's eviction pass.
+        cache_b_reloaded = ConcreteCache(str(tmp_path), recommender=recommender_b)
+        assert 'b-item' in cache_b_reloaded.cache['movies']
+        assert 'a-item' not in cache_b_reloaded.cache['movies']
+
+
 class TestBaseCacheSave:
     """Tests for BaseCache save functionality."""
 

@@ -28,16 +28,39 @@ Notes:
   unchanged from before: the console flag mainly governs the Windows EXE
   subsystem, and this spec never wraps macOS in a windowed .app BUNDLE,
   so flipping it there wouldn't suppress a Terminal launch anyway.
+- datas also bundles each Flask-stack package's own .dist-info metadata
+  (via copy_metadata) - werkzeug's own BaseWSGIServer.__init__ calls
+  importlib.metadata.version('werkzeug') unconditionally (not wrapped
+  in a try/except on werkzeug's side) every time app.run() constructs a
+  server. PyInstaller's static import analysis bundles a package's
+  CODE automatically but never its .dist-info metadata directory unless
+  told to - without this, that call raises
+  importlib.metadata.PackageNotFoundError and the whole process crashes
+  before ever binding a socket. Confirmed via a real end-to-end test of
+  the self-updater's relaunch step - see the v2.8.29 PR description.
+  Applied to every package in flask's own dependency chain
+  (werkzeug/jinja2/markupsafe/click/itsdangerous/blinker), not just
+  werkzeug, since any of them could grow the same kind of
+  importlib.metadata call in a future version bump and this is cheap
+  insurance either way.
 """
 
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 hidden_imports = (
     collect_submodules('ruamel.yaml')
     + collect_submodules('plexapi')
+    # cryptography (utils/self_update.py's pure-Python SSHSIG verification
+    # for the in-binary self-updater - see that module's docstring) ships
+    # its own PyInstaller hook, but its hazmat/openssl backend modules are
+    # still collected explicitly here, same defensive precedent as
+    # ruamel.yaml/plexapi above, since a build missing one would fail
+    # silently at update-verify time (deep inside a try/except) rather
+    # than at import time.
+    + collect_submodules('cryptography')
     + [
         'flask',
         'jinja2',
@@ -47,6 +70,18 @@ hidden_imports = (
     ]
 )
 
+# See this file's module docstring - werkzeug's own server construction
+# unconditionally reads its installed-package metadata at runtime.
+metadata_datas = (
+    copy_metadata('werkzeug')
+    + copy_metadata('flask')
+    + copy_metadata('jinja2')
+    + copy_metadata('markupsafe')
+    + copy_metadata('click')
+    + copy_metadata('itsdangerous')
+    + copy_metadata('blinker')
+)
+
 a = Analysis(
     ['curatarr_app.py'],
     pathex=[],
@@ -54,7 +89,7 @@ a = Analysis(
     datas=[
         ('web/templates', 'web/templates'),
         ('web/static', 'web/static'),
-    ],
+    ] + metadata_datas,
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

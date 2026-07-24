@@ -50,6 +50,25 @@ install. That subprocess already gets its stdout/stderr piped back to
 the server via web/job_runner.py's Popen(stdout=PIPE) call, so it never
 runs _configure_windowed_launch() below - only the primary UI launch
 does.
+
+Self-update dispatch (v2.8.29) - the same trick, for two more flags
+------------------------------------------------------------------
+`--self-update-worker <--pid P --host H --port PORT>`: the DETACHED
+worker web/update_apply.py's UpdateManager spawns for the web UI's
+"Update now" button when frozen (see that module's docstring for why
+it can't just re-invoke `sys.executable
+os.path.abspath(update_apply.py)` the way a source install does - there
+is no separate Python interpreter and no on-disk update_apply.py next
+to a onefile exe). Recognized here for exactly the same underlying
+reason `--run-recommender` is: it's the only way anything can hand a
+frozen exe "run this specific internal entry point instead of the
+normal UI launch" on the command line.
+
+`--self-update`: the user-facing CLI flag (docs/BINARIES.md) - download,
+verify, and swap the binary in place, then exit. Not a hidden dispatch
+flag like the two above (it's meant to be run directly by a user/
+script), but lives in the same `if len(sys.argv) > 1` chain since it's
+the same "frozen-only alternate entry point" shape.
 """
 
 import ctypes
@@ -58,6 +77,36 @@ import os
 import sys
 
 from web.app import main
+
+
+def _suppress_windows_crash_dialogs() -> None:  # pragma: no cover - real Windows API call, same category as _attach_or_setup_console below (not unit-testable on non-Windows CI)
+    """Call SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
+    as the very first thing this process does, on every frozen Windows
+    invocation - the normal UI launch, the self-update worker, and any
+    relaunched/re-invoked instance of this same exe alike (curatarr.exe
+    is always console=False/windowed - see curatarr.spec - so there is
+    NEVER a user watching a console who'd benefit from an OS crash
+    dialog; there's only ever a background process that must fail
+    silently into its own log instead). Without this, an unhandled
+    native-level fault (as opposed to a plain Python exception, which
+    this module's own try/except layers already handle - see
+    web/update_apply.py's _run_worker) could otherwise pop a modal
+    Windows Error Reporting dialog on the user's desktop with no one
+    there to dismiss it - unacceptable for a self-updater that's
+    supposed to fail silently and roll back, never surface anything.
+    SEM_FAILCRITICALERRORS additionally suppresses the classic "no disk
+    in drive" style dialogs for the same reason. No-op (and safe to
+    call) on non-Windows/non-frozen - only meaningful for the real
+    frozen Windows build.
+    """
+    if os.name != 'nt' or not getattr(sys, 'frozen', False):
+        return
+    SEM_FAILCRITICALERRORS = 0x0001
+    SEM_NOGPFAULTERRORBOX = 0x0002
+    try:
+        ctypes.windll.kernel32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
+    except Exception:
+        pass  # best-effort - must never block startup even if this itself somehow fails
 
 
 def _debug_requested() -> bool:
@@ -165,6 +214,42 @@ def _run_one_recommender(engine: str, rest: list) -> None:
     run()
 
 
+def _run_self_update_cli() -> None:
+    """`curatarr --self-update` / `curatarr.exe --self-update` - the
+    user-facing CLI surface of utils/self_update.py (see that module's
+    docstring for the full download/verify/swap trust chain). Frozen
+    binaries only; a source install has no exe to swap and gets a clear
+    message pointing at run.sh/run.ps1 instead - never a stack trace.
+
+    Deliberately does NOT relaunch itself afterward the way the web
+    UI's "Update now" flow does (see web/update_apply.py): this is a
+    short-lived CLI invocation, not a server that needs to keep
+    something bound to a port - printing the result and exiting is
+    the whole job. The freshly-swapped binary is simply THERE on disk,
+    ready for the next normal launch.
+    """
+    from utils.self_update import SelfUpdateError, NoUpdateAvailableError, perform_self_update
+
+    if not getattr(sys, 'frozen', False):
+        print(
+            "curatarr: --self-update only applies to a downloaded binary. "
+            "Source installs update via ./run.sh or run.ps1 instead.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        applied_version = perform_self_update()
+    except NoUpdateAvailableError as e:
+        print(f"curatarr: {e}")
+        sys.exit(0)
+    except SelfUpdateError as e:
+        print(f"curatarr: self-update failed - {e}", file=sys.stderr)
+        print("curatarr: the current binary was left unchanged.", file=sys.stderr)
+        sys.exit(1)
+    print(f"curatarr: updated to v{applied_version} - run curatarr again to use it.")
+
+
 def _dispatch_recommender(argv: list) -> None:
     """argv is sys.argv[2:], e.g. ['movie', 'alice'] or ['external'] or
     ['full']. See the module docstring above for why this exists."""
@@ -194,8 +279,26 @@ def _dispatch_recommender(argv: list) -> None:
 
 
 if __name__ == '__main__':
+    _suppress_windows_crash_dialogs()
     if len(sys.argv) > 2 and sys.argv[1] == '--run-recommender':
         _dispatch_recommender(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == '--self-update-worker':
+        # DETACHED worker for the web UI's "Update now" button when
+        # frozen - see web/update_apply.py's module docstring and this
+        # file's own docstring for why a frozen binary dispatches this
+        # way instead of re-invoking update_apply.py as a script.
+        from web.update_apply import run_self_update_worker
+        run_self_update_worker(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == '--self-update':
+        _run_self_update_cli()
     else:
+        if getattr(sys, 'frozen', False):
+            # Best-effort cleanup of a leftover <exe>.old from a
+            # previous self-update swap (see
+            # utils/self_update.py's cleanup_stale_old_binary
+            # docstring) - runs on every normal frozen startup, not
+            # just right after an update.
+            from utils.self_update import cleanup_stale_old_binary
+            cleanup_stale_old_binary()
         _configure_windowed_launch()
         main()
