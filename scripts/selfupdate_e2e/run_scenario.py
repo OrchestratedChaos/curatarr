@@ -124,10 +124,29 @@ def kill_tree(pid):
     psutil.wait_procs(children + [proc], timeout=5)
 
 
-def kill_whatever_is_listening_on(port):
-    for conn in psutil.net_connections(kind='inet'):
-        if conn.laddr and conn.laddr.port == port and conn.status == psutil.CONN_LISTEN and conn.pid:
-            kill_tree(conn.pid)
+def kill_by_install_dir(install_dir):
+    """Kills any process whose executable path is inside install_dir -
+    NOT psutil.net_connections()/port-based lookup: confirmed via real
+    CI runs that psutil.net_connections() raises AccessDenied without
+    root on macOS (and, separately, misattributes loopback listeners to
+    PID 4/"System" (a protected process) without elevation on Windows -
+    both netstat and psutil misattribute to it there too - see this
+    repo's v2.8.29 PR description). Process iteration + matching each
+    process's own exe/cmdline against install_dir needs no elevation on
+    any platform and is scoped tightly enough (a fresh, unique work dir
+    per scenario/cycle) to never touch anything unrelated - including
+    the swap-relaunched process this script never has a PID for
+    directly."""
+    install_dir_norm = os.path.normcase(os.path.abspath(install_dir))
+    for proc in psutil.process_iter(['pid', 'exe', 'cmdline']):
+        try:
+            exe = proc.info.get('exe') or ''
+            cmdline = proc.info.get('cmdline') or []
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        haystacks = [exe] + cmdline
+        if any(install_dir_norm in os.path.normcase(h) for h in haystacks if h):
+            kill_tree(proc.info['pid'])
 
 
 def main():
@@ -243,7 +262,7 @@ def main():
         return 0
     finally:
         kill_tree(exe_proc.pid)
-        kill_whatever_is_listening_on(args.ui_port)
+        kill_by_install_dir(install_dir)
         server_proc.terminate()
         try:
             server_proc.wait(timeout=5)
