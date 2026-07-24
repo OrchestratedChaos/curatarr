@@ -858,6 +858,32 @@ class TestBinaryToRelaunch:
             self_update._binary_to_relaunch(str(current))
 
 
+class TestSanitizeFrozenRelaunchEnv:
+    """PyInstaller onefile's internal _MEIPASS2 bootloader hand-off var
+    must never be inherited by a freshly-spawned, independent
+    curatarr.exe instance - see sanitize_frozen_relaunch_env's docstring
+    for the real end-to-end failure this fixes (confirmed via an actual
+    built binary - the relaunched process crashed inside werkzeug's own
+    package-metadata lookup because it reused a stale/wrong extraction
+    directory)."""
+
+    def test_strips_meipass2(self):
+        env = {'PATH': '/usr/bin', '_MEIPASS2': r'C:\Temp\_MEI123456'}
+        result = self_update.sanitize_frozen_relaunch_env(env)
+        assert '_MEIPASS2' not in result
+        assert result['PATH'] == '/usr/bin'
+
+    def test_noop_when_not_present(self):
+        env = {'PATH': '/usr/bin', 'CURATARR_UI_PORT': '8787'}
+        result = self_update.sanitize_frozen_relaunch_env(env)
+        assert result == env
+
+    def test_does_not_mutate_the_original_dict(self):
+        env = {'_MEIPASS2': 'x'}
+        self_update.sanitize_frozen_relaunch_env(env)
+        assert '_MEIPASS2' in env  # original untouched - a copy was returned
+
+
 class TestRelaunchBinary:
     @patch('utils.self_update.subprocess.Popen')
     def test_relaunches_current_binary_with_no_port(self, mock_popen, tmp_path):
@@ -876,6 +902,17 @@ class TestRelaunchBinary:
         _, kwargs = mock_popen.call_args
         assert kwargs['env']['CURATARR_UI_PORT'] == '8787'
         assert kwargs['env']['CURATARR_SKIP_BROWSER_OPEN'] == '1'
+
+    @patch('utils.self_update.subprocess.Popen')
+    def test_strips_meipass2_from_the_real_process_environment(self, mock_popen, tmp_path, monkeypatch):
+        """Regression test for the real end-to-end failure this fixes -
+        see sanitize_frozen_relaunch_env's docstring."""
+        monkeypatch.setenv('_MEIPASS2', r'C:\Temp\_MEIstale')
+        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
+            (tmp_path / 'curatarr').write_bytes(b'x')
+            self_update.relaunch_binary()
+        _, kwargs = mock_popen.call_args
+        assert '_MEIPASS2' not in kwargs['env']
 
     @patch('utils.self_update.subprocess.Popen')
     def test_relaunches_old_sidecar_when_current_missing(self, mock_popen, tmp_path):

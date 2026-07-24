@@ -256,6 +256,13 @@ class UpdateManager:
         log_path = os.path.join(self.logs_dir, UPDATE_LOG_FILENAME)
         log_file = open(log_path, 'a', encoding='utf-8')
 
+        popen_kwargs = dict(
+            cwd=self.project_root,
+            stdout=log_file,
+            stderr=log_file,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+        )
         if getattr(sys, 'frozen', False):
             cmd = [
                 sys.executable, '--self-update-worker',
@@ -263,6 +270,17 @@ class UpdateManager:
                 '--host', host,
                 '--port', str(port),
             ]
+            # This process (the running server) is itself a frozen
+            # curatarr.exe instance and may have PyInstaller onefile's
+            # internal _MEIPASS2 bootloader hand-off variable in its own
+            # environment - spawning ANOTHER independent instance must
+            # not inherit it, or that new instance's bootloader will
+            # wrongly skip its own extraction and reuse a stale/wrong
+            # temp directory. See utils.self_update.sanitize_frozen_relaunch_env's
+            # docstring for the full explanation (same fix applies here
+            # for the exact same reason - this worker is itself another
+            # fresh, independent curatarr.exe instance).
+            popen_kwargs['env'] = self_update.sanitize_frozen_relaunch_env(os.environ)
         else:
             cmd = [
                 sys.executable, os.path.abspath(__file__),
@@ -271,13 +289,6 @@ class UpdateManager:
                 '--host', host,
                 '--port', str(port),
             ]
-        popen_kwargs = dict(
-            cwd=self.project_root,
-            stdout=log_file,
-            stderr=log_file,
-            stdin=subprocess.DEVNULL,
-            close_fds=True,
-        )
         if os.name == 'nt':
             # getattr(...) defaults (not a bare subprocess.X reference)
             # for both flags - matches web/job_runner.py's own

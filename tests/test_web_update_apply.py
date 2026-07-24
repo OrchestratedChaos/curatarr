@@ -643,6 +643,33 @@ class TestSpawnWorkerFrozenCommand:
         assert '--host' in cmd and '127.0.0.1' in cmd
         assert '--port' in cmd and '8787' in cmd
 
+    @patch('web.update_apply.subprocess.Popen')
+    def test_frozen_worker_env_strips_meipass2(self, mock_popen, tmp_path, monkeypatch):
+        """Regression test for the real end-to-end failure this fixes -
+        see utils.self_update.sanitize_frozen_relaunch_env's docstring:
+        this server process is itself a frozen curatarr.exe instance
+        and may carry PyInstaller's internal _MEIPASS2 in its own
+        environment - the spawned worker (another independent instance)
+        must never inherit it."""
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setenv('_MEIPASS2', r'C:\Temp\_MEIstale')
+        manager = UpdateManager(str(tmp_path), str(tmp_path / 'logs'))
+        manager._spawn_worker('127.0.0.1', 8787)
+        _, kwargs = mock_popen.call_args
+        assert '_MEIPASS2' not in kwargs['env']
+
+    @patch('web.update_apply.subprocess.Popen')
+    def test_source_worker_does_not_set_env_kwarg(self, mock_popen, tmp_path, monkeypatch):
+        """Source installs never spawn another curatarr.exe instance -
+        no PyInstaller-internal state to worry about, and no reason to
+        override the default (full) inheritance the existing behavior
+        already relied on."""
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        manager = UpdateManager(str(tmp_path), str(tmp_path / 'logs'))
+        manager._spawn_worker('127.0.0.1', 8787)
+        _, kwargs = mock_popen.call_args
+        assert 'env' not in kwargs
+
 
 class TestParseBinaryWorkerArgs:
     def test_parses_pid_host_port_without_project_root(self):

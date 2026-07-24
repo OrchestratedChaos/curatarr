@@ -744,6 +744,36 @@ def _binary_to_relaunch(current_path: str) -> str:
     raise SwapError(f"No working binary found at {current_path} or {old_path} - cannot relaunch")
 
 
+# PyInstaller onefile internals: on first launch, the bootloader
+# extracts the bundled archive to a temp dir, sets _MEIPASS2 (pointing
+# at it) in ITS OWN environment, then re-execs itself - the resulting
+# CHILD process (the one that actually runs this Python code) inherits
+# that _MEIPASS2, uses it as sys._MEIPASS, and skips re-extracting.
+# That's fine for the process it was set for, but if THIS process (the
+# self-update worker or CLI, both already running with _MEIPASS2 in
+# os.environ) spawns ANOTHER, INDEPENDENT curatarr.exe instance while
+# blindly inheriting os.environ, the new instance's bootloader sees
+# _MEIPASS2 ALREADY set and skips ITS OWN extraction too - reusing a
+# temp directory that may belong to a DIFFERENT build (post-swap) or
+# may already be gone (cleaned up when the just-killed old server's own
+# parent bootloader process exited) - confirmed via a real end-to-end
+# test: without stripping this, the relaunched process crashed inside
+# werkzeug's own package-metadata lookup because it was running against
+# the wrong/missing extraction directory. Every spawn of a fresh,
+# independent curatarr.exe instance (this module's relaunch_binary, and
+# web/update_apply.py's _spawn_worker) must sanitize this out so the
+# new process always does its own clean extraction.
+_PYINSTALLER_CHILD_ENV_VARS_TO_STRIP = ('_MEIPASS2',)
+
+
+def sanitize_frozen_relaunch_env(env: dict) -> dict:
+    """Returns a copy of `env` with PyInstaller onefile's internal
+    bootloader hand-off variables removed - see the module-level
+    comment above. Safe to call on a non-frozen/non-Windows env too
+    (no-op if the vars aren't present)."""
+    return {k: v for k, v in env.items() if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP}
+
+
 def relaunch_binary(port: Optional[int] = None) -> None:
     """
     Spawn a fresh, DETACHED process from whatever's the working binary
@@ -766,7 +796,7 @@ def relaunch_binary(port: Optional[int] = None) -> None:
     current_path = current_binary_path()
     exe_path = _binary_to_relaunch(current_path)
 
-    env = dict(os.environ)
+    env = sanitize_frozen_relaunch_env(os.environ)
     if port is not None:
         env['CURATARR_UI_PORT'] = str(port)
         env['CURATARR_SKIP_BROWSER_OPEN'] = '1'
