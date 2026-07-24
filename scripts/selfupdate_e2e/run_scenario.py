@@ -192,6 +192,16 @@ def main():
     env['CURATARR_SKIP_BROWSER_OPEN'] = '1'
     env['CURATARR_RELEASES_API_OVERRIDE'] = f'http://127.0.0.1:{args.server_port}/api/latest'
     env['CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE'] = f'http://127.0.0.1:{args.server_port}/download'
+    # GitHub-hosted runners can have HTTP(S)_PROXY set for outbound
+    # traffic control - confirmed via a real CI run that without an
+    # explicit NO_PROXY, `requests` (used by utils/update_check.py and
+    # utils/self_update.py) tries to route even 127.0.0.1 through it,
+    # timing out after REQUEST_TIMEOUT_SECONDS and making the
+    # precondition check fail-open to "no update available" - never a
+    # real bug in the self-update logic itself, just this harness
+    # needing to force loopback traffic to bypass any proxy.
+    env['NO_PROXY'] = '127.0.0.1,localhost'
+    env['no_proxy'] = '127.0.0.1,localhost'
     if args.debug_log:
         env['CURATARR_HANDOFF_DEBUG_LOG'] = args.debug_log
 
