@@ -24,6 +24,24 @@
       </nav>
     </header>
     <main>
+      {% if update_banner %}
+      <div class="banner warn update-banner">
+        <span>
+          Update available: v{{ update_banner.latest }} (you have v{{ update_banner.current }}).
+          {% if update_banner.frozen %}
+          <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Download v{{ update_banner.latest }}</a>
+          {% else %}
+          Run <code>./run.sh</code> (or <code>run.ps1</code>) to update - signed releases are verified before being applied.
+          <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Release notes</a>
+          {% endif %}
+        </span>
+        <form method="post" action="{{ url_for('update_dismiss') }}" class="update-banner-dismiss">
+          <input type="hidden" name="version" value="{{ update_banner.latest }}">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <button type="submit" aria-label="Dismiss update notice">&times;</button>
+        </form>
+      </div>
+      {% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>

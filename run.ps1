@@ -302,96 +302,156 @@ function Select-VerifiedRelease {
 function Check-ForUpdates {
     param($pythonCmd)
 
-    if (Test-Path "config/config.yml") {
-        try {
-            $autoUpdate = & $pythonCmd -c "import yaml; c=yaml.safe_load(open('config/config.yml')); print(c.get('general', {}).get('auto_update', False))" 2>$null
-        } catch {
-            $autoUpdate = "False"
-        }
+    if (-not (Test-Path "config/config.yml")) {
+        return
+    }
 
-        if ($autoUpdate -eq "True") {
-            Write-Cyan "Checking for updates..."
+    # Resolve the effective update_mode: an explicit general.update_mode
+    # wins; otherwise fall back to the legacy general.auto_update flag
+    # (true -> force, false -> off) so installs that predate update_mode
+    # keep their exact current behavior; neither present -> notify (the
+    # new default). Mirrors utils.config.get_update_mode() / run.sh's own
+    # inline check - kept as a one-liner here (like the old $autoUpdate
+    # check it replaces) rather than importing the app's utils package,
+    # since this runs before dependencies are guaranteed installed.
+    #
+    # `mode is False` check matters: an unquoted `update_mode: off` in
+    # YAML parses as the Python boolean False (YAML 1.1 boolean
+    # literals include on/off/yes/no), not the string 'off' - without
+    # this, that config would fall through to the auto_update/notify
+    # fallback instead of being recognized as 'off'.
+    try {
+        $updateMode = & $pythonCmd -c "
+import yaml
+c = yaml.safe_load(open('config/config.yml')) or {}
+g = c.get('general', {}) or {}
+mode = g.get('update_mode')
+if mode is False:
+    mode = 'off'
+elif mode not in ('notify', 'force', 'off'):
+    mode = ('force' if g.get('auto_update') else 'off') if 'auto_update' in g else 'notify'
+print(mode)
+" 2>$null
+    } catch {
+        $updateMode = "off"
+    }
 
-            if (Test-Path ".git") {
-                $currentVersion = $null
-                $configPyContent = Get-Content "utils/config.py" -Raw
-                if ($configPyContent -match '__version__\s*=\s*"(\d+\.\d+\.\d+)"') {
-                    $currentVersion = $Matches[1]
-                }
+    # 'off' (or an unreadable config) stays silent - same as the old
+    # $autoUpdate -ne "True" path.
+    if ($updateMode -ne "force" -and $updateMode -ne "notify") {
+        return
+    }
 
-                if (-not $currentVersion) {
-                    Write-Yellow "Could not determine current version, skipping update check"
-                    Write-Host ""
-                    return
-                }
+    Write-Cyan "Checking for updates..."
 
-                # Fetch latest release tags from remote
-                git fetch --tags --force --prune origin --quiet 2>$null
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Yellow "Could not check for updates (network error)"
-                    Write-Host ""
-                    return
-                }
+    if (-not (Test-Path ".git")) {
+        Write-Yellow "Not a git repository, skipping update check"
+        Write-Host ""
+        return
+    }
 
-                $selectedTag = Select-VerifiedRelease -currentVersion $currentVersion
+    $currentVersion = $null
+    $configPyContent = Get-Content "utils/config.py" -Raw
+    if ($configPyContent -match '__version__\s*=\s*"(\d+\.\d+\.\d+)"') {
+        $currentVersion = $Matches[1]
+    }
 
-                if (-not $selectedTag) {
-                    Write-Green "OK No verified signed release available - staying on current version v$currentVersion"
-                    Write-Host ""
-                    return
-                }
+    if (-not $currentVersion) {
+        Write-Yellow "Could not determine current version, skipping update check"
+        Write-Host ""
+        return
+    }
 
-                Write-Yellow "Verified signed release $selectedTag available!"
+    # Fetch latest release tags from remote
+    git fetch --tags --force --prune origin --quiet 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Yellow "Could not check for updates (network error)"
+        Write-Host ""
+        return
+    }
 
-                # Python floor gate, checked BEFORE touching the working
-                # tree: peek at the candidate tag's requirements.lock via
-                # `git show` (no checkout needed) and read its declared
-                # floor the same way Check-Dependencies does. If the
-                # running interpreter doesn't meet it, skip this update
-                # and stay on the current (working) version - switching
-                # the working tree onto code whose deps can't even
-                # install would be strictly worse than not updating.
-                $candidateLock = git show "${selectedTag}:requirements.lock" 2>$null
-                if ($LASTEXITCODE -eq 0 -and $candidateLock) {
-                    $candidateLockText = $candidateLock -join "`n"
-                    $candidateFloorMatch = [regex]::Match($candidateLockText, '--python-version (\d+\.\d+)')
-                    if ($candidateFloorMatch.Success) {
-                        $candidateRequiredPython = $candidateFloorMatch.Groups[1].Value
-                        $currentPythonVersion = (& $pythonCmd --version 2>&1)
-                        $currentPythonNumber = [regex]::Match("$currentPythonVersion", '(\d+\.\d+\.\d+)').Groups[1].Value
-                        $currentTuple = ConvertTo-VersionTuple $currentPythonNumber
-                        $candidateRequiredTuple = ConvertTo-VersionTuple $candidateRequiredPython
-                        if ($currentTuple -and $candidateRequiredTuple -and (Compare-VersionTuple $currentTuple $candidateRequiredTuple) -lt 0) {
-                            Write-Yellow "$selectedTag requires Python $candidateRequiredPython+ (you have $currentPythonNumber) - staying on v$currentVersion."
-                            Write-Yellow "Upgrade Python to $candidateRequiredPython+, or use a standalone binary (bundles its own"
-                            Write-Yellow "Python + UI deps): https://github.com/OrchestratedChaos/curatarr/releases"
-                            Write-Host ""
-                            return
-                        }
-                    }
-                }
+    $selectedTag = Select-VerifiedRelease -currentVersion $currentVersion
 
-                Write-Yellow "Updating..."
+    if (-not $selectedTag) {
+        Write-Green "OK No verified signed release available - staying on current version v$currentVersion"
+        Write-Host ""
+        return
+    }
 
-                git stash --quiet 2>$null
+    Write-Yellow "Verified signed release $selectedTag available!"
 
-                git checkout $selectedTag --quiet 2>$null
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Green "OK Updated to $selectedTag!"
-                    Write-Yellow "Restarting with updated code..."
-                    Write-Host ""
-                    & $MyInvocation.MyCommand.Path @PSBoundParameters
-                    exit
-                } else {
-                    Write-Red "Update failed, continuing with current version"
-                    git stash pop --quiet 2>$null
-                }
-            } else {
-                Write-Yellow "Not a git repository, skipping update check"
+    # Python floor gate, checked BEFORE touching the working tree: peek
+    # at the candidate tag's requirements.lock via `git show` (no
+    # checkout needed) and read its declared floor the same way
+    # Check-Dependencies does. If the running interpreter doesn't meet
+    # it, skip this update and stay on the current (working) version -
+    # switching the working tree onto code whose deps can't even install
+    # would be strictly worse than not updating.
+    $candidateLock = git show "${selectedTag}:requirements.lock" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $candidateLock) {
+        $candidateLockText = $candidateLock -join "`n"
+        $candidateFloorMatch = [regex]::Match($candidateLockText, '--python-version (\d+\.\d+)')
+        if ($candidateFloorMatch.Success) {
+            $candidateRequiredPython = $candidateFloorMatch.Groups[1].Value
+            $currentPythonVersion = (& $pythonCmd --version 2>&1)
+            $currentPythonNumber = [regex]::Match("$currentPythonVersion", '(\d+\.\d+\.\d+)').Groups[1].Value
+            $currentTuple = ConvertTo-VersionTuple $currentPythonNumber
+            $candidateRequiredTuple = ConvertTo-VersionTuple $candidateRequiredPython
+            if ($currentTuple -and $candidateRequiredTuple -and (Compare-VersionTuple $currentTuple $candidateRequiredTuple) -lt 0) {
+                Write-Yellow "$selectedTag requires Python $candidateRequiredPython+ (you have $currentPythonNumber) - staying on v$currentVersion."
+                Write-Yellow "Upgrade Python to $candidateRequiredPython+, or use a standalone binary (bundles its own"
+                Write-Yellow "Python + UI deps): https://github.com/OrchestratedChaos/curatarr/releases"
+                Write-Host ""
+                return
             }
-            Write-Host ""
         }
     }
+
+    # notify mode: prompt before applying, but ONLY when attached to an
+    # interactive console. An unattended run (scheduled task, CI, piped
+    # input) has no one to answer a prompt, so it must never block
+    # waiting for one - same fail-safe, non-blocking contract as
+    # everywhere else in this function: an unattended notify-mode run
+    # just prints the notice and stays on the current version, exactly
+    # like the "no verified release" branch above. A single try/catch
+    # covers both "definitely non-interactive" (thrown deliberately) and
+    # "Read-Host itself failed for some other host-specific reason" -
+    # both land on the same non-blocking outcome.
+    if ($updateMode -eq "notify") {
+        $updateReply = $null
+        try {
+            if ([Console]::IsInputRedirected) {
+                throw "non-interactive"
+            }
+            $updateReply = Read-Host "Update available: $selectedTag. Update now? [y/N]"
+        } catch {
+            Write-Yellow "Update available: $selectedTag (unattended run - set general.update_mode: force to auto-update, or update manually)"
+            Write-Host ""
+            return
+        }
+        if ($updateReply -notmatch '^y(es)?$') {
+            Write-Yellow "Skipping update - staying on current version v$currentVersion"
+            Write-Host ""
+            return
+        }
+    }
+
+    Write-Yellow "Updating..."
+
+    git stash --quiet 2>$null
+
+    git checkout $selectedTag --quiet 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Green "OK Updated to $selectedTag!"
+        Write-Yellow "Restarting with updated code..."
+        Write-Host ""
+        & $MyInvocation.MyCommand.Path @PSBoundParameters
+        exit
+    } else {
+        Write-Red "Update failed, continuing with current version"
+        git stash pop --quiet 2>$null
+    }
+    Write-Host ""
 }
 
 # ------------------------------------------------------------------------
@@ -1151,7 +1211,10 @@ users:
 
 general:
   plex_only: true
-  auto_update: true
+  # notify (default): show a one-line CLI notice / web UI banner when a
+  #   newer release exists. force: auto-apply verified signed updates on
+  #   launch, no prompt. off: never check for updates.
+  update_mode: notify
   log_retention_days: 7
 
 # Huntarr: Find missing movies from your collections

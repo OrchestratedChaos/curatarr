@@ -264,86 +264,138 @@ check_for_updates() {
         return
     fi
 
-    # Check if auto_update is enabled in config
-    if [ -f "config/config.yml" ]; then
-        AUTO_UPDATE=$(python3 -c "import yaml; c=yaml.safe_load(open('config/config.yml')); print(c.get('general', {}).get('auto_update', False))" 2>/dev/null)
-
-        if [ "$AUTO_UPDATE" = "True" ]; then
-            echo -e "${CYAN}Checking for updates...${NC}"
-
-            # Check if we're in a git repo
-            if [ -d ".git" ]; then
-                CURRENT_VERSION=$(grep -oE '__version__ = "[0-9]+\.[0-9]+\.[0-9]+"' utils/config.py | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
-                if [ -z "$CURRENT_VERSION" ]; then
-                    echo -e "${YELLOW}Could not determine current version, skipping update check${NC}"
-                    echo ""
-                    return
-                fi
-
-                # Fetch latest release tags from remote
-                if ! git fetch --tags --force --prune origin --quiet 2>/dev/null; then
-                    echo -e "${YELLOW}Could not check for updates (network error)${NC}"
-                    echo ""
-                    return
-                fi
-
-                # `|| true` matters here: under `set -e`, a non-zero exit
-                # from select_verified_release (the normal fail-closed
-                # case when nothing verifies) would otherwise kill the
-                # whole script instead of falling through to the
-                # "staying on current version" branch below.
-                SELECTED_TAG=$(select_verified_release "$CURRENT_VERSION") || true
-
-                if [ -z "$SELECTED_TAG" ]; then
-                    echo -e "${GREEN}✓ No verified signed release available — staying on current version v${CURRENT_VERSION}${NC}"
-                    echo ""
-                    return
-                fi
-
-                echo -e "${YELLOW}Verified signed release ${SELECTED_TAG} available!${NC}"
-
-                # Python floor gate, checked BEFORE touching the working
-                # tree: peek at the candidate tag's requirements.lock via
-                # `git show` (no checkout needed) and read its declared
-                # floor the same way check_and_install_dependencies does.
-                # If the running interpreter doesn't meet it, skip this
-                # update and stay on the current (working) version -
-                # switching the working tree onto code whose deps can't
-                # even install would be strictly worse than not updating.
-                CANDIDATE_LOCK=$(git show "${SELECTED_TAG}:requirements.lock" 2>/dev/null) || true
-                CANDIDATE_REQUIRED_PYTHON=""
-                if [ -n "$CANDIDATE_LOCK" ]; then
-                    CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
-                fi
-                CURRENT_PYTHON=$(python3 --version | awk '{print $2}')
-                if [ -n "$CANDIDATE_REQUIRED_PYTHON" ] && ! version_ge "$CURRENT_PYTHON" "$CANDIDATE_REQUIRED_PYTHON"; then
-                    echo -e "${YELLOW}${SELECTED_TAG} requires Python ${CANDIDATE_REQUIRED_PYTHON}+ (you have ${CURRENT_PYTHON}) — staying on v${CURRENT_VERSION}.${NC}"
-                    echo -e "${YELLOW}Upgrade Python to ${CANDIDATE_REQUIRED_PYTHON}+, or use a standalone binary (bundles its own${NC}"
-                    echo -e "${YELLOW}Python + UI deps): https://github.com/OrchestratedChaos/curatarr/releases${NC}"
-                    echo ""
-                    return
-                fi
-
-                echo -e "${YELLOW}Updating...${NC}"
-
-                # Stash any local changes
-                git stash --quiet 2>/dev/null || true
-
-                if git checkout "$SELECTED_TAG" --quiet 2>/dev/null; then
-                    echo -e "${GREEN}✓ Updated to ${SELECTED_TAG}!${NC}"
-                    echo -e "${YELLOW}Restarting with updated code...${NC}"
-                    echo ""
-                    exec "$0" "$@"  # Restart script with same arguments
-                else
-                    echo -e "${RED}Update failed, continuing with current version${NC}"
-                    git stash pop --quiet 2>/dev/null || true
-                fi
-            else
-                echo -e "${YELLOW}Not a git repository, skipping update check${NC}"
-            fi
-            echo ""
-        fi
+    if [ ! -f "config/config.yml" ]; then
+        return
     fi
+
+    # Resolve the effective update_mode: an explicit general.update_mode
+    # wins; otherwise fall back to the legacy general.auto_update flag
+    # (true -> force, false -> off) so installs that predate update_mode
+    # keep their exact current behavior; neither present -> notify (the
+    # new default). Mirrors utils.config.get_update_mode() - kept as an
+    # inline one-liner here (like the old AUTO_UPDATE check it replaces)
+    # rather than importing the app's utils package, since this runs
+    # before dependencies are guaranteed installed.
+    #
+    # `mode is False` check matters: an unquoted `update_mode: off` in
+    # YAML parses as the Python boolean False (YAML 1.1 boolean
+    # literals include on/off/yes/no), not the string 'off' - without
+    # this, that config would fall through to the auto_update/notify
+    # fallback instead of being recognized as 'off'.
+    UPDATE_MODE=$(python3 -c "
+import yaml
+c = yaml.safe_load(open('config/config.yml')) or {}
+g = c.get('general', {}) or {}
+mode = g.get('update_mode')
+if mode is False:
+    mode = 'off'
+elif mode not in ('notify', 'force', 'off'):
+    mode = ('force' if g.get('auto_update') else 'off') if 'auto_update' in g else 'notify'
+print(mode)
+" 2>/dev/null)
+
+    # 'off' (or an unreadable config) stays silent - same as the old
+    # AUTO_UPDATE != True path.
+    if [ "$UPDATE_MODE" != "force" ] && [ "$UPDATE_MODE" != "notify" ]; then
+        return
+    fi
+
+    echo -e "${CYAN}Checking for updates...${NC}"
+
+    if [ ! -d ".git" ]; then
+        echo -e "${YELLOW}Not a git repository, skipping update check${NC}"
+        echo ""
+        return
+    fi
+
+    CURRENT_VERSION=$(grep -oE '__version__ = "[0-9]+\.[0-9]+\.[0-9]+"' utils/config.py | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+    if [ -z "$CURRENT_VERSION" ]; then
+        echo -e "${YELLOW}Could not determine current version, skipping update check${NC}"
+        echo ""
+        return
+    fi
+
+    # Fetch latest release tags from remote
+    if ! git fetch --tags --force --prune origin --quiet 2>/dev/null; then
+        echo -e "${YELLOW}Could not check for updates (network error)${NC}"
+        echo ""
+        return
+    fi
+
+    # `|| true` matters here: under `set -e`, a non-zero exit from
+    # select_verified_release (the normal fail-closed case when nothing
+    # verifies) would otherwise kill the whole script instead of falling
+    # through to the "staying on current version" branch below.
+    SELECTED_TAG=$(select_verified_release "$CURRENT_VERSION") || true
+
+    if [ -z "$SELECTED_TAG" ]; then
+        echo -e "${GREEN}✓ No verified signed release available — staying on current version v${CURRENT_VERSION}${NC}"
+        echo ""
+        return
+    fi
+
+    echo -e "${YELLOW}Verified signed release ${SELECTED_TAG} available!${NC}"
+
+    # Python floor gate, checked BEFORE touching the working tree: peek
+    # at the candidate tag's requirements.lock via `git show` (no
+    # checkout needed) and read its declared floor the same way
+    # check_and_install_dependencies does. If the running interpreter
+    # doesn't meet it, skip this update and stay on the current (working)
+    # version - switching the working tree onto code whose deps can't
+    # even install would be strictly worse than not updating.
+    CANDIDATE_LOCK=$(git show "${SELECTED_TAG}:requirements.lock" 2>/dev/null) || true
+    CANDIDATE_REQUIRED_PYTHON=""
+    if [ -n "$CANDIDATE_LOCK" ]; then
+        CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+    fi
+    CURRENT_PYTHON=$(python3 --version | awk '{print $2}')
+    if [ -n "$CANDIDATE_REQUIRED_PYTHON" ] && ! version_ge "$CURRENT_PYTHON" "$CANDIDATE_REQUIRED_PYTHON"; then
+        echo -e "${YELLOW}${SELECTED_TAG} requires Python ${CANDIDATE_REQUIRED_PYTHON}+ (you have ${CURRENT_PYTHON}) — staying on v${CURRENT_VERSION}.${NC}"
+        echo -e "${YELLOW}Upgrade Python to ${CANDIDATE_REQUIRED_PYTHON}+, or use a standalone binary (bundles its own${NC}"
+        echo -e "${YELLOW}Python + UI deps): https://github.com/OrchestratedChaos/curatarr/releases${NC}"
+        echo ""
+        return
+    fi
+
+    # notify mode: prompt before applying, but ONLY when attached to an
+    # interactive terminal (stdin is a tty). A cron/unattended run has no
+    # one to answer a prompt, so it must never block waiting for one -
+    # same fail-safe, non-blocking contract as everywhere else in this
+    # function: an unattended notify-mode run just prints the notice and
+    # stays on the current version, exactly like the "no verified
+    # release" branch above.
+    if [ "$UPDATE_MODE" = "notify" ]; then
+        if [ ! -t 0 ]; then
+            echo -e "${YELLOW}Update available: ${SELECTED_TAG} (unattended run - set general.update_mode: force to auto-update, or update manually)${NC}"
+            echo ""
+            return
+        fi
+        read -r -p "Update available: ${SELECTED_TAG}. Update now? [y/N] " UPDATE_REPLY
+        case "$UPDATE_REPLY" in
+            [yY]|[yY][eE][sS]) ;;
+            *)
+                echo -e "${YELLOW}Skipping update — staying on current version v${CURRENT_VERSION}${NC}"
+                echo ""
+                return
+                ;;
+        esac
+    fi
+
+    echo -e "${YELLOW}Updating...${NC}"
+
+    # Stash any local changes
+    git stash --quiet 2>/dev/null || true
+
+    if git checkout "$SELECTED_TAG" --quiet 2>/dev/null; then
+        echo -e "${GREEN}✓ Updated to ${SELECTED_TAG}!${NC}"
+        echo -e "${YELLOW}Restarting with updated code...${NC}"
+        echo ""
+        exec "$0" "$@"  # Restart script with same arguments
+    else
+        echo -e "${RED}Update failed, continuing with current version${NC}"
+        git stash pop --quiet 2>/dev/null || true
+    fi
+    echo ""
 }
 
 # ------------------------------------------------------------------------

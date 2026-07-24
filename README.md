@@ -37,7 +37,7 @@ Double-click it and it opens the dashboard at `http://127.0.0.1:8787` in your br
 
 First run, your OS will warn about an unsigned binary - Windows SmartScreen: **More info → Run anyway**; macOS Gatekeeper: right-click → **Open**. Details in [docs/BINARIES.md](docs/BINARIES.md#unsigned-binaries).
 
-Binaries are manual-download, no auto-update - grab a newer one from Releases to upgrade. Want auto-updates instead? Use a [source install](#quick-start) - `run.sh`/`run.ps1` apply signed releases automatically.
+Binaries are manual-download - the app itself notifies you (CLI and web UI banner) when a newer release exists, but you grab it from Releases to upgrade. Want the update auto-applied instead? Use a [source install](#quick-start) and set `general.update_mode: force` - `run.sh`/`run.ps1` then apply signed releases automatically.
 
 ---
 
@@ -66,7 +66,7 @@ Binaries are manual-download, no auto-update - grab a newer one from Releases to
 - **One command** — `./run.sh` handles everything
 - **Multi-library support** — Each Plex library gets its own Sonarr/Radarr root folder, quality profile, tags, monitor/search, and optionally its own *arr instance; recommendations run per-library so Movies, TV, Anime, and Kids each follow their own rules
 - **Modular config** — Main settings plus optional integration files
-- **Auto-updates** — Applies SSH-signed release updates from GitHub on each run (optional)
+- **Update notifications** — Notifies (CLI + web UI) when a newer signed release exists; set `update_mode: force` to auto-apply on each run instead
 - **Smart caching** — Auto-clears incompatible caches after updates
 - **Auto-scheduling** — Optional daily cron job
 - **Clean logs** — Know exactly what happened
@@ -327,12 +327,28 @@ Curatarr silently falls back to Plex-only history.
 ```yaml
 general:
   plex_only: true              # Only recommend from Plex library
-  auto_update: true            # Apply verified signed releases from GitHub on run
+  update_mode: notify          # notify (default) | force | off - see below
   log_retention_days: 7        # Keep logs for 7 days
 
 logging:
   level: INFO                  # DEBUG, INFO, WARNING, ERROR
 ```
+
+`general.update_mode` controls how Curatarr handles new releases:
+- `notify` (default) — CLI prints a one-line notice and the web UI shows a
+  dismissible banner when a newer release exists; nothing is applied
+  automatically. Source installs (`run.sh`/`run.ps1`) additionally prompt
+  `Update available: vX. Update now? [y/N]` on each interactive run.
+- `force` — source installs (`run.sh`/`run.ps1`) auto-apply verified signed
+  releases from GitHub on each run, no prompt (the old `auto_update: true`
+  behavior). Binaries never auto-apply anything regardless of this setting -
+  there's no local checkout to update; `force` on a binary install just
+  behaves like `notify`.
+- `off` — never check for updates.
+
+`general.auto_update` (legacy) is still read as a fallback if `update_mode`
+isn't set: `true` behaves like `force`, `false` behaves like `off`. Existing
+configs keep working unchanged; new installs get `update_mode: notify`.
 
 ### Tuning (Optional)
 ```yaml
@@ -691,7 +707,8 @@ python -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
 - Plex connection failed → Check URL and token
 - No recommendations → User needs more watch history
 - "Cache outdated" message → Normal after updates, rebuilds automatically
-- Want to disable auto-update → Set `general.auto_update: false` in config/config.yml
+- Want to disable update checks/notifications entirely → Set `general.update_mode: off` in config/config.yml
+- Want updates auto-applied instead of just notified → Set `general.update_mode: force`
 
 ### Docker
 ```bash
@@ -709,7 +726,7 @@ docker compose ps
 - Connection refused to Plex → Use host IP (not `localhost`), try `host.docker.internal` on Docker Desktop
 - Permission denied on cache/logs → Run `chmod -R 777 cache logs recommendations` on host
 
-**Manual update (if auto-update disabled):**
+**Manual update (if update_mode is `off` or `notify`):**
 ```bash
 git pull origin main
 ```

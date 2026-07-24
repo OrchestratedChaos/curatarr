@@ -2,6 +2,11 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.28] - 2026-07-23
+
+### Added
+- **Update notifications**: New `general.update_mode` setting (`notify` | `force` | `off`, default `notify`) replaces the old on/off `auto_update` flag. `notify` (new default) shows a one-line CLI notice and a dismissible web UI banner when a newer signed release exists, without applying anything automatically; source installs (`run.sh`/`run.ps1`) additionally prompt `Update available: vX. Update now? [y/N]` on an interactive run. `force` keeps the old auto-apply-on-launch behavior. `off` disables checking entirely. This is the first update signal binary users get at all - previously they had zero indication a newer release existed. The version check (`utils/update_check.py`) is advisory-only (unauthenticated GitHub Releases API lookup, ~12h cache, fails open on any network error) and never applies or verifies anything - the only signature-verified update path remains `run.sh`/`run.ps1`'s existing signed-tag verification. Existing configs with `auto_update` keep their exact current behavior via an automatic `true` -> `force` / `false` -> `off` fallback
+
 ## [2.8.27] - 2026-07-23
 
 ### Changed

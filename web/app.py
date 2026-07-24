@@ -36,7 +36,7 @@ from flask import (
 from flask.testing import FlaskClient
 from werkzeug.datastructures import Headers
 
-from utils import get_project_root, get_users_from_config, load_config
+from utils import get_project_root, get_update_mode, get_users_from_config, load_config, update_available
 
 from .config_app import register_config_routes
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
@@ -44,6 +44,13 @@ from .security import redact, register_origin_host_guard
 from .status import find_user_watchlist, get_last_run_status, list_log_files, read_log_tail
 
 DEFAULT_PORT = 8787
+
+# Cookie used to persist a per-version dismissal of the update banner
+# (see create_app()'s _update_banner_context / update_dismiss). One
+# year is effectively "until the next release the user hasn't seen",
+# since dismissal is keyed to the specific 'latest' version string.
+UPDATE_DISMISS_COOKIE = 'curatarr_update_dismissed'
+UPDATE_DISMISS_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 # How long the SSE stream waits for a new line before sending a
 # keepalive comment - see run_stream()'s generate().
@@ -118,6 +125,66 @@ def create_app(project_root: str = None) -> Flask:
     def _load_users():
         config = _load_config()
         return get_users_from_config(config) if config else []
+
+    @app.context_processor
+    def _update_banner_context():
+        """Injected into every rendered template (see base.html's
+        dismissible banner) so update state doesn't need to be threaded
+        through every route individually - this covers config_app.py's
+        routes too since they render through this same Flask app.
+
+        Fails open just like utils.update_check: any exception here
+        (config missing/unreadable, network error, whatever) just means
+        no banner, never a 500 - a broken update check must never break
+        normal page rendering.
+        """
+        try:
+            config = _load_config()
+            # No config at all (missing/unreadable) is already a degraded
+            # state the app can't really run normally in - skip the check
+            # rather than defaulting to 'notify', which would mean an
+            # HTTP call on every single page render for an install that
+            # can't even load its config yet.
+            update_mode = get_update_mode(config) if config else 'off'
+            if update_mode == 'off':
+                return {'update_banner': None}
+            latest, current, is_newer = update_available(update_mode=update_mode)
+            if not is_newer:
+                return {'update_banner': None}
+            # Dismissal is per-version: bumping to a newer release than
+            # the one that was dismissed shows the banner again.
+            if request.cookies.get(UPDATE_DISMISS_COOKIE) == latest:
+                return {'update_banner': None}
+            return {
+                'update_banner': {
+                    'latest': latest,
+                    'current': current,
+                    'frozen': getattr(sys, 'frozen', False),
+                }
+            }
+        except Exception:
+            return {'update_banner': None}
+
+    @app.post('/update/dismiss')
+    def update_dismiss():
+        """Persist a per-version banner dismissal as a cookie (no server-
+        side state needed - this is purely a display preference, not a
+        security-relevant setting). Redirects back to wherever the
+        dismiss button was clicked from."""
+        version = request.form.get('version', '')
+        next_url = request.form.get('next') or url_for('dashboard')
+        # Only ever redirect to a same-app relative path - never let an
+        # attacker-controlled 'next' turn this into an open redirect.
+        if not next_url.startswith('/') or next_url.startswith('//'):
+            next_url = url_for('dashboard')
+        response = redirect(next_url, code=303)
+        if version:
+            response.set_cookie(
+                UPDATE_DISMISS_COOKIE, version,
+                max_age=UPDATE_DISMISS_COOKIE_MAX_AGE,
+                httponly=True, samesite='Lax',
+            )
+        return response
 
     @app.get('/')
     def dashboard():

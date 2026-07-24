@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 import yaml
 
+from utils.config import get_update_mode
 from web.app import create_app
 from web.config_io import module_path
 
@@ -20,6 +21,17 @@ def client(curatarr_web_root):
     app = create_app(project_root=curatarr_web_root)
     app.testing = True
     return app.test_client(), app, curatarr_web_root
+
+
+@pytest.fixture(autouse=True)
+def _no_real_update_check(monkeypatch):
+    """This file deliberately writes config.yml files with a non-off
+    update_mode (to test the Settings screen's own rendering of the
+    effective mode) - that would otherwise make the page's update-banner
+    context processor (web/app.py) attempt a real network call on every
+    such GET. Neutralize it here regardless of config content; the
+    banner itself is covered separately in test_web_update_banner.py."""
+    monkeypatch.setattr('web.app.update_available', lambda **kwargs: (None, '0.0.0', False))
 
 
 def _read_yaml(root, name):
@@ -73,6 +85,37 @@ class TestGet:
         resp = c.get('/config/settings')
         assert b'Auto-sync' in resp.data
 
+    def test_defaults_update_mode_to_notify_when_unset(self, client):
+        c, app, root = client
+        # The shared curatarr_web_root fixture sets update_mode: off (so
+        # the rest of the web test suite never makes a real network
+        # call) - write a config.yml with no update_mode/auto_update at
+        # all to actually exercise the true "neither key present"
+        # default from get_update_mode().
+        config_path = module_path(root, 'config')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write('plex:\n  url: "http://localhost:32400"\n'
+                     'users:\n  list: "alice, bob"\n')
+
+        resp = c.get('/config/settings')
+        assert resp.status_code == 200
+        assert b'value="notify" selected' in resp.data
+
+    def test_shows_effective_update_mode_derived_from_legacy_auto_update(self, client):
+        """A config.yml with only the legacy auto_update flag (no
+        update_mode) must show the *effective* mode - force here - not
+        fall back to the notify default, matching get_update_mode()."""
+        c, app, root = client
+        config_path = module_path(root, 'config')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write('plex:\n  url: "http://localhost:32400"\n'
+                     'users:\n  list: "alice, bob"\n'
+                     'general:\n  auto_update: true\n')
+
+        resp = c.get('/config/settings')
+        assert resp.status_code == 200
+        assert b'value="force" selected' in resp.data
+
 
 class TestSave:
     def test_saves_weights_and_quality_filters_to_tuning_yml(self, client):
@@ -104,6 +147,46 @@ class TestSave:
         core = _read_yaml(root, 'config')
         assert core['general']['log_retention_days'] == 7
         assert core['logging']['level'] == 'INFO'
+
+    def test_saves_update_mode_to_config_yml(self, client):
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form['general_update_mode'] = 'force'
+        c.post('/config/settings', data=form)
+        core = _read_yaml(root, 'config')
+        assert core['general']['update_mode'] == 'force'
+
+    def test_defaults_update_mode_to_notify_when_field_omitted(self, client):
+        c, app, root = client
+        assert 'general_update_mode' not in VALID_FORM
+        c.post('/config/settings', data=VALID_FORM)
+        core = _read_yaml(root, 'config')
+        assert core['general']['update_mode'] == 'notify'
+
+    def test_saving_update_mode_preserves_legacy_auto_update_key(self, client):
+        """Additive write: saving a new update_mode must not delete a
+        pre-existing legacy auto_update key - matches _apply_settings'
+        merge-only-the-submitted-keys behavior."""
+        c, app, root = client
+        config_path = module_path(root, 'config')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write('plex:\n  url: "http://localhost:32400"\n'
+                     'users:\n  list: "alice, bob"\n'
+                     'general:\n  auto_update: true\n')
+
+        form = dict(VALID_FORM)
+        form['general_update_mode'] = 'off'
+        c.post('/config/settings', data=form)
+
+        core = _read_yaml(root, 'config')
+        # Not core['general']['update_mode'] == 'off' as a raw string:
+        # ruamel.yaml (like PyYAML) writes an unquoted `off` per YAML
+        # 1.1's boolean literals, so plain yaml.safe_load reads it back
+        # as False, not 'off' - get_update_mode() is what normalizes
+        # that back to the 'off' mode (see its docstring), so assert
+        # the effective mode through it rather than the raw value.
+        assert get_update_mode(core) == 'off'
+        assert core['general']['auto_update'] is True
 
     def test_saves_sync_safety_toggles_to_module_files(self, client):
         c, app, root = client
@@ -162,6 +245,13 @@ class TestValidation:
         c, app, root = client
         bad = dict(VALID_FORM)
         bad['logging_level'] = 'VERBOSE'
+        resp = c.post('/config/settings', data=bad)
+        assert resp.status_code == 400
+
+    def test_invalid_update_mode_rejected(self, client):
+        c, app, root = client
+        bad = dict(VALID_FORM)
+        bad['general_update_mode'] = 'yolo'
         resp = c.post('/config/settings', data=bad)
         assert resp.status_code == 400
 

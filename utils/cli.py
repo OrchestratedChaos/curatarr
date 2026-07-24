@@ -13,14 +13,15 @@ from typing import Callable, Dict, List, Optional
 import yaml
 from plexapi.myplex import MyPlexAccount
 
-from .config import __version__, get_libraries_for_media_type
+from .config import __version__, get_libraries_for_media_type, get_update_mode
 from .display import (
-    CYAN, GREEN, RESET,
+    CYAN, GREEN, RESET, YELLOW,
     TeeLogger,
     log_error, log_warning,
     setup_logging,
 )
 from .helpers import cleanup_old_logs, get_project_root
+from .update_check import GITHUB_RELEASES_PAGE, update_available
 from .user_migration import migrate_renamed_plex_users
 
 
@@ -162,6 +163,51 @@ def teardown_log_file(original_stdout, log_retention_days: int):
             log_warning(f"Error closing log file: {e}")
 
 
+def print_update_notice(update_mode: str) -> None:
+    """
+    Print a one-line advisory notice if a newer release is available.
+
+    This is the only update signal that reaches BINARY users - a
+    packaged/frozen build never runs run.sh/run.ps1's own git-based
+    update check (see curatarr_app.py), so this CLI notice plus the web
+    UI banner (web/app.py) are the only places binary installs learn an
+    update exists at all.
+
+    Fails open by construction: utils.update_check.update_available()
+    never raises, so a broken/offline check just means no notice gets
+    printed - it can never block or break a run. update_mode == 'off'
+    is handled by update_available() itself (skips the network call
+    entirely), checked again here for clarity at the call site.
+
+    Args:
+        update_mode: 'notify' | 'force' | 'off' (see
+            utils.config.get_update_mode)
+    """
+    if update_mode == 'off':
+        return
+
+    latest, current, is_newer = update_available(update_mode=update_mode)
+    if not is_newer:
+        return
+
+    if getattr(sys, 'frozen', False):
+        # Binary install - there's no local git checkout to update, point
+        # at the release download instead.
+        print(
+            f"{YELLOW}Update available: v{latest} (you have v{current}) - "
+            f"download: {GITHUB_RELEASES_PAGE}{RESET}"
+        )
+    else:
+        # Source install - the real (signature-verified) update path
+        # lives in run.sh/run.ps1, not here.
+        print(
+            f"{YELLOW}Update available: v{latest} (you have v{current}) - "
+            f"restart via run.sh/run.ps1 to update"
+            f"{' (or set general.update_mode: force to auto-update)' if update_mode == 'notify' else ''}"
+            f"{RESET}"
+        )
+
+
 def print_runtime(start_time: datetime):
     """Print formatted runtime duration."""
     runtime = datetime.now() - start_time
@@ -242,6 +288,11 @@ def run_recommender_main(
 
     general = base_config.get('general', {})
     log_retention_days = general.get('log_retention_days', 7)
+
+    # Advisory update notice - printed right after the version banner
+    # above in the overall output; see print_update_notice() docstring
+    # for why this (not run.sh/run.ps1) is what binary users see.
+    print_update_notice(get_update_mode(root_config))
 
     # Handle single user mode
     single_user = args.username

@@ -39,7 +39,12 @@ users:
 general:
   plex_only: true  # Only recommend from Plex library
   log_retention_days: 7
-  auto_update: true
+  # notify (default): show a one-line CLI notice / web UI banner when a
+  #   newer release exists, never applies anything automatically.
+  # force: auto-apply verified signed updates on launch, no prompt
+  #   (source installs only - see run.sh/run.ps1).
+  # off: never check for updates.
+  update_mode: notify
 
 # Huntarr: Find missing/upcoming movies from collections
 huntarr:

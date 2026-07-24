@@ -336,6 +336,27 @@ button:disabled {
 .banner.error { border-left-color: var(--fail); color: var(--fail); }
 .banner.warn { border-left-color: var(--warn); color: var(--warn); }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.update-banner a { color: inherit; text-decoration: underline; }
+
+.update-banner-dismiss { margin: 0; }
+
+.update-banner-dismiss button {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
 /* --- Forms --- */
 .config-form fieldset {
   background: var(--panel-gradient);
