@@ -94,9 +94,13 @@ class BaseCache(ABC):
             cache_dir: Directory path where cache files are stored
             recommender: Reference to parent recommender instance
         """
-        self.cache_path = os.path.join(cache_dir, self.cache_filename)
-        self.cache = self._load_cache()
+        # Set recommender before building the cache path so the
+        # per-library prefix (#157 Phase 3) can be resolved. Single-library
+        # installs get prefix "" -- exact legacy filename, unchanged.
         self.recommender = recommender
+        prefix = recommender._cache_library_prefix() if recommender else ""
+        self.cache_path = os.path.join(cache_dir, f"{prefix}{self.cache_filename}")
+        self.cache = self._load_cache()
 
     def _load_cache(self) -> Dict:
         """Load cache from file."""
