@@ -86,18 +86,59 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    `SHA256SUMS.txt`.
 6. Publishes the GitHub Release via `gh release create` (GitHub CLI only
    - no third-party marketplace actions), attaching both files.
-7. Once that job succeeds, the `build-binaries` matrix job builds a
-   standalone PyInstaller binary for Windows, macOS (arm64 + Intel),
-   and Linux and uploads each one - plus a matching `.sha256` checksum
-   file - to the same release. This job depends on `release`
-   (`needs: release`) as its only gate: it never runs for a tag that
-   failed the signature/fingerprint/version checks above, and it does
-   not re-verify them independently on top - one gate, not two that
-   could drift out of sync. See `curatarr.spec` and `docs/BINARIES.md`
-   for what's bundled, where a binary's config/cache/logs live, and
-   current limitations (binaries are manual-download / no auto-update -
-   the updater above is source/git-install only - and don't yet
-   support triggering a run from the UI).
+7. Once that job succeeds, the `build-binaries` matrix job (Windows,
+   Linux x64/arm64) and the `build-macos-universal` job each build a
+   standalone PyInstaller binary and upload it - plus a matching
+   `.sha256` checksum file - to the same release. Both depend on
+   `release` (`needs: release`) as their only gate: they never run for
+   a tag that failed the signature/fingerprint/version checks above,
+   and they do not re-verify them independently on top - one gate, not
+   two that could drift out of sync.
+8. Once ALL of those finish, `finalize-checksums` downloads every
+   per-binary `.sha256` plus the source-archive-only `SHA256SUMS.txt`
+   from step 5, combines them into one aggregate `SHA256SUMS.txt`
+   covering every published asset, and re-uploads it (`--clobber`).
+   This is the file the in-binary self-updater (`utils/self_update.py`)
+   actually checks a downloaded binary's hash against - see
+   `docs/BINARIES.md`'s "Self-updating" section.
+
+See `curatarr.spec` and `docs/BINARIES.md` for what's bundled, where a
+binary's config/cache/logs live, and how the self-update flow itself
+works (web UI "Update now" button, or `curatarr --self-update`).
+
+## Signing a release's checksums (binary self-update trust anchor)
+
+CI publishes `SHA256SUMS.txt` (step 8 above) but never signs it - the
+release-signing **private** key stays off CI entirely, same as tag
+signing. Signing `SHA256SUMS.txt` is therefore a separate, manual,
+offline step, run on whichever machine actually holds
+`~/.ssh/curatarr_release_signing` (this project's convention: a
+Windows machine, via Git Bash - `ssh-keygen`/`gh` both work fine
+there), **after** `scripts/release.sh` has cut the release and CI's
+`build-binaries` / `build-macos-universal` / `finalize-checksums` jobs
+have all finished:
+
+```
+./scripts/sign-release-checksums.sh 2.8.29
+```
+
+This downloads the tag's aggregate `SHA256SUMS.txt`, signs it with
+`ssh-keygen -Y sign -f ~/.ssh/curatarr_release_signing -n file
+SHA256SUMS.txt` (namespace `file` - matches
+`utils.self_update.SIGNATURE_NAMESPACE`, what actually gets checked at
+update time), **self-verifies** the resulting signature locally against
+`.github/allowed_signers` and the pinned key fingerprint before uploading
+anything (fail closed, same discipline as `scripts/release.sh`'s own
+tag verify-before-push), then uploads `SHA256SUMS.txt.sig` to the
+release.
+
+Until this step runs for a given tag, that tag's binaries are still
+published and manually downloadable/verifiable (see
+`docs/BINARIES.md`'s "Verifying the checksum"), but the in-binary
+self-updater can't yet treat that tag as a verified self-update
+target - `utils.self_update.verify_pinned_signature()` fails closed
+(no `SHA256SUMS.txt.sig` published yet = no signature to verify = no
+swap), which is exactly the intended behavior, not a bug.
 
 ## Manual sanity-check
 

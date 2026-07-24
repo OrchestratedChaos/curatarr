@@ -46,8 +46,18 @@ from .helpers import get_project_root
 
 logger = logging.getLogger('curatarr')
 
-# api.github.com - JSON, used for the actual version lookup.
-GITHUB_RELEASES_API = "https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest"
+# api.github.com - JSON, used for the actual version lookup. Overridable
+# via CURATARR_RELEASES_API_OVERRIDE for testing/staging (e.g. this
+# repo's own real end-to-end self-update test - see
+# tests/test_self_update.py and the v2.8.29 PR description for what
+# exercises this) - never security-relevant since this whole module is
+# already advisory/unauthenticated by design (see module docstring), so
+# redirecting WHERE the version number comes from doesn't change what
+# gets trusted with it.
+GITHUB_RELEASES_API = (
+    os.environ.get('CURATARR_RELEASES_API_OVERRIDE')
+    or "https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest"
+)
 # github.com - human-facing, used for CLI/web "go download it" links.
 GITHUB_RELEASES_PAGE = "https://github.com/OrchestratedChaos/curatarr/releases/latest"
 

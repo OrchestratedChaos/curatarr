@@ -120,7 +120,12 @@ class TestBannerGating:
 
 
 class TestBannerContent:
-    def test_frozen_binary_shows_download_link(self, client, monkeypatch):
+    def test_frozen_binary_shows_update_now_button(self, client, monkeypatch):
+        """As of v2.8.29, frozen binaries get the same one-click
+        "Update now" button as source installs (in-binary self-update -
+        see utils/self_update.py) - see
+        tests/test_web_update_apply.py::TestFrozenAndSourceBothGetTheButton
+        for the /update/apply route-level assertions."""
         c, app, root = client
         _write_config(root, update_mode='notify')
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
@@ -128,12 +133,17 @@ class TestBannerContent:
         with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
             resp = c.get('/')
 
-        assert b'Download v2.9.0' in resp.data
-        # Binary installs get the download link, never the source
-        # install's one-click "Update now" button - see
-        # tests/test_web_update_apply.py::TestSourceOnlyGating for the
-        # button-visibility assertions themselves.
-        assert b'update-now-btn' not in resp.data
+        assert b'update-now-btn' in resp.data
+
+    def test_frozen_binary_mentions_verification(self, client, monkeypatch):
+        c, app, root = client
+        _write_config(root, update_mode='notify')
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+
+        with patch('web.app.update_available', return_value=('2.9.0', '2.8.28', True)):
+            resp = c.get('/')
+
+        assert b'verified' in resp.data.lower()
 
     def test_source_install_shows_update_now_button(self, client, monkeypatch):
         c, app, root = client
@@ -144,7 +154,6 @@ class TestBannerContent:
             resp = c.get('/')
 
         assert b'update-now-btn' in resp.data
-        assert b'Download v2.9.0' not in resp.data
 
 
 class TestDismiss:

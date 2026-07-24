@@ -38,6 +38,14 @@ from PyInstaller.utils.hooks import collect_submodules
 hidden_imports = (
     collect_submodules('ruamel.yaml')
     + collect_submodules('plexapi')
+    # cryptography (utils/self_update.py's pure-Python SSHSIG verification
+    # for the in-binary self-updater - see that module's docstring) ships
+    # its own PyInstaller hook, but its hazmat/openssl backend modules are
+    # still collected explicitly here, same defensive precedent as
+    # ruamel.yaml/plexapi above, since a build missing one would fail
+    # silently at update-verify time (deep inside a try/except) rather
+    # than at import time.
+    + collect_submodules('cryptography')
     + [
         'flask',
         'jinja2',

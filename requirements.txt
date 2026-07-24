@@ -36,3 +36,13 @@ requests==2.34.2
 
 # YAML configuration parser
 pyyaml==6.0.3
+
+# Pure-Python Ed25519/SSHSIG verification for the standalone binaries'
+# in-binary self-updater (utils/self_update.py) - verifies
+# SHA256SUMS.txt.sig against the pinned release-signing key before
+# trusting any downloaded binary's hash. A core (not build-only)
+# dependency: this runs at UPDATE time inside the packaged binary
+# itself, on the end user's machine, not just at CI build time - see
+# utils/self_update.py's module docstring for why this is pure Python
+# rather than shelling out to a system `ssh-keygen`.
+cryptography==49.0.0

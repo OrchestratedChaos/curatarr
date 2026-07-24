@@ -356,3 +356,32 @@ class TestUpdateAvailable:
         mock_get_latest.return_value = '2.10.0'
         _, _, is_newer = update_available(update_mode='notify')
         assert is_newer is True
+
+
+class TestReleasesApiOverride:
+    """CURATARR_RELEASES_API_OVERRIDE - a test/staging-only seam (see
+    GITHUB_RELEASES_API's own comment for why this is safe: this module
+    is already advisory/unauthenticated, so redirecting where the
+    version number comes from changes nothing about what's trusted).
+    Used by this repo's own real end-to-end self-update test to point a
+    built binary at a local HTTP server."""
+
+    def test_env_override_wins_over_default(self):
+        import importlib
+        import utils.update_check as update_check_module
+        try:
+            with patch.dict(os.environ, {'CURATARR_RELEASES_API_OVERRIDE': 'http://127.0.0.1:9/fake-api'}):
+                importlib.reload(update_check_module)
+                assert update_check_module.GITHUB_RELEASES_API == 'http://127.0.0.1:9/fake-api'
+        finally:
+            importlib.reload(update_check_module)  # restore the real default for every later test
+
+    def test_default_used_when_env_var_unset(self):
+        import importlib
+        import utils.update_check as update_check_module
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('CURATARR_RELEASES_API_OVERRIDE', None)
+            importlib.reload(update_check_module)
+        assert update_check_module.GITHUB_RELEASES_API == (
+            'https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest'
+        )

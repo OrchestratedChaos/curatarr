@@ -353,3 +353,75 @@ jobs:
             curatarr-macos-universal \
             curatarr-macos-universal.sha256 \
             --clobber
+
+  # ---------------------------------------------------------------------
+  # Aggregate every asset's checksum into ONE SHA256SUMS.txt covering the
+  # source archive AND all four binaries (the `release` job's own
+  # SHA256SUMS.txt only ever covered the source archive - the binaries
+  # aren't built until the jobs above, which run after it). This is what
+  # the in-binary self-updater (utils/self_update.py) actually verifies
+  # against: it downloads SHA256SUMS.txt + SHA256SUMS.txt.sig and checks
+  # its target asset's hash against THIS file, not any of the individual
+  # `<asset>.sha256` sidecars - see docs/BINARIES.md and RELEASING.md.
+  #
+  # `needs: [release, build-binaries, build-macos-universal]` is a hard
+  # gate, same reasoning as build-binaries' own comment: if ANY platform
+  # failed to build, this job is skipped entirely rather than publishing
+  # a SHA256SUMS.txt that's silently missing an asset - a self-updater
+  # verifying against an incomplete-but-present sums file would fail
+  # closed anyway (HashMismatchError: "not listed"), but never even
+  # publishing it here is cleaner than a partial one existing at all.
+  #
+  # Deliberately does NOT sign SHA256SUMS.txt itself - the private
+  # signing key never touches CI (see RELEASING.md). Signing happens
+  # offline afterward: scripts/sign-release-checksums.sh, run by the
+  # maintainer on the machine that holds
+  # ~/.ssh/curatarr_release_signing, downloads exactly this file,
+  # signs it with `ssh-keygen -Y sign`, and uploads SHA256SUMS.txt.sig
+  # as a follow-up release asset.
+  # ---------------------------------------------------------------------
+  finalize-checksums:
+    name: Aggregate SHA256SUMS.txt (source archive + all binaries)
+    needs: [release, build-binaries, build-macos-universal]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download existing SHA256SUMS.txt and every per-binary .sha256 sidecar
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p checksums
+          gh release download "$GITHUB_REF_NAME" -p 'SHA256SUMS.txt' -D checksums
+          gh release download "$GITHUB_REF_NAME" -p '*.sha256' -D checksums
+          ls -la checksums
+
+      - name: Build the aggregate SHA256SUMS.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Sorted + de-duplicated so re-running this job (e.g. a re-run
+          # of a flaky matrix job) is idempotent rather than appending
+          # duplicate lines.
+          cat checksums/SHA256SUMS.txt checksums/*.sha256 | sort -u -k2 > SHA256SUMS.txt
+          echo "Aggregate SHA256SUMS.txt:"
+          cat SHA256SUMS.txt
+          # Sanity check: every platform asset this release published a
+          # .sha256 sidecar for must appear in the aggregate - a job that
+          # silently produced an incomplete file is worse than one that
+          # fails loudly here.
+          for f in checksums/*.sha256; do
+            name="$(basename "$f" .sha256)"
+            grep -qF "  ${name}" SHA256SUMS.txt || {
+              echo "::error::${name} missing from aggregated SHA256SUMS.txt"
+              exit 1
+            }
+          done
+
+      - name: Upload the aggregate SHA256SUMS.txt
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber

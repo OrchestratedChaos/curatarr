@@ -29,16 +29,14 @@
         <span id="update-banner-text">
           Update available: v{{ update_banner.latest }} (you have v{{ update_banner.current }}).
           {% if update_banner.frozen %}
-          <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Download v{{ update_banner.latest }}</a>
+          Downloaded binaries are cryptographically verified (signed checksum + hash match) before being applied.
           {% else %}
           Signed releases are verified before being applied.
-          <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Release notes</a>
           {% endif %}
+          <a href="https://github.com/OrchestratedChaos/curatarr/releases/latest" target="_blank" rel="noopener">Release notes</a>
         </span>
         <span class="update-banner-actions">
-          {% if not update_banner.frozen %}
           <button type="button" id="update-now-btn" class="update-now-btn">Update now</button>
-          {% endif %}
           <form method="post" action="{{ url_for('update_dismiss') }}" class="update-banner-dismiss" id="update-banner-dismiss-form">
             <input type="hidden" name="version" value="{{ update_banner.latest }}">
             <input type="hidden" name="next" value="{{ request.path }}">
@@ -46,16 +44,17 @@
           </form>
         </span>
       </div>
-      {% if not update_banner.frozen %}
       <script>
         (function () {
-          // Source-install "Update now" flow: POST /update/apply kicks
-          // off a detached updater (see web/update_apply.py) that kills
-          // THIS server process, applies the verified update (or not -
-          // see that module's docstring), and relaunches on the same
-          // port either way. This page can't know which outcome
-          // happened except by polling /healthz until something answers
-          // again, so it does that instead of assuming success.
+          // "Update now" flow (both source installs AND, as of
+          // v2.8.29, frozen binaries - see web/update_apply.py's
+          // module docstring for each's trust model): POST
+          // /update/apply kicks off a detached updater that kills THIS
+          // server process, applies the update (or not - see that
+          // module's docstring), and relaunches on the same port
+          // either way. This page can't know which outcome happened
+          // except by polling /healthz until something answers again,
+          // so it does that instead of assuming success.
           var btn = document.getElementById('update-now-btn');
           if (!btn) { return; }
           var textEl = document.getElementById('update-banner-text');
@@ -127,7 +126,6 @@
           });
         })();
       </script>
-      {% endif %}
       {% endif %}
       {% block content %}{% endblock %}
     </main>

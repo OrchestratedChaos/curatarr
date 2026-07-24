@@ -13,7 +13,11 @@ it, and it opens the web UI in your browser - no Python install, no
 | Linux (x86_64) | `curatarr-linux-x86_64` |
 | Linux (arm64) | `curatarr-linux-arm64` |
 
-Each asset has a matching `<asset>.sha256` file with its checksum.
+Each asset has a matching `<asset>.sha256` file with its checksum, and the
+release also publishes an aggregate `SHA256SUMS.txt` (every asset's checksum
+in one file) plus a detached signature `SHA256SUMS.txt.sig` over it - see
+[Self-updating](#self-updating) below for what verifies that signature and
+why.
 
 ## Running it
 
@@ -94,24 +98,65 @@ each release is only published by CI for a tag independently verified
 against the maintainer's signed-tag key (see `RELEASING.md`), and each
 binary is built by that same CI run from that same verified tag.
 
-## No auto-update, but you do get notified
+## Self-updating
 
-The auto-updater in `run.sh` / `run.ps1` (which checks for and applies
-new signed tags) is for **source/git installs only** - it re-`git pull`s
-and re-verifies a signed tag, which a standalone binary has no
-equivalent of. Binaries are **manual-download, no auto-apply**: to
-upgrade, download the newer binary from Releases and replace the old
-one. A self-updating binary (checking Releases, downloading, and
-replacing itself) is a possible future item, not implemented yet.
+As of v2.8.29, binaries can update themselves in place - no manual
+download required. Two ways to trigger it:
 
-You're not left guessing when a newer release exists, though: the CLI
-prints a one-line notice (with a download link) after the version banner,
-and the web UI shows a dismissible banner, whenever `general.update_mode`
-(default `notify`) isn't set to `off`. This is an advisory-only, unsigned
-version check against the GitHub Releases API - see
-`utils/update_check.py` - it only decides whether to show a notice, never
-downloads or applies anything. Set `general.update_mode: off` in
-`config/config.yml` to disable the check entirely.
+- **Web UI**: the dismissible update banner's **Update now** button
+  (same one-click flow source installs already had via
+  `run.sh`/`run.ps1`'s signed-tag updater).
+- **CLI**: `curatarr --self-update` (or `curatarr.exe --self-update` on
+  Windows) - downloads, verifies, swaps, and exits; run curatarr again
+  normally afterward.
+
+Either way, the sequence is: check whether a newer version is published
+(the same advisory GitHub Releases API lookup the CLI notice/web banner
+already do - see below), download the platform asset plus
+`SHA256SUMS.txt`/`SHA256SUMS.txt.sig`, **cryptographically verify**
+before trusting anything, then atomically swap the running executable
+and relaunch on the same port (web UI) or just exit (CLI).
+
+### Authenticity model
+
+A downloaded binary is verified for **authenticity**, not just
+integrity - a checksum alone only proves a file wasn't corrupted in
+transit, not that it came from the maintainer. The actual chain:
+
+1. `SHA256SUMS.txt.sig` is a detached SSH signature (`ssh-keygen -Y
+   sign`) over `SHA256SUMS.txt`, produced **offline** with the same
+   release-signing private key that signs every release git tag (see
+   `RELEASING.md`) - that key never touches CI or this repo.
+2. The updater (`utils/self_update.py`) verifies that signature in pure
+   Python (the `cryptography` package, bundled into the binary itself)
+   against a public key hardcoded in the binary, before trusting
+   anything else. Missing, tampered, or wrong-key signatures fail
+   closed - no swap, current binary keeps running.
+3. Only once that signature verifies is `SHA256SUMS.txt`'s content
+   trusted as the source of truth for the downloaded asset's expected
+   SHA256. The asset's actual hash is computed locally and compared;
+   any mismatch also fails closed.
+4. Only after both checks pass does the binary get swapped - see
+   `utils/self_update.py`'s module docstring for the full chain and
+   the per-OS swap mechanics (Windows: rename-while-running, since a
+   running .exe can't be overwritten directly; macOS/Linux: an atomic
+   `os.replace()`). Any failure at any step, including during the swap
+   itself, leaves the **current** binary running - a self-updater must
+   never be able to brick the install it's updating.
+
+### Advisory version check (unchanged, still non-authenticating on its own)
+
+The CLI prints a one-line notice after the version banner, and the web
+UI shows a dismissible banner, whenever `general.update_mode` (default
+`notify`) isn't set to `off`. This is the same unauthenticated,
+advisory-only version lookup against the GitHub Releases API as before
+(`utils/update_check.py`) - it only decides *whether a newer version
+number is known*, never anything about trusting or applying it; the
+authenticity model above is what actually gates the self-update itself.
+Set `general.update_mode: off` in `config/config.yml` to disable the
+check entirely (this also disables the "Update now" button's advisory
+precondition, though `curatarr --self-update` on the CLI still performs
+its own fresh check regardless of `update_mode`).
 
 ## Where data lives
 

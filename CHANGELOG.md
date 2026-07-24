@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.8.29] - 2026-07-23
+
+### Added
+- **Self-updating binaries**: the standalone PyInstaller binaries (Windows/macOS/Linux) can now update themselves in place - no more manual download-and-replace. The web UI's update banner **Update now** button works for binaries the same one-click way it already did for source installs, and a new `curatarr --self-update` CLI flag does the same from a terminal. Authenticity is cryptographically verified before anything is trusted: the release publishes a `SHA256SUMS.txt` covering every asset (source archive + all four binaries - previously only covered the source archive), signed offline with the maintainer's release-signing key (`scripts/sign-release-checksums.sh`, `ssh-keygen -Y sign`) and verified in pure Python (`utils/self_update.py`, via the `cryptography` package bundled into the binary itself - no dependency on a system `ssh-keygen`) against a pinned public key, fail-closed on any missing/tampered/wrong-key signature. Only once that signature verifies is the downloaded binary's SHA256 checked against the now-trusted sums file; only then is the running executable atomically swapped (Windows: rename-while-running, since an open .exe can't be overwritten directly; macOS/Linux: atomic `os.replace()`) and relaunched. Any failure at any step - network, verification, or swap - leaves the current binary running unchanged, never a broken install
+- `.github/workflows/release.yml`: new `finalize-checksums` job aggregates every published asset's checksum (source archive + all binaries) into one `SHA256SUMS.txt` after all builds finish - the file the self-updater actually verifies against
+
 ## [2.8.28] - 2026-07-23
 
 ### Added

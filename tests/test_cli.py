@@ -902,12 +902,13 @@ class TestPrintUpdateNotice:
         assert 'update_mode: force' not in out
 
     @patch('utils.cli.update_available')
-    def test_frozen_binary_points_at_download_url_not_run_sh(self, mock_update_available, capsys, monkeypatch):
+    def test_frozen_binary_points_at_self_update_flag_and_download_url(self, mock_update_available, capsys, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         mock_update_available.return_value = ('2.9.0', '2.8.28', True)
         print_update_notice('notify')
         out = capsys.readouterr().out
         assert 'Update available: v2.9.0' in out
+        assert '--self-update' in out
         assert 'download:' in out
         assert 'github.com/OrchestratedChaos/curatarr/releases' in out
         assert 'run.sh' not in out

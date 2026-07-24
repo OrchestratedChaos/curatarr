@@ -167,11 +167,14 @@ def print_update_notice(update_mode: str) -> None:
     """
     Print a one-line advisory notice if a newer release is available.
 
-    This is the only update signal that reaches BINARY users - a
-    packaged/frozen build never runs run.sh/run.ps1's own git-based
-    update check (see curatarr_app.py), so this CLI notice plus the web
-    UI banner (web/app.py) are the only places binary installs learn an
-    update exists at all.
+    This is the only update signal that reaches BINARY users via the
+    CLI - a packaged/frozen build never runs run.sh/run.ps1's own
+    git-based update check (see curatarr_app.py), so this notice plus
+    the web UI banner (web/app.py) are the only places binary installs
+    learn an update exists at all. As of v2.8.29, a binary install can
+    also self-update in place (see utils/self_update.py and
+    curatarr_app.py's `--self-update` dispatch) - this notice's
+    frozen-branch message points at that flag first.
 
     Fails open by construction: utils.update_check.update_available()
     never raises, so a broken/offline check just means no notice gets
@@ -191,11 +194,11 @@ def print_update_notice(update_mode: str) -> None:
         return
 
     if getattr(sys, 'frozen', False):
-        # Binary install - there's no local git checkout to update, point
-        # at the release download instead.
+        # Binary install - self-update in place (verified download/
+        # swap - see utils/self_update.py), or download manually.
         print(
             f"{YELLOW}Update available: v{latest} (you have v{current}) - "
-            f"download: {GITHUB_RELEASES_PAGE}{RESET}"
+            f"run 'curatarr --self-update' or download: {GITHUB_RELEASES_PAGE}{RESET}"
         )
     else:
         # Source install - the real (signature-verified) update path

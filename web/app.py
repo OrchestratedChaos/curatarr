@@ -46,7 +46,6 @@ from .update_apply import (
     UpdateAlreadyInProgressError,
     UpdateManager,
     UpdateNotAvailableError,
-    UpdateNotSupportedError,
 )
 
 DEFAULT_PORT = 8787
@@ -195,21 +194,23 @@ def create_app(project_root: str = None) -> Flask:
 
     @app.post('/update/apply')
     def update_apply_route():
-        """Source-install "Update now": verifies a newer signed release
+        """"Update now": source installs verify a newer signed release
         actually exists (see web.update_apply.check_verified_update -
         shells out to run.sh's/run.ps1's own verification, never
-        reimplemented here), then hands off to a DETACHED worker
-        process that outlives this request/this server process - see
-        web/update_apply.py's module docstring for the full sequence.
-        Returns immediately; the frontend (base.html) polls /healthz
-        to detect the server coming back up on the new version.
+        reimplemented here); frozen binaries do a cheap advisory check
+        (see web.update_apply._check_update_available_for_binary) and
+        leave the real cryptographic verification to the worker's call
+        into utils.self_update - see web/update_apply.py's module
+        docstring for the full sequence and trust model of each. Either
+        way, this hands off to a DETACHED worker process that outlives
+        this request/this server process and returns immediately; the
+        frontend (base.html) polls /healthz to detect the server coming
+        back up on the new version.
         """
         host = '127.0.0.1'
         port = int(os.environ.get('CURATARR_UI_PORT', DEFAULT_PORT))
         try:
             tag = app.update_manager.begin_update(host, port)
-        except UpdateNotSupportedError as exc:
-            return jsonify({'error': str(exc)}), 400
         except UpdateAlreadyInProgressError as exc:
             return jsonify({'error': str(exc)}), 409
         except UpdateNotAvailableError as exc:
