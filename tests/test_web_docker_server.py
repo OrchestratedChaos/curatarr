@@ -23,12 +23,13 @@ class TestMain:
         monkeypatch.delenv('CURATARR_UI_HOST', raising=False)
         monkeypatch.delenv('CURATARR_UI_PORT', raising=False)
         fake_app = Mock()
-        with patch.object(docker_server, 'create_app', return_value=fake_app) as mock_create_app:
+        with patch.object(docker_server, 'create_app', return_value=fake_app) as mock_create_app, \
+                patch.object(docker_server.waitress, 'serve') as mock_serve:
             docker_server.main()
         mock_create_app.assert_called_once_with()
-        fake_app.run.assert_called_once_with(
-            host='0.0.0.0', port=docker_server.DEFAULT_PORT,
-            debug=False, use_reloader=False, threaded=True,
+        mock_serve.assert_called_once_with(
+            fake_app, host='0.0.0.0', port=docker_server.DEFAULT_PORT,
+            threads=docker_server.THREADS,
         )
 
     def test_default_port_is_8787(self):
@@ -38,11 +39,11 @@ class TestMain:
         monkeypatch.delenv('CURATARR_UI_HOST', raising=False)
         monkeypatch.setenv('CURATARR_UI_PORT', '9000')
         fake_app = Mock()
-        with patch.object(docker_server, 'create_app', return_value=fake_app):
+        with patch.object(docker_server, 'create_app', return_value=fake_app), \
+                patch.object(docker_server.waitress, 'serve') as mock_serve:
             docker_server.main()
-        fake_app.run.assert_called_once_with(
-            host='0.0.0.0', port=9000,
-            debug=False, use_reloader=False, threaded=True,
+        mock_serve.assert_called_once_with(
+            fake_app, host='0.0.0.0', port=9000, threads=docker_server.THREADS,
         )
 
     def test_curatarr_ui_host_env_override(self, monkeypatch):
@@ -53,11 +54,12 @@ class TestMain:
         monkeypatch.setenv('CURATARR_UI_HOST', '10.0.0.5')
         monkeypatch.delenv('CURATARR_UI_PORT', raising=False)
         fake_app = Mock()
-        with patch.object(docker_server, 'create_app', return_value=fake_app):
+        with patch.object(docker_server, 'create_app', return_value=fake_app), \
+                patch.object(docker_server.waitress, 'serve') as mock_serve:
             docker_server.main()
-        fake_app.run.assert_called_once_with(
-            host='10.0.0.5', port=docker_server.DEFAULT_PORT,
-            debug=False, use_reloader=False, threaded=True,
+        mock_serve.assert_called_once_with(
+            fake_app, host='10.0.0.5', port=docker_server.DEFAULT_PORT,
+            threads=docker_server.THREADS,
         )
 
 
@@ -82,3 +84,15 @@ class TestIndependenceFromNativeAppGuardrail:
         source = inspect.getsource(docker_server)
         assert 'create_app' in source
         assert 'Flask(' not in source
+
+    def test_uses_waitress_not_flask_dev_server(self):
+        """Regression guard: this module must serve via waitress (a
+        production WSGI server appropriate for a long-running
+        container), never fall back to app.run() (Flask's single-
+        threaded dev server - fine for web/app.py's native, single-user,
+        localhost-only main(), not for this one)."""
+        import inspect
+
+        source = inspect.getsource(docker_server)
+        assert 'waitress.serve(' in source
+        assert '.run(' not in source

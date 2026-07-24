@@ -170,9 +170,18 @@ docker buildx build --platform linux/amd64,linux/arm64 -t curatarr:local .
 
 The published image is built the same way by
 `.github/workflows/docker.yml`, from the hash-locked
-`requirements.lock`/`requirements-ui.lock` (`pip install
---require-hashes`), multi-stage so the build toolchain never ends up in
-the final image, and runs as a non-root user (uid/gid 1000).
+`requirements.lock`/`requirements-ui.lock`/`requirements-docker.lock`
+(`pip install --require-hashes`), multi-stage so the build toolchain
+never ends up in the final image, and runs as a non-root user (uid/gid
+1000).
+
+The web UI runs on [waitress](https://docs.pylonsproject.org/projects/waitress/)
+in the container - a production-grade, multi-threaded WSGI server -
+rather than Flask's own single-threaded development server. This is
+Docker-specific (`web/docker_server.py`, `requirements-docker.lock`):
+the native app (`run-ui.sh`/`run-ui.ps1`, the standalone binaries)
+still uses Flask's dev server bound to `127.0.0.1` only, which is fine
+for a single local user and unrelated to this container's needs.
 
 ## Troubleshooting
 

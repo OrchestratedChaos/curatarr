@@ -2,7 +2,7 @@
 #
 # Curatarr container image. Two entrypoints share this same image (see
 # docker-entrypoint.sh):
-#   - the web UI (default CMD)          - a long-running Flask server
+#   - the web UI (default CMD)          - a long-running waitress (production WSGI) server
 #   - the recommender, as a one-shot    - `docker run curatarr recommend [movie|tv|external|full]`
 #
 # Multi-arch (linux/amd64 + linux/arm64) via `docker buildx build
@@ -26,18 +26,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# requirements.lock/-ui.lock are fully SHA256-hashed (uv pip compile
-# --generate-hashes) - `--require-hashes` refuses to install anything
-# whose downloaded artifact doesn't match, the same supply-chain
-# integrity guarantee run.sh/run-ui.sh already give source installs.
-COPY requirements.lock requirements-ui.lock ./
+# requirements.lock/-ui.lock/-docker.lock are all fully SHA256-hashed
+# (uv pip compile --generate-hashes) - `--require-hashes` refuses to
+# install anything whose downloaded artifact doesn't match, the same
+# supply-chain integrity guarantee run.sh/run-ui.sh already give source
+# installs. requirements-docker.lock is Docker-only (currently just
+# waitress - see web/docker_server.py) - never installed for a native
+# source/binary install, which has no use for it.
+COPY requirements.lock requirements-ui.lock requirements-docker.lock ./
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --require-hashes -r requirements.lock && \
-    pip install --no-cache-dir --require-hashes -r requirements-ui.lock
+    pip install --no-cache-dir --require-hashes -r requirements-ui.lock && \
+    pip install --no-cache-dir --require-hashes -r requirements-docker.lock
 
 # ---------------------------------------------------------------------
 # Stage 2: lean runtime - just the venv + app code, no compiler.

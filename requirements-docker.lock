@@ -1,0 +1,21 @@
+# Fully-hashed lock of requirements-docker.txt's direct + transitive
+# dependencies, installed with `pip install --require-hashes` by the
+# Dockerfile ONLY (in addition to requirements.lock and
+# requirements-ui.lock) so the container's production WSGI server
+# (waitress - see web/docker_server.py) gets the same supply-chain
+# integrity guarantee as everything else in the image - see
+# requirements.lock's header for the full rationale.
+# requirements-docker.txt remains the human-edited source of truth;
+# this file is generated from it - do not hand-edit.
+#
+# Regenerate after any requirements-docker.txt change with (requires
+# `uv`, https://docs.astral.sh/uv/):
+#   uv pip compile --universal --generate-hashes --python-version 3.10 requirements-docker.txt -o requirements-docker.lock
+#
+# --python-version 3.10 matches requirements.lock's floor for
+# consistency (waitress itself only requires >=3.9) - the Docker image
+# runs 3.12 either way (see Dockerfile).
+waitress==3.0.2 \
+    --hash=sha256:682aaaf2af0c44ada4abfb70ded36393f0e307f4ab9456a215ce0020baefc31f \
+    --hash=sha256:c56d67fd6e87c2ee598b76abdd4e96cfad1f24cacdea5078d382b1f9d7b5ed2e
+    # via -r requirements-docker.txt
