@@ -457,13 +457,20 @@ class TestWindowsBranches:
         with patch('web.update_apply.subprocess.run', side_effect=Exception('no tasklist')):
             assert _pid_alive(1234) is True
 
-    def test_shut_down_old_server_uses_taskkill(self, monkeypatch):
+    def test_shut_down_old_server_uses_forceful_taskkill(self, monkeypatch):
+        """/F is required - see _shut_down_old_server's docstring for
+        why plain (non-forceful) taskkill doesn't actually work against
+        a console-less Windows process (confirmed via a real end-to-end
+        test against a built binary)."""
         monkeypatch.setattr('web.update_apply.os.name', 'nt')
         with patch('web.update_apply._pid_alive', side_effect=[True, False]), \
                 patch('web.update_apply.subprocess.run') as mock_run, \
                 patch('web.update_apply.time.sleep'):
             _shut_down_old_server(1234, timeout=5)
-        assert mock_run.call_args[0][0][0] == 'taskkill'
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == 'taskkill'
+        assert '/F' in cmd
+        assert cmd == ['taskkill', '/F', '/PID', '1234']
 
     @patch('web.update_apply.subprocess.Popen')
     def test_relaunch_ui_uses_powershell_and_creationflags(self, mock_popen, monkeypatch):

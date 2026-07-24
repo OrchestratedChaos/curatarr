@@ -328,10 +328,24 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _shut_down_old_server(pid: int, timeout: float) -> None:
-    """Signal the old server to shut down gracefully - SIGTERM on
-    POSIX, taskkill on Windows. web/app.py's main() already installs a
-    handler for both that terminates any in-flight recommender job
-    first, then exits cleanly - reused here rather than duplicated.
+    """Signal the old server to shut down - SIGTERM on POSIX, forceful
+    taskkill on Windows. web/app.py's main() installs a SIGTERM/SIGINT
+    handler that terminates any in-flight recommender job first, then
+    exits cleanly - POSIX gets that graceful path via os.kill(SIGTERM).
+
+    Windows has no equivalent for a console-less (windowed,
+    console=False - see curatarr.spec) process: plain `taskkill /PID`
+    (no /F) sends a WM_CLOSE-style request that only a process with a
+    window/message loop can receive, and reliably FAILS against a
+    background Flask server with neither - confirmed against a real
+    built binary (see this repo's v2.8.29 PR description for the actual
+    end-to-end evidence: without /F, the old server never died, the
+    relaunched new process couldn't bind the same port, and the whole
+    update silently never took effect). `/F` (forceful termination) is
+    therefore the only mechanism that actually works here, not a choice
+    of graceful-vs-forceful - the graceful signal handler above simply
+    has no Windows-console-less equivalent to be delivered through.
+
     Waits up to `timeout` seconds for the pid to actually disappear
     (i.e. for the port to actually be released), but never raises: a
     still-alive old process past the timeout just means the relaunch
@@ -342,7 +356,7 @@ def _shut_down_old_server(pid: int, timeout: float) -> None:
         return
     try:
         if os.name == 'nt':
-            subprocess.run(['taskkill', '/PID', str(pid)], capture_output=True, timeout=5)
+            subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True, timeout=5)
         else:
             os.kill(pid, signal.SIGTERM)
     except (ProcessLookupError, OSError):
