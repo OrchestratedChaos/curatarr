@@ -45,4 +45,18 @@ pyyaml==6.0.3
 # itself, on the end user's machine, not just at CI build time - see
 # utils/self_update.py's module docstring for why this is pure Python
 # rather than shelling out to a system `ssh-keygen`.
-cryptography==49.0.0
+#
+# Pinned at 48.0.1, NOT the newer 49.0.0, because 49.0.0 dropped macOS
+# x86_64 wheels entirely (arm64-only per its own CHANGELOG: 'Support
+# for x86_64 macOS has been removed') - no x86_64 wheel exists to fuse
+# into a universal2 build at all, which is what broke the v2.8.29
+# macos-universal release (PyInstaller bundled the arm64-only
+# _rust.abi3.so, IncompatibleBinaryArchError). 48.0.1 is the newest
+# release that still ships a real prebuilt macosx_10_9_universal2
+# wheel on PyPI - no delocate-merge fuse needed for this dep, plain
+# pip install picks it up directly - and it already carries the fixed
+# OpenSSL build (GHSA-537c-gmf6-5ccf); no known CVE is unpatched
+# between 48.0.1 and 49.0.0 (checked pyca/cryptography's GHSA
+# advisories directly). Bump only alongside re-verifying PyPI still
+# publishes a macOS universal2 wheel for the target version.
+cryptography==48.0.1
