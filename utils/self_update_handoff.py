@@ -392,10 +392,18 @@ def write_and_launch_handoff_script(
     # swap/rollback itself behaves, purely log visibility. Left unset
     # (the default for every real user), behavior is identical to before.
     debug_log_path = env.get('CURATARR_HANDOFF_DEBUG_LOG')
+    stdio_target = subprocess.DEVNULL
     if debug_log_path:
-        stdio_target = open(debug_log_path, 'ab')
-    else:
-        stdio_target = subprocess.DEVNULL
+        try:
+            stdio_target = open(debug_log_path, 'ab')
+        except OSError as e:
+            # A debugging convenience must never be able to break the
+            # actual swap/rollback it's only meant to observe - fall
+            # back to the normal DEVNULL behavior (e.g. the debug log's
+            # own parent directory not existing is a test-harness setup
+            # bug, not a reason to leave the old server permanently
+            # down).
+            logger.warning(f"Could not open CURATARR_HANDOFF_DEBUG_LOG={debug_log_path!r}: {e}")
 
     popen_kwargs = dict(
         env=env,

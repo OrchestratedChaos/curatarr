@@ -66,6 +66,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/selfupdate-e2e/debug-logs"
           python scripts/selfupdate_e2e/run_repeated.py 5 \
             --manifest "$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json" \
             --work-dir "$RUNNER_TEMP/selfupdate-e2e/runs/swap" \
