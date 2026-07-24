@@ -382,12 +382,44 @@ BIND_RETRY_ATTEMPTS = 20
 BIND_RETRY_DELAY_SECONDS = 0.5
 
 
+def _skip_slow_server_name_lookup() -> None:
+    """Werkzeug's own BaseWSGIServer.server_bind() calls
+    socket.getfqdn(host) to set self.server_name - a reverse DNS lookup
+    that's irrelevant here (this app only ever binds 127.0.0.1 - see
+    main()'s docstring) but confirmed, via real end-to-end self-update
+    testing (see this repo's v2.8.29 PR description), to take 30+
+    seconds on some networks. That delay eats directly into the
+    self-update hand-off script's own health-check window (see
+    utils/self_update_handoff.py's HANDOFF_HEALTH_TIMEOUT_SECONDS) -
+    a perfectly good just-installed update could get spuriously rolled
+    back simply because ITS OWN server took too long to finish binding,
+    not because anything was actually wrong with it. Patches
+    socket.getfqdn globally (idempotent - safe to call more than once)
+    rather than subclassing the server Flask constructs internally,
+    since Flask's own app.run() doesn't expose a server class hook."""
+    import socket as _socket
+
+    if getattr(_socket.getfqdn, '_curatarr_fast_path', False):
+        return
+
+    _real_getfqdn = _socket.getfqdn
+
+    def _fast_getfqdn(name=''):
+        if not name or name in ('127.0.0.1', 'localhost', '::1'):
+            return 'localhost'
+        return _real_getfqdn(name)
+
+    _fast_getfqdn._curatarr_fast_path = True
+    _socket.getfqdn = _fast_getfqdn
+
+
 def _run_with_bind_retry(app: Flask, host: str, port: int) -> None:
     """Wraps app.run() with a short bind-retry loop - see
     BIND_RETRY_ATTEMPTS above. app.run() blocks for the life of a
     successful bind (returning only on shutdown), so a retry loop
     around it only ever actually iterates on an immediate bind failure,
     never once the server is actually up and serving."""
+    _skip_slow_server_name_lookup()
     for attempt in range(BIND_RETRY_ATTEMPTS):
         try:
             app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
