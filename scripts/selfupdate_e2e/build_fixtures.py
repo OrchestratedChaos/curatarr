@@ -218,27 +218,22 @@ def main():
     new_version = synthetic_higher_version(current_version)
     print(f"== old version: {current_version}  new (synthetic) version: {new_version}")
 
-    # DIAGNOSTIC (temporary): swap build order - new version first, old
-    # second - to determine whether a real-world reliability issue is
-    # tied to WHICH version gets built, or is actually an artifact of
-    # building twice in the same PyInstaller/job session (second build
-    # unreliable regardless of which version it is). See this repo's
-    # v2.8.29 PR description for the real end-to-end evidence this is
-    # investigating: the swap-to-a-genuinely-newer-version scenario's
-    # relaunched process consistently never becomes healthy, while the
-    # rollback scenario's relaunch of the ORIGINAL binary (single,
-    # first build) consistently does.
+    # Build order was temporarily swapped (new-then-old) as a
+    # diagnostic to rule out "second build in the same job is
+    # unreliable regardless of version" as the cause of a real relaunch
+    # failure investigated in this repo's v2.8.29 PR description -
+    # ruled out (the failure stayed with the newer version either way),
+    # so this reverts to the semantically clearer old-then-new order.
     try:
+        old_binary_path = build_binary(
+            repo_root, args.pyinstaller, dist_name,
+            os.path.join(work_dir, 'binaries', 'old', asset_name),
+        )
+
         bump_version(repo_root, new_version)
         new_binary_path = build_binary(
             repo_root, args.pyinstaller, dist_name,
             os.path.join(work_dir, 'binaries', 'new', asset_name),
-        )
-
-        restore_file(repo_root, CONFIG_PY_RELATIVE, original_config_content)
-        old_binary_path = build_binary(
-            repo_root, args.pyinstaller, dist_name,
-            os.path.join(work_dir, 'binaries', 'old', asset_name),
         )
     finally:
         restore_file(repo_root, CONFIG_PY_RELATIVE, original_config_content)
