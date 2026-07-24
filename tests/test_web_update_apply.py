@@ -40,6 +40,7 @@ from utils import self_update
 from web.app import create_app
 from web.update_apply import (
     OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS,
+    RELAUNCH_MAX_ATTEMPTS,
     RESPONSE_FLUSH_DELAY_SECONDS,
     UpdateAlreadyInProgressError,
     UpdateManager,
@@ -49,6 +50,9 @@ from web.update_apply import (
     _parse_binary_worker_args,
     _parse_worker_args,
     _pid_alive,
+    _port_is_listening,
+    _recommender_job_in_progress,
+    _relaunch_and_verify,
     _relaunch_ui,
     _run_worker,
     _shut_down_old_server,
@@ -159,6 +163,38 @@ class TestPreconditionCheckGate:
         with patch('web.update_apply.check_verified_update', return_value=None):
             c.post('/update/apply')
         assert app.update_manager.is_in_progress() is False
+
+
+class TestRefusesToUpdateWhileJobRunning:
+    """A recommender run's subprocess is itself another instance of
+    this same binary (frozen), sharing PyInstaller onefile extraction
+    state with the server that spawned it - killing/swapping that
+    server out from under a running job could crash it (see
+    utils.self_update.fresh_extraction_temp_dir's docstring for the
+    real end-to-end crash that motivated this). The route-level check
+    is the immediate, synchronous gate; web/update_apply.py's own
+    _recommender_job_in_progress is the race-safe, cross-process second
+    gate the detached worker itself re-checks - see
+    TestRunWorkerAbortsWhenJobInProgress below."""
+
+    def test_job_running_returns_409_and_does_not_begin_update(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with patch.object(app.job_manager, 'is_running', return_value=True), \
+                patch.object(UpdateManager, 'begin_update') as mock_begin:
+            resp = c.post('/update/apply')
+        assert resp.status_code == 409
+        assert 'in progress' in resp.get_json()['error']
+        mock_begin.assert_not_called()
+
+    def test_job_not_running_proceeds_normally(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        with patch.object(app.job_manager, 'is_running', return_value=False), \
+                patch('web.update_apply.check_verified_update', return_value='v2.9.0'), \
+                patch.object(UpdateManager, '_spawn_worker'):
+            resp = c.post('/update/apply')
+        assert resp.status_code == 202
 
 
 class TestLockConcurrency:
@@ -273,6 +309,81 @@ class TestPidAlive:
             assert _pid_alive(1234) is False
 
 
+class TestRecommenderJobInProgress:
+    """_recommender_job_in_progress - the worker's own cross-process,
+    race-safe re-check of web/job_runner.py's lockfile (same filename,
+    deliberately not imported - see that function's docstring)."""
+
+    def test_no_lockfile_means_not_running(self, tmp_path):
+        (tmp_path / 'logs').mkdir()
+        assert _recommender_job_in_progress(str(tmp_path)) is False
+
+    def test_no_logs_dir_at_all_means_not_running(self, tmp_path):
+        assert _recommender_job_in_progress(str(tmp_path)) is False
+
+    def test_live_pid_in_lockfile_means_running(self, tmp_path):
+        logs_dir = tmp_path / 'logs'
+        logs_dir.mkdir()
+        (logs_dir / 'webui_job.lock').write_text(str(os.getpid()), encoding='utf-8')
+        assert _recommender_job_in_progress(str(tmp_path)) is True
+
+    def test_dead_pid_in_lockfile_means_not_running(self, tmp_path):
+        logs_dir = tmp_path / 'logs'
+        logs_dir.mkdir()
+        (logs_dir / 'webui_job.lock').write_text('999999', encoding='utf-8')
+        with patch('web.update_apply._pid_alive', return_value=False):
+            assert _recommender_job_in_progress(str(tmp_path)) is False
+
+    def test_corrupt_lockfile_fails_safe_toward_running(self, tmp_path):
+        logs_dir = tmp_path / 'logs'
+        logs_dir.mkdir()
+        (logs_dir / 'webui_job.lock').write_text('not-a-pid', encoding='utf-8')
+        assert _recommender_job_in_progress(str(tmp_path)) is True
+
+
+class TestRunWorkerAbortsWhenJobInProgress:
+    """The worker's own re-check (see _recommender_job_in_progress) -
+    if a job is in flight, the old server must be left COMPLETELY
+    untouched: no shutdown, no apply, no relaunch."""
+
+    @patch('web.update_apply._relaunch_and_verify')
+    @patch('web.update_apply._apply_binary_self_update')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=True)
+    @patch('web.update_apply.time.sleep')
+    def test_job_in_progress_skips_everything(
+        self, mock_sleep, mock_job_check, mock_shutdown, mock_apply, mock_relaunch
+    ):
+        _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+        mock_shutdown.assert_not_called()
+        mock_apply.assert_not_called()
+        mock_relaunch.assert_not_called()
+
+    @patch('web.update_apply._relaunch_and_verify')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=True)
+    @patch('web.update_apply.time.sleep')
+    def test_job_in_progress_logs_why(self, mock_sleep, mock_job_check, mock_shutdown, mock_relaunch, capsys):
+        _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+        out = capsys.readouterr().out
+        assert 'in progress' in out
+        assert 'aborting' in out
+
+    @patch('web.update_apply._relaunch_and_verify')
+    @patch('web.update_apply._apply_binary_self_update')
+    @patch('web.update_apply._shut_down_old_server')
+    @patch('web.update_apply._recommender_job_in_progress', return_value=False)
+    @patch('web.update_apply.time.sleep')
+    def test_no_job_in_progress_proceeds_normally(
+        self, mock_sleep, mock_job_check, mock_shutdown, mock_apply, mock_relaunch, monkeypatch
+    ):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+        mock_shutdown.assert_called_once()
+        mock_apply.assert_called_once()
+        mock_relaunch.assert_called_once()
+
+
 class TestShutDownOldServer:
     """Every path here mocks _pid_alive/os.kill/subprocess.run - this
     must NEVER send a real signal to a real pid (that would kill
@@ -328,20 +439,20 @@ class TestRunWorkerNeverPropagatesUnhandledException:
     exception escaping this function entirely would still mean a
     crashed worker and a dead port)."""
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply._shut_down_old_server', side_effect=RuntimeError('totally unexpected'))
     @patch('web.update_apply.time.sleep')
     def test_unexpected_error_before_apply_step_still_relaunches(self, mock_sleep, mock_shutdown, mock_relaunch):
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)  # must not raise
         mock_relaunch.assert_called_once_with('/fake/root', 8787)
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.time.sleep', side_effect=RuntimeError('even the sleep itself blew up'))
     def test_unexpected_error_at_the_very_start_still_relaunches(self, mock_sleep, mock_relaunch):
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)  # must not raise
         mock_relaunch.assert_called_once_with('/fake/root', 8787)
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply._shut_down_old_server', side_effect=RuntimeError('totally unexpected'))
     @patch('web.update_apply.time.sleep')
     def test_unexpected_error_is_logged(self, mock_sleep, mock_shutdown, mock_relaunch, capsys):
@@ -351,12 +462,92 @@ class TestRunWorkerNeverPropagatesUnhandledException:
         assert 'totally unexpected' in out
 
 
+class TestPortIsListening:
+    def test_false_when_nothing_listening(self):
+        assert _port_is_listening(1) is False  # port 1 requires privileges - never bound in CI/dev
+
+
+class TestRelaunchAndVerify:
+    """_relaunch_and_verify - the reliability net around _relaunch_ui's
+    fire-and-forget spawn (see that function's docstring for why a
+    frozen relaunch's startup time isn't perfectly deterministic).
+    Every test shrinks RELAUNCH_VERIFY_TIMEOUT_SECONDS via monkeypatch
+    (rather than mocking time.time()'s exact sequence) so the real
+    per-attempt poll loop runs for real, just fast - deterministic
+    without being fragile to exactly how many times the loop body
+    happens to iterate."""
+
+    def test_succeeds_on_first_attempt_without_retrying(self, monkeypatch):
+        monkeypatch.setattr('web.update_apply.RELAUNCH_VERIFY_TIMEOUT_SECONDS', 2.0)
+        with patch('web.update_apply._relaunch_ui') as mock_relaunch_ui, \
+                patch('web.update_apply._port_is_listening', return_value=True) as mock_listening:
+            _relaunch_and_verify('/fake/root', 8787)
+        mock_relaunch_ui.assert_called_once_with('/fake/root', 8787)
+        mock_listening.assert_called_once_with(8787)
+
+    def test_retries_a_fresh_spawn_when_first_attempt_never_comes_up(self, monkeypatch):
+        monkeypatch.setattr('web.update_apply.RELAUNCH_VERIFY_TIMEOUT_SECONDS', 0.05)
+        state = {'spawns': 0}
+
+        def fake_relaunch(project_root, port):
+            state['spawns'] += 1
+
+        def fake_listening(port):
+            # Only "comes up" once a SECOND fresh spawn has happened -
+            # deterministic regardless of how many times the poll loop
+            # itself iterates within the first attempt's tiny timeout.
+            return state['spawns'] >= 2
+
+        with patch('web.update_apply._relaunch_ui', side_effect=fake_relaunch) as mock_relaunch_ui, \
+                patch('web.update_apply._port_is_listening', side_effect=fake_listening), \
+                patch('web.update_apply.time.sleep'):
+            _relaunch_and_verify('/fake/root', 8787)
+        assert mock_relaunch_ui.call_count == 2
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        monkeypatch.setattr('web.update_apply.RELAUNCH_VERIFY_TIMEOUT_SECONDS', 0.02)
+        with patch('web.update_apply._relaunch_ui') as mock_relaunch_ui, \
+                patch('web.update_apply._port_is_listening', return_value=False), \
+                patch('web.update_apply.time.sleep'):
+            _relaunch_and_verify('/fake/root', 8787)  # must not raise
+        assert mock_relaunch_ui.call_count == RELAUNCH_MAX_ATTEMPTS
+
+    def test_logs_fatal_when_all_attempts_exhausted(self, monkeypatch, capsys):
+        monkeypatch.setattr('web.update_apply.RELAUNCH_VERIFY_TIMEOUT_SECONDS', 0.02)
+        with patch('web.update_apply._relaunch_ui'), \
+                patch('web.update_apply._port_is_listening', return_value=False), \
+                patch('web.update_apply.time.sleep'):
+            _relaunch_and_verify('/fake/root', 8787)
+        out = capsys.readouterr().out
+        assert 'FATAL' in out
+        assert 'manual restart required' in out
+
+    def test_relaunch_ui_raising_is_caught_and_retried(self, monkeypatch):
+        monkeypatch.setattr('web.update_apply.RELAUNCH_VERIFY_TIMEOUT_SECONDS', 2.0)
+        with patch(
+                'web.update_apply._relaunch_ui',
+                side_effect=[Exception('spawn boom'), None],
+        ) as mock_relaunch_ui, \
+                patch('web.update_apply._port_is_listening', return_value=True), \
+                patch('web.update_apply.time.sleep'):
+            _relaunch_and_verify('/fake/root', 8787)  # must not raise
+        assert mock_relaunch_ui.call_count == 2
+
+    def test_relaunch_ui_raising_on_every_attempt_never_raises_out(self, monkeypatch):
+        monkeypatch.setattr('web.update_apply.RELAUNCH_VERIFY_TIMEOUT_SECONDS', 0.02)
+        with patch('web.update_apply._relaunch_ui', side_effect=Exception('always fails')) as mock_relaunch_ui, \
+                patch('web.update_apply._port_is_listening', return_value=False), \
+                patch('web.update_apply.time.sleep'):
+            _relaunch_and_verify('/fake/root', 8787)  # must not raise
+        assert mock_relaunch_ui.call_count == RELAUNCH_MAX_ATTEMPTS
+
+
 class TestRunWorkerAlwaysRelaunches:
     """The core "never leave a dead port" guarantee: regardless of
     whether the apply step reports success, no update available, or an
     outright failure, the worker must always relaunch the UI."""
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.subprocess.run')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -366,7 +557,7 @@ class TestRunWorkerAlwaysRelaunches:
         mock_shutdown.assert_called_once()
         mock_relaunch.assert_called_once_with('/fake/root', 8787)
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.subprocess.run')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -375,7 +566,7 @@ class TestRunWorkerAlwaysRelaunches:
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
         mock_relaunch.assert_called_once_with('/fake/root', 8787)
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.subprocess.run')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -384,7 +575,7 @@ class TestRunWorkerAlwaysRelaunches:
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
         mock_relaunch.assert_called_once_with('/fake/root', 8787)
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.subprocess.run', side_effect=Exception('subprocess plumbing exploded'))
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -394,7 +585,7 @@ class TestRunWorkerAlwaysRelaunches:
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
         mock_relaunch.assert_called_once_with('/fake/root', 8787)
 
-    @patch('web.update_apply._relaunch_ui', side_effect=Exception('could not spawn'))
+    @patch('web.update_apply._relaunch_and_verify', side_effect=Exception('could not spawn'))
     @patch('web.update_apply.subprocess.run')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -406,7 +597,7 @@ class TestRunWorkerAlwaysRelaunches:
         mock_run.return_value = Mock(returncode=0, stdout='UPDATED:v2.9.0\n', stderr='')
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)  # must not raise
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.subprocess.run')
     @patch('web.update_apply._shut_down_old_server')
     def test_sleeps_for_response_flush_delay(self, mock_shutdown, mock_run, mock_relaunch):
@@ -524,7 +715,7 @@ class TestWindowsBranches:
         assert 'creationflags' in kwargs
         assert 'start_new_session' not in kwargs
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.subprocess.run')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -538,7 +729,7 @@ class TestWindowsBranches:
 
 
 class TestRunWorkerLogsApplyStderr:
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply.subprocess.run')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -611,7 +802,7 @@ class TestRunWorkerFrozenBranch:
     path (see TestRunWorkerAlwaysRelaunches above for that same
     guarantee on the source side)."""
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply._apply_binary_self_update')
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -625,7 +816,7 @@ class TestRunWorkerFrozenBranch:
         mock_apply.assert_called_once_with()
         mock_relaunch.assert_called_once_with('/fake/root', 8787)
 
-    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._relaunch_and_verify')
     @patch('web.update_apply._apply_binary_self_update', side_effect=Exception('should never escape anyway'))
     @patch('web.update_apply._shut_down_old_server')
     @patch('web.update_apply.time.sleep')
@@ -692,6 +883,27 @@ class TestSpawnWorkerFrozenCommand:
         manager._spawn_worker('127.0.0.1', 8787)
         _, kwargs = mock_popen.call_args
         assert '_MEIPASS2' not in kwargs['env']
+
+    @patch('web.update_apply.subprocess.Popen')
+    def test_frozen_worker_gets_its_own_fresh_extraction_temp_dir(self, mock_popen, tmp_path, monkeypatch):
+        """Regression test for the exact real-world crash this fixes:
+        the worker sharing the OLD server's PyInstaller onefile
+        extraction directory, which then gets torn apart when
+        _shut_down_old_server force-kills that old server moments
+        later - crashing the still-running worker with a hard
+        bootloader error dialog (`pyi_rth_multiprocessing` failing to
+        find files under a now-gone `_MEI*` directory). See
+        utils.self_update.fresh_extraction_temp_dir's docstring for the
+        full chain."""
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        manager = UpdateManager(str(tmp_path), str(tmp_path / 'logs'))
+        manager._spawn_worker('127.0.0.1', 8787)
+        _, kwargs = mock_popen.call_args
+        assert kwargs['env']['TEMP'] == kwargs['env']['TMP']
+        assert os.path.isdir(kwargs['env']['TEMP'])
+        # Never the plain inherited TEMP - must be a freshly-created,
+        # dedicated directory the old server never touched.
+        assert kwargs['env']['TEMP'] != os.environ.get('TEMP')
 
     @patch('web.update_apply.subprocess.Popen')
     def test_source_worker_does_not_set_env_kwarg(self, mock_popen, tmp_path, monkeypatch):

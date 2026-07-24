@@ -207,6 +207,22 @@ def create_app(project_root: str = None) -> Flask:
         frontend (base.html) polls /healthz to detect the server coming
         back up on the new version.
         """
+        # Refuse to even attempt an update while a recommender run is
+        # in flight: that job's subprocess is itself another instance
+        # of this same binary (frozen) sharing PyInstaller onefile
+        # extraction state with this server process (see
+        # utils.self_update.fresh_extraction_temp_dir's docstring) -
+        # killing/swapping this server out from under it could crash
+        # the running job. web/job_runner.py's own LOCK_FILENAME is
+        # checked again, cross-process, by the detached worker itself
+        # right before it shuts anything down (see
+        # web/update_apply.py's _run_worker) as a race-safe second
+        # gate - this route-level check is just the immediate,
+        # synchronous "no" for the common case of a user clicking
+        # Update now while a run they can see is still going.
+        if app.job_manager.is_running():
+            return jsonify({'error': 'A recommender run is currently in progress - wait for it to finish before updating.'}), 409
+
         host = '127.0.0.1'
         port = int(os.environ.get('CURATARR_UI_PORT', DEFAULT_PORT))
         try:

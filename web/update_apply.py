@@ -77,6 +77,7 @@ import argparse
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -101,6 +102,16 @@ CHECK_TIMEOUT_SECONDS = 20.0
 RESPONSE_FLUSH_DELAY_SECONDS = 1.5
 OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS = 15.0
 APPLY_TIMEOUT_SECONDS = 60.0
+
+# How long a single relaunch attempt gets to actually start accepting
+# connections, and how many times to retry a full fresh spawn if it
+# doesn't - see _relaunch_and_verify's docstring for why this exists:
+# a frozen relaunch's startup time (onefile extraction, etc.) isn't
+# perfectly deterministic, and a single fire-and-forget spawn that
+# silently never came up would otherwise leave a genuinely dead port
+# with no second chance.
+RELAUNCH_VERIFY_TIMEOUT_SECONDS = 15.0
+RELAUNCH_MAX_ATTEMPTS = 3
 
 
 class UpdateAlreadyInProgressError(Exception):
@@ -276,11 +287,26 @@ class UpdateManager:
             # environment - spawning ANOTHER independent instance must
             # not inherit it, or that new instance's bootloader will
             # wrongly skip its own extraction and reuse a stale/wrong
-            # temp directory. See utils.self_update.sanitize_frozen_relaunch_env's
-            # docstring for the full explanation (same fix applies here
-            # for the exact same reason - this worker is itself another
-            # fresh, independent curatarr.exe instance).
-            popen_kwargs['env'] = self_update.sanitize_frozen_relaunch_env(os.environ)
+            # temp directory.
+            #
+            # Beyond that: this worker gets its OWN fresh TEMP/TMP too,
+            # not just a sanitized copy of ours - see
+            # utils.self_update.fresh_extraction_temp_dir's docstring
+            # for the real crash this fixes. Without it, the worker
+            # could still end up sharing an extraction-directory
+            # identity with THIS (soon to be force-killed) server
+            # process; when _shut_down_old_server kills it moments
+            # later, that process's own bootloader cleanup can tear
+            # apart a SHARED extraction directory out from under the
+            # still-running worker, crashing it with a hard PyInstaller
+            # bootloader error dialog. A worker with its own extraction
+            # from the start can never be affected by what happens to
+            # the old server's.
+            worker_env = self_update.sanitize_frozen_relaunch_env(os.environ)
+            fresh_temp = self_update.fresh_extraction_temp_dir()
+            worker_env['TEMP'] = fresh_temp
+            worker_env['TMP'] = fresh_temp
+            popen_kwargs['env'] = worker_env
         else:
             cmd = [
                 sys.executable, os.path.abspath(__file__),
@@ -336,6 +362,45 @@ def _pid_alive(pid: int) -> bool:
         return True  # exists, just owned by someone else
     except OSError:
         return False
+
+
+# Same filename web/job_runner.py's JobManager writes/reads - see that
+# module's own LOCK_FILENAME. Deliberately duplicated here rather than
+# imported: this is a cross-process, filesystem-level contract (the
+# PID of whatever recommender subprocess is currently running, if any),
+# not something that needs (or should have) an in-process coupling
+# between the two modules.
+_JOB_LOCK_FILENAME = 'webui_job.lock'
+
+
+def _recommender_job_in_progress(project_root: str) -> bool:
+    """True if web/job_runner.py's own lockfile points at a still-alive
+    PID - i.e. a recommender run (movie/tv/external/full) is currently
+    executing, regardless of which server process spawned it.
+
+    Why the worker checks this itself, cross-process, instead of
+    trusting only the /update/apply route's own (in-process,
+    synchronous) app.job_manager.is_running() check: a run could start
+    in the gap between that route check passing and this worker
+    actually getting to the shutdown step, and a frozen recommender
+    subprocess is itself another instance of this same binary sharing
+    PyInstaller onefile extraction state with the server that spawned
+    it (see utils.self_update.fresh_extraction_temp_dir's docstring for
+    the real crash this whole check exists to prevent) - killing/
+    swapping that server out from under a still-running job could crash
+    it. Fails toward "assume a job might be running" (never proceeds)
+    on any read error, same fail-safe direction as _pid_alive's own
+    "can't confirm, assume alive" branches.
+    """
+    lock_path = os.path.join(project_root, 'logs', _JOB_LOCK_FILENAME)
+    try:
+        with open(lock_path, 'r', encoding='utf-8') as f:
+            pid = int(f.read().strip())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True  # unreadable/corrupt lockfile - can't rule it out, fail safe
+    return _pid_alive(pid)
 
 
 def _shut_down_old_server(pid: int, timeout: float) -> None:
@@ -428,6 +493,69 @@ def _relaunch_ui(project_root: str, port: int) -> None:
         )
 
 
+def _port_is_listening(port: int, timeout: float = 0.3) -> bool:
+    """Bare TCP connect probe - mirrors web/app.py's own
+    _wait_for_listening (same reasoning: cheaper and more meaningful
+    than an HTTP round-trip when the only question is "did SOMETHING
+    start accepting connections here")."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        return sock.connect_ex(('127.0.0.1', port)) == 0
+
+
+def _relaunch_and_verify(project_root: str, port: int) -> None:
+    """Calls _relaunch_ui and then actively confirms the relaunched
+    process actually started accepting connections on `port`, retrying
+    a full fresh spawn (up to RELAUNCH_MAX_ATTEMPTS times) if it
+    doesn't within RELAUNCH_VERIFY_TIMEOUT_SECONDS.
+
+    Why this exists (frozen binaries especially): _relaunch_ui's
+    subprocess.Popen() is fire-and-forget by design (see that
+    function's docstring - a DETACHED process this one intentionally
+    doesn't wait on). That's normally fine, but a frozen relaunch's
+    startup time isn't perfectly deterministic - PyInstaller onefile
+    extraction, antivirus scanning a freshly-written exe, general OS
+    scheduling noise - and a single spawn that silently never came up
+    (for any of those reasons, or one not yet fully understood) would
+    otherwise leave a dead port with no second chance, exactly the
+    outcome this whole self-update design exists to prevent. This is a
+    generic reliability net, independent of - and in addition to -
+    utils.self_update's own swap-time fail-safes.
+
+    Never raises - the caller (_run_worker) already treats "relaunch
+    ultimately failed" as a logged, non-fatal outcome; there is nothing
+    further downstream that could act on an exception here anyway.
+    """
+    for attempt in range(1, RELAUNCH_MAX_ATTEMPTS + 1):
+        print(f"[update-worker] relaunch attempt {attempt}/{RELAUNCH_MAX_ATTEMPTS}...", flush=True)
+        try:
+            _relaunch_ui(project_root, port)
+        except Exception as e:
+            print(f"[update-worker] relaunch attempt {attempt} could not even start: {e}", flush=True)
+            continue
+
+        deadline = time.time() + RELAUNCH_VERIFY_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            if _port_is_listening(port):
+                print(
+                    f"[update-worker] relaunch attempt {attempt} confirmed listening on port {port}",
+                    flush=True,
+                )
+                return
+            time.sleep(0.5)
+        print(
+            f"[update-worker] relaunch attempt {attempt} did not come up within "
+            f"{RELAUNCH_VERIFY_TIMEOUT_SECONDS}s",
+            flush=True,
+        )
+
+    print(
+        f"[update-worker] FATAL: port {port} never came up after {RELAUNCH_MAX_ATTEMPTS} relaunch "
+        f"attempts - manual restart required",
+        flush=True,
+    )
+
+
 def _apply_binary_self_update() -> None:
     """Frozen-binary apply step: the ACTUAL trust boundary for a binary
     install (see this module's docstring) - downloads the platform
@@ -474,6 +602,23 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
     try:
         time.sleep(RESPONSE_FLUSH_DELAY_SECONDS)
 
+        # Cross-process, race-safe re-check (see _recommender_job_in_progress's
+        # docstring) - the /update/apply route already checked
+        # app.job_manager.is_running() synchronously before spawning
+        # this worker, but a run could have started in the gap since
+        # then. If one's in flight now, do NOTHING: leave the old
+        # server completely untouched (still healthy, still serving)
+        # rather than kill/swap/relaunch out from under a job whose
+        # subprocess may share this server's PyInstaller onefile
+        # extraction state.
+        if _recommender_job_in_progress(project_root):
+            print(
+                "[update-worker] a recommender run is currently in progress - "
+                "aborting this update attempt, old server left untouched",
+                flush=True,
+            )
+            return
+
         print("[update-worker] shutting down old server...", flush=True)
         _shut_down_old_server(old_pid, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
 
@@ -519,13 +664,13 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
 
     print(f"[update-worker] relaunching UI on port {port}...", flush=True)
     try:
-        _relaunch_ui(project_root, port)
-        print("[update-worker] relaunch command issued - worker exiting", flush=True)
+        _relaunch_and_verify(project_root, port)
     except Exception as e:
-        # Last-resort log line: if even spawning the relaunch fails,
-        # nothing else will bring the UI back up, so the operator needs
-        # this in the log to know they must restart manually.
+        # _relaunch_and_verify itself never raises by design - this is
+        # a final belt-and-suspenders catch anyway, since NOTHING may
+        # ever escape this function unhandled (see its own docstring).
         print(f"[update-worker] FATAL: could not relaunch UI: {e}", flush=True)
+    print("[update-worker] worker exiting", flush=True)
 
 
 def _parse_worker_args(argv):

@@ -774,28 +774,46 @@ def sanitize_frozen_relaunch_env(env: dict) -> dict:
     return {k: v for k, v in env.items() if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP}
 
 
-def _fresh_extraction_temp_dir() -> str:
-    """A guaranteed-unique directory under the system temp root, used as
-    the relaunched process's OWN TEMP/TMP (see relaunch_binary below).
+def fresh_extraction_temp_dir() -> str:
+    """A guaranteed-unique directory under the system temp root, meant
+    to be pointed at by TEMP/TMP for any freshly-spawned, independent
+    curatarr.exe instance involved in a self-update - the worker
+    (web/update_apply.py's _spawn_worker) AND the final relaunch (this
+    module's relaunch_binary) both use this, and for the SAME
+    underlying reason.
 
-    Confirmed via a real end-to-end test that stripping _MEIPASS2 alone
-    (sanitize_frozen_relaunch_env above) is NOT sufficient on its own:
-    PyInstaller onefile's bootloader can still resolve to the SAME
-    extraction directory identity for a fresh, independent process if
-    it derives that identity from something tied to the executable's
-    PATH rather than random per-launch entropy - which is exactly wrong
-    immediately after a self-update swap, where the file at that same
-    path now has DIFFERENT content than whatever extracted there
-    before. The observed failure: a relaunched process crashed inside
-    werkzeug's own package-metadata lookup because its extraction
-    directory was missing files - almost certainly a stale/partial
-    reuse of the pre-swap build's extraction, possibly torn apart mid-
-    use by another process's cleanup (the just-killed old server's
-    parent bootloader exiting). Pointing TEMP/TMP at a directory that
-    is GUARANTEED to have never been used by any prior curatarr.exe
-    process sidesteps whatever the exact reuse mechanism is, rather
-    than relying on understanding (or trusting the stability of) its
-    internals across PyInstaller versions.
+    Confirmed via a real end-to-end test on Windows that stripping
+    _MEIPASS2 alone (sanitize_frozen_relaunch_env above) is NOT
+    sufficient: PyInstaller onefile's bootloader can still resolve
+    MULTIPLE independent processes to the SAME extraction-directory
+    identity if it derives that identity from something tied to the
+    executable's PATH rather than random per-launch entropy. The
+    specific failure chain observed: the worker (spawned from the OLD
+    server, at that point still the same on-disk exe/path) shared its
+    _MEIPASS extraction with the old server. When the old server was
+    then force-killed (see _shut_down_old_server), its own parent
+    bootloader process's exit-time cleanup tore apart that SHARED
+    extraction directory - files disappearing out from under the
+    worker WHILE IT WAS STILL RUNNING AND USING THEM. The result was a
+    hard PyInstaller bootloader error dialog ("Failed to execute
+    script" / `pyi_rth_multiprocessing` failing with `[Errno 2] No such
+    file or directory: ...\\_MEI*\\base_library.zip...`) - a modal
+    MessageBox the bootloader itself shows directly, NOT a standard
+    Windows Error Reporting crash that
+    curatarr_app.py's_suppress_windows_crash_dialogs() (SetErrorMode)
+    can suppress, since it isn't routed through the OS's WER path at
+    all.
+
+    Giving the worker its OWN extraction directory from the moment it's
+    spawned - decoupled from the old server's before that old server is
+    ever killed - closes this off entirely: nothing the old server's
+    death does to ITS OWN extraction directory can ever affect the
+    worker's. The final relaunch gets the same treatment for the
+    earlier-observed, related reason (a relaunch immediately after a
+    binary swap could otherwise still inherit a stale/wrong extraction
+    tied to the pre-swap build). Both sidestep whatever the exact reuse
+    mechanism is, rather than relying on understanding (or trusting the
+    stability of) PyInstaller's internals across versions.
 
     PyInstaller's bootloader cleans up its own extracted subdirectory
     within this on normal process exit; this function's directory
@@ -833,10 +851,10 @@ def relaunch_binary(port: Optional[int] = None) -> None:
     exe_path = _binary_to_relaunch(current_path)
 
     env = sanitize_frozen_relaunch_env(os.environ)
-    # See _fresh_extraction_temp_dir's docstring - without this, a
+    # See fresh_extraction_temp_dir's docstring - without this, a
     # relaunch right after a binary swap can inherit a PyInstaller
     # onefile extraction directory belonging to the PRE-swap build.
-    fresh_temp = _fresh_extraction_temp_dir()
+    fresh_temp = fresh_extraction_temp_dir()
     env['TEMP'] = fresh_temp
     env['TMP'] = fresh_temp
     if port is not None:
