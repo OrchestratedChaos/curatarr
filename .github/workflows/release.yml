@@ -406,6 +406,19 @@ jobs:
     needs: [release, build-binaries, build-macos-universal]
     runs-on: ubuntu-latest
     steps:
+      # This job's own `gh release download`/`gh release upload` calls
+      # below rely on `gh` auto-detecting owner/repo from the checked-out
+      # git remote, same as every other `gh release` call in this
+      # workflow (see `release`/`build-binaries`/`build-macos-universal`
+      # above) - none of them pass `--repo` explicitly. This job was
+      # missing its own Checkout step (the only job in this workflow that
+      # was), so `gh` had no repo to resolve and failed with "fatal: not
+      # a git repository" the first time this job actually ran (v2.8.29 -
+      # it was added alongside the self-update feature and had never
+      # been exercised by a real release tag before that).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       - name: Download existing SHA256SUMS.txt and every per-binary .sha256 sidecar
         shell: bash
         env:
