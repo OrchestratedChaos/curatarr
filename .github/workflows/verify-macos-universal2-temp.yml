@@ -1,0 +1,116 @@
+name: TEMP - Verify macOS universal2 build (cryptography 48.0.1 fix)
+
+# THROWAWAY verification workflow, not meant to survive past the
+# fix/macos-universal2-cryptography-wheel branch - see PR #190. Exercises
+# the exact CI path that broke the v2.8.29 macos-universal release
+# (release.yml's build-macos-universal job: IncompatibleBinaryArchError
+# from cryptography 49.0.0's arm64-only macOS wheel) against the
+# cryptography==48.0.1 pin, WITHOUT touching any release or publishing
+# anything. Deleted before this branch merges to main.
+
+on:
+  push:
+    branches:
+      - fix/macos-universal2-cryptography-wheel
+  workflow_dispatch: {}
+
+jobs:
+  verify-macos-universal2:
+    name: Verify macOS universal2 build
+    runs-on: macos-latest
+    env:
+      PYTHON_VERSION: "3.12.10"
+      PYTHON_PKG_SHA256: "8373e58da4ea146b3eb1c1f9834f19a319440b6b679b06050b1f9ee3237aa8e4"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install python.org universal2 Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sL -o python-universal2.pkg \
+            "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-macos11.pkg"
+          echo "${PYTHON_PKG_SHA256}  python-universal2.pkg" | shasum -a 256 -c -
+          sudo installer -pkg python-universal2.pkg -target /
+
+          PY_BIN="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+          echo "PYTHON_BIN=$PY_BIN" >> "$GITHUB_ENV"
+          "$PY_BIN" --version
+          echo "python3.12 archs: $(lipo -archs "$PY_BIN")"
+
+      - name: Create venv and install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$PYTHON_BIN" -m venv .venv-universal2
+          source .venv-universal2/bin/activate
+          python -m pip install --upgrade pip
+          pip install delocate
+          pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt
+
+      - name: Verify cryptography's own wheel is already dual-arch
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv-universal2/bin/activate
+          SO_PATH="$(python -c "import cryptography.hazmat.bindings._rust as m; print(m.__file__)")"
+          echo "cryptography _rust.abi3.so: $SO_PATH"
+          ARCHES="$(lipo -archs "$SO_PATH")"
+          echo "archs: $ARCHES"
+          echo "$ARCHES" | grep -q x86_64
+          echo "$ARCHES" | grep -q arm64
+
+      - name: Fuse single-arch-only wheels into universal2
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv-universal2/bin/activate
+          mkdir -p fuse/arm64 fuse/x86_64 fuse/out
+
+          # Single-arch-only-on-PyPI deps that need delocate-merge fusing
+          # into a universal2 wheel - see release.yml's build-macos-universal
+          # job comment. cryptography is NOT in this list - 48.0.1 ships a
+          # real prebuilt universal2 wheel (verified in the previous step).
+          THIN_WHEEL_DEPS=(pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3)
+
+          pip download --no-deps --only-binary=:all: --python-version 312 \
+            --implementation cp --platform macosx_11_0_arm64 \
+            -d fuse/arm64 "${THIN_WHEEL_DEPS[@]}"
+          pip download --no-deps --only-binary=:all: --python-version 312 \
+            --implementation cp --platform macosx_10_13_x86_64 \
+            -d fuse/x86_64 "${THIN_WHEEL_DEPS[@]}"
+
+          for arm_whl in fuse/arm64/*.whl; do
+            base="$(basename "$arm_whl")"
+            prefix="${base%-macosx_*}"
+            x86_whl="$(ls fuse/x86_64/${prefix}-macosx_*x86_64.whl)"
+            echo "fusing: $arm_whl + $x86_whl"
+            delocate-merge "$arm_whl" "$x86_whl" -w fuse/out
+          done
+
+          pip install --force-reinstall --no-deps fuse/out/*.whl
+
+      - name: Build binary with PyInstaller (universal2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv-universal2/bin/activate
+          PYINSTALLER_TARGET_ARCH=universal2 pyinstaller --clean --noconfirm curatarr.spec
+
+      - name: Verify the binary is truly universal2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHES="$(lipo -archs dist/curatarr)"
+          echo "dist/curatarr archs: $ARCHES"
+          echo "$ARCHES" | grep -q x86_64
+          echo "$ARCHES" | grep -q arm64
+          echo "SUCCESS: universal2 build with cryptography 48.0.1 is dual-arch."
+
+      - name: Smoke test the built binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x dist/curatarr
+          file dist/curatarr
