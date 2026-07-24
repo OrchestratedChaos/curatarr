@@ -77,9 +77,19 @@ jobs:
           pip download --no-deps --only-binary=:all: --python-version 312 \
             --implementation cp --platform macosx_11_0_arm64 \
             -d fuse/arm64 "${THIN_WHEEL_DEPS[@]}"
+
+          # x86_64 wheels for these deps use different minimum-macOS-version
+          # platform tags depending on the package - checked directly
+          # against PyPI (pip's --platform match is an EXACT tag match,
+          # not a compatibility range, so a single shared tag can't fetch
+          # all of them): pyyaml/ruamel.yaml.clib/markupsafe publish
+          # macosx_10_13_x86_64; cffi publishes macosx_10_15_x86_64.
           pip download --no-deps --only-binary=:all: --python-version 312 \
             --implementation cp --platform macosx_10_13_x86_64 \
-            -d fuse/x86_64 "${THIN_WHEEL_DEPS[@]}"
+            -d fuse/x86_64 pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3
+          pip download --no-deps --only-binary=:all: --python-version 312 \
+            --implementation cp --platform macosx_10_15_x86_64 \
+            -d fuse/x86_64 cffi==2.1.0
 
           for arm_whl in fuse/arm64/*.whl; do
             base="$(basename "$arm_whl")"
