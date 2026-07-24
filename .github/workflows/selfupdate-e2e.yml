@@ -1,0 +1,138 @@
+name: Self-Update E2E
+
+# Real, destructive end-to-end testing of the in-binary self-update
+# swap/relaunch cycle (utils/self_update.py, utils/self_update_handoff.py,
+# web/update_apply.py) - runs on an actual built PyInstaller binary on
+# each of the three platforms curatarr ships for.
+#
+# This runs ONLY here, never on a maintainer's own machine - see this
+# repo's v2.8.29 PR description for why: earlier iterations of this
+# testing were done by hand against real Windows binaries and, despite
+# careful sandboxing (isolated ports/data dirs), still carried real risk
+# to the machine running them (a PyInstaller onefile bootloader failure
+# pops a native MessageBox that no amount of process/port isolation can
+# suppress). A GitHub Actions runner is disposable and headless - a
+# stuck bootloader dialog here can't reach anyone, and a hung job just
+# times out and gets thrown away.
+#
+# Uses its own throwaway ed25519 signing key (generated fresh in each
+# run, never persisted) - see scripts/selfupdate_e2e/build_fixtures.py's
+# docstring for how that lets this workflow sign realistic release
+# fixtures without ever touching the real maintainer-only release
+# signing key (which never leaves the maintainer's own machine - see
+# RELEASING.md).
+
+on:
+  push:
+    branches:
+      - feat/binary-self-update-2.8.29
+  workflow_dispatch: {}
+
+jobs:
+  selfupdate-e2e:
+    name: Self-update E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt psutil
+
+      - name: Build test fixtures (binaries + signed release dirs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/selfupdate_e2e/build_fixtures.py \
+            --repo-root "$(pwd)" \
+            --work-dir "$RUNNER_TEMP/selfupdate-e2e/fixtures" \
+            --pyinstaller pyinstaller
+
+      - name: Swap cycle x5 (proves the relaunch is not flaky)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/selfupdate_e2e/run_repeated.py 5 \
+            --manifest "$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json" \
+            --work-dir "$RUNNER_TEMP/selfupdate-e2e/runs/swap" \
+            --ui-port 18787 --server-port 18800 \
+            --debug-log-dir "$RUNNER_TEMP/selfupdate-e2e/debug-logs"
+
+      - name: Tamper - bad signature (must refuse, old server keeps serving)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json"
+          RELEASE_DIR=$(python -c "import json; print(json.load(open('$MANIFEST'))['releases']['bad_sig']['dir'])")
+          OLD_BINARY=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_binary'])")
+          OLD_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_version'])")
+          NEW_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['new_version'])")
+          python scripts/selfupdate_e2e/run_scenario.py \
+            --scenario bad_sig \
+            --old-binary "$OLD_BINARY" --release-dir "$RELEASE_DIR" \
+            --old-version "$OLD_VERSION" --target-version "$NEW_VERSION" \
+            --ui-port 18788 --server-port 18801 \
+            --work-dir "$RUNNER_TEMP/selfupdate-e2e/runs/bad_sig" \
+            --debug-log "$RUNNER_TEMP/selfupdate-e2e/debug-logs/bad_sig_handoff.log"
+
+      - name: Tamper - bad hash (must refuse, old server keeps serving)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json"
+          RELEASE_DIR=$(python -c "import json; print(json.load(open('$MANIFEST'))['releases']['bad_hash']['dir'])")
+          OLD_BINARY=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_binary'])")
+          OLD_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_version'])")
+          NEW_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['new_version'])")
+          python scripts/selfupdate_e2e/run_scenario.py \
+            --scenario bad_hash \
+            --old-binary "$OLD_BINARY" --release-dir "$RELEASE_DIR" \
+            --old-version "$OLD_VERSION" --target-version "$NEW_VERSION" \
+            --ui-port 18789 --server-port 18802 \
+            --work-dir "$RUNNER_TEMP/selfupdate-e2e/runs/bad_hash" \
+            --debug-log "$RUNNER_TEMP/selfupdate-e2e/debug-logs/bad_hash_handoff.log"
+
+      - name: Rollback - new binary never boots (must restore + relaunch old)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="$RUNNER_TEMP/selfupdate-e2e/fixtures/manifest.json"
+          RELEASE_DIR=$(python -c "import json; print(json.load(open('$MANIFEST'))['releases']['rollback']['dir'])")
+          OLD_BINARY=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_binary'])")
+          OLD_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['old_version'])")
+          NEW_VERSION=$(python -c "import json; print(json.load(open('$MANIFEST'))['new_version'])")
+          python scripts/selfupdate_e2e/run_scenario.py \
+            --scenario rollback \
+            --old-binary "$OLD_BINARY" --release-dir "$RELEASE_DIR" \
+            --old-version "$OLD_VERSION" --target-version "$NEW_VERSION" \
+            --ui-port 18790 --server-port 18803 \
+            --work-dir "$RUNNER_TEMP/selfupdate-e2e/runs/rollback" \
+            --debug-log "$RUNNER_TEMP/selfupdate-e2e/debug-logs/rollback_handoff.log"
+
+      - name: Upload debug logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: selfupdate-e2e-debug-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/selfupdate-e2e/debug-logs
+            ${{ runner.temp }}/selfupdate-e2e/runs
+          if-no-files-found: ignore
+          retention-days: 7

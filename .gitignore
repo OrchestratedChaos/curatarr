@@ -37,3 +37,7 @@ build/
 dist/
 *.buildvenv/
 .buildvenv/
+
+# Self-update fast local stub test harness compiled output (see
+# scripts/selfupdate_stub_e2e/build_stubs.py)
+scripts/selfupdate_stub_e2e/bin/

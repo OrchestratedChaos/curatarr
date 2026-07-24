@@ -381,9 +381,25 @@ def write_and_launch_handoff_script(
 
     env = sanitize_frozen_relaunch_env(os.environ)
 
+    # Normally the script's own stdout/stderr (its Write-Host/echo trace)
+    # go nowhere - by design, there is no console for a windowed/
+    # console=False frozen build to write to, and no one watching a real
+    # user's machine who'd benefit from it. CURATARR_HANDOFF_DEBUG_LOG is
+    # a narrow, opt-in exception used ONLY by this repo's own CI
+    # self-update E2E workflow (.github/workflows/selfupdate-e2e.yml) to
+    # capture that trace into a file for post-mortem debugging when a
+    # run fails - it changes nothing about what gets trusted or how the
+    # swap/rollback itself behaves, purely log visibility. Left unset
+    # (the default for every real user), behavior is identical to before.
+    debug_log_path = env.get('CURATARR_HANDOFF_DEBUG_LOG')
+    if debug_log_path:
+        stdio_target = open(debug_log_path, 'ab')
+    else:
+        stdio_target = subprocess.DEVNULL
+
     popen_kwargs = dict(
         env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        stdout=stdio_target, stderr=stdio_target, stdin=subprocess.DEVNULL,
         close_fds=True,
     )
     if os.name == 'nt':
