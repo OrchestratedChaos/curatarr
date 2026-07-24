@@ -180,10 +180,18 @@ def main():
     print(f"[{args.scenario}] old binary sha256: {original_hash}", flush=True)
 
     server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fake_release_server.py')
+    server_log_path = os.path.join(args.work_dir, 'fake_release_server.log')
+    server_log_file = open(server_log_path, 'w')
     server_proc = subprocess.Popen(
         [sys.executable, server_script, args.release_dir, args.target_version, str(args.server_port)],
+        stdout=server_log_file, stderr=subprocess.STDOUT,
     )
     time.sleep(1.0)
+    if server_proc.poll() is not None:
+        server_log_file.close()
+        with open(server_log_path) as f:
+            print(f"[{args.scenario}] fake release server exited immediately (code {server_proc.returncode}):\n{f.read()}", flush=True)
+        raise SystemExit(f"[{args.scenario}] FAIL: fake release server never started")
 
     env = dict(os.environ)
     env['HOME'] = home_dir
@@ -212,20 +220,30 @@ def main():
         old_up = wait_for_version(args.ui_port, timeout=30, acceptable={args.old_version}, label='startup')
         print(f"[{args.scenario}] old server up: version={old_up.version}", flush=True)
 
-        print(f"[{args.scenario}] POST /update/apply ...", flush=True)
-        status, body = http_post(f'http://127.0.0.1:{args.ui_port}/update/apply')
-        print(f"[{args.scenario}] /update/apply -> {status} {body}", flush=True)
-        if status != 202:
-            raise SystemExit(f"[{args.scenario}] FAIL: expected 202, got {status}: {body}")
-
         appdata_curatarr = os.path.join(home_dir, 'curatarr') if os.name == 'nt' else os.path.join(home_dir, '.curatarr')
         update_log_path = os.path.join(appdata_curatarr, 'logs', 'update_apply.log')
+        app_log_path = os.path.join(appdata_curatarr, 'logs', 'curatarr.log')
 
         def read_update_log():
             if os.path.isfile(update_log_path):
                 with open(update_log_path, encoding='utf-8', errors='replace') as f:
                     return f.read()
             return ''
+
+        def dump_diagnostics():
+            for label, path in (('curatarr.log', app_log_path), ('fake_release_server.log', server_log_path)):
+                if os.path.isfile(path):
+                    with open(path, encoding='utf-8', errors='replace') as f:
+                        print(f"[{args.scenario}] --- {label} ---\n{f.read()}\n--- end {label} ---", flush=True)
+                else:
+                    print(f"[{args.scenario}] {label} does not exist at {path}", flush=True)
+
+        print(f"[{args.scenario}] POST /update/apply ...", flush=True)
+        status, body = http_post(f'http://127.0.0.1:{args.ui_port}/update/apply')
+        print(f"[{args.scenario}] /update/apply -> {status} {body}", flush=True)
+        if status != 202:
+            dump_diagnostics()
+            raise SystemExit(f"[{args.scenario}] FAIL: expected 202, got {status}: {body}")
 
         if args.scenario == 'swap':
             outcome = wait_for_version(
@@ -278,6 +296,10 @@ def main():
             server_proc.wait(timeout=5)
         except Exception:
             server_proc.kill()
+        try:
+            server_log_file.close()
+        except Exception:
+            pass
         try:
             exe_proc.wait(timeout=5)
         except Exception:
