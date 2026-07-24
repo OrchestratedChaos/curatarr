@@ -16,8 +16,20 @@ from utils.cli import (
     setup_log_file,
     teardown_log_file,
     print_runtime,
+    print_update_notice,
     run_recommender_main,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_update_check(monkeypatch):
+    """Prevent every run_recommender_main() test in this file from making
+    a real network call via the new print_update_notice() call inside it
+    - default to "no update available" so existing tests (which don't
+    care about the update notice) aren't slowed down or made
+    network-dependent. TestPrintUpdateNotice below overrides this
+    per-test where it actually needs to control the result."""
+    monkeypatch.setattr('utils.cli.update_available', lambda **kwargs: (None, '0.0.0', False))
 
 
 class TestGetUsersFromConfig:
@@ -848,3 +860,54 @@ class TestRunRecommenderMainLibraryMatrixLoop:
 
         assert exc_info.value.code == 1
         mock_process.assert_not_called()
+
+
+class TestPrintUpdateNotice:
+    """Tests for print_update_notice - the CLI surface of the update
+    notification feature (the only update signal that reaches binary
+    users - see docstring)."""
+
+    @patch('utils.cli.update_available')
+    def test_off_mode_never_calls_update_available(self, mock_update_available, capsys):
+        print_update_notice('off')
+        mock_update_available.assert_not_called()
+        assert capsys.readouterr().out == ''
+
+    @patch('utils.cli.update_available')
+    def test_no_newer_version_prints_nothing(self, mock_update_available, capsys):
+        mock_update_available.return_value = ('2.8.28', '2.8.28', False)
+        print_update_notice('notify')
+        assert capsys.readouterr().out == ''
+
+    @patch('utils.cli.update_available')
+    def test_source_notify_mode_points_at_run_sh(self, mock_update_available, capsys, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        mock_update_available.return_value = ('2.9.0', '2.8.28', True)
+        print_update_notice('notify')
+        out = capsys.readouterr().out
+        assert 'Update available: v2.9.0' in out
+        assert 'v2.8.28' in out
+        assert 'run.sh' in out
+        assert 'update_mode: force' in out
+
+    @patch('utils.cli.update_available')
+    def test_source_force_mode_omits_the_force_hint(self, mock_update_available, capsys, monkeypatch):
+        """force mode is already auto-applying updates - no need to tell
+        the user to set update_mode: force."""
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        mock_update_available.return_value = ('2.9.0', '2.8.28', True)
+        print_update_notice('force')
+        out = capsys.readouterr().out
+        assert 'Update available: v2.9.0' in out
+        assert 'update_mode: force' not in out
+
+    @patch('utils.cli.update_available')
+    def test_frozen_binary_points_at_download_url_not_run_sh(self, mock_update_available, capsys, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        mock_update_available.return_value = ('2.9.0', '2.8.28', True)
+        print_update_notice('notify')
+        out = capsys.readouterr().out
+        assert 'Update available: v2.9.0' in out
+        assert 'download:' in out
+        assert 'github.com/OrchestratedChaos/curatarr/releases' in out
+        assert 'run.sh' not in out

@@ -6,13 +6,14 @@ import concurrent.futures
 import os
 import sys
 import time
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
 import web.app as app_module
-from web.app import create_app, _wait_for_listening
+from web.app import BIND_RETRY_ATTEMPTS, create_app, _run_with_bind_retry, _wait_for_listening
 
 
 @pytest.fixture
@@ -290,6 +291,33 @@ class TestWaitForListening:
         assert _wait_for_listening(port, timeout=0.3) is False
 
 
+class TestBindRetry:
+    """Tests for _run_with_bind_retry - lets a post-update relaunch
+    (see web/update_apply.py's _relaunch_ui) tolerate a brief window
+    where the OS hasn't fully released the port the just-killed old
+    server was using yet."""
+
+    def test_succeeds_immediately_when_bind_works(self):
+        fake_app = Mock()
+        fake_app.run = Mock(return_value=None)
+        _run_with_bind_retry(fake_app, '127.0.0.1', 8787)
+        fake_app.run.assert_called_once()
+
+    def test_retries_then_succeeds(self):
+        fake_app = Mock()
+        fake_app.run = Mock(side_effect=[OSError('address in use'), OSError('address in use'), None])
+        with patch('web.app.time.sleep'):
+            _run_with_bind_retry(fake_app, '127.0.0.1', 8787)
+        assert fake_app.run.call_count == 3
+
+    def test_gives_up_after_max_attempts(self):
+        fake_app = Mock()
+        fake_app.run = Mock(side_effect=OSError('address in use'))
+        with patch('web.app.time.sleep'), pytest.raises(OSError):
+            _run_with_bind_retry(fake_app, '127.0.0.1', 8787)
+        assert fake_app.run.call_count == BIND_RETRY_ATTEMPTS
+
+
 class TestBindingGuardrail:
     """Guardrail: the app must only ever bind 127.0.0.1, never 0.0.0.0."""
 
@@ -300,10 +328,16 @@ class TestBindingGuardrail:
         import web.app as app_module
 
         source = inspect.getsource(app_module)
-        assert "host='127.0.0.1'" in source
+        # main() calls _run_with_bind_retry(app, '127.0.0.1', port) -
+        # not a bare app.run(host='127.0.0.1', ...) - since the bind
+        # retry loop (see _run_with_bind_retry) needs to be able to
+        # call app.run() more than once. The literal '127.0.0.1' at
+        # that one call site is what actually matters here.
+        assert "_run_with_bind_retry(app, '127.0.0.1', port)" in source
         # Only the redaction/no-wildcard-bind explanation may mention
-        # 0.0.0.0 in prose; app.run() itself must never pass it as host=.
+        # 0.0.0.0 in prose; nothing must ever pass it as an actual host.
         assert not re.search(r'host\s*=\s*[\'"]0\.0\.0\.0[\'"]', source)
+        assert not re.search(r'_run_with_bind_retry\([^)]*0\.0\.0\.0', source)
 
 
 class TestOriginHostGuard:

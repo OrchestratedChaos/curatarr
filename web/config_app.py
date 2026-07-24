@@ -32,6 +32,7 @@ from typing import Dict, Optional
 from flask import jsonify, redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+from utils.config import UPDATE_MODES, get_update_mode
 from utils.plex import MOVIE_RATING_HIERARCHY, TV_RATING_HIERARCHY
 
 from .config_io import (
@@ -1021,7 +1022,11 @@ def _settings_view(tuning: CommentedMap, core: CommentedMap, sonarr: CommentedMa
             'auto_open_html': bool(external.get('auto_open_html', False)),
         },
         'general': {
-            'auto_update': bool(general.get('auto_update', False)),
+            # get_update_mode() resolves the effective mode, falling back
+            # to the legacy auto_update flag for installs that predate
+            # update_mode - so this screen shows the mode that's actually
+            # in effect even before a user has ever saved the new field.
+            'update_mode': get_update_mode(core),
             'log_retention_days': general.get('log_retention_days', 7),
             'plex_only': bool(general.get('plex_only', True)),
         },
@@ -1047,6 +1052,7 @@ def _settings_view(tuning: CommentedMap, core: CommentedMap, sonarr: CommentedMa
         },
         'log_level_choices': LOG_LEVEL_CHOICES,
         'user_mode_choices': USER_MODE_CHOICES,
+        'update_mode_choices': UPDATE_MODES,
     }
 
 
@@ -1137,8 +1143,10 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
         'language': form.get('ext_language', '').strip(),
         'auto_open_html': flag('ext_auto_open_html'),
     }
+    update_mode = form.get('general_update_mode', 'notify')
+    validate_choice(update_mode, 'general_update_mode', errors, UPDATE_MODES)
     general = {
-        'auto_update': flag('general_auto_update'),
+        'update_mode': update_mode,
         'log_retention_days': i('general_log_retention_days', 0, None, 'Log retention days'),
         'plex_only': flag('general_plex_only'),
     }
@@ -1167,6 +1175,7 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
         'sync_safety': sync_safety,
         'log_level_choices': LOG_LEVEL_CHOICES,
         'user_mode_choices': USER_MODE_CHOICES,
+        'update_mode_choices': UPDATE_MODES,
     }
 
 

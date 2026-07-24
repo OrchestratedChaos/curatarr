@@ -43,6 +43,7 @@ from .config import (
     COLLECTION_BONUS_CAP,
     TMDB_TV_MOVIE_GENRE_ID,
     TMDB_ANIMATION_GENRE_ID,
+    UPDATE_MODES,
     check_cache_version,
     get_config_section,
     get_tmdb_config,
@@ -54,6 +55,17 @@ from .config import (
     get_libraries,
     get_libraries_for_media_type,
     get_effective_arr_config,
+    get_update_mode,
+)
+
+# Update-check utilities (advisory-only - see module docstring)
+from .update_check import (
+    GITHUB_RELEASES_API,
+    GITHUB_RELEASES_PAGE,
+    UPDATE_CHECK_INTERVAL_HOURS,
+    parse_version,
+    get_latest_version,
+    update_available,
 )
 
 # Display utilities
@@ -146,6 +158,7 @@ from .cli import (
     setup_log_file,
     teardown_log_file,
     print_runtime,
+    print_update_notice,
     run_recommender_main,
 )
 
@@ -285,6 +298,7 @@ __all__ = [
     'TIER_WILDCARD_PERCENT',
     'DEFAULT_RATING_MULTIPLIERS',
     'RATING_MULTIPLIERS',
+    'UPDATE_MODES',
     'check_cache_version',
     'get_config_section',
     'get_tmdb_config',
@@ -294,6 +308,14 @@ __all__ = [
     'get_libraries',
     'get_libraries_for_media_type',
     'get_effective_arr_config',
+    'get_update_mode',
+    # Update check
+    'GITHUB_RELEASES_API',
+    'GITHUB_RELEASES_PAGE',
+    'UPDATE_CHECK_INTERVAL_HOURS',
+    'parse_version',
+    'get_latest_version',
+    'update_available',
     # Display
     'RED',
     'GREEN',
@@ -358,6 +380,7 @@ __all__ = [
     'setup_log_file',
     'teardown_log_file',
     'print_runtime',
+    'print_update_notice',
     'run_recommender_main',
     # Plex
     'init_plex',

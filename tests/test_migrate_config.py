@@ -16,6 +16,7 @@ from utils.migrate_config import (
     build_core_config,
     migrate_config,
     migrate_to_libraries,
+    migrate_update_mode,
     main,
     TUNING_SECTIONS,
     CORE_SECTIONS,
@@ -469,3 +470,75 @@ class TestMain:
             main()
 
         mock_migrate.assert_called_once_with('config/config.yml', dry_run=False)
+
+
+class TestMigrateUpdateMode:
+    """Tests for migrate_update_mode - additive general.update_mode
+    derivation from legacy general.auto_update, same pattern as
+    migrate_to_libraries."""
+
+    def test_returns_none_if_update_mode_already_present(self):
+        config = {'general': {'update_mode': 'off', 'auto_update': True}}
+        assert migrate_update_mode(config) is None
+
+    def test_returns_none_if_no_general_section(self):
+        assert migrate_update_mode({}) is None
+
+    def test_returns_none_if_no_legacy_auto_update(self):
+        config = {'general': {'plex_only': True}}
+        assert migrate_update_mode(config) is None
+
+    def test_derives_force_from_auto_update_true(self):
+        config = {'general': {'auto_update': True}}
+        assert migrate_update_mode(config) == 'force'
+
+    def test_derives_off_from_auto_update_false(self):
+        config = {'general': {'auto_update': False}}
+        assert migrate_update_mode(config) == 'off'
+
+
+class TestMigrateConfigUpdateMode:
+    """Tests for the 'update_mode' hook inside migrate_config, wired in
+    alongside the 'libraries' hook (#157-style additive migration)."""
+
+    def test_persists_derived_update_mode_alongside_libraries(self, tmp_path):
+        """End-to-end: a legacy auto_update flag gets an explicit
+        update_mode persisted into the migrated config.yml, without
+        removing auto_update."""
+        config_path = str(tmp_path / 'config.yml')
+        config = {
+            'plex': {'url': 'http://localhost', 'movie_library': 'Movies', 'tv_library': 'TV Shows'},
+            'tmdb': {'api_key': 'abc'},
+            'general': {'auto_update': True},
+        }
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        result = migrate_config(config_path)
+
+        assert result['migrated'] is True
+        with open(config_path, 'r') as f:
+            migrated = yaml.safe_load(f)
+
+        assert migrated['general']['update_mode'] == 'force'
+        assert migrated['general']['auto_update'] is True
+
+    def test_no_update_mode_key_written_when_no_legacy_auto_update(self, tmp_path):
+        """Idempotent: nothing to derive from means no update_mode key is
+        added at all - a fresh install with no auto_update just gets the
+        'notify' default at runtime (get_update_mode), not a persisted key."""
+        config_path = str(tmp_path / 'config.yml')
+        config = {
+            'plex': {'url': 'http://localhost', 'movie_library': 'Movies'},
+            'tmdb': {'api_key': 'abc'},
+            'general': {'plex_only': True},
+        }
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        migrate_config(config_path)
+
+        with open(config_path, 'r') as f:
+            migrated = yaml.safe_load(f)
+
+        assert 'update_mode' not in migrated.get('general', {})

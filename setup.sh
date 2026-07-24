@@ -463,7 +463,10 @@ users:
 
 general:
   plex_only: true
-  auto_update: true
+  # notify (default): show a one-line CLI notice / web UI banner when a
+  #   newer release exists. force: auto-apply verified signed updates on
+  #   launch, no prompt. off: never check for updates.
+  update_mode: notify
   log_retention_days: 7
 EOF
 

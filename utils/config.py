@@ -10,7 +10,7 @@ import yaml
 from typing import Dict, List
 
 # Project version - single source of truth
-__version__ = "2.8.27"
+__version__ = "2.8.28"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -284,6 +284,54 @@ def load_config(config_path: str) -> dict:
     except Exception as e:
         print(f"\033[91mError loading config from {config_path}: {e}\033[0m")
         raise
+
+
+
+# Valid values for general.update_mode (see get_update_mode() below).
+UPDATE_MODES = ('notify', 'force', 'off')
+
+
+def get_update_mode(config: dict) -> str:
+    """
+    Resolve the effective general.update_mode, with legacy fallback to
+    general.auto_update for installs that predate update_mode.
+
+    Back-compat contract: an existing install's behavior must not
+    change on upgrade, so auto_update is still read here (never
+    removed by anything in this codebase) even though update_mode is
+    now the preferred key:
+      - general.update_mode present and valid -> used verbatim
+      - general.update_mode present but not one of UPDATE_MODES ->
+        'notify' (never silently force/disable updates from a typo'd
+        or otherwise-unrecognized value)
+      - general.update_mode absent, general.auto_update present ->
+        True => 'force' (mirrors the old "auto_update: true" behavior:
+        auto-apply signed updates on launch, no prompt), False =>
+        'off' (mirrors the old silent-no-op behavior)
+      - neither present -> 'notify' (new default: notify, don't force)
+
+    Note: an unquoted `update_mode: off` in YAML parses as the Python
+    boolean False, not the string 'off' - YAML 1.1's boolean literals
+    include on/off/yes/no (both PyYAML's safe_load and ruamel.yaml's
+    default resolver do this). That's handled explicitly below rather
+    than requiring users/the web UI to always quote 'off'.
+
+    Args:
+        config: Root configuration dictionary (or a media-adapted one -
+            both carry a 'general' section through unchanged)
+
+    Returns:
+        One of 'notify', 'force', 'off'
+    """
+    general = (config or {}).get('general') or {}
+    mode = general.get('update_mode')
+    if mode is False:
+        return 'off'
+    if mode:
+        return mode if mode in UPDATE_MODES else 'notify'
+    if 'auto_update' in general:
+        return 'force' if general.get('auto_update') else 'off'
+    return 'notify'
 
 
 def get_rating_multipliers(config: dict = None) -> dict:

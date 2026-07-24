@@ -336,6 +336,42 @@ button:disabled {
 .banner.error { border-left-color: var(--fail); color: var(--fail); }
 .banner.warn { border-left-color: var(--warn); color: var(--warn); }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.update-banner a { color: inherit; text-decoration: underline; }
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.update-now-btn {
+  background: linear-gradient(180deg, #2d2d2d 0%, #1a1a1a 100%);
+  color: var(--text);
+  padding: 8px 16px;
+  font-size: 0.7rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.update-banner-dismiss { margin: 0; }
+
+.update-banner-dismiss button {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
 /* --- Forms --- */
 .config-form fieldset {
   background: var(--panel-gradient);

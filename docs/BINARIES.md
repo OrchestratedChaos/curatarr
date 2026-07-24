@@ -94,15 +94,24 @@ each release is only published by CI for a tag independently verified
 against the maintainer's signed-tag key (see `RELEASING.md`), and each
 binary is built by that same CI run from that same verified tag.
 
-## No auto-update
+## No auto-update, but you do get notified
 
 The auto-updater in `run.sh` / `run.ps1` (which checks for and applies
 new signed tags) is for **source/git installs only** - it re-`git pull`s
 and re-verifies a signed tag, which a standalone binary has no
-equivalent of. Binaries are **manual-download, no auto-update**: to
+equivalent of. Binaries are **manual-download, no auto-apply**: to
 upgrade, download the newer binary from Releases and replace the old
 one. A self-updating binary (checking Releases, downloading, and
 replacing itself) is a possible future item, not implemented yet.
+
+You're not left guessing when a newer release exists, though: the CLI
+prints a one-line notice (with a download link) after the version banner,
+and the web UI shows a dismissible banner, whenever `general.update_mode`
+(default `notify`) isn't set to `off`. This is an advisory-only, unsigned
+version check against the GitHub Releases API - see
+`utils/update_check.py` - it only decides whether to show a notice, never
+downloads or applies anything. Set `general.update_mode: off` in
+`config/config.yml` to disable the check entirely.
 
 ## Where data lives
 

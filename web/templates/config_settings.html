@@ -145,7 +145,22 @@
 
   <fieldset>
     <legend>General</legend>
-    <label><input type="checkbox" name="general_auto_update" {% if general.auto_update %}checked{% endif %}> Auto-update on run</label>
+    <label>Updates
+      <select name="general_update_mode">
+        {% for choice in update_mode_choices %}
+        <option value="{{ choice }}" {% if general.update_mode == choice %}selected{% endif %}>
+          {%- if choice == 'notify' -%}
+            Notify (default - show a banner/CLI notice when an update is available)
+          {%- elif choice == 'force' -%}
+            Force (auto-apply verified updates on launch, no prompt)
+          {%- else -%}
+            Off (never check for updates)
+          {%- endif -%}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if errors.general_update_mode %}<p class="field-error">{{ errors.general_update_mode }}</p>{% endif %}
     <label><input type="checkbox" name="general_plex_only" {% if general.plex_only %}checked{% endif %}> Plex-only (only recommend from Plex library)</label>
     <label>Log retention days <input type="text" name="general_log_retention_days" value="{{ general.log_retention_days }}"></label>
     {% if errors.general_log_retention_days %}<p class="field-error">{{ errors.general_log_retention_days }}</p>{% endif %}

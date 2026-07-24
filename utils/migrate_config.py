@@ -220,6 +220,40 @@ def migrate_to_libraries(config: dict, config_dir: str) -> Optional[List[dict]]:
     ]
 
 
+def migrate_update_mode(config: dict) -> Optional[str]:
+    """
+    Derive an explicit general.update_mode from the legacy
+    general.auto_update flag, mirroring migrate_to_libraries()'s
+    additive, idempotent pattern: does NOT remove auto_update - both
+    keys coexist afterward, so utils.config.get_update_mode() (the
+    actual runtime source of truth, consulted whether or not this
+    physical migration ever runs) keeps working either way.
+
+    Idempotent: returns None if general.update_mode is already set, or
+    if there's no legacy auto_update to derive from (a fresh 'notify'
+    default needs no persisted key at all).
+
+    Note: an unquoted `update_mode: off` in hand-written YAML parses as
+    the Python boolean False, not the string 'off' (YAML 1.1 boolean
+    literals include on/off/yes/no) - checked explicitly below so that
+    case still counts as "already set" rather than being treated as
+    absent. Mirrors utils.config.get_update_mode()'s same handling.
+
+    Args:
+        config: The config dict being migrated
+
+    Returns:
+        'force' or 'off' derived from legacy auto_update, or None if no
+        migration is applicable.
+    """
+    general = config.get('general') or {}
+    if 'update_mode' in general and general.get('update_mode') is not None:
+        return None
+    if 'auto_update' not in general:
+        return None
+    return 'force' if general.get('auto_update') else 'off'
+
+
 def build_core_config(config: dict) -> dict:
     """Build the slim core config.yml with essentials only."""
     core = {}
@@ -285,6 +319,13 @@ def migrate_config(config_path: str, dry_run: bool = False) -> dict:
     if libraries:
         core_config['libraries'] = libraries
 
+    # Additive: persist an explicit general.update_mode derived from the
+    # legacy general.auto_update flag - same non-destructive pattern as
+    # migrate_to_libraries() above, auto_update is kept, not removed.
+    derived_update_mode = migrate_update_mode(core_config)
+    if derived_update_mode:
+        core_config.setdefault('general', {})['update_mode'] = derived_update_mode
+
     if dry_run:
         print("\n=== Dry Run - Would create these files ===\n")
         print(f"config.yml (slimmed to {len(core_config)} sections)")
@@ -294,6 +335,8 @@ def migrate_config(config_path: str, dry_run: bool = False) -> dict:
             print(f"{feature}.yml")
         if libraries:
             print(f"config.yml would gain a 'libraries' section ({len(libraries)} entries)")
+        if derived_update_mode:
+            print(f"config.yml would gain general.update_mode: {derived_update_mode}")
         result['migrated'] = True
         return result
 

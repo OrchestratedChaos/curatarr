@@ -9,6 +9,7 @@ from utils.config import (
     CACHE_VERSION,
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
+    UPDATE_MODES,
     DEFAULT_RATING_MULTIPLIERS,
     DEFAULT_NEGATIVE_MULTIPLIERS,
     DEFAULT_NEGATIVE_THRESHOLD,
@@ -23,6 +24,7 @@ from utils.config import (
     get_libraries,
     get_libraries_for_media_type,
     get_effective_arr_config,
+    get_update_mode,
 )
 
 
@@ -758,6 +760,45 @@ class TestGetEffectiveArrConfig:
         result = get_effective_arr_config(config, library)
         assert result['series_type'] == 'anime'
         assert 'minimum_availability' not in result
+
+
+class TestGetUpdateMode:
+    """Tests for get_update_mode - the general.update_mode resolver,
+    with legacy general.auto_update fallback (see docstring)."""
+
+    def test_explicit_notify(self):
+        assert get_update_mode({'general': {'update_mode': 'notify'}}) == 'notify'
+
+    def test_explicit_force(self):
+        assert get_update_mode({'general': {'update_mode': 'force'}}) == 'force'
+
+    def test_explicit_off(self):
+        assert get_update_mode({'general': {'update_mode': 'off'}}) == 'off'
+
+    def test_unrecognized_value_falls_back_to_notify(self):
+        # Never silently force/disable updates from a typo'd value.
+        assert get_update_mode({'general': {'update_mode': 'bogus'}}) == 'notify'
+
+    def test_legacy_auto_update_true_becomes_force(self):
+        assert get_update_mode({'general': {'auto_update': True}}) == 'force'
+
+    def test_legacy_auto_update_false_becomes_off(self):
+        assert get_update_mode({'general': {'auto_update': False}}) == 'off'
+
+    def test_neither_key_present_defaults_to_notify(self):
+        assert get_update_mode({'general': {}}) == 'notify'
+        assert get_update_mode({}) == 'notify'
+
+    def test_none_config_defaults_to_notify(self):
+        assert get_update_mode(None) == 'notify'
+
+    def test_explicit_update_mode_wins_over_legacy_auto_update(self):
+        config = {'general': {'update_mode': 'off', 'auto_update': True}}
+        assert get_update_mode(config) == 'off'
+
+    def test_all_valid_modes_are_covered(self):
+        for mode in UPDATE_MODES:
+            assert get_update_mode({'general': {'update_mode': mode}}) == mode
 
     def test_search_field_falls_back_to_legacy_radarr_search_for_movie(self):
         config = {'radarr': {'search_for_movie': True}}
