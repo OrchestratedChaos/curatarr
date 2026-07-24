@@ -562,9 +562,32 @@ class TestReleaseAssetUrl:
 # =============================================================================
 
 class TestDownloadToFile:
-    def test_rejects_non_https_url(self, tmp_path):
-        with pytest.raises(self_update.DownloadError, match='non-HTTPS'):
-            self_update._download_to_file('http://example.com/asset', str(tmp_path / 'out'))
+    def test_rejects_url_outside_configured_release_host(self, tmp_path):
+        with pytest.raises(self_update.DownloadError, match='outside the configured release host'):
+            self_update._download_to_file('http://evil.example.com/asset', str(tmp_path / 'out'))
+
+    def test_rejects_https_url_on_a_different_host(self, tmp_path):
+        """Not just a scheme check - a URL that's HTTPS but points
+        somewhere other than GITHUB_RELEASES_DOWNLOAD_BASE must also be
+        refused (stronger than a bare https://-only check)."""
+        with pytest.raises(self_update.DownloadError, match='outside the configured release host'):
+            self_update._download_to_file('https://evil.example.com/asset', str(tmp_path / 'out'))
+
+    @patch('utils.self_update.requests.get')
+    def test_allows_the_configured_download_base_even_when_overridden_to_http(self, mock_get, tmp_path, monkeypatch):
+        """CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE (test/staging only -
+        see that constant's docstring) can point GITHUB_RELEASES_DOWNLOAD_BASE
+        at a plain-http local server - this is what this repo's own real
+        end-to-end self-update test uses. Never possible for the
+        production default, which is hardcoded to https://."""
+        monkeypatch.setattr(self_update, 'GITHUB_RELEASES_DOWNLOAD_BASE', 'http://127.0.0.1:9999/download')
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock()
+        mock_response.iter_content = Mock(return_value=[b'x'])
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        mock_get.return_value = mock_response
+        self_update._download_to_file('http://127.0.0.1:9999/download/v1.0.0/asset', str(tmp_path / 'out'))  # must not raise
 
     @patch('utils.self_update.requests.get')
     def test_writes_response_content_to_dest(self, mock_get, tmp_path):
@@ -576,13 +599,13 @@ class TestDownloadToFile:
         mock_get.return_value = mock_response
 
         dest = tmp_path / 'out.bin'
-        self_update._download_to_file('https://example.com/asset', str(dest))
+        self_update._download_to_file(self_update.release_asset_url('1.0.0', 'asset'), str(dest))
         assert dest.read_bytes() == b'chunk1chunk2'
 
     @patch('utils.self_update.requests.get', side_effect=requests.ConnectionError('offline'))
     def test_network_error_raises_download_error(self, mock_get, tmp_path):
         with pytest.raises(self_update.DownloadError, match='Could not download'):
-            self_update._download_to_file('https://example.com/asset', str(tmp_path / 'out'))
+            self_update._download_to_file(self_update.release_asset_url('1.0.0', 'asset'), str(tmp_path / 'out'))
 
     @patch('utils.self_update.requests.get')
     def test_http_error_status_raises_download_error(self, mock_get, tmp_path):
@@ -592,7 +615,7 @@ class TestDownloadToFile:
         mock_response.__exit__ = Mock(return_value=False)
         mock_get.return_value = mock_response
         with pytest.raises(self_update.DownloadError):
-            self_update._download_to_file('https://example.com/missing', str(tmp_path / 'out'))
+            self_update._download_to_file(self_update.release_asset_url('1.0.0', 'missing'), str(tmp_path / 'out'))
 
 
 # =============================================================================

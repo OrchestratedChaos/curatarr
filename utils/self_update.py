@@ -579,12 +579,22 @@ def release_asset_url(version: str, filename: str) -> str:
 
 
 def _download_to_file(url: str, dest_path: str, timeout: float = DOWNLOAD_TIMEOUT_SECONDS) -> None:
-    if not url.startswith('https://'):
-        # Defense in depth: every URL this module ever builds is already
-        # hardcoded to https://github.com/... (release_asset_url above) -
-        # this just guarantees a future refactor can never accidentally
-        # turn this into a plain-HTTP fetch.
-        raise DownloadError(f"Refusing non-HTTPS download URL: {url}")
+    if not url.startswith(GITHUB_RELEASES_DOWNLOAD_BASE):
+        # Defense in depth: every URL this module ever builds comes from
+        # release_asset_url() above, which always prefixes
+        # GITHUB_RELEASES_DOWNLOAD_BASE - this just guarantees a future
+        # refactor can never accidentally fetch from anywhere else.
+        # GITHUB_RELEASES_DOWNLOAD_BASE itself is hardcoded to
+        # https://github.com/... in production, so this is normally
+        # equivalent to (and strictly stronger than) an https://-only
+        # check; it's only ever http:// when
+        # CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE is explicitly set for
+        # local testing/staging (see that constant's own comment) - a
+        # deliberate, narrow relaxation of transport security for a seam
+        # that already can't weaken the actual authenticity check (the
+        # pinned-key signature verification below is what's actually
+        # trusted, never transport).
+        raise DownloadError(f"Refusing download URL outside the configured release host: {url}")
     try:
         with requests.get(url, timeout=timeout, stream=True) as response:
             response.raise_for_status()
