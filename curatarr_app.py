@@ -79,6 +79,36 @@ import sys
 from web.app import main
 
 
+def _suppress_windows_crash_dialogs() -> None:  # pragma: no cover - real Windows API call, same category as _attach_or_setup_console below (not unit-testable on non-Windows CI)
+    """Call SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
+    as the very first thing this process does, on every frozen Windows
+    invocation - the normal UI launch, the self-update worker, and any
+    relaunched/re-invoked instance of this same exe alike (curatarr.exe
+    is always console=False/windowed - see curatarr.spec - so there is
+    NEVER a user watching a console who'd benefit from an OS crash
+    dialog; there's only ever a background process that must fail
+    silently into its own log instead). Without this, an unhandled
+    native-level fault (as opposed to a plain Python exception, which
+    this module's own try/except layers already handle - see
+    web/update_apply.py's _run_worker) could otherwise pop a modal
+    Windows Error Reporting dialog on the user's desktop with no one
+    there to dismiss it - unacceptable for a self-updater that's
+    supposed to fail silently and roll back, never surface anything.
+    SEM_FAILCRITICALERRORS additionally suppresses the classic "no disk
+    in drive" style dialogs for the same reason. No-op (and safe to
+    call) on non-Windows/non-frozen - only meaningful for the real
+    frozen Windows build.
+    """
+    if os.name != 'nt' or not getattr(sys, 'frozen', False):
+        return
+    SEM_FAILCRITICALERRORS = 0x0001
+    SEM_NOGPFAULTERRORBOX = 0x0002
+    try:
+        ctypes.windll.kernel32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
+    except Exception:
+        pass  # best-effort - must never block startup even if this itself somehow fails
+
+
 def _debug_requested() -> bool:
     """True if --debug was passed or CURATARR_DEBUG=1 is set - gates
     both _attach_or_setup_console()'s AllocConsole fallback and the log
@@ -249,6 +279,7 @@ def _dispatch_recommender(argv: list) -> None:
 
 
 if __name__ == '__main__':
+    _suppress_windows_crash_dialogs()
     if len(sys.argv) > 2 and sys.argv[1] == '--run-recommender':
         _dispatch_recommender(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--self-update-worker':

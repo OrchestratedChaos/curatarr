@@ -34,6 +34,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -884,7 +885,40 @@ class TestSanitizeFrozenRelaunchEnv:
         assert '_MEIPASS2' in env  # original untouched - a copy was returned
 
 
+class TestFreshExtractionTempDir:
+    """Regression test for the real end-to-end failure this fixes - see
+    _fresh_extraction_temp_dir's docstring: sanitizing _MEIPASS2 alone
+    wasn't enough, because PyInstaller onefile could still resolve to
+    the SAME extraction directory identity for an independent process,
+    reusing (partially torn-apart) files from the pre-swap build."""
+
+    def test_returns_a_directory_that_exists(self):
+        result = self_update._fresh_extraction_temp_dir()
+        assert os.path.isdir(result)
+
+    def test_two_calls_return_different_directories(self):
+        first = self_update._fresh_extraction_temp_dir()
+        second = self_update._fresh_extraction_temp_dir()
+        assert first != second
+
+    def test_directory_is_under_the_system_temp_root(self):
+        result = self_update._fresh_extraction_temp_dir()
+        assert result.startswith(tempfile.gettempdir())
+
+
 class TestRelaunchBinary:
+    @patch('utils.self_update.subprocess.Popen')
+    def test_sets_fresh_temp_and_tmp_env_vars(self, mock_popen, tmp_path):
+        """Regression test for the real end-to-end swap+relaunch
+        failure - see _fresh_extraction_temp_dir's docstring."""
+        with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):
+            (tmp_path / 'curatarr').write_bytes(b'x')
+            self_update.relaunch_binary()
+        _, kwargs = mock_popen.call_args
+        assert kwargs['env']['TEMP'] == kwargs['env']['TMP']
+        assert os.path.isdir(kwargs['env']['TEMP'])
+        assert kwargs['env']['TEMP'].startswith(tempfile.gettempdir())
+
     @patch('utils.self_update.subprocess.Popen')
     def test_relaunches_current_binary_with_no_port(self, mock_popen, tmp_path):
         with patch('utils.self_update.current_binary_path', return_value=str(tmp_path / 'curatarr')):

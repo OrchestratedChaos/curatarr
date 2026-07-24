@@ -316,6 +316,41 @@ class TestRelaunchUi:
         assert kwargs['cwd'] == '/fake/root'
 
 
+class TestRunWorkerNeverPropagatesUnhandledException:
+    """Crash-hardening: _run_worker must NEVER let an exception escape
+    unhandled, no matter where it originates - not just the apply
+    step's own try/excepts, but ANY unexpected failure between the
+    shutdown-wait and the apply step (see _run_worker's docstring for
+    why: this process is windowed/console=False, so an unhandled
+    exception has no console to even print a traceback to, and
+    curatarr_app.py's _suppress_windows_crash_dialogs() only prevents a
+    *modal OS dialog* for a lower-level native fault - a plain Python
+    exception escaping this function entirely would still mean a
+    crashed worker and a dead port)."""
+
+    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._shut_down_old_server', side_effect=RuntimeError('totally unexpected'))
+    @patch('web.update_apply.time.sleep')
+    def test_unexpected_error_before_apply_step_still_relaunches(self, mock_sleep, mock_shutdown, mock_relaunch):
+        _run_worker('/fake/root', 12345, '127.0.0.1', 8787)  # must not raise
+        mock_relaunch.assert_called_once_with('/fake/root', 8787)
+
+    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply.time.sleep', side_effect=RuntimeError('even the sleep itself blew up'))
+    def test_unexpected_error_at_the_very_start_still_relaunches(self, mock_sleep, mock_relaunch):
+        _run_worker('/fake/root', 12345, '127.0.0.1', 8787)  # must not raise
+        mock_relaunch.assert_called_once_with('/fake/root', 8787)
+
+    @patch('web.update_apply._relaunch_ui')
+    @patch('web.update_apply._shut_down_old_server', side_effect=RuntimeError('totally unexpected'))
+    @patch('web.update_apply.time.sleep')
+    def test_unexpected_error_is_logged(self, mock_sleep, mock_shutdown, mock_relaunch, capsys):
+        _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
+        out = capsys.readouterr().out
+        assert 'UNEXPECTED ERROR' in out
+        assert 'totally unexpected' in out
+
+
 class TestRunWorkerAlwaysRelaunches:
     """The core "never leave a dead port" guarantee: regardless of
     whether the apply step reports success, no update available, or an

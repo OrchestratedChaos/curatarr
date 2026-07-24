@@ -26,7 +26,7 @@ and _configure_windowed_launch()'s not-frozen/not-Windows no-op guard.
 import os
 import runpy
 import sys
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -137,6 +137,52 @@ class TestRunSelfUpdateCli:
         err = capsys.readouterr().err
         assert 'bad hash' in err
         assert 'left unchanged' in err
+
+
+class TestSuppressWindowsCrashDialogs:
+    """_suppress_windows_crash_dialogs() - SetErrorMode(SEM_FAILCRITICALERRORS
+    | SEM_NOGPFAULTERRORBOX), called first thing on every frozen Windows
+    launch (worker, relaunch, normal UI, CLI alike) so a native-level
+    fault can never pop a modal Windows Error Reporting dialog on the
+    user's desktop - see that function's docstring. Marked
+    `# pragma: no cover` in curatarr_app.py itself (real Windows ctypes
+    API, same category as _attach_or_setup_console - see this file's
+    module docstring), but still exercised here with a faked
+    ctypes.windll so its guard/call/never-raises behavior is proven
+    cross-platform."""
+
+    def test_noop_when_not_frozen(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        curatarr_app._suppress_windows_crash_dialogs()  # must not raise
+
+    def test_noop_when_not_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'posix')
+        curatarr_app._suppress_windows_crash_dialogs()  # must not raise
+
+    def test_calls_set_error_mode_when_frozen_on_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        mock_windll = Mock()
+        monkeypatch.setattr(curatarr_app.ctypes, 'windll', mock_windll, raising=False)
+
+        curatarr_app._suppress_windows_crash_dialogs()
+
+        SEM_FAILCRITICALERRORS = 0x0001
+        SEM_NOGPFAULTERRORBOX = 0x0002
+        mock_windll.kernel32.SetErrorMode.assert_called_once_with(
+            SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+        )
+
+    def test_never_raises_even_if_the_api_call_itself_fails(self, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        monkeypatch.setattr(os, 'name', 'nt')
+        mock_windll = Mock()
+        mock_windll.kernel32.SetErrorMode.side_effect = OSError('no such API')
+        monkeypatch.setattr(curatarr_app.ctypes, 'windll', mock_windll, raising=False)
+
+        curatarr_app._suppress_windows_crash_dialogs()  # must not raise
 
 
 class TestDebugRequested:

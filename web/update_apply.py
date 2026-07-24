@@ -450,47 +450,72 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
     the why. Plain print()s: stdout/stderr were already redirected to
     logs/update_apply.log by UpdateManager._spawn_worker before this
     process was started, so this doubles as the operator-visible log of
-    what happened if something goes wrong."""
+    what happened if something goes wrong.
+
+    Crash-hardening: everything from "shutting down old server" through
+    "applying the update" runs under one outer try/except - ANY
+    unexpected exception, not just the ones the per-step try/excepts
+    already anticipate, is caught, logged, and treated exactly like a
+    failed apply: fall through to the unconditional relaunch below.
+    This process must NEVER exit via an unhandled exception - besides
+    leaving the port dead, curatarr.spec builds Windows as
+    console=False/windowed (no console for a traceback to even print
+    to) and curatarr_app.py additionally calls
+    _suppress_windows_crash_dialogs() as the very first thing on every
+    frozen Windows launch specifically so a lower-level native fault
+    can't pop a modal Windows Error Reporting dialog on the user's
+    desktop either - see that function's docstring. Between the two,
+    there is no path from "something went wrong in here" to anything
+    visible on the user's desktop other than this log file and,
+    moments later, the relaunched (old or new) binary working again.
+    """
     print(f"[update-worker] starting, old pid={old_pid}, target={host}:{port}", flush=True)
 
-    time.sleep(RESPONSE_FLUSH_DELAY_SECONDS)
+    try:
+        time.sleep(RESPONSE_FLUSH_DELAY_SECONDS)
 
-    print("[update-worker] shutting down old server...", flush=True)
-    _shut_down_old_server(old_pid, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+        print("[update-worker] shutting down old server...", flush=True)
+        _shut_down_old_server(old_pid, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
 
-    if getattr(sys, 'frozen', False):
-        print("[update-worker] applying self-update (binary download+verify+swap)...", flush=True)
-        try:
-            # Belt-and-suspenders on top of _apply_binary_self_update()'s
-            # own internal try/except (mirrors the source branch's
-            # subprocess.run() try/except immediately below) - the
-            # relaunch after this block must be unconditional no matter
-            # what, even if something here raised in a way that helper's
-            # own handling didn't anticipate.
-            _apply_binary_self_update()
-        except Exception as e:
-            print(f"[update-worker] apply step raised: {e}", flush=True)
-    else:
-        script = _updater_script(project_root)
-        if os.name == 'nt':
-            apply_cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script, '-ApplyVerifiedUpdate']
+        if getattr(sys, 'frozen', False):
+            print("[update-worker] applying self-update (binary download+verify+swap)...", flush=True)
+            try:
+                # Belt-and-suspenders on top of _apply_binary_self_update()'s
+                # own internal try/except (mirrors the source branch's
+                # subprocess.run() try/except immediately below) - the
+                # relaunch after this block must be unconditional no matter
+                # what, even if something here raised in a way that helper's
+                # own handling didn't anticipate.
+                _apply_binary_self_update()
+            except Exception as e:
+                print(f"[update-worker] apply step raised: {e}", flush=True)
         else:
-            apply_cmd = ['bash', script, '--apply-verified-update']
+            script = _updater_script(project_root)
+            if os.name == 'nt':
+                apply_cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script, '-ApplyVerifiedUpdate']
+            else:
+                apply_cmd = ['bash', script, '--apply-verified-update']
 
-        print("[update-worker] applying verified update...", flush=True)
-        try:
-            result = subprocess.run(
-                apply_cmd, cwd=project_root, capture_output=True, text=True, timeout=APPLY_TIMEOUT_SECONDS,
-            )
-            output = (result.stdout or '').strip()
-            print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)
-            if result.stderr:
-                print(f"[update-worker] apply stderr: {result.stderr.strip()}", flush=True)
-        except Exception as e:
-            # Whatever happened, fall through to relaunching below anyway -
-            # an apply step that couldn't even run is exactly the same
-            # "stay on the current version" outcome as NO_UPDATE/FAILED.
-            print(f"[update-worker] apply step raised: {e}", flush=True)
+            print("[update-worker] applying verified update...", flush=True)
+            try:
+                result = subprocess.run(
+                    apply_cmd, cwd=project_root, capture_output=True, text=True, timeout=APPLY_TIMEOUT_SECONDS,
+                )
+                output = (result.stdout or '').strip()
+                print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)
+                if result.stderr:
+                    print(f"[update-worker] apply stderr: {result.stderr.strip()}", flush=True)
+            except Exception as e:
+                # Whatever happened, fall through to relaunching below anyway -
+                # an apply step that couldn't even run is exactly the same
+                # "stay on the current version" outcome as NO_UPDATE/FAILED.
+                print(f"[update-worker] apply step raised: {e}", flush=True)
+    except Exception as e:
+        # Last-resort catch-all - see this function's docstring. Nothing
+        # above this point (the shutdown wait, an apply step's own
+        # try/except somehow not catching everything, etc.) may ever
+        # skip the unconditional relaunch below.
+        print(f"[update-worker] UNEXPECTED ERROR (still relaunching): {e}", flush=True)
 
     print(f"[update-worker] relaunching UI on port {port}...", flush=True)
     try:

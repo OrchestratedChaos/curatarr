@@ -774,6 +774,42 @@ def sanitize_frozen_relaunch_env(env: dict) -> dict:
     return {k: v for k, v in env.items() if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP}
 
 
+def _fresh_extraction_temp_dir() -> str:
+    """A guaranteed-unique directory under the system temp root, used as
+    the relaunched process's OWN TEMP/TMP (see relaunch_binary below).
+
+    Confirmed via a real end-to-end test that stripping _MEIPASS2 alone
+    (sanitize_frozen_relaunch_env above) is NOT sufficient on its own:
+    PyInstaller onefile's bootloader can still resolve to the SAME
+    extraction directory identity for a fresh, independent process if
+    it derives that identity from something tied to the executable's
+    PATH rather than random per-launch entropy - which is exactly wrong
+    immediately after a self-update swap, where the file at that same
+    path now has DIFFERENT content than whatever extracted there
+    before. The observed failure: a relaunched process crashed inside
+    werkzeug's own package-metadata lookup because its extraction
+    directory was missing files - almost certainly a stale/partial
+    reuse of the pre-swap build's extraction, possibly torn apart mid-
+    use by another process's cleanup (the just-killed old server's
+    parent bootloader exiting). Pointing TEMP/TMP at a directory that
+    is GUARANTEED to have never been used by any prior curatarr.exe
+    process sidesteps whatever the exact reuse mechanism is, rather
+    than relying on understanding (or trusting the stability of) its
+    internals across PyInstaller versions.
+
+    PyInstaller's bootloader cleans up its own extracted subdirectory
+    within this on normal process exit; this function's directory
+    itself is deliberately left for the OS's own temp-cleanup policies
+    rather than actively removed here (there is no reliable point in a
+    detached/relaunched process's lifecycle to clean it up from the
+    OUTSIDE).
+    """
+    # tempfile.mkdtemp() itself already guarantees a fresh, collision-free
+    # name (unlike a hand-rolled pid+timestamp scheme, which two calls
+    # within the same millisecond could collide on).
+    return tempfile.mkdtemp(prefix=f'curatarr-relaunch-{os.getpid()}-')
+
+
 def relaunch_binary(port: Optional[int] = None) -> None:
     """
     Spawn a fresh, DETACHED process from whatever's the working binary
@@ -797,6 +833,12 @@ def relaunch_binary(port: Optional[int] = None) -> None:
     exe_path = _binary_to_relaunch(current_path)
 
     env = sanitize_frozen_relaunch_env(os.environ)
+    # See _fresh_extraction_temp_dir's docstring - without this, a
+    # relaunch right after a binary swap can inherit a PyInstaller
+    # onefile extraction directory belonging to the PRE-swap build.
+    fresh_temp = _fresh_extraction_temp_dir()
+    env['TEMP'] = fresh_temp
+    env['TMP'] = fresh_temp
     if port is not None:
         env['CURATARR_UI_PORT'] = str(port)
         env['CURATARR_SKIP_BROWSER_OPEN'] = '1'
