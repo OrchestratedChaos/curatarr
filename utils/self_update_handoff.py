@@ -89,6 +89,7 @@ import sys
 import tempfile
 from typing import Optional
 
+from .helpers import get_project_root
 from .self_update import sanitize_frozen_relaunch_env
 
 logger = logging.getLogger('curatarr')
@@ -369,6 +370,56 @@ def _write_script(content: str) -> str:
     return script_path
 
 
+def _debug_log_allowed_roots() -> list:
+    """Directories CURATARR_HANDOFF_DEBUG_LOG (see
+    write_and_launch_handoff_script below) is allowed to point at.
+    Deliberately narrow:
+      - The app's own per-user log dir (get_project_root()/logs) - the
+        legitimate real-user opt-in debugging location.
+      - The GitHub Actions runner's own RUNNER_TEMP, but ONLY when
+        GITHUB_ACTIONS is actually set - that var is set by the runner
+        infrastructure itself, never by an arbitrary caller of this
+        process, so trusting it here doesn't widen what an attacker
+        who merely controls this process's env could reach. This is
+        the exact directory this repo's own
+        .github/workflows/selfupdate-e2e.yml points the var at.
+    The plain OS temp dir is deliberately NOT included - broader than
+    either legitimate use needs.
+    """
+    roots = [os.path.join(get_project_root(), 'logs')]
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        runner_temp = os.environ.get('RUNNER_TEMP')
+        if runner_temp:
+            roots.append(runner_temp)
+    return roots
+
+
+def _is_safe_debug_log_path(path: str) -> bool:
+    """True if `path` resolves (symlinks and `..` included) under one
+    of _debug_log_allowed_roots(). CURATARR_HANDOFF_DEBUG_LOG opens
+    whatever path it's given in APPEND mode with no other validation -
+    on an attacker-controlled process environment (already a
+    significant compromise on its own; this var would be only one of
+    many things worth abusing from that position) that would otherwise
+    let an arbitrary file anywhere on disk this process can write to be
+    opened for append. realpath() resolves the candidate path BEFORE
+    the containment check so neither a symlink nor a `..` segment can
+    be used to escape an otherwise-allowed root.
+    """
+    try:
+        resolved = os.path.realpath(path)
+    except OSError:
+        return False
+    for root in _debug_log_allowed_roots():
+        try:
+            root_resolved = os.path.realpath(root)
+        except OSError:
+            continue
+        if resolved == root_resolved or resolved.startswith(root_resolved + os.sep):
+            return True
+    return False
+
+
 def write_and_launch_handoff_script(
     old_pid: int,
     current_exe_path: str,
@@ -418,8 +469,20 @@ def write_and_launch_handoff_script(
     # run fails - it changes nothing about what gets trusted or how the
     # swap/rollback itself behaves, purely log visibility. Left unset
     # (the default for every real user), behavior is identical to before.
+    #
+    # SECURITY: only ever honored when it resolves under an allowed
+    # root (see _is_safe_debug_log_path/_debug_log_allowed_roots) -
+    # this is an env-controlled path opened in APPEND mode, so an
+    # unvalidated value would let anything that can set this process's
+    # environment make it open an arbitrary file on disk.
     debug_log_path = env.get('CURATARR_HANDOFF_DEBUG_LOG')
     stdio_target = subprocess.DEVNULL
+    if debug_log_path and not _is_safe_debug_log_path(debug_log_path):
+        logger.warning(
+            f"Ignoring CURATARR_HANDOFF_DEBUG_LOG={debug_log_path!r}: not under an "
+            f"allowed log directory"
+        )
+        debug_log_path = None
     if debug_log_path:
         try:
             stdio_target = open(debug_log_path, 'ab')

@@ -44,6 +44,7 @@ import requests
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from utils import self_update
+from utils.update_check import _fetch_latest_version as _REAL_FETCH_LATEST_VERSION
 
 
 # =============================================================================
@@ -520,6 +521,46 @@ class TestDetermineUpdateTarget:
         mock_update_available.return_value = ('2.9.0', '2.8.29', True)
         self_update.determine_update_target(force_refresh=False)
         assert mock_update_available.call_args.kwargs['force_refresh'] is False
+
+
+class TestDetermineUpdateTargetMaliciousTagNameEndToEnd:
+    """SECURITY regression suite for the silent-downgrade vulnerability
+    (spoofed GitHub 'latest release' tag_name, e.g.
+    "2.99.0/../v2.5.0", passing the newer-than-current check via its
+    numeric prefix while the raw string carried a path-traversal
+    sequence into the download URL - see
+    utils.update_check.parse_version's docstring). Unlike
+    TestDetermineUpdateTarget above (which mocks update_available()
+    directly), these drive the REAL utils.update_check chain end to
+    end - only requests.get is mocked - to prove the exploit is closed
+    all the way from the raw API response, not just at one function's
+    own unit boundary."""
+
+    @pytest.fixture(autouse=True)
+    def _real_update_check(self, tmp_path, monkeypatch):
+        # Undo tests/conftest.py's suite-wide _no_real_update_check_network
+        # stub (which every other test in this file benefits from, but
+        # THESE tests specifically need the real fetch/parse chain
+        # running against a mocked requests.get) and isolate the cache
+        # dir, same as tests/test_update_check.py's own fixture.
+        monkeypatch.setattr('utils.update_check._fetch_latest_version', _REAL_FETCH_LATEST_VERSION)
+        monkeypatch.setattr('utils.update_check.get_project_root', lambda: str(tmp_path))
+
+    @pytest.mark.parametrize('malicious_tag', [
+        '2.99.0/../v2.5.0',
+        '2.99.0/../../etc',
+        '2.99.0\n2.5.0',
+        '2.99.0; rm -rf',
+    ])
+    @patch('utils.update_check.requests.get')
+    def test_malicious_tag_name_never_becomes_an_update_target(self, mock_get, malicious_tag):
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'tag_name': malicious_tag}
+        mock_get.return_value = mock_response
+
+        with pytest.raises(self_update.NoUpdateAvailableError):
+            self_update.determine_update_target(force_refresh=True)
 
 
 class TestReleasesDownloadBaseOverride:
@@ -1156,3 +1197,109 @@ class TestPerformSelfUpdate:
         self_update.perform_self_update(force_refresh=False)
 
         mock_download.assert_called_once_with(force_refresh=False)
+
+
+class TestPerformSelfUpdateDowngradeGate:
+    """SECURITY defense-in-depth: perform_self_update() must refuse to
+    swap in a verified asset whose version isn't STRICTLY newer than
+    the currently-installed __version__, even though
+    determine_update_target() (called several steps earlier, inside
+    download_and_verify_update -> update_available) already enforces
+    the same rule - see perform_self_update's own docstring for why
+    this is re-checked immediately before the swap rather than trusted
+    from upstream. Mirrors the web "Update now" path's begin_update(),
+    which already gates strictly-newer."""
+
+    @patch('utils.self_update.__version__', '2.8.29')
+    def test_refuses_equal_version_no_swap(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'not actually newer binary')
+
+        verified = self_update.VerifiedUpdate(
+            version='2.8.29', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        )
+        monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        swap_mock = Mock()
+        monkeypatch.setattr(self_update, 'swap_binary', swap_mock)
+
+        with pytest.raises(self_update.NoUpdateAvailableError):
+            self_update.perform_self_update()
+
+        swap_mock.assert_not_called()
+        assert current_exe.read_bytes() == b'old binary'  # never touched
+        assert not asset_path.exists()  # still cleaned up, just not consumed by a swap
+
+    @patch('utils.self_update.__version__', '2.8.29')
+    def test_refuses_older_version_no_swap(self, tmp_path, monkeypatch):
+        """The scenario this whole gate exists for: a real, validly-
+        signed OLDER release (e.g. what a spoofed tag_name's
+        "/../v2.5.0" traversal would have redirected the download to)
+        must never reach swap_binary(), even though it would pass
+        signature/hash verification (it's a genuine release)."""
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'genuinely older signed binary')
+
+        verified = self_update.VerifiedUpdate(
+            version='2.5.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        )
+        monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        swap_mock = Mock()
+        monkeypatch.setattr(self_update, 'swap_binary', swap_mock)
+
+        with pytest.raises(self_update.NoUpdateAvailableError, match='2.5.0'):
+            self_update.perform_self_update()
+
+        swap_mock.assert_not_called()
+        assert current_exe.read_bytes() == b'old binary'
+        assert not asset_path.exists()
+
+    @patch('utils.self_update.__version__', '2.8.29')
+    def test_refuses_unparsable_verified_version_no_swap(self, tmp_path, monkeypatch):
+        """Belt-and-suspenders: even if something upstream somehow
+        handed back a VerifiedUpdate with a non-clean version string,
+        this gate must fail closed (refuse), never fail open."""
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'binary')
+
+        verified = self_update.VerifiedUpdate(
+            version='not-a-version', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        )
+        monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        swap_mock = Mock()
+        monkeypatch.setattr(self_update, 'swap_binary', swap_mock)
+
+        with pytest.raises(self_update.NoUpdateAvailableError):
+            self_update.perform_self_update()
+
+        swap_mock.assert_not_called()
+
+    @patch('utils.self_update.__version__', '2.8.29')
+    def test_allows_strictly_newer_version(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, 'frozen', True, raising=False)
+        current_exe = tmp_path / 'curatarr'
+        current_exe.write_bytes(b'old binary')
+        asset_path = tmp_path / '.curatarr-update-abc.tmp'
+        asset_path.write_bytes(b'new binary')
+
+        verified = self_update.VerifiedUpdate(
+            version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+        )
+        monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
+        monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+
+        result = self_update.perform_self_update()
+
+        assert result == '2.9.0'
+        assert current_exe.read_bytes() == b'new binary'

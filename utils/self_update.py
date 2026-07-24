@@ -108,7 +108,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from .update_check import GITHUB_RELEASES_PAGE, update_available
+from .config import __version__
+from .update_check import GITHUB_RELEASES_PAGE, parse_version, update_available
 
 logger = logging.getLogger('curatarr')
 
@@ -915,9 +916,33 @@ def perform_self_update(force_refresh: bool = True) -> str:
     NOT swap anything, keep running the current binary. Either every
     verification step succeeds and swap_binary() runs, or nothing on
     disk changes at all - there is no partial-update state.
+
+    Defense-in-depth downgrade gate: determine_update_target() (called
+    inside download_and_verify_update, via update_available) already
+    requires a strictly-newer version before a target is even chosen -
+    but that decision happens several steps, and one whole parsed HTTPS
+    API response, earlier than the swap actually below. This function
+    re-checks verified.version against the currently-installed
+    __version__ again immediately before swap_binary() - the same
+    strictly-newer-only rule the web "Update now" path's begin_update()
+    already enforces - so a future refactor of anything upstream can
+    never accidentally let an equal-or-older version reach the swap,
+    even one that's genuinely pinned-signature-verified: a real, older
+    release existing on GitHub with a valid signature is not
+    hypothetical, it's exactly what a spoofed "latest release" API
+    tag_name could otherwise be used to redirect this whole chain into
+    silently installing (see utils.update_check.parse_version's
+    docstring for that exploit).
     """
     verified = download_and_verify_update(force_refresh=force_refresh)
     try:
+        target_tuple = parse_version(verified.version)
+        current_tuple = parse_version(__version__)
+        if not target_tuple or not current_tuple or target_tuple <= current_tuple:
+            raise NoUpdateAvailableError(
+                f"Refusing to install v{verified.version}: not strictly newer than "
+                f"the running v{__version__}"
+            )
         swap_binary(current_binary_path(), verified.asset_path)
     finally:
         # swap_binary() (on success) moves asset_path away via

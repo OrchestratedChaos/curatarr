@@ -79,10 +79,17 @@ class TestParseVersion:
     def test_parses_v_prefixed_version(self):
         assert parse_version('v2.8.28') == (2, 8, 28)
 
-    def test_parses_version_with_trailing_suffix(self):
-        # e.g. a pre-release/build suffix on the tag - only the leading
-        # X.Y.Z is meaningful for comparison purposes.
-        assert parse_version('2.8.28-rc1') == (2, 8, 28)
+    def test_rejects_version_with_trailing_suffix(self):
+        # SECURITY (regression guard): parse_version used to be only
+        # start-anchored and accepted anything trailing a valid X.Y.Z
+        # prefix (e.g. a "-rc1" pre-release suffix). It's now end-
+        # anchored and rejects ALL trailing junk, no exceptions - see
+        # parse_version's docstring for why (the parsed value gets
+        # re-serialized and used to build a download URL downstream;
+        # a spoofed GitHub tag_name like "2.99.0/../v2.5.0" relies on
+        # exactly this kind of prefix-only match to smuggle a path-
+        # traversal sequence past the version check).
+        assert parse_version('2.8.28-rc1') is None
 
     def test_returns_none_for_empty_string(self):
         assert parse_version('') is None
@@ -98,6 +105,28 @@ class TestParseVersion:
         sort AFTER "2.9.0", which '2.10.0' > '2.9.0' as strings gets
         wrong (string compare puts '1' before '9')."""
         assert parse_version('2.10.0') > parse_version('2.9.0')
+
+    def test_strips_only_surrounding_whitespace(self):
+        """Trailing whitespace (e.g. a stray newline/space in a GitHub
+        API response) is stripped and the clean version still parses -
+        this is the one "leading-valid" malicious-looking input in
+        TestMaliciousTagNameNeutralized below that's actually safe."""
+        assert parse_version('2.99.0 ') == (2, 99, 0)
+        assert parse_version(' v2.99.0\n') == (2, 99, 0)
+
+    @pytest.mark.parametrize('malicious', [
+        '2.99.0/../v2.5.0',
+        '2.99.0/../../etc',
+        '2.99.0\n2.5.0',
+        '2.99.0; rm -rf',
+    ])
+    def test_rejects_path_traversal_and_injection_attempts(self, malicious):
+        """SECURITY: none of these may parse - each has a valid-looking
+        X.Y.Z prefix (so a start-anchored-only match, the pre-fix
+        behavior, would have accepted it and reported it as comparable/
+        newer) followed by characters that must never reach a
+        downstream URL: '/', '..', a newline, or shell metacharacters."""
+        assert parse_version(malicious) is None
 
 
 class TestGetLatestVersionFailOpen:
@@ -310,6 +339,92 @@ class TestGetLatestVersionSuccess:
         result = get_latest_version(update_mode='notify')
 
         assert result == '2.9.0'
+
+
+class TestMaliciousTagNameNeutralized:
+    """SECURITY regression suite for the silent-downgrade vulnerability:
+    a spoofed GitHub 'latest release' API response with an
+    attacker-controlled tag_name (e.g. "2.99.0/../v2.5.0") used to pass
+    the newer-than-current check via its numeric PREFIX while the RAW
+    string - carrying a path-traversal sequence - was what
+    utils.self_update.release_asset_url() actually built a download URL
+    from (requests/the HTTP layer collapses "/../", so the URL silently
+    resolved to a real, older, validly-signed release instead of the
+    one that was actually checked). _fetch_latest_version() must now
+    NEVER return anything except a plain "%d.%d.%d" string or None -
+    no '/', no '..', no whitespace, nothing that could ever survive
+    into a URL.
+    """
+
+    @pytest.mark.parametrize('malicious_tag, expected', [
+        ('2.99.0/../v2.5.0', None),
+        ('2.99.0/../../etc', None),
+        ('2.99.0\n2.5.0', None),
+        ('2.99.0; rm -rf', None),
+        ('2.99.0 ', '2.99.0'),  # trailing whitespace only - safe to normalize
+    ])
+    @patch('utils.update_check.requests.get')
+    def test_fetch_latest_version_neutralizes_malicious_tag_name(
+        self, mock_get, malicious_tag, expected,
+    ):
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'tag_name': malicious_tag}
+        mock_get.return_value = mock_response
+
+        result = _REAL_FETCH_LATEST_VERSION()
+
+        assert result == expected
+        if result is not None:
+            # Whatever DID come back must be pure digits-and-dots - no
+            # path separator, traversal sequence, whitespace, or shell
+            # metacharacter could possibly have survived.
+            assert set(result) <= set('0123456789.')
+            assert '..' not in result
+            assert '/' not in result
+            assert '\\' not in result
+
+    @pytest.mark.parametrize('malicious_tag', [
+        '2.99.0/../v2.5.0',
+        '2.99.0/../../etc',
+        '2.99.0\n2.5.0',
+        '2.99.0; rm -rf',
+    ])
+    @patch('utils.update_check.requests.get')
+    def test_malicious_tag_name_never_registers_as_an_update(self, mock_get, malicious_tag):
+        """Even setting aside URL-safety: a tag_name that fails to
+        parse must make the whole check report "no update", not just
+        "no update string" - update_available()/is_newer must be False,
+        the same fail-closed contract as an unreachable network."""
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'tag_name': malicious_tag}
+        mock_get.return_value = mock_response
+
+        latest, _current, is_newer = update_available(update_mode='notify', force_refresh=True)
+
+        assert latest is None
+        assert is_newer is False
+
+    @patch('utils.update_check.requests.get')
+    def test_normalized_version_builds_a_traversal_free_download_url(self, mock_get):
+        """End-to-end proof for the one input that DOES normalize
+        (trailing whitespace only): feed it through the real fetch,
+        then build the actual download URL utils.self_update uses -
+        the URL must contain no '..' anywhere."""
+        import utils.self_update as self_update_module
+
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'tag_name': '2.99.0 '}
+        mock_get.return_value = mock_response
+
+        version = _REAL_FETCH_LATEST_VERSION()
+        assert version == '2.99.0'
+
+        url = self_update_module.release_asset_url(version, 'SHA256SUMS.txt')
+        assert '..' not in url
+        assert url == f'{self_update_module.GITHUB_RELEASES_DOWNLOAD_BASE}/v2.99.0/SHA256SUMS.txt'
 
 
 class TestUpdateAvailable:

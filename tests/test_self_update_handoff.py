@@ -24,6 +24,7 @@ simulate here).
 
 import os
 import shutil
+import subprocess
 import sys
 from unittest.mock import patch
 
@@ -310,3 +311,80 @@ class TestWriteAndLaunchHandoffScript:
         monkeypatch.setattr(self_update_handoff, '_write_script', fake_write)
         self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
         assert seen['content'].startswith('#!/bin/sh')
+
+
+# =============================================================================
+# CURATARR_HANDOFF_DEBUG_LOG path restriction (minor hardening - see
+# write_and_launch_handoff_script's comment: this env var opens
+# whatever path it's given in APPEND mode, so it must only ever be
+# honored for a path under an allowed root, never an arbitrary
+# attacker-controlled location).
+# =============================================================================
+
+class TestIsSafeDebugLogPath:
+    def test_allows_path_under_app_log_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(self_update_handoff, 'get_project_root', lambda: str(tmp_path))
+        log_path = tmp_path / 'logs' / 'handoff.log'
+        assert self_update_handoff._is_safe_debug_log_path(str(log_path)) is True
+
+    def test_rejects_path_outside_any_allowed_root(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(self_update_handoff, 'get_project_root', lambda: str(tmp_path))
+        monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+        elsewhere = tmp_path.parent / f'not-allowed-{os.getpid()}.log'
+        assert self_update_handoff._is_safe_debug_log_path(str(elsewhere)) is False
+
+    def test_rejects_traversal_out_of_the_allowed_root(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(self_update_handoff, 'get_project_root', lambda: str(tmp_path))
+        escaping = tmp_path / 'logs' / '..' / '..' / 'escaped.log'
+        assert self_update_handoff._is_safe_debug_log_path(str(escaping)) is False
+
+    def test_allows_runner_temp_only_when_github_actions_env_is_set(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(self_update_handoff, 'get_project_root', lambda: str(tmp_path / 'app'))
+        runner_temp = tmp_path / 'runner-temp'
+        monkeypatch.setenv('RUNNER_TEMP', str(runner_temp))
+
+        monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+        assert self_update_handoff._is_safe_debug_log_path(str(runner_temp / 'debug.log')) is False
+
+        monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+        assert self_update_handoff._is_safe_debug_log_path(str(runner_temp / 'debug.log')) is True
+
+    def test_rejects_unresolvable_path(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(self_update_handoff, 'get_project_root', lambda: str(tmp_path))
+        with patch('utils.self_update_handoff.os.path.realpath', side_effect=OSError('boom')):
+            assert self_update_handoff._is_safe_debug_log_path('whatever') is False
+
+
+class TestWriteAndLaunchHandoffScriptDebugLog:
+    @patch('utils.self_update_handoff.subprocess.Popen')
+    def test_disallowed_debug_log_falls_back_to_devnull(self, mock_popen, monkeypatch, tmp_path):
+        monkeypatch.setattr(self_update_handoff.os, 'name', 'posix')
+        monkeypatch.setattr(self_update_handoff, '_write_script', lambda content: str(tmp_path / 'script.sh'))
+        monkeypatch.setattr(self_update_handoff, 'get_project_root', lambda: str(tmp_path / 'app'))
+        monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+        outside_path = tmp_path / 'attacker-controlled.log'
+        monkeypatch.setenv('CURATARR_HANDOFF_DEBUG_LOG', str(outside_path))
+
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+
+        _, kwargs = mock_popen.call_args
+        assert kwargs['stdout'] is subprocess.DEVNULL
+        assert kwargs['stderr'] is subprocess.DEVNULL
+        assert not outside_path.exists()  # never opened
+
+    @patch('utils.self_update_handoff.subprocess.Popen')
+    def test_allowed_debug_log_under_app_log_dir_is_opened(self, mock_popen, monkeypatch, tmp_path):
+        monkeypatch.setattr(self_update_handoff.os, 'name', 'posix')
+        monkeypatch.setattr(self_update_handoff, '_write_script', lambda content: str(tmp_path / 'script.sh'))
+        app_root = tmp_path / 'app'
+        monkeypatch.setattr(self_update_handoff, 'get_project_root', lambda: str(app_root))
+        (app_root / 'logs').mkdir(parents=True)
+        log_path = app_root / 'logs' / 'handoff.log'
+        monkeypatch.setenv('CURATARR_HANDOFF_DEBUG_LOG', str(log_path))
+
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+
+        _, kwargs = mock_popen.call_args
+        assert kwargs['stdout'] is not subprocess.DEVNULL
+        kwargs['stdout'].close()
+        assert log_path.exists()
