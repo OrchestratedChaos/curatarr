@@ -5,6 +5,7 @@ Miscellaneous helper utilities for Curatarr.
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -61,6 +62,63 @@ def get_project_root() -> str:
         os.makedirs(root, exist_ok=True)
         return root
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def migrate_legacy_cache_dir(legacy_dir: str, new_dir: str) -> None:
+    """
+    One-time best-effort migration of curatarr's cache directory from
+    the pre-2.10.3 location (computed relative to recommenders/base.py's
+    own __file__, bypassing get_project_root() entirely - see
+    recommenders/base.py's cache_dir setup) to the get_project_root()-
+    resolved location.
+
+    In practice only reachable for a source install run with
+    CURATARR_CONFIG_DIR set, where the two locations genuinely differ
+    and the old one may still have files on disk:
+      - Docker: the old /app/cache is destroyed by the container
+        recreate that delivers this fix, so there's nothing to migrate.
+      - Frozen binary: the old location was inside a PyInstaller
+        --onefile temp unpack dir already deleted when that earlier run
+        exited, so there's nothing to migrate.
+      - Source install with no CURATARR_CONFIG_DIR: both __file__-relative
+        computations land on the same repo root - old and new paths are
+        identical, so this is a same-directory no-op.
+    Callers don't need to special-case any of the above; legacy_dir
+    equal to (or empty/missing at) new_dir all just no-op below.
+
+    Only moves files that don't already exist at the new location -
+    never overwrites/clobbers a cache the new location already has.
+    Never raises: any failure is logged as a warning and the run
+    continues with whatever ended up on disk - worst case, an
+    unmigrated cache simply regenerates rather than blocking a run.
+    """
+    try:
+        if not os.path.isdir(legacy_dir):
+            return
+        if os.path.realpath(legacy_dir) == os.path.realpath(new_dir):
+            return
+
+        moved = []
+        for filename in os.listdir(legacy_dir):
+            legacy_path = os.path.join(legacy_dir, filename)
+            if not os.path.isfile(legacy_path):
+                continue
+            new_path = os.path.join(new_dir, filename)
+            if os.path.exists(new_path):
+                # New location already has this cache - don't clobber it,
+                # just leave the stale legacy copy where it is.
+                continue
+            os.makedirs(new_dir, exist_ok=True)
+            shutil.move(legacy_path, new_path)
+            moved.append(filename)
+
+        if moved:
+            log_info(
+                f"Migrated {len(moved)} cache file(s) from legacy location "
+                f"{legacy_dir} to {new_dir}: {', '.join(sorted(moved))}"
+            )
+    except Exception as e:
+        log_warning(f"Cache directory migration from {legacy_dir} skipped due to error: {e}")
 
 
 # Response bodies from a USER-CONFIGURED host (Radarr/Sonarr/Tautulli/

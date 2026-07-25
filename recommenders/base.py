@@ -68,6 +68,8 @@ from utils import (
     load_trakt_enhance_cache,
     save_trakt_enhance_cache,
     enhance_profile_with_trakt,
+    get_project_root,
+    migrate_legacy_cache_dir,
 )
 
 logger = logging.getLogger('curatarr')
@@ -434,9 +436,19 @@ class BaseRecommender(ABC):
         self.use_tmdb_keywords = tmdb_config['use_keywords']
         self.tmdb_api_key = tmdb_config['api_key']
 
-        # Setup cache directory
-        self.cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+        # Setup cache directory - routed through get_project_root() (same
+        # resolver as utils/cli.py and recommenders/external.py) rather than
+        # a __file__-relative path, so it honors CURATARR_CONFIG_DIR/the
+        # frozen-binary per-user data dir instead of always landing next to
+        # the installed code (which Docker doesn't mount and a PyInstaller
+        # onefile binary deletes on exit). config-level 'cache_dir' override
+        # (relative subdir name or absolute path) is applied the same way
+        # external.py's cache_dir setup does - os.path.join() already
+        # discards project_root when the override is absolute.
+        legacy_cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
+        self.cache_dir = os.path.join(get_project_root(), self.config.get('cache_dir', 'cache'))
         os.makedirs(self.cache_dir, exist_ok=True)
+        migrate_legacy_cache_dir(legacy_cache_dir, self.cache_dir)
 
         # Load display options
         self.confirm_operations = general_config.get('confirm_operations', False)

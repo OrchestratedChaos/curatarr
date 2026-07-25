@@ -179,6 +179,7 @@ from .counters import (
 from .helpers import (
     TITLE_SUFFIXES_TO_STRIP,
     get_project_root,
+    migrate_legacy_cache_dir,
     normalize_title,
     map_path,
     cleanup_old_logs,
@@ -431,6 +432,7 @@ __all__ = [
     # Helpers
     'TITLE_SUFFIXES_TO_STRIP',
     'get_project_root',
+    'migrate_legacy_cache_dir',
     'normalize_title',
     'map_path',
     'cleanup_old_logs',

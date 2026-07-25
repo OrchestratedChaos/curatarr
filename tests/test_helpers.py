@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 from utils.helpers import (
     normalize_title, map_path, cleanup_old_logs, compute_profile_hash,
-    get_project_root, no_window_kwargs, TITLE_SUFFIXES_TO_STRIP,
+    get_project_root, migrate_legacy_cache_dir, no_window_kwargs,
+    TITLE_SUFFIXES_TO_STRIP,
 )
 
 
@@ -422,6 +423,103 @@ class TestGetProjectRoot:
         root = get_project_root()
         assert os.path.isdir(os.path.join(root, 'utils'))
         assert os.path.isdir(os.path.join(root, 'web'))
+
+
+class TestMigrateLegacyCacheDir:
+    """Tests for migrate_legacy_cache_dir() - the best-effort, one-time
+    move of cache files from the pre-2.10.3 __file__-relative cache
+    directory to the get_project_root()-resolved one (see
+    recommenders/base.py's cache_dir setup)."""
+
+    def test_moves_files_to_new_location(self, tmp_path):
+        legacy_dir = tmp_path / "legacy" / "cache"
+        new_dir = tmp_path / "new" / "cache"
+        legacy_dir.mkdir(parents=True)
+        (legacy_dir / "all_movies_cache.json").write_text('{"movies": {}}')
+        (legacy_dir / "watched_cache_plex_admin.json").write_text('{}')
+
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+
+        assert not (legacy_dir / "all_movies_cache.json").exists()
+        assert not (legacy_dir / "watched_cache_plex_admin.json").exists()
+        assert (new_dir / "all_movies_cache.json").read_text() == '{"movies": {}}'
+        assert (new_dir / "watched_cache_plex_admin.json").exists()
+
+    def test_does_not_overwrite_existing_file_at_new_location(self, tmp_path):
+        legacy_dir = tmp_path / "legacy"
+        new_dir = tmp_path / "new"
+        legacy_dir.mkdir()
+        new_dir.mkdir()
+        (legacy_dir / "all_movies_cache.json").write_text('"stale"')
+        (new_dir / "all_movies_cache.json").write_text('"current"')
+
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+
+        # New location's file is untouched; stale legacy copy is left in place
+        # rather than clobbering it.
+        assert (new_dir / "all_movies_cache.json").read_text() == '"current"'
+        assert (legacy_dir / "all_movies_cache.json").read_text() == '"stale"'
+
+    def test_same_resolved_path_is_a_noop(self, tmp_path):
+        """Legacy and new paths resolving to the same directory (the
+        normal case for every install without CURATARR_CONFIG_DIR set) -
+        must not touch anything."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        (cache_dir / "all_movies_cache.json").write_text('"data"')
+
+        migrate_legacy_cache_dir(str(cache_dir), str(cache_dir))
+
+        assert (cache_dir / "all_movies_cache.json").read_text() == '"data"'
+
+    def test_missing_legacy_dir_is_a_noop(self, tmp_path):
+        """Nothing to migrate (Docker/frozen-binary case where the old
+        location never had anything persisted in it) - must not raise
+        or create the new directory."""
+        legacy_dir = tmp_path / "does_not_exist"
+        new_dir = tmp_path / "new"
+
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+
+        assert not new_dir.exists()
+
+    def test_ignores_subdirectories(self, tmp_path):
+        legacy_dir = tmp_path / "legacy"
+        new_dir = tmp_path / "new"
+        legacy_dir.mkdir()
+        (legacy_dir / "subdir").mkdir()
+        (legacy_dir / "subdir" / "nested.json").write_text('{}')
+
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+
+        # Only flat files are migrated - a subdirectory is left alone.
+        assert (legacy_dir / "subdir" / "nested.json").exists()
+
+    @patch('utils.helpers.log_warning')
+    @patch('utils.helpers.shutil.move')
+    def test_move_failure_logs_warning_and_does_not_raise(self, mock_move, mock_warn, tmp_path):
+        legacy_dir = tmp_path / "legacy"
+        new_dir = tmp_path / "new"
+        legacy_dir.mkdir()
+        (legacy_dir / "all_movies_cache.json").write_text('"data"')
+        mock_move.side_effect = OSError("simulated move failure")
+
+        # Must not raise.
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+
+        mock_warn.assert_called_once()
+
+    @patch('utils.helpers.log_info')
+    def test_logs_migrated_filenames_at_info(self, mock_info, tmp_path):
+        legacy_dir = tmp_path / "legacy"
+        new_dir = tmp_path / "new"
+        legacy_dir.mkdir()
+        (legacy_dir / "all_movies_cache.json").write_text('"data"')
+
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+
+        mock_info.assert_called_once()
+        assert "all_movies_cache.json" in mock_info.call_args[0][0]
 
 
 class TestNoWindowKwargs:
