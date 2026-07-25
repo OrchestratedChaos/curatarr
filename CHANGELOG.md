@@ -2,6 +2,31 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.9.1] - 2026-07-24
+
+Maintenance release: dependency bump and lock file refresh. No feature
+or behavior changes.
+
+### Dependencies
+
+- `ruamel.yaml` 0.18.6 → 0.19.1 (`requirements-ui.txt`). Verified
+  round-trip YAML behavior (comment/key-order preservation used by
+  `web/config_io.py`) is unaffected - all `test_web_config_*` tests
+  pass and a direct load/dump of `config/config.example.yml` preserves
+  all 65 comment lines and key order exactly.
+- All other direct dependencies (`plexapi`, `requests`, `pyyaml`,
+  `flask`, `waitress`, `pyinstaller`, `pyinstaller-hooks-contrib`) were
+  already at their latest stable release; no change needed.
+- `cryptography` held at 48.0.1 (latest release is 49.0.0) - 49.0.0
+  drops x86_64 macOS wheels entirely, which breaks the macOS universal2
+  binary build (see the pin's rationale comment in `requirements.txt`
+  and PR #190). Not bumped.
+- Regenerated `requirements.lock`, `requirements-ui.lock`,
+  `requirements-docker.lock`, and `build-requirements.lock` via `uv pip
+  compile --universal --generate-hashes` so all hashes match the
+  updated resolution. `pip-audit` against every lock reports zero known
+  vulnerabilities.
+
 ## [2.9.0] - 2026-07-24
 
 Security-hardening release covering a full audit of the web UI, CI/
