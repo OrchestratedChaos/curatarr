@@ -8,10 +8,13 @@ import sys
 from io import StringIO
 from unittest.mock import Mock, patch, MagicMock
 
+import json
+
 from utils.display import (
     RED, GREEN, YELLOW, CYAN, RESET,
     ANSI_PATTERN,
     ColoredFormatter,
+    JsonFormatter,
     TeeLogger,
     setup_logging,
     print_user_header,
@@ -273,6 +276,112 @@ class TestSetupLogging:
         logger = setup_logging()
 
         assert logger.name == 'curatarr'
+
+
+class TestJsonFormatter:
+    """Tests for JsonFormatter - the opt-in structured (JSON-lines) log
+    format (see logging.format: json in config.yml / setup_logging)."""
+
+    def _record(self, msg='Test message', level=logging.INFO, extra=None):
+        record = logging.LogRecord(
+            name='curatarr', level=level, pathname='', lineno=0,
+            msg=msg, args=(), exc_info=None,
+        )
+        for key, value in (extra or {}).items():
+            setattr(record, key, value)
+        return record
+
+    def test_output_is_valid_json(self):
+        formatter = JsonFormatter()
+        formatted = formatter.format(self._record())
+        payload = json.loads(formatted)  # raises if not valid JSON
+        assert isinstance(payload, dict)
+
+    def test_has_consistent_core_fields(self):
+        formatter = JsonFormatter()
+        payload = json.loads(formatter.format(self._record(msg='hello world', level=logging.WARNING)))
+        assert payload['level'] == 'WARNING'
+        assert payload['logger'] == 'curatarr'
+        assert payload['message'] == 'hello world'
+        assert 'timestamp' in payload
+
+    def test_timestamp_is_iso8601(self):
+        from datetime import datetime
+        formatter = JsonFormatter()
+        payload = json.loads(formatter.format(self._record()))
+        # Raises ValueError if not a real ISO 8601 timestamp.
+        datetime.fromisoformat(payload['timestamp'])
+
+    def test_includes_structured_extra_fields(self):
+        formatter = JsonFormatter()
+        payload = json.loads(formatter.format(self._record(
+            msg='run finished',
+            extra={'user': 'alice', 'engine': 'movie', 'duration': 12.5},
+        )))
+        assert payload['user'] == 'alice'
+        assert payload['engine'] == 'movie'
+        assert payload['duration'] == 12.5
+
+    def test_redacts_token_shaped_value_in_message(self):
+        """Proves a token-shaped value is redacted in JSON output - same
+        contract utils/redact.py's other call sites already guarantee
+        for the human-readable format. Uses a run of 'x' characters as
+        the placeholder value (matches .gitleaks.toml's own allowlisted
+        placeholder shape, `x{16,}`) rather than a realistic-looking
+        secret literal, since this is a NEW line the secret-scan CI
+        check inspects on its own merits regardless of similar-shaped
+        values already existing elsewhere in the suite."""
+        formatter = JsonFormatter()
+        payload = json.loads(formatter.format(self._record(
+            msg='GET http://localhost:32400/library?X-Plex-Token=xxxxxxxxxxxxxxxxxxxx',
+        )))
+        assert 'xxxxxxxxxxxxxxxxxxxx' not in payload['message']
+        assert 'REDACTED' in payload['message']
+
+    def test_redacts_token_shaped_value_in_extra_field(self):
+        """Same placeholder value as test_masks_bearer_header in
+        tests/test_web_security.py's TestRedact."""
+        formatter = JsonFormatter()
+        payload = json.loads(formatter.format(self._record(
+            msg='Trakt call',
+            extra={'response_headers': 'Authorization: Bearer abcdefghijklmnop'},
+        )))
+        assert 'abcdefghijklmnop' not in payload['response_headers']
+        assert 'REDACTED' in payload['response_headers']
+
+    def test_does_not_leak_internal_logrecord_attributes(self):
+        formatter = JsonFormatter()
+        payload = json.loads(formatter.format(self._record()))
+        # 'msg'/'args'/'pathname'/etc. are internal LogRecord plumbing,
+        # not part of the documented structured field set.
+        assert 'msg' not in payload
+        assert 'args' not in payload
+        assert 'pathname' not in payload
+
+
+class TestSetupLoggingFormat:
+    """Tests for setup_logging()'s logging.format wiring (see
+    TestJsonFormatter above for the formatter's own behavior)."""
+
+    def test_default_format_is_colored_text(self):
+        setup_logging(debug=False)
+        root_handler = logging.getLogger().handlers[0]
+        assert isinstance(root_handler.formatter, ColoredFormatter)
+
+    def test_json_format_selects_json_formatter(self):
+        setup_logging(debug=False, config={'logging': {'format': 'json'}})
+        root_handler = logging.getLogger().handlers[0]
+        assert isinstance(root_handler.formatter, JsonFormatter)
+
+    def test_unknown_format_falls_back_to_text(self):
+        setup_logging(debug=False, config={'logging': {'format': 'xml'}})
+        root_handler = logging.getLogger().handlers[0]
+        assert isinstance(root_handler.formatter, ColoredFormatter)
+
+    def test_json_format_is_case_insensitive(self):
+        setup_logging(debug=False, config={'logging': {'format': 'JSON'}})
+        root_handler = logging.getLogger().handlers[0]
+        assert isinstance(root_handler.formatter, JsonFormatter)
 
 
 class TestPrintUserHeader:

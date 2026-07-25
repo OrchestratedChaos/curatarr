@@ -51,6 +51,8 @@ from utils import (
     is_dismissed,
     load_config,
     record_dismissal,
+    record_unhandled_error,
+    render_prometheus_text,
     update_available,
 )
 
@@ -338,8 +340,85 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         origin/host guard, and a version number isn't sensitive).
         Polled by base.html's "Update now" flow to detect the server
         coming back up after a restart, and by whatever launches it
-        (see _wait_for_listening) as a liveness probe."""
+        (see _wait_for_listening) as a liveness probe.
+
+        Deliberately stays THIS boring: liveness + version, nothing
+        else. No library names, user names, integration hostnames, or
+        any other config detail - unlike /status.json below (which
+        needs a valid token/loopback bind the same as every other
+        route), widening this unauthenticated endpoint with any of that
+        would be an information-disclosure regression."""
         return jsonify({'version': __version__})
+
+    @app.get('/status.json')
+    def status_json():
+        """Authenticated (NOT in web.security's _TOKEN_EXEMPT_PATHS,
+        same as every route below) readiness/status detail that would be
+        inappropriate on the unauthenticated /healthz above: last run
+        time/outcome across configured users, whether config.yml is
+        currently loadable, and whether a run is in progress right now.
+        Still deliberately narrow - no library names, user names, or
+        integration hostnames - see /metrics below for the endpoint that
+        actually exposes that level of detail (and is gated accordingly).
+        """
+        config = _load_config()
+        users = get_users_from_config(config) if config else []
+        last_run = None
+        for user in users:
+            status = get_last_run_status(logs_dir, user)
+            if status.get('timestamp') is None:
+                continue
+            if last_run is None or status['timestamp'] > last_run['timestamp']:
+                last_run = status
+        return jsonify({
+            'version': __version__,
+            'config_valid': config is not None,
+            'job_running': app.job_manager.is_running(),
+            'last_run': {
+                'timestamp': last_run['timestamp'].isoformat(),
+                'status': last_run['status'],
+            } if last_run else None,
+        })
+
+    @app.get('/metrics')
+    def metrics_endpoint():
+        """Prometheus text-format metrics (see utils/metrics.py) - NOT
+        in web.security's _TOKEN_EXEMPT_PATHS, so it's behind the exact
+        same token gate as every other route once bound non-loopback
+        (see register_token_auth): library names, user counts, and
+        integration topology surface indirectly through the metric
+        labels this exposes (e.g. which *arr/Trakt/Simkl/etc. services
+        are actually configured and being called), which isn't public
+        data any more than /config/connections is. Cheap to serve - see
+        utils.metrics.render_prometheus_text's docstring: exactly one
+        local file read, never a network call, never a Plex/TMDB/etc.
+        request, so scraping this on any interval never adds load to
+        anything curatarr talks to."""
+        return Response(
+            render_prometheus_text(),
+            mimetype='text/plain; version=0.0.4; charset=utf-8',
+        )
+
+    @app.errorhandler(Exception)
+    def _handle_unhandled_exception(exc):
+        """Records curatarr_unhandled_errors_total (see utils/metrics.py)
+        for any exception that escapes a route handler, then re-raises
+        so Flask's own default error handling (a 500 in production, the
+        interactive debugger under app.debug, which this app never
+        enables - see main()) behaves exactly as it did before this
+        handler existed. HTTPException (abort(400)/abort(401)/abort(404)/
+        etc. - every deliberate, expected non-200 this app already
+        returns) is returned AS-IS instead: those aren't unhandled
+        errors, they're routes working as designed, and an HTTPException
+        instance is itself a valid Flask response (returning it - not
+        raising it - is what makes Flask render its normal status
+        code/body instead of this becoming a second, wrongly-classified
+        exception)."""
+        from werkzeug.exceptions import HTTPException
+        if isinstance(exc, HTTPException):
+            return exc
+        record_unhandled_error(component='web')
+        raise exc
 
     @app.get('/')
     def dashboard():

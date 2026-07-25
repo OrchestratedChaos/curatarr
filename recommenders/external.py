@@ -46,6 +46,8 @@ from utils import (
     get_authenticated_trakt_client,
     get_libraries_for_media_type,
     smart_open_html,
+    record_recommender_run,
+    record_unhandled_error,
 )
 
 # Import output generation
@@ -2825,6 +2827,28 @@ def _merge_user_runs(username: str, movie_runs: List[Dict], tv_runs: List[Dict])
 
 
 def main():
+    """Thin wrapper around _main_impl() that records
+    curatarr_recommender_runs_total/curatarr_recommender_run_duration_seconds
+    (engine='external' - see utils/metrics.py) for the whole run,
+    regardless of how it ends (normal completion, sys.exit(), or an
+    unhandled exception) - kept separate from _main_impl() itself so
+    that function's existing body/control flow (including its own
+    per-user try/except blocks) needed no re-indentation to add this."""
+    run_start = time.monotonic()
+    outcome = 'failure'
+    try:
+        _main_impl()
+        outcome = 'success'
+    except SystemExit:
+        raise
+    except Exception:
+        record_unhandled_error(component='external')
+        raise
+    finally:
+        record_recommender_run('external', outcome, time.monotonic() - run_start)
+
+
+def _main_impl():
     import argparse
     parser = argparse.ArgumentParser(description='External Recommendations Generator')
     parser.add_argument('--huntarr-only', action='store_true',

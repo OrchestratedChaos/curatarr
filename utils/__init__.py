@@ -112,6 +112,7 @@ from .display import (
     RESET,
     ANSI_PATTERN,
     ColoredFormatter,
+    JsonFormatter,
     TeeLogger,
     setup_logging,
     print_user_header,
@@ -314,6 +315,19 @@ from .tautulli import (
     merge_show_watched_data,
 )
 
+# Metrics utilities (local-first Prometheus text format - see module
+# docstring for why this isn't the prometheus_client package)
+from .metrics import (
+    DURATION_BUCKETS,
+    record_recommender_run,
+    record_api_call,
+    track_api_call,
+    record_cache_lookup,
+    record_self_update_attempt,
+    record_unhandled_error,
+    render_prometheus_text,
+)
+
 # Define __all__ for explicit public API
 __all__ = [
     # Config
@@ -387,6 +401,7 @@ __all__ = [
     'RESET',
     'ANSI_PATTERN',
     'ColoredFormatter',
+    'JsonFormatter',
     'TeeLogger',
     'setup_logging',
     'print_user_header',
@@ -529,4 +544,13 @@ __all__ = [
     'fetch_tautulli_show_watched_data',
     'merge_movie_history',
     'merge_show_watched_data',
+    # Metrics
+    'DURATION_BUCKETS',
+    'record_recommender_run',
+    'record_api_call',
+    'track_api_call',
+    'record_cache_lookup',
+    'record_self_update_attempt',
+    'record_unhandled_error',
+    'render_prometheus_text',
 ]

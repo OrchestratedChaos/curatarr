@@ -109,6 +109,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from .config import __version__
+from .metrics import record_self_update_attempt
 from .update_check import GITHUB_RELEASES_PAGE, parse_version, update_available
 
 logger = logging.getLogger('curatarr')
@@ -1005,6 +1006,31 @@ class VerifiedUpdate(NamedTuple):
 
 
 def download_and_verify_update(force_refresh: bool = True) -> VerifiedUpdate:
+    """Thin wrapper around _download_and_verify_update_impl() that records
+    curatarr_self_update_attempts_total (see utils/metrics.py) -
+    'success' if a verified update was produced, 'failure' on any of
+    this module's *Error subclasses. This is the single choke point both
+    self-update entry points call through - the CLI's `--self-update`
+    (perform_self_update(), immediately below, calls this first) and the
+    web UI's "Update now" for a frozen binary (web/update_apply.py's
+    _run_frozen_verify_and_handoff calls this directly) - so instrumenting
+    here covers both without either needing its own metrics call.
+
+    Kept separate from _download_and_verify_update_impl() itself so that
+    function's own body/control flow needed no re-indentation to add
+    this - see recommenders/external.py's main()/_main_impl() split for
+    the identical reasoning.
+    """
+    outcome = 'failure'
+    try:
+        verified = _download_and_verify_update_impl(force_refresh=force_refresh)
+        outcome = 'success'
+        return verified
+    finally:
+        record_self_update_attempt(outcome)
+
+
+def _download_and_verify_update_impl(force_refresh: bool = True) -> VerifiedUpdate:
     """
     Steps 1-4 of the self-update chain (module docstring): determine the
     target version, pick this platform's asset, download it plus

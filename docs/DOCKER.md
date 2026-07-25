@@ -78,6 +78,12 @@ cookie so the browser doesn't need to resend it on every request.
 Scripts/reverse proxies can instead send it directly, either as
 `Authorization: Bearer <token>` or `X-Curatarr-Token: <token>`.
 
+This same token also gates `/metrics` (Prometheus text-format metrics) and
+`/status.json` - see the main [README's Observability
+section](../README.md#observability) for what each exposes and an example
+Prometheus scrape config. `/login` and `/healthz` remain the only
+unauthenticated routes.
+
 ### Opting out: `CURATARR_TRUSTED_NETWORK`
 
 If you've decided the published port is genuinely unreachable by

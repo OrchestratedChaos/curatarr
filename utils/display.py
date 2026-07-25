@@ -5,7 +5,9 @@ Handles colored output, progress indicators, and formatting.
 
 import sys
 import re
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List
 
 from .redact import redact
@@ -37,6 +39,61 @@ class ColoredFormatter(logging.Formatter):
         color = self.LEVEL_COLORS.get(record.levelno, '')
         record.levelname = f"{color}{record.levelname}{RESET}"
         return super().format(record)
+
+
+# logging.LogRecord attributes that are always present on every record -
+# used by JsonFormatter below to tell "standard" attributes apart from
+# structured "extra" fields a call site attached via
+# logger.info(msg, extra={...}). Anything not in this set (and not
+# private, i.e. not leading with '_') is treated as a structured extra
+# and included in the rendered JSON object verbatim.
+_LOG_RECORD_RESERVED_ATTRS = frozenset({
+    'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 'filename',
+    'module', 'exc_info', 'exc_text', 'stack_info', 'lineno', 'funcName',
+    'created', 'msecs', 'relativeCreated', 'thread', 'threadName',
+    'processName', 'process', 'message', 'asctime', 'taskName',
+})
+
+
+class JsonFormatter(logging.Formatter):
+    """Structured (JSON-lines) log formatter - opt-in via config.yml's
+    `logging.format: json` (default stays ColoredFormatter above; see
+    setup_logging). Every record renders as exactly one JSON object per
+    line (JSON-lines, not a JSON array, so log aggregators/SIEMs can
+    consume it as a stream) with a consistent field set:
+
+        timestamp, level, logger, message
+
+    plus whatever structured "extra" fields a call site attached, e.g.
+    ``logger.info("run finished", extra={'user': u, 'engine': e,
+    'duration': d})`` - those keys are included as their own top-level
+    JSON fields, not folded into the message string.
+
+    Redacted through the exact same utils.redact.redact() every other
+    log destination in this codebase uses (see this module's own
+    docstring and utils/redact.py's) - a secret-shaped value reaching a
+    JSON log line in plaintext is exactly as unacceptable as it reaching
+    the human-readable one. Applied to the rendered message, every
+    string-valued extra field, and a formatted exception traceback
+    (exc_info), since any of the three could in principle echo a token
+    (e.g. a stray X-Plex-Token query parameter in an error message or in
+    an extra field pulled from a response).
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            'timestamp': datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            'level': record.levelname,
+            'logger': record.name,
+            'message': redact(record.getMessage()),
+        }
+        for key, value in record.__dict__.items():
+            if key in _LOG_RECORD_RESERVED_ATTRS or key.startswith('_'):
+                continue
+            payload[key] = redact(value) if isinstance(value, str) else value
+        if record.exc_info:
+            payload['exception'] = redact(self.formatException(record.exc_info))
+        return json.dumps(payload, default=str)
 
 
 class TeeLogger:
@@ -93,7 +150,12 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
 
     Args:
         debug: If True, set level to DEBUG. Otherwise use config or default to INFO.
-        config: Optional config dict that may contain logging.level setting.
+        config: Optional config dict that may contain logging.level setting
+            and an optional logging.format setting ('text', the default,
+            human-readable/colored - or 'json', structured JSON-lines via
+            JsonFormatter above - see that class's docstring). Unset/any
+            other value falls back to 'text', so existing configs (which
+            predate logging.format entirely) are completely unaffected.
 
     Returns:
         Configured logger instance.
@@ -107,14 +169,20 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
     else:
         level = logging.INFO
 
-    # Create handler with colored formatter
+    log_format = str((config or {}).get('logging', {}).get('format', 'text')).lower()
+
+    # Create handler with the configured formatter - JSON opt-in via
+    # logging.format: json, text (ColoredFormatter) otherwise/by default.
     handler = logging.StreamHandler()
     handler.setLevel(level)
 
-    formatter = ColoredFormatter(
-        fmt='%(asctime)s [%(levelname)s] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    if log_format == 'json':
+        formatter = JsonFormatter()
+    else:
+        formatter = ColoredFormatter(
+            fmt='%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
     handler.setFormatter(formatter)
 
     # Configure root logger

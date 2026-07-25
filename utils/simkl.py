@@ -9,6 +9,8 @@ import logging
 import requests
 from typing import Dict, Optional, Any, List
 
+from .metrics import record_api_call
+
 logger = logging.getLogger('curatarr')
 
 # Simkl API endpoints
@@ -123,6 +125,15 @@ class SimklClient:
         if not authenticated:
             params['client_id'] = self.client_id
 
+        # curatarr_api_requests_total/curatarr_api_request_duration_seconds
+        # (see utils/metrics.py) - see utils/trakt.py's _make_request for
+        # the identical reasoning (same pattern intentionally mirrored
+        # here): outcome only flips to 'success' on an actually-handled
+        # response (2xx/204, and 404 which this client treats as a valid
+        # "not found" None return, not an error), so every raised path
+        # is recorded as 'error'.
+        request_start = time.time()
+        outcome = 'error'
         try:
             response = None
             # Bounded retry loop for 429s - see SIMKL_MAX_429_RETRIES's
@@ -162,6 +173,7 @@ class SimklClient:
 
             # Handle not found
             if response.status_code == 404:
+                outcome = 'success'
                 return None
 
             # Handle other errors
@@ -169,6 +181,7 @@ class SimklClient:
                 raise SimklAPIError(f"Simkl API error {response.status_code}: {response.text}")
 
             # Return JSON or None for no-content responses
+            outcome = 'success'
             if response.status_code == 204:
                 return None
 
@@ -180,6 +193,8 @@ class SimklClient:
             raise SimklAPIError("Could not connect to Simkl API")
         except requests.exceptions.RequestException as e:
             raise SimklAPIError(f"Simkl request failed: {e}")
+        finally:
+            record_api_call('simkl', outcome, time.time() - request_start)
 
     # =========================================================================
     # PIN Authentication Flow

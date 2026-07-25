@@ -130,6 +130,27 @@ def _isolated_update_dismissal_dir(tmp_path_factory, monkeypatch):
         lambda: str(tmp_path_factory.mktemp('update_dismissal')),
     )
 
+
+@pytest.fixture(autouse=True)
+def _isolated_metrics_dir(tmp_path_factory, monkeypatch):
+    """Same reasoning as _isolated_update_dismissal_dir above, for
+    utils/metrics.py's on-disk metrics_state.json: its get_project_root()
+    also always resolves to the real repo/data dir regardless of a
+    test's Flask app project_root override, and metrics recording is
+    exercised incidentally by a lot of otherwise-unrelated tests (any
+    recommender run, any *arr/TMDB/Trakt/Simkl/Tautulli/MDBList client
+    call, any cache read - see each module's own utils.metrics call
+    sites). Without this, those tests would write a REAL
+    cache/metrics_state.json into the repo root. Tests that specifically
+    exercise metrics persistence/rendering (tests/test_metrics.py,
+    tests/test_web_metrics.py) override this per-test with their own
+    stable tmp_path, same layering the two fixtures above document.
+    """
+    monkeypatch.setattr(
+        'utils.metrics.get_project_root',
+        lambda: str(tmp_path_factory.mktemp('metrics_state')),
+    )
+
 _FAKE_MOVIE_PY = '''\
 import os
 import sys

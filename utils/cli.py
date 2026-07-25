@@ -7,6 +7,7 @@ import argparse
 import copy
 import os
 import sys
+import time
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
@@ -21,6 +22,7 @@ from .display import (
     setup_logging,
 )
 from .helpers import cleanup_old_logs, get_project_root
+from .metrics import record_recommender_run, record_unhandled_error
 from .update_check import GITHUB_RELEASES_PAGE, update_available
 from .update_dismissal import is_dismissed
 from .user_migration import migrate_renamed_plex_users
@@ -286,82 +288,102 @@ def run_recommender_main(
     project_root = get_project_root()
     config_path = os.path.join(project_root, 'config/config.yml')
 
+    # curatarr_recommender_runs_total/curatarr_recommender_run_duration_seconds
+    # (see utils/metrics.py) - covers the WHOLE run, including a config
+    # load failure or "no users configured" below (both are still a run
+    # that didn't produce recommendations, useful to see on a dashboard),
+    # not just the per-user loop. outcome flips to 'success' only if the
+    # entire body below completes without raising; the `finally` records
+    # exactly once regardless of how this function exits (normal
+    # completion, sys.exit(), or an unhandled exception).
+    run_start = time.monotonic()
+    outcome = 'failure'
     try:
-        with open(config_path, 'r') as f:
-            root_config = yaml.safe_load(f)
-
-        # Detect Plex account renames (keyed by stable id) and migrate any
-        # affected preferences/cache files/collections before this run
-        # processes users. Best-effort - never blocks a normal run.
-        cache_dir = os.path.join(project_root, 'cache')
-        renamed_users = migrate_renamed_plex_users(root_config, config_path, cache_dir)
-        if renamed_users:
+        try:
             with open(config_path, 'r') as f:
                 root_config = yaml.safe_load(f)
 
-        base_config = adapt_config_func(root_config)
-    except Exception as e:
-        log_error(f"Could not load config.yml from project root: {e}")
-        log_warning(f"Looking for config at: {config_path}")
-        sys.exit(1)
+            # Detect Plex account renames (keyed by stable id) and migrate any
+            # affected preferences/cache files/collections before this run
+            # processes users. Best-effort - never blocks a normal run.
+            cache_dir = os.path.join(project_root, 'cache')
+            renamed_users = migrate_renamed_plex_users(root_config, config_path, cache_dir)
+            if renamed_users:
+                with open(config_path, 'r') as f:
+                    root_config = yaml.safe_load(f)
 
-    # Setup logging
-    logger = setup_logging(debug=args.debug, config=root_config)
-    logger.debug("Debug logging enabled")
-
-    general = base_config.get('general', {})
-    log_retention_days = general.get('log_retention_days', 7)
-
-    # Advisory update notice - printed right after the version banner
-    # above in the overall output; see print_update_notice() docstring
-    # for why this (not run.sh/run.ps1) is what binary users see.
-    print_update_notice(get_update_mode(root_config))
-
-    # Handle single user mode
-    single_user = args.username
-    if single_user:
-        log_warning(f"Single user mode: {single_user}")
-
-    # Get users to process
-    all_users = get_users_from_config(base_config)
-    if single_user:
-        all_users = [single_user]
-
-    if not all_users:
-        log_error("No users configured. Please configure plex_users or managed_users in config.yml")
-        sys.exit(1)
-
-    # Resolve libraries for this media type (#157 Phase 3). A single-library
-    # install (no 'libraries:' config, or exactly one explicit library of
-    # this media type) always resolves to exactly one entry here, so the
-    # loop below collapses to the original one-pass-per-user behavior.
-    libraries = get_libraries_for_media_type(base_config, media_type_key)
-
-    if args.library_id:
-        libraries = [lib for lib in libraries if lib.get('id') == args.library_id]
-        if not libraries:
-            log_error(f"Library '{args.library_id}' not found for media type '{media_type_key}'")
+            base_config = adapt_config_func(root_config)
+        except Exception as e:
+            log_error(f"Could not load config.yml from project root: {e}")
+            log_warning(f"Looking for config at: {config_path}")
             sys.exit(1)
 
-    multi_library = len(libraries) > 1
+        # Setup logging
+        logger = setup_logging(debug=args.debug, config=root_config)
+        logger.debug("Debug logging enabled")
 
-    # Process each library x user
-    plex_token = base_config.get('plex', {}).get('token', '')
-    for library in libraries:
-        if multi_library:
-            print(f"\n{CYAN}=== Library: {library['name']} ==={RESET}")
-            print("-" * 50)
+        general = base_config.get('general', {})
+        log_retention_days = general.get('log_retention_days', 7)
 
-        for user in all_users:
-            print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
-            print("-" * 50)
+        # Advisory update notice - printed right after the version banner
+        # above in the overall output; see print_update_notice() docstring
+        # for why this (not run.sh/run.ps1) is what binary users see.
+        print_update_notice(get_update_mode(root_config))
 
-            resolved_user = resolve_admin_username(user, plex_token)
-            user_config = update_config_for_user(base_config, resolved_user)
+        # Handle single user mode
+        single_user = args.username
+        if single_user:
+            log_warning(f"Single user mode: {single_user}")
 
-            process_func(user_config, config_path, log_retention_days, resolved_user, library)
+        # Get users to process
+        all_users = get_users_from_config(base_config)
+        if single_user:
+            all_users = [single_user]
 
-            print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
-            print("-" * 50)
+        if not all_users:
+            log_error("No users configured. Please configure plex_users or managed_users in config.yml")
+            sys.exit(1)
+
+        # Resolve libraries for this media type (#157 Phase 3). A single-library
+        # install (no 'libraries:' config, or exactly one explicit library of
+        # this media type) always resolves to exactly one entry here, so the
+        # loop below collapses to the original one-pass-per-user behavior.
+        libraries = get_libraries_for_media_type(base_config, media_type_key)
+
+        if args.library_id:
+            libraries = [lib for lib in libraries if lib.get('id') == args.library_id]
+            if not libraries:
+                log_error(f"Library '{args.library_id}' not found for media type '{media_type_key}'")
+                sys.exit(1)
+
+        multi_library = len(libraries) > 1
+
+        # Process each library x user
+        plex_token = base_config.get('plex', {}).get('token', '')
+        for library in libraries:
+            if multi_library:
+                print(f"\n{CYAN}=== Library: {library['name']} ==={RESET}")
+                print("-" * 50)
+
+            for user in all_users:
+                print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
+                print("-" * 50)
+
+                resolved_user = resolve_admin_username(user, plex_token)
+                user_config = update_config_for_user(base_config, resolved_user)
+
+                process_func(user_config, config_path, log_retention_days, resolved_user, library)
+
+                print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
+                print("-" * 50)
+
+        outcome = 'success'
+    except SystemExit:
+        raise
+    except Exception:
+        record_unhandled_error(component=media_type_key)
+        raise
+    finally:
+        record_recommender_run(media_type_key, outcome, time.monotonic() - run_start)
 
     print_runtime(start_time)

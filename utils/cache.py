@@ -12,6 +12,7 @@ from typing import Dict, Optional
 
 from .config import CACHE_VERSION, check_cache_version
 from .display import log_warning
+from .metrics import record_cache_lookup
 
 
 def save_json_cache(cache_path: str, data: Dict, cache_version: int = None) -> bool:
@@ -48,12 +49,16 @@ def load_json_cache(cache_path: str) -> Optional[Dict]:
         Dictionary from cache or None on failure
     """
     if not os.path.exists(cache_path):
+        record_cache_lookup('miss')
         return None
     try:
         with open(cache_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        record_cache_lookup('hit')
+        return data
     except Exception as e:
         logging.warning(f"Error loading cache from {cache_path}: {e}")
+        record_cache_lookup('miss')
         return None
 
 
@@ -71,15 +76,20 @@ def load_media_cache(cache_path: str, media_key: str = 'movies') -> Dict:
     empty_cache = {media_key: {}, 'last_updated': None, 'library_count': 0, 'cache_version': CACHE_VERSION}
 
     if not check_cache_version(cache_path, f"{media_key.title()} cache"):
+        record_cache_lookup('miss')
         return empty_cache
 
     if os.path.exists(cache_path):
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+            record_cache_lookup('hit')
+            return data
         except Exception as e:
             log_warning(f"Error loading {media_key} cache: {e}")
+            record_cache_lookup('miss')
             return empty_cache
+    record_cache_lookup('miss')
     return empty_cache
 
 

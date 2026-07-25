@@ -179,6 +179,64 @@ written atomically, so a bad submission can't corrupt your config files.
 
 ---
 
+## Observability
+
+Local-first only - nothing here ever leaves your machine or gets shipped to a
+third-party service.
+
+### Structured logging
+
+Set `logging.format: json` in `config/config.yml` (default is `text`, the
+existing colored console output - nothing changes unless you opt in) for
+JSON-lines log output instead: one JSON object per line with `timestamp`,
+`level`, `logger`, `message`, plus any structured fields a given log call
+attaches (e.g. `user`, `engine`, `duration`). Convenient for feeding logs into
+`jq`, Loki, or another log aggregator. Secrets are redacted the same way
+either format - a leaked Plex/Sonarr/Radarr/etc. token is masked in JSON
+output exactly as it already is in the human-readable one.
+
+### `/metrics` (Prometheus)
+
+The web UI exposes Prometheus text-format metrics at `/metrics`:
+recommender run count/duration by engine and outcome, outbound API request
+count/latency/error count by service (Plex, Sonarr, Radarr, TMDB, Trakt,
+Simkl, MDBList, Tautulli), local cache hit/miss, self-update attempts/
+failures, unhandled error count, and a `curatarr_build_info` gauge carrying
+the running version. Rendered directly from a small local state file - no
+new runtime dependency, and scraping never makes a network call or triggers
+a Plex/TMDB request.
+
+**Same auth as everything else**: for a native install (bound to
+`127.0.0.1` only) `/metrics` needs no token, same as every other route. For
+Docker (bound `0.0.0.0` - see [docs/DOCKER.md](docs/DOCKER.md#authentication))
+it requires the exact same `CURATARR_AUTH_TOKEN` as the rest of the app -
+`/metrics` labels expose library names, user counts, and which integrations
+are configured, which isn't public data any more than the config screens
+are. Only `/login` and `/healthz` are ever unauthenticated.
+
+Example Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: curatarr
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["curatarr-host:8787"]
+    authorization:
+      credentials: "YOUR_CURATARR_AUTH_TOKEN"   # omit entirely for a loopback-only native install
+```
+
+### `/healthz` and `/status.json`
+
+`/healthz` stays unauthenticated and deliberately minimal - liveness plus
+version, nothing else - so it's safe to leave open to a container
+orchestrator's health check with no token. Richer readiness detail (last run
+time/outcome, whether `config.yml` currently loads, whether a run is in
+progress) lives instead on the authenticated `/status.json`, which - like
+`/metrics` - needs a token on a non-loopback bind.
+
+---
+
 ## What You Get
 
 ### In Plex
@@ -341,6 +399,7 @@ general:
 
 logging:
   level: INFO                  # DEBUG, INFO, WARNING, ERROR
+  format: text                 # text (default) | json - see Observability below
 ```
 
 `general.update_mode` controls how Curatarr handles new releases:

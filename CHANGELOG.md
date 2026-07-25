@@ -2,6 +2,40 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.8] - 2026-07-25
+
+### Added
+
+- **Local-first observability**: structured logging, a Prometheus
+  `/metrics` endpoint, and a richer authenticated status endpoint - all
+  self-hosted, nothing shipped to a third-party service.
+  - **Structured logging**: opt-in JSON-lines log format alongside the
+    existing human-readable one, via the new `logging.format: json`
+    config key (default stays `text` - existing installs are
+    unaffected). Wired through `utils.display.setup_logging`, the same
+    place `logging.level` already plugs in. Every record is redacted
+    through the same `utils/redact.py` path every other log destination
+    in this codebase uses, so a token-shaped value is masked in JSON
+    output exactly as it already is in the human-readable one.
+  - **`/metrics`**: Prometheus text-format metrics on the web UI -
+    recommender run count/duration by engine and outcome, outbound API
+    request count/latency/error count by service (Plex, Radarr, Sonarr,
+    TMDB, Trakt, Simkl, MDBList, Tautulli), local cache hit/miss,
+    self-update attempts/failures, unhandled error count, and
+    `curatarr_build_info`. Rendered directly (no new runtime
+    dependency - see `utils/metrics.py`) from a small local JSON state
+    file, so scraping never makes a network call or triggers a Plex/
+    TMDB request. Behind the exact same token gate as every other route
+    once the server is bound non-loopback (Docker) - it surfaces
+    library/integration topology, which isn't public data any more than
+    the config screens are. `/login` and `/healthz` remain the only
+    unauthenticated routes.
+  - **`/status.json`**: authenticated readiness detail (last run time/
+    outcome, whether config.yml currently loads, whether a run is in
+    progress) that doesn't belong on the unauthenticated `/healthz`,
+    which stays exactly as boring as before (liveness + version only -
+    no library/user/integration detail).
+
 ## [2.10.7] - 2026-07-25
 
 ### Added

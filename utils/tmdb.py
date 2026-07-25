@@ -10,6 +10,8 @@ import logging
 import requests
 from typing import Dict, List, Optional
 
+from .metrics import record_api_call
+
 # Module-level logger
 logger = logging.getLogger('curatarr')
 
@@ -54,6 +56,19 @@ def fetch_tmdb_with_retry(url: str, params: Dict, max_retries: int = 3, timeout:
     Returns:
         JSON response dict or None on failure
     """
+    # curatarr_api_requests_total/curatarr_api_request_duration_seconds
+    # (see utils/metrics.py) - recorded once per call to this function
+    # (i.e. once per logical TMDB fetch), not once per retry attempt:
+    # _fetch_tmdb_with_retry_impl already never raises (every failure
+    # mode inside it is caught and turned into a None return), so
+    # 'success'/'error' here is simply "did we end up with a result".
+    start = time.time()
+    result = _fetch_tmdb_with_retry_impl(url, params, max_retries, timeout)
+    record_api_call('tmdb', 'success' if result is not None else 'error', time.time() - start)
+    return result
+
+
+def _fetch_tmdb_with_retry_impl(url: str, params: Dict, max_retries: int = 3, timeout: int = 15) -> Optional[Dict]:
     for attempt in range(max_retries):
         try:
             resp = requests.get(url, params=params, timeout=timeout, allow_redirects=False)
@@ -248,12 +263,15 @@ def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'mo
     if cache is not None and imdb_id in cache:
         return cache[imdb_id]
 
+    start = time.time()
+    outcome = 'error'
     try:
         url = f"https://api.themoviedb.org/3/find/{imdb_id}"
         params = {'api_key': tmdb_api_key, 'external_source': 'imdb_id'}
         response = requests.get(url, params=params, timeout=10, allow_redirects=False)
 
         if response.status_code == 200:
+            outcome = 'success'
             data = response.json()
             results_key = 'movie_results' if media_type == 'movie' else 'tv_results'
             results = data.get(results_key, [])
@@ -264,4 +282,6 @@ def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'mo
                 return tmdb_id
     except Exception as e:
         logger.debug(f"Failed to get TMDB ID for IMDB {imdb_id}: {e}")
+    finally:
+        record_api_call('tmdb', outcome, time.time() - start)
     return None
