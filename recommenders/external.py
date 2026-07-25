@@ -23,9 +23,6 @@ from typing import Dict, List, Set, Optional, Tuple, Any
 from plexapi.server import PlexServer
 from plexapi.myplex import MyPlexAccount
 
-# Disable SSL warnings
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 # Module-level logger
 logger = logging.getLogger('curatarr')
 
@@ -2839,6 +2836,17 @@ def main():
     project_root = get_project_root()
     config_path = os.path.join(project_root, 'config/config.yml')
     config = load_config(config_path)
+
+    # Suppress urllib3's InsecureRequestWarning ONLY when this config
+    # actually opts out of certificate verification (verify_ssl: false,
+    # an explicit user choice, e.g. for a local Plex server with a
+    # self-signed cert) - never unconditionally at import time (this
+    # module's previous behavior), which would also silence the warning
+    # for every other HTTPS request this process ever makes. Matches
+    # utils/plex.py's _resolve_verify_ssl - see that function's
+    # docstring for the same reasoning.
+    if not config.get('plex', {}).get('verify_ssl', True):
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     # Huntarr: config controls which features are enabled
     # huntarr.sequel_huntarr: true/false (default: true) - missing collection movies

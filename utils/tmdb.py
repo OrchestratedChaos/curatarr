@@ -56,7 +56,7 @@ def fetch_tmdb_with_retry(url: str, params: Dict, max_retries: int = 3, timeout:
     """
     for attempt in range(max_retries):
         try:
-            resp = requests.get(url, params=params, timeout=timeout)
+            resp = requests.get(url, params=params, timeout=timeout, allow_redirects=False)
 
             if resp.status_code == 429:
                 sleep_time = 2 * (attempt + 1)
@@ -251,7 +251,7 @@ def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'mo
     try:
         url = f"https://api.themoviedb.org/3/find/{imdb_id}"
         params = {'api_key': tmdb_api_key, 'external_source': 'imdb_id'}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10, allow_redirects=False)
 
         if response.status_code == 200:
             data = response.json()

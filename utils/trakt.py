@@ -23,6 +23,21 @@ TRAKT_RATE_LIMIT_DELAY = 0.2
 # HTTP request timeout in seconds
 TRAKT_REQUEST_TIMEOUT = 30
 
+# Bounds the 429 (rate limited) retry loop in _make_request - matching
+# the pattern already used correctly in utils/tmdb.py's
+# fetch_tmdb_with_retry. Without a cap, a 429 response recursed/looped
+# forever, sleeping for however long the server's own Retry-After header
+# said to (see TRAKT_MAX_RETRY_AFTER_SECONDS below for why that alone
+# isn't trustworthy either).
+TRAKT_MAX_429_RETRIES = 3
+
+# Ceiling on how long a single 429 retry will ever sleep for, regardless
+# of what the server's Retry-After header asks for - that header is
+# server-controlled input, and a compromised/misbehaving Trakt endpoint
+# (or a malicious response) could otherwise stall this process for an
+# arbitrary/huge amount of time.
+TRAKT_MAX_RETRY_AFTER_SECONDS = 60
+
 
 class TraktAuthError(Exception):
     """Raised when Trakt authentication fails."""
@@ -101,27 +116,45 @@ class TraktClient:
 
         Returns:
             Response JSON or None for 204 responses
-        """
-        self._rate_limit()
 
+        Raises:
+            TraktAPIError: If still rate limited (429) after
+                TRAKT_MAX_429_RETRIES retries, or on any other API error.
+        """
         url = f"{TRAKT_API_URL}{endpoint}"
         headers = self._get_headers(authenticated)
 
         try:
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=TRAKT_REQUEST_TIMEOUT
-            )
+            response = None
+            # Bounded retry loop for 429s - see TRAKT_MAX_429_RETRIES's
+            # comment above for why this used to recurse unboundedly.
+            for attempt in range(TRAKT_MAX_429_RETRIES + 1):
+                self._rate_limit()
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    json=data,
+                    timeout=TRAKT_REQUEST_TIMEOUT,
+                    # Never auto-follow redirects - requests only strips
+                    # the Authorization header on a cross-host hop, not
+                    # the custom trakt-api-key header this client also
+                    # sends (see _get_headers).
+                    allow_redirects=False,
+                )
 
-            # Handle rate limiting
-            if response.status_code == 429:
-                retry_after = int(response.headers.get('Retry-After', 1))
-                logger.warning(f"Trakt rate limited, waiting {retry_after}s")
+                if response.status_code != 429 or attempt == TRAKT_MAX_429_RETRIES:
+                    break
+
+                retry_after = min(
+                    int(response.headers.get('Retry-After', 1)),
+                    TRAKT_MAX_RETRY_AFTER_SECONDS,
+                )
+                logger.warning(
+                    f"Trakt rate limited, waiting {retry_after}s "
+                    f"(retry {attempt + 1}/{TRAKT_MAX_429_RETRIES})"
+                )
                 time.sleep(retry_after)
-                return self._make_request(method, endpoint, data, authenticated, retry_auth)
 
             # Handle auth errors
             if response.status_code == 401 and retry_auth and self.refresh_token:
@@ -157,7 +190,8 @@ class TraktClient:
             f"{TRAKT_API_URL}/oauth/device/code",
             json={"client_id": self.client_id},
             headers={"Content-Type": "application/json"},
-            timeout=TRAKT_REQUEST_TIMEOUT
+            timeout=TRAKT_REQUEST_TIMEOUT,
+            allow_redirects=False,
         )
 
         if response.status_code != 200:
@@ -189,7 +223,8 @@ class TraktClient:
                     "client_secret": self.client_secret
                 },
                 headers={"Content-Type": "application/json"},
-                timeout=TRAKT_REQUEST_TIMEOUT
+                timeout=TRAKT_REQUEST_TIMEOUT,
+                allow_redirects=False,
             )
 
             if response.status_code == 200:
@@ -250,7 +285,8 @@ class TraktClient:
                     "grant_type": "refresh_token"
                 },
                 headers={"Content-Type": "application/json"},
-                timeout=TRAKT_REQUEST_TIMEOUT
+                timeout=TRAKT_REQUEST_TIMEOUT,
+                allow_redirects=False,
             )
 
             if response.status_code == 200:
@@ -289,7 +325,8 @@ class TraktClient:
                     "client_secret": self.client_secret
                 },
                 headers={"Content-Type": "application/json"},
-                timeout=TRAKT_REQUEST_TIMEOUT
+                timeout=TRAKT_REQUEST_TIMEOUT,
+                allow_redirects=False,
             )
 
             if response.status_code == 200:
@@ -942,7 +979,7 @@ def fetch_tmdb_details_for_profile(tmdb_api_key: str, tmdb_id: int, media_type: 
         endpoint = 'movie' if media_type == 'movie' else 'tv'
         url = f"https://api.themoviedb.org/3/{endpoint}/{tmdb_id}"
         params = {'api_key': tmdb_api_key, 'append_to_response': 'keywords,credits'}
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10, allow_redirects=False)
 
         if response.status_code != 200:
             return None

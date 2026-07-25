@@ -106,6 +106,7 @@ import time
 from typing import Optional
 
 from utils import self_update, self_update_handoff
+from utils.helpers import resolve_system_executable
 from utils.update_check import update_available
 
 logger = logging.getLogger('curatarr')
@@ -133,6 +134,35 @@ APPLY_TIMEOUT_SECONDS = 60.0
 # with no second chance.
 RELAUNCH_VERIFY_TIMEOUT_SECONDS = 15.0
 RELAUNCH_MAX_ATTEMPTS = 3
+
+
+# Fully-qualified, well-known system tool paths - see
+# utils.helpers.resolve_system_executable's docstring for why a bare
+# PATH-resolved name ('powershell', 'bash', 'tasklist', 'taskkill') is
+# worth avoiding here: this module shells out to each of them to manage
+# the OTHER server process during an update, a security-relevant
+# operation. Each falls back to the bare name if the expected absolute
+# path doesn't exist on this machine.
+def _windows_powershell_path() -> str:
+    system_root = os.environ.get('SystemRoot', r'C:\Windows')
+    candidate = os.path.join(system_root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    return resolve_system_executable(candidate, 'powershell')
+
+
+def _posix_bash_path() -> str:
+    return resolve_system_executable('/bin/bash', 'bash')
+
+
+def _windows_tasklist_path() -> str:
+    system_root = os.environ.get('SystemRoot', r'C:\Windows')
+    candidate = os.path.join(system_root, 'System32', 'tasklist.exe')
+    return resolve_system_executable(candidate, 'tasklist')
+
+
+def _windows_taskkill_path() -> str:
+    system_root = os.environ.get('SystemRoot', r'C:\Windows')
+    candidate = os.path.join(system_root, 'System32', 'taskkill.exe')
+    return resolve_system_executable(candidate, 'taskkill')
 
 
 class UpdateAlreadyInProgressError(Exception):
@@ -171,9 +201,9 @@ def check_verified_update(project_root: str, timeout: float = CHECK_TIMEOUT_SECO
         return None
     try:
         if os.name == 'nt':
-            cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script, '-CheckVerifiedUpdate']
+            cmd = [_windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script, '-CheckVerifiedUpdate']
         else:
-            cmd = ['bash', script, '--check-verified-update']
+            cmd = [_posix_bash_path(), script, '--check-verified-update']
         result = subprocess.run(
             cmd, cwd=project_root, capture_output=True, text=True, timeout=timeout,
         )
@@ -395,7 +425,7 @@ def _pid_alive(pid: int) -> bool:
     if os.name == 'nt':
         try:
             result = subprocess.run(
-                ['tasklist', '/FI', f'PID eq {pid}'],
+                [_windows_tasklist_path(), '/FI', f'PID eq {pid}'],
                 capture_output=True, text=True, timeout=3,
             )
             return str(pid) in result.stdout
@@ -480,7 +510,7 @@ def _shut_down_old_server(pid: int, timeout: float) -> None:
         return
     try:
         if os.name == 'nt':
-            subprocess.run(['taskkill', '/F', '/PID', str(pid)], capture_output=True, timeout=5)
+            subprocess.run([_windows_taskkill_path(), '/F', '/PID', str(pid)], capture_output=True, timeout=5)
         else:
             os.kill(pid, signal.SIGTERM)
     except (ProcessLookupError, OSError):
@@ -516,7 +546,7 @@ def _relaunch_ui(project_root: str, port: int) -> None:
     env['CURATARR_SKIP_BROWSER_OPEN'] = '1'
 
     if os.name == 'nt':
-        cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script]
+        cmd = [_windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script]
         subprocess.Popen(
             cmd, cwd=project_root, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
@@ -533,7 +563,7 @@ def _relaunch_ui(project_root: str, port: int) -> None:
             ),
         )
     else:
-        cmd = ['bash', script]
+        cmd = [_posix_bash_path(), script]
         subprocess.Popen(
             cmd, cwd=project_root, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
@@ -653,6 +683,7 @@ def _run_frozen_verify_and_handoff(project_root: str, old_pid: int, port: int) -
             old_pid=old_pid,
             current_exe_path=self_update.current_binary_path(),
             verified_asset_path=verified.asset_path,
+            verified_asset_sha256=verified.asset_sha256,
             port=port,
             target_version=verified.version,
         )
@@ -739,9 +770,9 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
 
         script = _updater_script(project_root)
         if os.name == 'nt':
-            apply_cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script, '-ApplyVerifiedUpdate']
+            apply_cmd = [_windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script, '-ApplyVerifiedUpdate']
         else:
-            apply_cmd = ['bash', script, '--apply-verified-update']
+            apply_cmd = [_posix_bash_path(), script, '--apply-verified-update']
 
         print("[update-worker] applying verified update...", flush=True)
         try:

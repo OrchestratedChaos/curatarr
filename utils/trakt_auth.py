@@ -13,6 +13,7 @@ import yaml
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils.helpers import harden_file_permissions
 from utils.trakt import TraktClient, TraktAuthError
 
 
@@ -50,6 +51,7 @@ def save_tokens(access_token: str, refresh_token: str):
 
     with open(trakt_path, 'w') as f:
         yaml.dump(trakt_config, f, default_flow_style=False, sort_keys=False)
+    harden_file_permissions(trakt_path)
 
     print("\033[92mTokens saved to config/trakt.yml\033[0m")
 

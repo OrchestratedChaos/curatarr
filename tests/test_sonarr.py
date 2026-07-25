@@ -52,6 +52,13 @@ class TestSonarrClientMakeRequest:
     def test_successful_request(self, mock_request):
         """Test successful API request."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "ok"}
         mock_request.return_value = mock_response
@@ -66,6 +73,13 @@ class TestSonarrClientMakeRequest:
     def test_unauthorized_raises_error(self, mock_request):
         """Test 401 raises SonarrAPIError."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 401
         mock_request.return_value = mock_response
 
@@ -78,6 +92,13 @@ class TestSonarrClientMakeRequest:
     def test_404_returns_none(self, mock_request):
         """Test 404 returns None."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 404
         mock_request.return_value = mock_response
 
@@ -90,6 +111,13 @@ class TestSonarrClientMakeRequest:
     def test_204_returns_none(self, mock_request):
         """Test 204 No Content returns None."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 204
         mock_request.return_value = mock_response
 

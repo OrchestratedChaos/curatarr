@@ -7,8 +7,19 @@ import logging
 import time
 import requests
 from typing import Any, Dict, Optional
+from urllib.parse import urljoin, urlsplit
+
+from .helpers import read_response_capped
 
 logger = logging.getLogger('curatarr')
+
+# Redirect statuses requests would otherwise follow automatically.
+_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
+
+# Bounds _follow_same_host_redirect's loop - a same-host redirect chain
+# should never legitimately be this long; this just guards against a
+# misconfigured/malicious server redirecting forever.
+_MAX_REDIRECT_HOPS = 5
 
 
 class BaseAPIClient:
@@ -84,6 +95,18 @@ class BaseAPIClient:
         Raises:
             exception_class: For HTTP errors
         """
+        if response.status_code in _REDIRECT_STATUSES:
+            # Still a redirect after _follow_same_host_redirect - either
+            # it pointed at a different host (refused, already logged
+            # there) or exceeded _MAX_REDIRECT_HOPS. Either way, a raw
+            # redirect response's body isn't the API response the caller
+            # expects, so surface a clear error instead of trying (and
+            # likely failing) to parse it as JSON.
+            raise self.exception_class(
+                f"{self.api_name} returned an unfollowed redirect "
+                f"({response.status_code}) - refusing to send credentials "
+                f"to a different host. See logs for the redirect target."
+            )
         if response.status_code == 401:
             raise self.exception_class("Invalid API key")
         elif response.status_code == 404:
@@ -96,6 +119,58 @@ class BaseAPIClient:
             return None
 
         return response.json()
+
+    def _follow_same_host_redirect(self, method: str, response: requests.Response,
+                                    headers: Dict[str, str], data: Optional[Dict],
+                                    params: Optional[Dict]) -> requests.Response:
+        """Manually re-issue a redirected request, but ONLY when the
+        redirect target is the same host the request was already
+        trusted to go to.
+
+        requests follows redirects by default and only auto-strips the
+        Authorization header on a cross-host hop - not a custom auth
+        header like the X-Api-Key every subclass here sends via
+        _get_headers(). A malicious or compromised configured
+        Sonarr/Radarr/etc. host could redirect this client to an
+        attacker-controlled host and harvest the API key from those
+        headers. _make_request_to_url disables requests' own redirect
+        following entirely (allow_redirects=False) so that can never
+        happen silently; this re-implements just the safe subset - a
+        same-host redirect (e.g. a reverse proxy normalizing a trailing
+        slash) still works exactly as before.
+        """
+        hops = 0
+        while response.status_code in _REDIRECT_STATUSES and hops < _MAX_REDIRECT_HOPS:
+            location = response.headers.get('Location')
+            if not location:
+                break
+            original_host = urlsplit(response.url).netloc
+            next_url = urljoin(response.url, location)
+            if urlsplit(next_url).netloc != original_host:
+                logger.warning(
+                    f"{self.api_name} redirected to a different host "
+                    f"({urlsplit(next_url).netloc}) - refusing to follow "
+                    f"with credentials."
+                )
+                break
+            response = requests.request(
+                method=method,
+                url=next_url,
+                headers=headers,
+                json=data,
+                params=params,
+                timeout=self.request_timeout,
+                allow_redirects=False,
+                stream=True,
+            )
+            hops += 1
+        else:
+            if response.status_code in _REDIRECT_STATUSES and response.headers.get('Location'):
+                logger.warning(
+                    f"{self.api_name} redirected more than {_MAX_REDIRECT_HOPS} times "
+                    f"- refusing to follow further."
+                )
+        return response
 
     def _make_request_to_url(self, method: str, url: str,
                               data: Optional[Dict] = None,
@@ -129,8 +204,26 @@ class BaseAPIClient:
                 headers=headers,
                 json=data,
                 params=params,
-                timeout=self.request_timeout
+                timeout=self.request_timeout,
+                # Never auto-follow redirects: requests only strips the
+                # Authorization header on a cross-host hop, not custom
+                # auth headers like X-Api-Key - see
+                # _follow_same_host_redirect for the safe, same-host-only
+                # replacement.
+                allow_redirects=False,
+                # Deferred body read - see the capped read below. Every
+                # subclass here (Radarr/Sonarr/Tautulli/MDBList) talks to
+                # a host from config (all but MDBList are genuinely
+                # user-configured, and could point anywhere), so the
+                # response body is never assumed to be a bounded size
+                # just because a legitimate one always would be.
+                stream=True,
             )
+            response = self._follow_same_host_redirect(method, response, headers, data, params)
+            try:
+                read_response_capped(response)
+            except ValueError as e:
+                raise self.exception_class(f"{self.api_name} response rejected: {e}")
             return self._handle_response(response)
 
         except requests.exceptions.Timeout:

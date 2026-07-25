@@ -152,6 +152,24 @@ class SwapError(SelfUpdateError):
     """The verified binary could not be swapped into place."""
 
 
+class VersionMismatchError(SelfUpdateError):
+    """SHA256SUMS.txt's signed `# curatarr-version:` line (see
+    .github/workflows/release.yml's finalize-checksums job) didn't match
+    the version this download was actually for - a signal something is
+    wrong (e.g. a stale or substituted SHA256SUMS.txt) even though every
+    individual asset hash inside it still verified against the pinned
+    signature. Only ever raised when the line IS present but WRONG - an
+    absent line (a release published before this field existed) is not
+    an error; see download_and_verify_update's docstring."""
+
+
+class VersionReadbackError(SelfUpdateError):
+    """After swapping in a verified binary, running it with --version
+    either failed outright or printed something other than the expected
+    version - see perform_self_update's docstring. The previous binary
+    is restored before this is raised."""
+
+
 # =============================================================================
 # Platform -> release asset selection (section C.2)
 # =============================================================================
@@ -476,6 +494,31 @@ SUMS_SIG_FILENAME = 'SHA256SUMS.txt.sig'
 # of which use one or the other depending on OS.
 _SUMS_LINE_RE = re.compile(r'^([0-9a-fA-F]{64})\s+[* ]?(.+)$')
 
+# Matches the `# curatarr-version: X.Y.Z` comment line
+# .github/workflows/release.yml's finalize-checksums job writes into
+# SHA256SUMS.txt (see that job's own comment for why - binding the
+# version number itself to the same signature that already covers every
+# asset's hash). Present on every release from v2.9.0 onward; absent on
+# anything published before that - see download_and_verify_update's
+# docstring for how an absent line is handled.
+_VERSION_LINE_RE = re.compile(r'^#\s*curatarr-version:\s*(\S+)\s*$', re.IGNORECASE)
+
+
+def parse_sha256sums_version(text: str) -> Optional[str]:
+    """Extract the signed `# curatarr-version:` comment line from a
+    SHA256SUMS.txt-style file's text, or None if it isn't present (an
+    older release, published before this field existed - see
+    _VERSION_LINE_RE's comment). A SEPARATE function from
+    parse_sha256sums() below rather than folded into its return value,
+    so that function's existing {filename: digest} contract (and every
+    existing caller/test relying on exactly that shape) stays
+    unchanged."""
+    for line in text.splitlines():
+        match = _VERSION_LINE_RE.match(line.strip())
+        if match:
+            return match.group(1)
+    return None
+
 
 def parse_sha256sums(text: str) -> Dict[str, str]:
     """Parse a SHA256SUMS.txt-style file into {filename: lowercase hex
@@ -507,12 +550,30 @@ def sha256_file(path: str, chunk_size: int = 1 << 20) -> str:
     return hasher.hexdigest()
 
 
-def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asset_name: str) -> None:
+def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asset_name: str,
+                             target_version: Optional[str] = None) -> str:
     """
     The full authenticity chain (module docstring steps 3-4) applied to
     one already-downloaded asset. Raises SignatureVerificationError or
-    HashMismatchError on any failure - never returns anything, silent
-    success is the only non-raising outcome.
+    HashMismatchError on any failure. On success, returns the verified
+    (lowercase hex) SHA256 digest - the SAME value already checked
+    against the signed sums file here, handed back so a caller can
+    re-check the file against THIS exact value again immediately before
+    actually using it (see perform_self_update's TOCTOU re-hash and
+    utils/self_update_handoff.py's own pre-swap re-hash), without
+    needing to re-derive or re-trust anything.
+
+    If target_version is given, also binds the version NUMBER itself to
+    the same signature that already covers every asset hash (see
+    _VERSION_LINE_RE's comment): a signed `# curatarr-version:` line
+    present in sums_text but not equal to target_version raises
+    VersionMismatchError - fail closed, since that combination can only
+    mean a genuinely-signed-but-wrong-release SHA256SUMS.txt was served
+    (e.g. a stale cache, a mix-up, or a downgrade/version-confusion
+    attempt) even though the individual asset hash inside it still
+    matches byte-for-byte. A MISSING version line is not an error (an
+    older release, published before this field existed) - see this
+    module's docstring and download_and_verify_update.
     """
     try:
         with open(sums_path, 'r', encoding='utf-8') as f:
@@ -544,6 +605,21 @@ def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asse
     actual = sha256_file(asset_path)
     if actual.lower() != expected.lower():
         raise HashMismatchError(f"{asset_name} SHA256 mismatch: expected {expected}, got {actual}")
+
+    if target_version is not None:
+        signed_version = parse_sha256sums_version(sums_text)
+        if signed_version is None:
+            logger.info(
+                f"{SUMS_FILENAME} has no signed version line (published before this "
+                f"field existed) - skipping the version-binding check for v{target_version}"
+            )
+        elif signed_version != target_version:
+            raise VersionMismatchError(
+                f"{SUMS_FILENAME}'s signed version ({signed_version}) does not match "
+                f"the requested release (v{target_version}) - refusing to trust it"
+            )
+
+    return actual.lower()
 
 
 # =============================================================================
@@ -637,9 +713,11 @@ def _old_sidecar_path(path: str) -> str:
 
 def cleanup_stale_old_binary(current_path: Optional[str] = None) -> None:
     """
-    Best-effort removal of a leftover `<exe>.old` from a previous
-    Windows swap (see _swap_windows below) - call unconditionally at
-    every frozen startup (curatarr_app.py), not just after an update.
+    Best-effort removal of a leftover `<exe>.old` from a previous swap
+    (see _swap_windows and _swap_posix below - both platforms leave one
+    behind on a successful swap now, so a post-swap readback failure
+    has something to restore from) - call unconditionally at every
+    frozen startup (curatarr_app.py), not just after an update.
 
     A missing/undeletable `.old` is never fatal (already gone, or still
     locked by a lingering old process that hasn't exited yet - it'll
@@ -672,22 +750,53 @@ def _preserve_permissions(source_path: str, dest_path: str) -> None:
 
 
 def _swap_posix(current_path: str, new_binary_path: str) -> None:
+    """POSIX alone would allow a single atomic os.replace() straight
+    onto current_path (a single rename(2) syscall - either fully
+    succeeds or leaves current_path completely untouched; replacing the
+    file underneath an already-running process, if this IS the running
+    binary, is well-defined on POSIX, unlike Windows). This deliberately
+    does NOT do that anymore: it backs up current_path to
+    current_path+'.old' FIRST, same sequence _swap_windows already uses
+    below and for the same reason - a post-swap readback failure (see
+    perform_self_update) needs something on disk to restore from, and
+    once the original bytes were overwritten there was no way back.
+    Matches what the web UI's own hand-off script
+    (utils/self_update_handoff.py's _posix_script_content) already does
+    independently, for the identical reason."""
+    old_path = _old_sidecar_path(current_path)
+    try:
+        if os.path.isfile(old_path):
+            os.remove(old_path)  # clear out any leftover before reusing the name
+    except OSError:
+        pass  # non-fatal - the rename below will just fail loudly if this is actually a problem
+
     try:
         # Belt-and-suspenders on top of _preserve_permissions: always
         # guarantee the exec bit regardless of what mode the freshly
         # downloaded temp file started with.
         mode = os.stat(new_binary_path).st_mode
         os.chmod(new_binary_path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        # A single rename(2) syscall - atomic by POSIX definition: either
-        # fully succeeds or leaves current_path completely untouched.
-        # The already-running process (if this IS the running binary -
-        # true for the detached self-update worker, see
-        # web/update_apply.py) keeps executing its old, already-mapped
-        # inode either way; replacing the file underneath a running
-        # process is well-defined on POSIX, unlike Windows.
+    except OSError as e:
+        raise SwapError(f"Could not set executable permissions on {new_binary_path}: {e}") from e
+
+    try:
+        os.rename(current_path, old_path)
+    except OSError as e:
+        raise SwapError(f"Could not rename running exe {current_path} -> {old_path}: {e}") from e
+
+    try:
         os.replace(new_binary_path, current_path)
     except OSError as e:
-        raise SwapError(f"Could not swap binary at {current_path}: {e}") from e
+        try:
+            os.replace(old_path, current_path)
+        except OSError as rollback_error:
+            raise SwapError(
+                f"Could not move verified binary into place ({e}), AND rollback failed "
+                f"({rollback_error}) - the original binary may still be recoverable at {old_path}"
+            ) from e
+        raise SwapError(
+            f"Could not move verified binary into place ({e}) - rolled back to the original binary"
+        ) from e
 
 
 def _swap_windows(current_path: str, new_binary_path: str) -> None:
@@ -731,14 +840,17 @@ def _swap_windows(current_path: str, new_binary_path: str) -> None:
 
 
 def swap_binary(current_path: str, new_binary_path: str) -> None:
-    """Atomically replace the executable at current_path with the
-    already hash+signature verified file at new_binary_path (see
+    """Replace the executable at current_path with the already
+    hash+signature verified file at new_binary_path (see
     verify_downloaded_asset - swap_binary() must NEVER be called on an
     unverified file). Dispatches to the POSIX or Windows mechanics
-    above - see each for the platform-specific guarantees. Raises
-    SwapError on failure; callers (perform_self_update) never catch
-    this to retry with something unverified, only to abort and keep
-    running the current binary."""
+    above - see each for the platform-specific guarantees; both now
+    leave the original binary behind at current_path+'.old' on success
+    (see cleanup_stale_old_binary), specifically so a caller can restore
+    it if a post-swap check (perform_self_update's readback) finds
+    something wrong with what's now on disk. Raises SwapError on
+    failure; callers never catch this to retry with something
+    unverified, only to abort and keep running the current binary."""
     _preserve_permissions(current_path, new_binary_path)
     if os.name == 'nt':
         _swap_windows(current_path, new_binary_path)
@@ -823,10 +935,20 @@ class VerifiedUpdate(NamedTuple):
     utils/self_update_handoff.py). Either way, if the caller doesn't
     consume `asset_path` (move/rename it away), IT is responsible for
     removing it - this function never leaves it behind on its own
-    success path, only hands over ownership."""
+    success path, only hands over ownership.
+
+    `asset_sha256` is the digest already verified against the signed
+    sums file (verify_downloaded_asset's return value) - carried here so
+    a caller can cheaply re-hash `asset_path` against this EXACT
+    already-trusted value again immediately before actually using it
+    (closing the TOCTOU window between verification and use - see
+    perform_self_update and utils/self_update_handoff.py), without
+    re-deriving or re-trusting anything new.
+    """
     version: str
     asset_path: str
     asset_name: str
+    asset_sha256: str
 
 
 def download_and_verify_update(force_refresh: bool = True) -> VerifiedUpdate:
@@ -886,7 +1008,9 @@ def download_and_verify_update(force_refresh: bool = True) -> VerifiedUpdate:
 
         try:
             _download_to_file(release_asset_url(target_version, asset_name), asset_path)
-            verify_downloaded_asset(asset_path, sums_path, sig_path, asset_name)
+            asset_sha256 = verify_downloaded_asset(
+                asset_path, sums_path, sig_path, asset_name, target_version=target_version
+            )
         except Exception:
             if os.path.isfile(asset_path):
                 try:
@@ -895,7 +1019,76 @@ def download_and_verify_update(force_refresh: bool = True) -> VerifiedUpdate:
                     pass
             raise
 
-    return VerifiedUpdate(version=target_version, asset_path=asset_path, asset_name=asset_name)
+    return VerifiedUpdate(
+        version=target_version, asset_path=asset_path, asset_name=asset_name, asset_sha256=asset_sha256,
+    )
+
+
+# How long the post-swap readback (_verify_swapped_binary_or_restore)
+# waits for the newly-swapped binary to answer `--version` - generous
+# for a PyInstaller onefile's own extraction time (the dominant cost of
+# any frozen launch, --version included - see curatarr_app.py's
+# dispatcher) without letting a genuinely hung/broken binary stall the
+# CLI indefinitely.
+VERSION_READBACK_TIMEOUT_SECONDS = 15
+
+
+def _verify_swapped_binary_or_restore(current_path: str, expected_version: str) -> None:
+    """After swap_binary() has replaced current_path, actually RUN what's
+    now there (`<exe> --version`) and confirm it reports
+    expected_version - mirroring, for this in-process CLI path, the same
+    intent as the web UI's own post-swap /healthz confirmation (see
+    utils/self_update_handoff.py) - trust the running result, not just
+    that the swap syscalls themselves didn't raise.
+
+    On ANY failure (the new binary won't even launch, times out, exits
+    non-zero, or prints something other than exactly expected_version),
+    restores the `.old` backup swap_binary() left behind (see
+    _swap_posix/_swap_windows) back into current_path's place before
+    raising VersionReadbackError - a bad swap must never leave the user
+    stranded on a binary that doesn't work, or on the wrong version.
+    Always raises on failure; there is no return value on success
+    (silent return is the only non-raising outcome).
+    """
+    old_path = _old_sidecar_path(current_path)
+
+    def _restore_and_raise(reason: str) -> None:
+        if not os.path.isfile(old_path):
+            raise VersionReadbackError(f"{reason} - no backup binary was available to restore.")
+        try:
+            if os.path.isfile(current_path):
+                os.remove(current_path)
+            os.replace(old_path, current_path)
+        except OSError as restore_error:
+            raise VersionReadbackError(
+                f"{reason} - AND restoring the previous binary from {old_path} also failed "
+                f"({restore_error}). The previous binary may still be recoverable from {old_path}."
+            ) from restore_error
+        raise VersionReadbackError(f"{reason} - restored the previous binary.")
+
+    try:
+        # sanitize_frozen_relaunch_env: this process IS itself a frozen
+        # PyInstaller instance (--self-update only ever runs from one -
+        # see NotFrozenError above), so spawning ANOTHER instance of the
+        # same exe without stripping its PyInstaller bootloader hand-off
+        # env vars first is exactly the inherited-_MEIPASS2-class bug
+        # this same module already had to fix for the web relaunch path
+        # (see the big comment above sanitize_frozen_relaunch_env).
+        result = subprocess.run(
+            [current_path, '--version'],
+            capture_output=True, text=True, timeout=VERSION_READBACK_TIMEOUT_SECONDS,
+            env=sanitize_frozen_relaunch_env(dict(os.environ)),
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        _restore_and_raise(f"Could not run the newly-swapped binary to confirm its version: {e}")
+        return
+
+    reported = (result.stdout or '').strip()
+    if result.returncode != 0 or reported != expected_version:
+        _restore_and_raise(
+            f"Newly-swapped binary did not confirm v{expected_version} "
+            f"(exit code {result.returncode}, printed {reported!r})"
+        )
 
 
 def perform_self_update(force_refresh: bool = True) -> str:
@@ -903,19 +1096,26 @@ def perform_self_update(force_refresh: bool = True) -> str:
     The CLI's `--self-update` path (curatarr_app.py's
     _run_self_update_cli): download+verify (see
     download_and_verify_update), then swap the verified binary into
-    place IN-PROCESS, and return the applied version string. Safe to do
-    the swap in-process here specifically because the CLI never
-    relaunches anything afterward (the process just exits - see
-    _run_self_update_cli's docstring) - there is no subsequent spawn of
-    a new curatarr.exe instance from within this one to race a
-    PyInstaller onefile extraction directory against, which is what
-    made the WEB UI's relaunch flow unsafe to do this way (see
-    utils/self_update_handoff.py's module docstring).
+    place IN-PROCESS, confirm the swap by actually running the result
+    (see _verify_swapped_binary_or_restore), and return the applied
+    version string. Safe to do the swap in-process here specifically
+    because the CLI never relaunches anything afterward as part of its
+    own process tree (the process just exits - see
+    _run_self_update_cli's docstring) - there is no LONG-LIVED new
+    curatarr.exe instance spawned from within this one to race a
+    PyInstaller onefile extraction directory against, which is what made
+    the WEB UI's relaunch flow unsafe to do this way (see
+    utils/self_update_handoff.py's module docstring). The readback
+    subprocess below is short-lived and exits on its own well before
+    this process does, so it doesn't reintroduce that hazard.
 
-    Raises one of this module's *Error subclasses on ANY failure - do
-    NOT swap anything, keep running the current binary. Either every
-    verification step succeeds and swap_binary() runs, or nothing on
-    disk changes at all - there is no partial-update state.
+    Raises one of this module's *Error subclasses on ANY failure. Before
+    swap_binary() runs, that means "do NOT swap anything, keep running
+    the current binary" exactly as before - nothing on disk changes at
+    all. After swap_binary() runs, a failure instead means "the previous
+    binary was restored" (see _verify_swapped_binary_or_restore) - there
+    is still no state where a broken/unverified/wrong-version binary is
+    left in place for the next launch to pick up.
 
     Defense-in-depth downgrade gate: determine_update_target() (called
     inside download_and_verify_update, via update_available) already
@@ -943,7 +1143,27 @@ def perform_self_update(force_refresh: bool = True) -> str:
                 f"Refusing to install v{verified.version}: not strictly newer than "
                 f"the running v{__version__}"
             )
-        swap_binary(current_binary_path(), verified.asset_path)
+
+        # TOCTOU close: re-hash the already-verified asset one more
+        # time, immediately before it's actually used, against the
+        # EXACT digest download_and_verify_update already checked
+        # against the signed sums file (verified.asset_sha256) - closes
+        # the window between that check and this use, however small, on
+        # a local filesystem this process doesn't fully control (the
+        # temp file lives next to the running binary - see that
+        # function's docstring for why - not an unpredictable system
+        # temp dir, but still not provably untouchable by anything else
+        # running as this same user).
+        current_hash = sha256_file(verified.asset_path)
+        if current_hash != verified.asset_sha256:
+            raise HashMismatchError(
+                f"{verified.asset_name} SHA256 changed between verification and swap "
+                f"(expected {verified.asset_sha256}, now {current_hash}) - refusing to install"
+            )
+
+        current_path = current_binary_path()
+        swap_binary(current_path, verified.asset_path)
+        _verify_swapped_binary_or_restore(current_path, verified.version)
     finally:
         # swap_binary() (on success) moves asset_path away via
         # os.replace(); if it raised before doing so, it's still

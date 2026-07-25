@@ -2,6 +2,167 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.9.0] - 2026-07-24
+
+Security-hardening release covering a full audit of the web UI, CI/
+release supply chain, and the binary self-updater. No feature or config
+schema changes; the version bump is minor (not patch) because of the
+Docker authentication requirement below, which changes default runtime
+behavior for existing Docker users.
+
+### ⚠️ Upgrade note for Docker users
+
+The container now **requires** either `CURATARR_AUTH_TOKEN` (a strong
+random value, `openssl rand -hex 32`) or an explicit
+`CURATARR_TRUSTED_NETWORK=true` opt-out to start at all - see
+`docs/DOCKER.md`'s new **Authentication** section. Without one of these
+set, the container will refuse to start and print exactly which env var
+to set. This applies even behind the new loopback-only default port
+publish in `docker-compose.yml` (`127.0.0.1:8787:8787`), because the
+container's process always binds `0.0.0.0` *inside* its own network
+namespace regardless of how the host-side port is published. Native
+(non-Docker) installs are unaffected - `web/app.py`'s own server is
+still hardcoded to `127.0.0.1` only and never requires a token.
+
+### Security
+
+- **[CRITICAL] Real authentication for any non-loopback bind.** An
+  audit proved live (via `curl`) that the existing Host/Origin guard
+  (`web/security.py`) is not authentication - it only stops a
+  *browser*, since a browser is what actually enforces same-origin
+  policy on the Host/Origin headers in the first place. A non-browser
+  client setting both to `localhost` sailed straight through it: config
+  writes persisted, `/run` launched a real recommender job, and
+  `/config/connections` disclosed saved values, all with zero
+  credentials. `web/security.py`'s new `register_token_auth` requires a
+  shared secret (`CURATARR_AUTH_TOKEN`, `Authorization: Bearer`/
+  `X-Curatarr-Token`/cookie, `hmac.compare_digest`) on every request
+  once the server is bound anywhere other than loopback - in addition
+  to the existing guard, never instead of it. `web/docker_server.py`
+  fails closed at startup rather than ever booting unauthenticated by
+  accident; the one exception is an explicit, non-default
+  `CURATARR_TRUSTED_NETWORK=true` opt-out for an operator who has
+  decided the published port is genuinely unreachable by anything
+  untrusted (prints a prominent warning on every boot). A minimal
+  `GET`/`POST /login` sets the browser-session cookie. Native installs
+  (`web/app.py`'s own `main()`, always `127.0.0.1`) are byte-for-byte
+  unchanged - no token required.
+- **[HIGH] Python code injection in `setup.sh`/`run.ps1`.** Interactive
+  setup interpolated Plex/Trakt/Simkl values - some sourced from live
+  API responses, not just local user input - unescaped into single-
+  quoted Python string literals inside `python3 -c "..."`/PowerShell
+  here-strings. A crafted value (or a compromised Trakt/Simkl response)
+  could break out and inject arbitrary Python. Every call site now
+  passes values as real subprocess arguments (`sys.argv`), never
+  text-interpolated into the script body - matching the pattern
+  `run.sh`'s own version-check helpers already used correctly.
+- **[HIGH] Plex token leaking into plaintext logs.** `utils/plex.py`
+  built several request URLs with `?X-Plex-Token=...` directly in the
+  query string (now `headers={'X-Plex-Token': ...}` everywhere, matching
+  the pattern already used correctly elsewhere in that file) and
+  redaction (`redact()`) was only ever applied when the web UI *read* a
+  log back, not when `web/job_runner.py`'s subprocess pump or
+  `utils/display.py`'s `TeeLogger`/`log_warning`/`log_error` *wrote* one
+  - meaning a token could sit in plaintext on disk even though the UI
+  itself never displayed it unredacted. Redaction now happens at write
+  time in both places. The implementation moved from `web/security.py`
+  to a new neutral `utils/redact.py` (importing `web.*` from `utils.*`
+  would have been a bad layering direction); `web/security.py`
+  re-exports it unchanged, so no existing import breaks.
+- **[MEDIUM] Config files written world-readable.** `config.yml`/
+  `tuning.yml`/`trakt.yml`/etc hold the Plex token and integration API
+  keys/tokens in plaintext; a plain `open(path, 'w')` lands at the OS
+  umask default (typically `0o644` on Linux/Docker). `utils/
+  migrate_config.py`, `utils/trakt_auth.py`, and `web/config_io.py`'s
+  `save_module` now explicitly `chmod(path, 0o600)` after every such
+  write (no-op-with-warning on Windows, where POSIX permission bits
+  don't apply - never crashes).
+- **[MEDIUM] No clickjacking/CSP protection on the core config UI.**
+  Only the watchlist-export route had a `Content-Security-Policy`
+  before this. A new `web/app.py` `after_request` hook sets
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, and a baseline CSP on every response
+  that doesn't already set its own - the watchlist route's own
+  (stricter, Google-Fonts-allowing) CSP still always wins on that one
+  route.
+- **[MEDIUM] Missing request timeouts** on the last two outbound calls
+  in `utils/plex.py` that lacked one (`timeout=30`, matching every other
+  call in that file).
+- **[MEDIUM] API keys survivable via cross-host redirects.** `requests`
+  follows redirects by default and only auto-strips the `Authorization`
+  header on a cross-host hop, never a custom header like `X-Api-Key` - a
+  malicious/compromised configured Radarr/Sonarr/Tautulli host could
+  redirect this app to an attacker-controlled host and harvest the key.
+  `utils/api_client.py`'s shared `BaseAPIClient` now disables automatic
+  redirect-following entirely and only ever re-issues a redirected
+  request when the target is the *same host* (capped at 5 hops); an
+  unfollowed redirect raises a clear error instead of silently trying to
+  parse a redirect page as JSON. The same `allow_redirects=False`
+  treatment was also applied to Trakt/Simkl/TMDB's own direct request
+  paths for consistency, even though those hit fixed official APIs
+  rather than user-configured hosts.
+- **[MEDIUM] Uncapped recursive retry on HTTP 429.** `utils/trakt.py`
+  and `utils/simkl.py` recursed indefinitely on a 429, sleeping for
+  however long the server-controlled `Retry-After` said to - a
+  misbehaving/malicious endpoint could hang or loop the process
+  indefinitely. Both now use a bounded loop (3 retries, matching the
+  pattern `utils/tmdb.py` already used correctly) with `Retry-After`
+  clamped to a 60-second ceiling.
+- **[MEDIUM] Response bodies from user-configured hosts were read into
+  memory unbounded.** `BaseAPIClient` (Radarr/Sonarr/Tautulli/MDBList)
+  and `utils/plex.py`'s direct requests now stream and cap the response
+  body at 10MB (`utils/helpers.read_response_capped`) before parsing it
+  - a misconfigured/compromised configured host serving an unbounded
+  body can no longer exhaust this process's memory.
+- Config-file-write hardening and the response cap both apply the same
+  neutral-module layering discipline as the redaction fix above -
+  reusable helpers live in `utils/helpers.py`, not duplicated per
+  caller.
+- **CI/release supply chain**: every CI/release workflow install step
+  now uses the hash-locked `*.lock` files with `pip install
+  --require-hashes` (including a newly-generated, hash-verified
+  `build-requirements.lock` for the PyInstaller build step, matching
+  the convention `requirements.lock`/etc already used) instead of a
+  plain `pip install -r *.txt`. Published Docker images are now signed
+  keylessly with `cosign` (Sigstore, no long-lived key in CI) right
+  after push - see `docs/DOCKER.md`'s new **Verifying the image**
+  section for the `cosign verify` command. Added least-privilege
+  `permissions:` blocks to every workflow that was missing one, a
+  `pip-audit` gate (blocking) in the test workflow and a Trivy image
+  scan (report-only) in the Docker workflow, a `docker` ecosystem entry
+  in Dependabot, and a digest pin (in addition to the tag) on the
+  `python:3.12-slim` base image. Fixed a script-injection pattern in the
+  test workflow (raw `${{ github.event.* }}` interpolated into a shell
+  `run:` block) to match the `env:`-var discipline `release.yml` already
+  used.
+- **Self-update hardening**: the release pipeline now embeds a signed
+  `# curatarr-version:` line inside `SHA256SUMS.txt` itself, so the
+  version number - not just each asset's hash - is covered by the same
+  signature (`utils/self_update.py` fails closed on a present-but-wrong
+  version line; an absent one, from an older release, is not an error).
+  The CLI's `--self-update` now reads back the freshly-swapped binary
+  (`<exe> --version`, a new flag) and restores the previous binary if it
+  doesn't confirm the expected version - mirroring the intent the web
+  UI's update path already had via its own `/healthz` readback. Both
+  the CLI and the web hand-off script now re-hash the verified asset one
+  more time immediately before the swap (closing the TOCTOU window
+  between verification and use), and both replace bare `powershell`/
+  `sh`/`bash`/`tasklist`/`taskkill` invocations with fully-qualified
+  system paths (falling back to the bare name if the expected path
+  doesn't exist, so nothing breaks on an unusual install).
+- Misc hardening: an open-redirect bypass (`/\evil.com`) in the update-
+  banner dismiss route's `next` parameter; unescaped streaming-service
+  fields in the external watchlist HTML output (defense-in-depth -
+  currently fed only by a hardcoded allowlist); a path-traversal
+  exposure in per-user cache-file migration if a Plex account's own
+  username/title field contained a path separator; `urllib3.
+  disable_warnings` no longer fires unconditionally at import, only when
+  a config actually opts out of TLS verification; and `set -o pipefail`
+  added to `run.sh`/`setup.sh` (with `|| true` preserved everywhere a
+  non-matching `grep` in a pipeline is already handled gracefully
+  afterward, so this doesn't turn an intentional "nothing found" path
+  into an unwanted hard exit).
+
 ## [2.8.31] - 2026-07-24
 
 ### Changed

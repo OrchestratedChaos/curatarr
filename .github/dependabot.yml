@@ -15,3 +15,11 @@ updates:
     open-pull-requests-limit: 3
     labels:
       - "dependencies"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"

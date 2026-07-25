@@ -548,16 +548,17 @@ function Start-SetupWizard {
     # Try to detect admin username from Plex
     $adminUser = ""
     try {
-        $adminUser = & $pythonCmd -c @"
+        $adminUserScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from plexapi.myplex import MyPlexAccount
-    account = MyPlexAccount(token='$plexToken')
+    account = MyPlexAccount(token=sys.argv[1])
     print(account.username)
 except:
-    print('')
-"@ 2>$null
+    print("")
+'@
+        $adminUser = & $pythonCmd -c $adminUserScript $plexToken 2>$null
     } catch {}
 
     # --- Huntarr: Missing Collection Movies ---
@@ -612,19 +613,20 @@ except:
             Write-Cyan "Authenticating with Trakt..."
 
             # Get device code
-            $traktAuthResult = & $pythonCmd -c @"
+            $traktDeviceCodeScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 from utils.trakt import TraktClient
 try:
-    client = TraktClient('$traktClientId', '$traktClientSecret')
+    client = TraktClient(sys.argv[1], sys.argv[2])
     device_info = client.get_device_code()
-    print('URL:' + device_info['verification_url'])
-    print('CODE:' + device_info['user_code'])
-    print('DEVICE:' + device_info['device_code'])
+    print("URL:" + device_info["verification_url"])
+    print("CODE:" + device_info["user_code"])
+    print("DEVICE:" + device_info["device_code"])
 except Exception as e:
-    print('ERROR:' + str(e))
-"@ 2>$null
+    print("ERROR:" + str(e))
+'@
+            $traktAuthResult = & $pythonCmd -c $traktDeviceCodeScript $traktClientId $traktClientSecret 2>$null
 
             $traktUrl = ($traktAuthResult | Where-Object { $_ -match "^URL:" }) -replace "^URL:", ""
             $traktCode = ($traktAuthResult | Where-Object { $_ -match "^CODE:" }) -replace "^CODE:", ""
@@ -642,18 +644,19 @@ except Exception as e:
                 Read-Host "Press Enter after you've approved on Trakt..."
 
                 # Poll for token
-                $traktTokens = & $pythonCmd -c @"
+                $traktPollScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 from utils.trakt import TraktClient
-client = TraktClient('$traktClientId', '$traktClientSecret')
-success = client.poll_for_token('$traktDevice', interval=1, expires_in=30)
+client = TraktClient(sys.argv[1], sys.argv[2])
+success = client.poll_for_token(sys.argv[3], interval=1, expires_in=30)
 if success:
-    print('ACCESS:' + client.access_token)
-    print('REFRESH:' + client.refresh_token)
+    print("ACCESS:" + client.access_token)
+    print("REFRESH:" + client.refresh_token)
 else:
-    print('FAILED')
-"@ 2>$null
+    print("FAILED")
+'@
+                $traktTokens = & $pythonCmd -c $traktPollScript $traktClientId $traktClientSecret $traktDevice 2>$null
 
                 $traktAccessToken = ($traktTokens | Where-Object { $_ -match "^ACCESS:" }) -replace "^ACCESS:", ""
                 $traktRefreshToken = ($traktTokens | Where-Object { $_ -match "^REFRESH:" }) -replace "^REFRESH:", ""
@@ -753,14 +756,14 @@ else:
             Write-Host ""
             Write-Cyan "Testing Sonarr connection..."
 
-            $sonarrTest = & $pythonCmd -c @"
+            $sonarrTestScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from utils.sonarr import SonarrClient
-    client = SonarrClient('$sonarrUrl', '$sonarrApiKey')
+    client = SonarrClient(sys.argv[1], sys.argv[2])
     client.test_connection()
-    print('OK')
+    print("OK")
     profiles = client.get_quality_profiles()
     for p in profiles:
         print(f'PROFILE:{p["id"]}:{p["name"]}')
@@ -768,8 +771,9 @@ try:
     for f in folders:
         print(f'FOLDER:{f["path"]}')
 except Exception as e:
-    print(f'ERROR:{e}')
-"@ 2>$null
+    print(f"ERROR:{e}")
+'@
+            $sonarrTest = & $pythonCmd -c $sonarrTestScript $sonarrUrl $sonarrApiKey 2>$null
 
             if ($sonarrTest -match "^OK") {
                 Write-Green "OK Connected to Sonarr!"
@@ -879,14 +883,14 @@ except Exception as e:
             Write-Host ""
             Write-Cyan "Testing Radarr connection..."
 
-            $radarrTest = & $pythonCmd -c @"
+            $radarrTestScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from utils.radarr import RadarrClient
-    client = RadarrClient('$radarrUrl', '$radarrApiKey')
+    client = RadarrClient(sys.argv[1], sys.argv[2])
     client.test_connection()
-    print('OK')
+    print("OK")
     profiles = client.get_quality_profiles()
     for p in profiles:
         print(f'PROFILE:{p["id"]}:{p["name"]}')
@@ -894,8 +898,9 @@ try:
     for f in folders:
         print(f'FOLDER:{f["path"]}')
 except Exception as e:
-    print(f'ERROR:{e}')
-"@ 2>$null
+    print(f"ERROR:{e}")
+'@
+            $radarrTest = & $pythonCmd -c $radarrTestScript $radarrUrl $radarrApiKey 2>$null
 
             if ($radarrTest -match "^OK") {
                 Write-Green "OK Connected to Radarr!"
@@ -1001,17 +1006,18 @@ except Exception as e:
             Write-Host ""
             Write-Cyan "Testing MDBList connection..."
 
-            $mdblistTest = & $pythonCmd -c @"
+            $mdblistTestScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from utils.mdblist import MDBListClient
-    client = MDBListClient('$mdblistApiKey')
+    client = MDBListClient(sys.argv[1])
     client.test_connection()
-    print('OK')
+    print("OK")
 except Exception as e:
-    print(f'ERROR:{e}')
-"@ 2>$null
+    print(f"ERROR:{e}")
+'@
+            $mdblistTest = & $pythonCmd -c $mdblistTestScript $mdblistApiKey 2>$null
 
             if ($mdblistTest -match "^OK") {
                 Write-Green "OK Connected to MDBList!"
@@ -1096,18 +1102,19 @@ except Exception as e:
             Write-Host ""
             Write-Cyan "Getting Simkl PIN code..."
 
-            $simklPin = & $pythonCmd -c @"
+            $simklPinScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from utils.simkl import SimklClient
-    client = SimklClient('$simklClientId')
+    client = SimklClient(sys.argv[1])
     pin_data = client.get_pin_code()
     print(f"CODE:{pin_data['user_code']}")
     print(f"URL:{pin_data['verification_url']}")
 except Exception as e:
-    print(f'ERROR:{e}')
-"@ 2>$null
+    print(f"ERROR:{e}")
+'@
+            $simklPin = & $pythonCmd -c $simklPinScript $simklClientId 2>$null
 
             $pinCode = ($simklPin | Where-Object { $_ -match "^CODE:" }) -replace "^CODE:", ""
             $pinUrl = ($simklPin | Where-Object { $_ -match "^URL:" }) -replace "^URL:", ""
@@ -1122,19 +1129,20 @@ except Exception as e:
                 Read-Host "Press Enter after you've authorized the app..."
 
                 Write-Cyan "Checking authorization..."
-                $simklAuth = & $pythonCmd -c @"
+                $simklAuthScript = @'
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from utils.simkl import SimklClient
-    client = SimklClient('$simklClientId')
-    if client.poll_for_token('$pinCode', interval=2, expires_in=30):
-        print(f'TOKEN:{client.access_token}')
+    client = SimklClient(sys.argv[1])
+    if client.poll_for_token(sys.argv[2], interval=2, expires_in=30):
+        print(f"TOKEN:{client.access_token}")
     else:
-        print('ERROR:Authorization timed out or was denied')
+        print("ERROR:Authorization timed out or was denied")
 except Exception as e:
-    print(f'ERROR:{e}')
-"@ 2>$null
+    print(f"ERROR:{e}")
+'@
+                $simklAuth = & $pythonCmd -c $simklAuthScript $simklClientId $pinCode 2>$null
 
                 $simklAccessToken = ($simklAuth | Where-Object { $_ -match "^TOKEN:" }) -replace "^TOKEN:", ""
 

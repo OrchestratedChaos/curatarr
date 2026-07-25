@@ -421,11 +421,14 @@ class TestVerifyPinnedSignature:
 class TestVerifyDownloadedAsset:
     ASSET_NAME = 'curatarr-linux-x86_64'
 
-    def _write_verified_fixture(self, tmp_path, signing_key, asset_bytes: bytes):
+    def _write_verified_fixture(self, tmp_path, signing_key, asset_bytes: bytes, version_line: str = None):
         asset_path = tmp_path / self.ASSET_NAME
         asset_path.write_bytes(asset_bytes)
         digest = self_update.sha256_file(str(asset_path))
-        sums_text = f"{digest}  {self.ASSET_NAME}\n"
+        sums_text = ''
+        if version_line is not None:
+            sums_text += f"# curatarr-version: {version_line}\n"
+        sums_text += f"{digest}  {self.ASSET_NAME}\n"
         sums_path = tmp_path / 'SHA256SUMS.txt'
         sums_path.write_text(sums_text, encoding='utf-8')
         sig_text = _sign(signing_key['key_path'], sums_text.encode('utf-8'), tmp_path)
@@ -492,6 +495,100 @@ class TestVerifyDownloadedAsset:
         asset_path, sums_path, sig_path = self._write_verified_fixture(tmp_path, signing_key, b'fake binary bytes')
         with pytest.raises(self_update.HashMismatchError, match='not listed'):
             self_update.verify_downloaded_asset(asset_path, sums_path, sig_path, 'curatarr-windows-x86_64.exe')
+
+    def test_returns_the_verified_digest(self, tmp_path, signing_key, monkeypatch):
+        monkeypatch.setattr(self_update, '_pinned_public_key', lambda: signing_key['public_key'])
+        asset_path, sums_path, sig_path = self._write_verified_fixture(tmp_path, signing_key, b'fake binary bytes')
+        expected = self_update.sha256_file(asset_path)
+        digest = self_update.verify_downloaded_asset(asset_path, sums_path, sig_path, self.ASSET_NAME)
+        assert digest == expected
+
+
+class TestVerifyDownloadedAssetVersionBinding:
+    """FIX 17: the version NUMBER itself is bound to the same signature
+    that already covers every asset hash (see .github/workflows/
+    release.yml's finalize-checksums job and _VERSION_LINE_RE). Must
+    stay backward-compatible with releases published before this field
+    existed - an ABSENT line is not an error, only a WRONG one is."""
+
+    ASSET_NAME = 'curatarr-linux-x86_64'
+
+    def _write_verified_fixture(self, tmp_path, signing_key, asset_bytes: bytes, version_line: str = None):
+        asset_path = tmp_path / self.ASSET_NAME
+        asset_path.write_bytes(asset_bytes)
+        digest = self_update.sha256_file(str(asset_path))
+        sums_text = ''
+        if version_line is not None:
+            sums_text += f"# curatarr-version: {version_line}\n"
+        sums_text += f"{digest}  {self.ASSET_NAME}\n"
+        sums_path = tmp_path / 'SHA256SUMS.txt'
+        sums_path.write_text(sums_text, encoding='utf-8')
+        sig_text = _sign(signing_key['key_path'], sums_text.encode('utf-8'), tmp_path)
+        sig_path = tmp_path / 'SHA256SUMS.txt.sig'
+        sig_path.write_text(sig_text, encoding='utf-8')
+        return str(asset_path), str(sums_path), str(sig_path)
+
+    def test_matching_version_line_passes(self, tmp_path, signing_key, monkeypatch):
+        monkeypatch.setattr(self_update, '_pinned_public_key', lambda: signing_key['public_key'])
+        asset_path, sums_path, sig_path = self._write_verified_fixture(
+            tmp_path, signing_key, b'fake binary bytes', version_line='2.9.0',
+        )
+        self_update.verify_downloaded_asset(  # must not raise
+            asset_path, sums_path, sig_path, self.ASSET_NAME, target_version='2.9.0',
+        )
+
+    def test_mismatched_version_line_fails_closed(self, tmp_path, signing_key, monkeypatch):
+        """A genuinely-signed sums file for a DIFFERENT release than the
+        one requested - e.g. a stale cache, a mix-up, or a downgrade/
+        version-confusion attempt - must be rejected even though every
+        individual asset hash inside it still verifies byte-for-byte."""
+        monkeypatch.setattr(self_update, '_pinned_public_key', lambda: signing_key['public_key'])
+        asset_path, sums_path, sig_path = self._write_verified_fixture(
+            tmp_path, signing_key, b'fake binary bytes', version_line='2.9.0',
+        )
+        with pytest.raises(self_update.VersionMismatchError):
+            self_update.verify_downloaded_asset(
+                asset_path, sums_path, sig_path, self.ASSET_NAME, target_version='2.9.1',
+            )
+
+    def test_absent_version_line_still_succeeds(self, tmp_path, signing_key, monkeypatch):
+        """A release published before this field existed - fails OPEN
+        on absence (never treats "no line" the same as "wrong line"),
+        so updating from an older release keeps working."""
+        monkeypatch.setattr(self_update, '_pinned_public_key', lambda: signing_key['public_key'])
+        asset_path, sums_path, sig_path = self._write_verified_fixture(
+            tmp_path, signing_key, b'fake binary bytes', version_line=None,
+        )
+        self_update.verify_downloaded_asset(  # must not raise
+            asset_path, sums_path, sig_path, self.ASSET_NAME, target_version='2.9.0',
+        )
+
+    def test_no_target_version_supplied_skips_the_check_entirely(self, tmp_path, signing_key, monkeypatch):
+        """target_version is optional - callers that don't pass it (or
+        pass None) get the pre-existing hash/signature-only behavior."""
+        monkeypatch.setattr(self_update, '_pinned_public_key', lambda: signing_key['public_key'])
+        asset_path, sums_path, sig_path = self._write_verified_fixture(
+            tmp_path, signing_key, b'fake binary bytes', version_line='2.9.0',
+        )
+        self_update.verify_downloaded_asset(asset_path, sums_path, sig_path, self.ASSET_NAME)  # must not raise
+
+
+class TestParseSha256SumsVersion:
+    def test_extracts_version_from_comment_line(self):
+        text = "# curatarr-version: 2.9.0\nabc123  curatarr-linux-x86_64\n"
+        assert self_update.parse_sha256sums_version(text) == '2.9.0'
+
+    def test_returns_none_when_absent(self):
+        text = "abc123  curatarr-linux-x86_64\n"
+        assert self_update.parse_sha256sums_version(text) is None
+
+    def test_case_insensitive_and_tolerant_of_whitespace(self):
+        text = "#   CURATARR-VERSION:   2.9.0   \nabc123  curatarr-linux-x86_64\n"
+        assert self_update.parse_sha256sums_version(text) == '2.9.0'
+
+    def test_does_not_match_an_unrelated_comment(self):
+        text = "# just a comment\nabc123  curatarr-linux-x86_64\n"
+        assert self_update.parse_sha256sums_version(text) is None
 
 
 # =============================================================================
@@ -666,6 +763,15 @@ class TestDownloadToFile:
 # =============================================================================
 
 class TestSwapPosix:
+    """_swap_posix now backs up current_path to current_path+'.old'
+    FIRST (rename), then moves the verified binary into place, with a
+    rollback-on-failure - the same two-step sequence _swap_windows
+    already used, adopted here so a post-swap readback failure
+    (perform_self_update's _verify_swapped_binary_or_restore) has
+    something on disk to restore from. See TestSwapWindows above for
+    the near-identical test shape this mirrors.
+    """
+
     def test_replaces_current_with_new_and_sets_exec_bit(self, tmp_path):
         current = tmp_path / 'curatarr'
         current.write_bytes(b'old content')
@@ -680,16 +786,94 @@ class TestSwapPosix:
         assert not new.exists()
         assert os.stat(str(current)).st_mode & 0o100  # owner-exec bit set
 
-    def test_replace_failure_raises_swap_error(self, tmp_path):
+    def test_leaves_old_backup_behind_on_success(self, tmp_path):
+        """The .old backup is deliberately NOT cleaned up immediately on
+        success - see cleanup_stale_old_binary, called on the NEXT
+        frozen startup, same as _swap_windows."""
+        current = tmp_path / 'curatarr'
+        current.write_bytes(b'old content')
+        new = tmp_path / 'new_download.tmp'
+        new.write_bytes(b'new verified content')
+
+        self_update._swap_posix(str(current), str(new))
+
+        assert (tmp_path / 'curatarr.old').read_bytes() == b'old content'
+
+    def test_clears_stale_old_sidecar_before_reuse(self, tmp_path):
+        current = tmp_path / 'curatarr'
+        current.write_bytes(b'old content')
+        (tmp_path / 'curatarr.old').write_bytes(b'stale leftover from a previous update')
+        new = tmp_path / 'new_download.tmp'
+        new.write_bytes(b'new verified content')
+
+        self_update._swap_posix(str(current), str(new))
+
+        assert (tmp_path / 'curatarr.old').read_bytes() == b'old content'
+
+    def test_stale_old_sidecar_removal_failure_is_non_fatal(self, tmp_path):
+        """A leftover .old that can't be removed (e.g. still locked by a
+        slow-to-exit previous process) must not abort the swap - the
+        rename below will just fail loudly on its own if that's
+        actually a real problem."""
+        current = tmp_path / 'curatarr'
+        current.write_bytes(b'old content')
+        (tmp_path / 'curatarr.old').write_bytes(b'stale, locked')
+        new = tmp_path / 'new_download.tmp'
+        new.write_bytes(b'new verified content')
+
+        with patch('utils.self_update.os.remove', side_effect=OSError('still locked')):
+            self_update._swap_posix(str(current), str(new))  # must not raise
+
+        assert current.read_bytes() == b'new verified content'
+
+    def test_rename_failure_raises_and_touches_nothing(self, tmp_path):
         current = tmp_path / 'curatarr'
         current.write_bytes(b'old content')
         new = tmp_path / 'new_download.tmp'
         new.write_bytes(b'new content')
-        with patch('utils.self_update.os.replace', side_effect=OSError('disk full')):
-            with pytest.raises(self_update.SwapError, match='Could not swap'):
+
+        with patch('utils.self_update.os.rename', side_effect=OSError('locked')):
+            with pytest.raises(self_update.SwapError, match='Could not rename'):
                 self_update._swap_posix(str(current), str(new))
-        # os.replace was mocked out entirely - current must be untouched.
         assert current.read_bytes() == b'old content'
+        assert new.read_bytes() == b'new content'
+
+    def test_move_failure_rolls_back_to_original_binary(self, tmp_path):
+        current = tmp_path / 'curatarr'
+        current.write_bytes(b'old content')
+        new = tmp_path / 'new_download.tmp'
+        new.write_bytes(b'new content')
+
+        real_replace = os.replace
+        calls = {'n': 0}
+
+        def _flaky_replace(src, dst):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise OSError('could not move new binary into place')
+            return real_replace(src, dst)
+
+        with patch('utils.self_update.os.replace', side_effect=_flaky_replace):
+            with pytest.raises(self_update.SwapError, match='rolled back to the original binary'):
+                self_update._swap_posix(str(current), str(new))
+
+        # Rollback succeeded: current_path has the ORIGINAL content back.
+        assert current.read_bytes() == b'old content'
+
+    def test_move_failure_and_rollback_failure_both_raise_with_recovery_hint(self, tmp_path):
+        current = tmp_path / 'curatarr'
+        current.write_bytes(b'old content')
+        new = tmp_path / 'new_download.tmp'
+        new.write_bytes(b'new content')
+
+        with patch('utils.self_update.os.replace', side_effect=OSError('everything is on fire')):
+            with pytest.raises(self_update.SwapError, match='rollback failed'):
+                self_update._swap_posix(str(current), str(new))
+        # current_path is gone (both replace attempts failed) but the
+        # renamed original is still recoverable at .old - the error
+        # message says so (asserted above via match).
+        assert not current.exists()
+        assert (tmp_path / 'curatarr.old').read_bytes() == b'old content'
 
 
 class TestCurrentBinaryPath:
@@ -966,8 +1150,9 @@ class TestDownloadAndVerifyUpdate:
             with open(dest, 'wb') as f:
                 f.write(b'downloaded bytes')
 
-        def _fake_verify(asset_path, sums_path, sig_path, asset_name):
-            calls.append(('verify', asset_name))
+        def _fake_verify(asset_path, sums_path, sig_path, asset_name, target_version=None):
+            calls.append(('verify', asset_name, target_version))
+            return 'fake-verified-digest'
 
         monkeypatch.setattr(self_update, '_download_to_file', _fake_download)
         monkeypatch.setattr(self_update, 'verify_downloaded_asset', _fake_verify)
@@ -977,9 +1162,10 @@ class TestDownloadAndVerifyUpdate:
         assert isinstance(result, self_update.VerifiedUpdate)
         assert result.version == '2.9.0'
         assert result.asset_name == 'curatarr-linux-x86_64'
+        assert result.asset_sha256 == 'fake-verified-digest'
         assert os.path.dirname(result.asset_path) == str(tmp_path)
         assert os.path.isfile(result.asset_path)
-        assert calls[-1] == ('verify', 'curatarr-linux-x86_64')
+        assert calls[-1] == ('verify', 'curatarr-linux-x86_64', '2.9.0')
         # Downloaded SHA256SUMS.txt and .sig, plus the asset itself.
         download_urls = [c[1] for c in calls if c[0] == 'download']
         assert any('SHA256SUMS.txt.sig' in u for u in download_urls)
@@ -1108,6 +1294,7 @@ class TestPerformSelfUpdate:
         with pytest.raises(self_update.NotFrozenError):
             self_update.perform_self_update()
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_success_path_swaps_and_returns_version(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
@@ -1117,9 +1304,17 @@ class TestPerformSelfUpdate:
 
         verified = self_update.VerifiedUpdate(
             version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         )
         monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        # Post-swap readback (_verify_swapped_binary_or_restore) actually
+        # runs the swapped-in file as a subprocess with --version - not
+        # meaningful against a plain text fixture file, and not this
+        # test's own concern (see TestVerifySwappedBinaryOrRestore for
+        # that). No-op it so this test stays focused on swap/download
+        # orchestration.
+        monkeypatch.setattr(self_update, '_verify_swapped_binary_or_restore', lambda *a, **k: None)
 
         result = self_update.perform_self_update()
 
@@ -1141,6 +1336,7 @@ class TestPerformSelfUpdate:
 
         swap_mock.assert_not_called()
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_swap_failure_still_cleans_up_the_verified_temp_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
@@ -1150,6 +1346,7 @@ class TestPerformSelfUpdate:
 
         verified = self_update.VerifiedUpdate(
             version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         )
         monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
@@ -1162,6 +1359,7 @@ class TestPerformSelfUpdate:
 
         assert not asset_path.exists()
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_swap_failure_cleanup_itself_failing_does_not_mask_the_real_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
@@ -1171,6 +1369,7 @@ class TestPerformSelfUpdate:
 
         verified = self_update.VerifiedUpdate(
             version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         )
         monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
@@ -1181,6 +1380,7 @@ class TestPerformSelfUpdate:
                 self_update.perform_self_update()
         assert current_exe.read_bytes() == b'old binary'
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_passes_force_refresh_through(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
@@ -1190,9 +1390,11 @@ class TestPerformSelfUpdate:
 
         mock_download = Mock(return_value=self_update.VerifiedUpdate(
             version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         ))
         monkeypatch.setattr(self_update, 'download_and_verify_update', mock_download)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        monkeypatch.setattr(self_update, '_verify_swapped_binary_or_restore', lambda *a, **k: None)
 
         self_update.perform_self_update(force_refresh=False)
 
@@ -1220,6 +1422,7 @@ class TestPerformSelfUpdateDowngradeGate:
 
         verified = self_update.VerifiedUpdate(
             version='2.8.29', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         )
         monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
@@ -1248,6 +1451,7 @@ class TestPerformSelfUpdateDowngradeGate:
 
         verified = self_update.VerifiedUpdate(
             version='2.5.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         )
         monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
@@ -1274,6 +1478,7 @@ class TestPerformSelfUpdateDowngradeGate:
 
         verified = self_update.VerifiedUpdate(
             version='not-a-version', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         )
         monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
@@ -1295,9 +1500,11 @@ class TestPerformSelfUpdateDowngradeGate:
 
         verified = self_update.VerifiedUpdate(
             version='2.9.0', asset_path=str(asset_path), asset_name='curatarr-linux-x86_64',
+            asset_sha256=self_update.sha256_file(str(asset_path)),
         )
         monkeypatch.setattr(self_update, 'download_and_verify_update', lambda force_refresh=True: verified)
         monkeypatch.setattr(self_update, 'current_binary_path', lambda: str(current_exe))
+        monkeypatch.setattr(self_update, '_verify_swapped_binary_or_restore', lambda *a, **k: None)
 
         result = self_update.perform_self_update()
 

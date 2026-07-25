@@ -46,9 +46,9 @@ requires_posix_shell = pytest.mark.skipif(
 
 
 class TestWindowsScriptContent:
-    def test_contains_all_five_expected_parameters(self):
+    def test_contains_all_six_expected_parameters(self):
         content = self_update_handoff._windows_script_content()
-        for param in ('$OldPid', '$CurrentExePath', '$NewAssetPath', '$Port', '$TargetVersion'):
+        for param in ('$OldPid', '$CurrentExePath', '$NewAssetPath', '$Port', '$TargetVersion', '$ExpectedSha256'):
             assert param in content
 
     def test_never_interpolates_a_literal_placeholder_for_dynamic_values(self):
@@ -102,7 +102,10 @@ class TestPosixScriptContent:
 
     def test_contains_positional_params_not_interpolated_paths(self):
         content = self_update_handoff._posix_script_content()
-        for var in ('OLD_PID="$1"', 'CURRENT_EXE="$2"', 'NEW_ASSET="$3"', 'PORT="$4"', 'TARGET_VERSION="$5"'):
+        for var in (
+            'OLD_PID="$1"', 'CURRENT_EXE="$2"', 'NEW_ASSET="$3"', 'PORT="$4"',
+            'TARGET_VERSION="$5"', 'EXPECTED_SHA256="$6"',
+        ):
             assert var in content
 
     def test_embeds_the_configured_timeouts_as_iteration_counts(self):
@@ -216,12 +219,17 @@ class TestWriteAndLaunchHandoffScript:
             old_pid=1234,
             current_exe_path=r'C:\install\curatarr.exe',
             verified_asset_path=r'C:\install\.curatarr-update-x.tmp',
+            verified_asset_sha256='deadbeef' * 8,
             port=8787,
             target_version='2.9.0',
         )
 
         cmd = mock_popen.call_args[0][0]
-        assert cmd[0] == 'powershell'
+        # Fully-qualified powershell.exe path if it exists on this
+        # machine (see _windows_powershell_path/resolve_system_executable),
+        # else the bare name - never hardcode which, just match whatever
+        # the production code itself would resolve to.
+        assert cmd[0] == self_update_handoff._windows_powershell_path()
         assert '-File' in cmd
         assert str(tmp_path / 'script.ps1') in cmd
         assert '-OldPid' in cmd and '1234' in cmd
@@ -229,12 +237,13 @@ class TestWriteAndLaunchHandoffScript:
         assert '-NewAssetPath' in cmd and r'C:\install\.curatarr-update-x.tmp' in cmd
         assert '-Port' in cmd and '8787' in cmd
         assert '-TargetVersion' in cmd and '2.9.0' in cmd
+        assert '-ExpectedSha256' in cmd and 'deadbeef' * 8 in cmd
 
     @patch('utils.self_update_handoff.subprocess.Popen')
     def test_windows_sets_detached_creationflags(self, mock_popen, monkeypatch, tmp_path):
         monkeypatch.setattr(self_update_handoff.os, 'name', 'nt')
         monkeypatch.setattr(self_update_handoff, '_write_script', lambda content: str(tmp_path / 'script.ps1'))
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c.exe', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c.exe', 'a.tmp', 'a' * 64, 8787, '2.9.0')
         _, kwargs = mock_popen.call_args
         assert 'creationflags' in kwargs
         assert 'start_new_session' not in kwargs
@@ -248,21 +257,25 @@ class TestWriteAndLaunchHandoffScript:
             old_pid=5678,
             current_exe_path='/opt/curatarr/curatarr',
             verified_asset_path='/opt/curatarr/.curatarr-update-x.tmp',
+            verified_asset_sha256='deadbeef' * 8,
             port=8787,
             target_version='2.9.0',
         )
 
         cmd = mock_popen.call_args[0][0]
+        # Fully-qualified /bin/sh if it exists on this machine (see
+        # _posix_sh_path/resolve_system_executable), else the bare name.
         assert cmd == [
-            'sh', str(tmp_path / 'script.sh'),
+            self_update_handoff._posix_sh_path(), str(tmp_path / 'script.sh'),
             '5678', '/opt/curatarr/curatarr', '/opt/curatarr/.curatarr-update-x.tmp', '8787', '2.9.0',
+            'deadbeef' * 8,
         ]
 
     @patch('utils.self_update_handoff.subprocess.Popen')
     def test_posix_uses_start_new_session(self, mock_popen, monkeypatch, tmp_path):
         monkeypatch.setattr(self_update_handoff.os, 'name', 'posix')
         monkeypatch.setattr(self_update_handoff, '_write_script', lambda content: str(tmp_path / 'script.sh'))
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 'a' * 64, 8787, '2.9.0')
         _, kwargs = mock_popen.call_args
         assert kwargs.get('start_new_session') is True
         assert 'creationflags' not in kwargs
@@ -272,7 +285,7 @@ class TestWriteAndLaunchHandoffScript:
         monkeypatch.setattr(self_update_handoff.os, 'name', 'posix')
         monkeypatch.setenv('_MEIPASS2', '/tmp/_MEIstale')
         monkeypatch.setattr(self_update_handoff, '_write_script', lambda content: str(tmp_path / 'script.sh'))
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 'a' * 64, 8787, '2.9.0')
         _, kwargs = mock_popen.call_args
         assert '_MEIPASS2' not in kwargs['env']
 
@@ -280,7 +293,7 @@ class TestWriteAndLaunchHandoffScript:
     def test_detached_stdio_and_close_fds(self, mock_popen, monkeypatch, tmp_path):
         monkeypatch.setattr(self_update_handoff.os, 'name', 'posix')
         monkeypatch.setattr(self_update_handoff, '_write_script', lambda content: str(tmp_path / 'script.sh'))
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 'a' * 64, 8787, '2.9.0')
         _, kwargs = mock_popen.call_args
         assert kwargs['stdin'] is not None  # DEVNULL, not inherited
         assert kwargs['close_fds'] is True
@@ -295,7 +308,7 @@ class TestWriteAndLaunchHandoffScript:
             return str(tmp_path / 'script.ps1')
 
         monkeypatch.setattr(self_update_handoff, '_write_script', fake_write)
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c.exe', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c.exe', 'a.tmp', 'a' * 64, 8787, '2.9.0')
         assert 'param(' in seen['content']
         assert '$OldPid' in seen['content']
 
@@ -309,7 +322,7 @@ class TestWriteAndLaunchHandoffScript:
             return str(tmp_path / 'script.sh')
 
         monkeypatch.setattr(self_update_handoff, '_write_script', fake_write)
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 'a' * 64, 8787, '2.9.0')
         assert seen['content'].startswith('#!/bin/sh')
 
 
@@ -365,7 +378,7 @@ class TestWriteAndLaunchHandoffScriptDebugLog:
         outside_path = tmp_path / 'attacker-controlled.log'
         monkeypatch.setenv('CURATARR_HANDOFF_DEBUG_LOG', str(outside_path))
 
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 'a' * 64, 8787, '2.9.0')
 
         _, kwargs = mock_popen.call_args
         assert kwargs['stdout'] is subprocess.DEVNULL
@@ -382,7 +395,7 @@ class TestWriteAndLaunchHandoffScriptDebugLog:
         log_path = app_root / 'logs' / 'handoff.log'
         monkeypatch.setenv('CURATARR_HANDOFF_DEBUG_LOG', str(log_path))
 
-        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 8787, '2.9.0')
+        self_update_handoff.write_and_launch_handoff_script(1234, 'c', 'a.tmp', 'a' * 64, 8787, '2.9.0')
 
         _, kwargs = mock_popen.call_args
         assert kwargs['stdout'] is not subprocess.DEVNULL

@@ -10,9 +10,6 @@ import xml.etree.ElementTree as ET
 import plexapi.server
 import plexapi.exceptions
 
-# Suppress InsecureRequestWarning when users explicitly set verify_ssl=False for local Plex servers
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -22,7 +19,52 @@ logger = logging.getLogger('curatarr')
 from plexapi.myplex import MyPlexAccount
 
 from .display import GREEN, YELLOW, RED, RESET, log_warning, log_error
-from .helpers import normalize_title
+from .helpers import normalize_title, read_response_capped
+
+
+def _resolve_verify_ssl(config: dict) -> bool:
+    """config['plex'].get('verify_ssl', True), with the side effect of
+    suppressing urllib3's InsecureRequestWarning ONLY when THIS config
+    actually opts out of certificate verification (an explicit user
+    choice, e.g. for a local Plex server with a self-signed cert) -
+    never unconditionally at import time (this module's previous
+    behavior), which would also silence the warning for every other
+    HTTPS request this process ever makes, including ones that never
+    disabled verification at all."""
+    verify_ssl = config['plex'].get('verify_ssl', True)
+    if not verify_ssl:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    return verify_ssl
+
+
+def _capped_get(url, **kwargs):
+    """requests.get() wrapper that streams the response and caps its
+    body size (see utils.helpers.read_response_capped) - config['plex']
+    ['url'] is user-configured and could point anywhere, so a response
+    body is never assumed to be a bounded size just because a
+    legitimate Plex server's always would be. Raises
+    requests.RequestException (same as every other failure mode already
+    handled at each call site) rather than the ValueError
+    read_response_capped itself raises, so no call site needs its own
+    except clause changed."""
+    kwargs.setdefault('stream', True)
+    response = requests.get(url, **kwargs)
+    try:
+        read_response_capped(response)
+    except ValueError as e:
+        raise requests.RequestException(f"Plex response rejected: {e}") from e
+    return response
+
+
+def _capped_put(url, **kwargs):
+    """See _capped_get's docstring - identical reasoning, for PUT."""
+    kwargs.setdefault('stream', True)
+    response = requests.put(url, **kwargs)
+    try:
+        read_response_capped(response)
+    except ValueError as e:
+        raise requests.RequestException(f"Plex response rejected: {e}") from e
+    return response
 
 
 def init_plex(config: dict) -> plexapi.server.PlexServer:
@@ -38,7 +80,7 @@ def init_plex(config: dict) -> plexapi.server.PlexServer:
     try:
         # Create session with SSL verification settings
         session = requests.Session()
-        session.verify = config['plex'].get('verify_ssl', True)
+        session.verify = _resolve_verify_ssl(config)
 
         return plexapi.server.PlexServer(
             config['plex']['url'],
@@ -63,10 +105,10 @@ def get_plex_account_ids(config: Dict, users_to_match: List[str]) -> List[str]:
     """
     account_ids = []
     try:
-        response = requests.get(
+        response = _capped_get(
             f"{config['plex']['url']}/accounts",
             headers={'X-Plex-Token': config['plex']['token']},
-            verify=config['plex'].get('verify_ssl', True),
+            verify=_resolve_verify_ssl(config),
             timeout=30
         )
         response.raise_for_status()
@@ -152,8 +194,13 @@ def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
 
         watched_movies = set()
         for account_id in account_ids:
-            url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
-            response = requests.get(url, verify=config['plex'].get('verify_ssl', True), timeout=30)
+            url = f"{config['plex']['url']}/status/sessions/history/all?accountID={account_id}"
+            response = _capped_get(
+                url,
+                headers={'X-Plex-Token': config['plex']['token']},
+                verify=_resolve_verify_ssl(config),
+                timeout=30,
+            )
             root = ET.fromstring(response.content)
 
             for video in root.findall('.//Video'):
@@ -187,8 +234,13 @@ def get_watched_show_count(config: Dict, users_to_check: List[str]) -> int:
 
         watched_shows = set()
         for account_id in account_ids:
-            url = f"{config['plex']['url']}/status/sessions/history/all?X-Plex-Token={config['plex']['token']}&accountID={account_id}"
-            response = requests.get(url, verify=config['plex'].get('verify_ssl', True), timeout=30)
+            url = f"{config['plex']['url']}/status/sessions/history/all?accountID={account_id}"
+            response = _capped_get(
+                url,
+                headers={'X-Plex-Token': config['plex']['token']},
+                verify=_resolve_verify_ssl(config),
+                timeout=30,
+            )
             root = ET.fromstring(response.content)
 
             for video in root.findall('.//Video'):
@@ -242,14 +294,19 @@ def fetch_plex_watch_history_movies(config: Dict, account_ids: List[str], movies
 
                     history_url = f"{base_url}/status/sessions/history/all"
                     params = {
-                        'X-Plex-Token': token,
                         'accountID': account_id,
                         'librarySectionID': library_key,
                         'sort': 'viewedAt:desc',
                         'X-Plex-Container-Size': 10000
                     }
 
-                    response = requests.get(history_url, params=params, verify=config['plex'].get('verify_ssl', True), timeout=30)
+                    response = _capped_get(
+                        history_url,
+                        params=params,
+                        headers={'X-Plex-Token': token},
+                        verify=_resolve_verify_ssl(config),
+                        timeout=30,
+                    )
                     response.raise_for_status()
 
                     root = ET.fromstring(response.content)
@@ -313,7 +370,6 @@ def fetch_plex_watch_history_shows(
 
         url = f"{config['plex']['url']}/status/sessions/history/all"
         params = {
-            'X-Plex-Token': config['plex']['token'],
             'accountID': account_id,
             'librarySectionID': tv_section.key,
             'sort': 'viewedAt:desc',
@@ -321,7 +377,13 @@ def fetch_plex_watch_history_shows(
         }
 
         try:
-            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', True), timeout=30)
+            response = _capped_get(
+                url,
+                params=params,
+                headers={'X-Plex-Token': config['plex']['token']},
+                verify=_resolve_verify_ssl(config),
+                timeout=30,
+            )
             response.raise_for_status()
 
             root = ET.fromstring(response.content)
@@ -387,7 +449,6 @@ def fetch_show_completion_data(
     for account_id in account_ids:
         url = f"{config['plex']['url']}/status/sessions/history/all"
         params = {
-            'X-Plex-Token': config['plex']['token'],
             'accountID': account_id,
             'librarySectionID': tv_section.key,
             'sort': 'viewedAt:desc',
@@ -395,9 +456,10 @@ def fetch_show_completion_data(
         }
 
         try:
-            response = requests.get(
+            response = _capped_get(
                 url, params=params,
-                verify=config['plex'].get('verify_ssl', True),
+                headers={'X-Plex-Token': config['plex']['token']},
+                verify=_resolve_verify_ssl(config),
                 timeout=60
             )
             response.raise_for_status()
@@ -515,14 +577,19 @@ def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str
     for account_id in account_ids:
         url = f"{config['plex']['url']}/status/sessions/history/all"
         params = {
-            'X-Plex-Token': config['plex']['token'],
             'accountID': account_id,
             'librarySectionID': section.key,
             'sort': 'viewedAt:desc'
         }
 
         try:
-            response = requests.get(url, params=params, verify=config['plex'].get('verify_ssl', True), timeout=30)
+            response = _capped_get(
+                url,
+                params=params,
+                headers={'X-Plex-Token': config['plex']['token']},
+                verify=_resolve_verify_ssl(config),
+                timeout=30,
+            )
             if response.status_code != 200:
                 continue
 
@@ -1097,8 +1164,8 @@ def apply_user_label_restrictions(
         admin_username = account.username.lower()
 
         # Fetch all users via direct API (works for both shared and managed users)
-        users_url = f"https://plex.tv/api/users?X-Plex-Token={plex_token}"
-        response = requests.get(users_url)
+        users_url = "https://plex.tv/api/users"
+        response = _capped_get(users_url, headers={'X-Plex-Token': plex_token}, timeout=30)
         response.raise_for_status()
 
         # Parse XML response to get user IDs and names
@@ -1166,13 +1233,17 @@ def apply_user_label_restrictions(
             # Apply restrictions via direct PUT to Plex API
             update_url = f"https://plex.tv/api/users/{user_id}"
             params = {
-                'X-Plex-Token': plex_token,
                 'filterMovies': filter_value,
                 'filterTelevision': filter_value
             }
 
             try:
-                put_response = requests.put(update_url, params=params)
+                put_response = _capped_put(
+                    update_url,
+                    params=params,
+                    headers={'X-Plex-Token': plex_token},
+                    timeout=30,
+                )
                 put_response.raise_for_status()
                 print(f"{GREEN}Applied exclusions for {username}: hiding labels {exclude_labels}{RESET}")
             except requests.RequestException as e:

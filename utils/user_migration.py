@@ -237,12 +237,49 @@ def _capture_old_display_name(root_config: Dict, old_username: str) -> str:
     return old_prefs.get('display_name') or old_username.capitalize()
 
 
+def _safe_cache_path(cache_dir: str, filename: str) -> Optional[str]:
+    """Join *filename* onto *cache_dir* and confirm the result actually
+    resolves under it - realpath-based (not just textual normalization)
+    so a symlink placed inside cache_dir can't be used to escape it
+    either, same technique as web.security.safe_join (not imported from
+    here - importing web.* from utils.* would be a bad layering
+    direction; this is small enough not to warrant moving it to a
+    shared module the way redact() was).
+
+    Why this matters here specifically: old_username/new_username come
+    from a live Plex account's own username/title field - set by
+    whoever owns that account, not something curatarr controls - and
+    get interpolated directly into _CACHE_FILENAME_PATTERNS. A username
+    containing a path separator (e.g. '../../etc/passwd') would
+    otherwise make the "cache filename" resolve OUTSIDE cache_dir
+    entirely, and migrate_cache_files below calls os.rename/os.remove
+    on it. Deliberately NOT solved by sanitizing the username instead
+    (replacing unusual characters) - recommenders/external.py's own
+    cache-writing code interpolates the raw, unsanitized username into
+    these same filenames, so a sanitized lookup here could silently
+    fail to find (and thus skip migrating) a real, legitimately-named
+    existing cache file. Returns None (never raises) if containment
+    fails, so callers can just skip that file.
+    """
+    base = os.path.realpath(cache_dir)
+    candidate = os.path.realpath(os.path.join(cache_dir, filename))
+    if candidate != base and not candidate.startswith(base + os.sep):
+        return None
+    return candidate
+
+
 def migrate_cache_files(cache_dir: str, old_username: str, new_username: str) -> None:
     """Rename (or drop, if a file for the new name already exists) known
     per-user cache files so a rename doesn't leave stale/orphaned caches."""
     for pattern in _CACHE_FILENAME_PATTERNS:
-        old_path = os.path.join(cache_dir, pattern.format(username=old_username))
-        new_path = os.path.join(cache_dir, pattern.format(username=new_username))
+        old_path = _safe_cache_path(cache_dir, pattern.format(username=old_username))
+        new_path = _safe_cache_path(cache_dir, pattern.format(username=new_username))
+        if old_path is None or new_path is None:
+            log_warning(
+                f"Skipping cache migration for '{old_username}' -> '{new_username}': "
+                f"resolved path would escape {cache_dir}"
+            )
+            continue
         if not os.path.exists(old_path):
             continue
         try:

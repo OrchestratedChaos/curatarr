@@ -44,6 +44,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_success_unwraps_data(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {
             'response': {'result': 'success', 'message': None, 'data': [{'user_id': 1}]}
@@ -63,6 +70,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_error_result_raises(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {
             'response': {'result': 'error', 'message': 'Invalid apikey', 'data': {}}
@@ -76,6 +90,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_unexpected_shape_raises(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {"unexpected": True}
         mock_request.return_value = mock_response
@@ -87,6 +108,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_http_error_raises(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 401
         mock_request.return_value = mock_response
 
@@ -213,16 +241,16 @@ class TestMapUsers:
         assert result == {'1': '501'}
 
     def test_falls_back_to_username_when_no_email_match(self):
-        plex_identities = [{'id': '2', 'username': 'ericarutyunov', 'email': None}]
-        tautulli_users = [{'user_id': 502, 'username': 'ericarutyunov', 'email': 'someone-else@example.com'}]
+        plex_identities = [{'id': '2', 'username': 'testuser_bravo', 'email': None}]
+        tautulli_users = [{'user_id': 502, 'username': 'testuser_bravo', 'email': 'someone-else@example.com'}]
 
         result = map_users(plex_identities, tautulli_users)
 
         assert result == {'2': '502'}
 
     def test_falls_back_to_friendly_name(self):
-        plex_identities = [{'id': '3', 'username': 'homehouse165', 'email': None}]
-        tautulli_users = [{'user_id': 503, 'username': 'random_login', 'friendly_name': 'homehouse165', 'email': None}]
+        plex_identities = [{'id': '3', 'username': 'testuser_charlie', 'email': None}]
+        tautulli_users = [{'user_id': 503, 'username': 'random_login', 'friendly_name': 'testuser_charlie', 'email': None}]
 
         result = map_users(plex_identities, tautulli_users)
 

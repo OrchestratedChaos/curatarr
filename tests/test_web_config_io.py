@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
 from ruamel.yaml.comments import CommentedMap
 
 from web.config_io import (
@@ -113,6 +114,24 @@ class TestLoadSaveRoundTrip:
         path = config_dir / 'trakt.yml'
         path.write_text('', encoding='utf-8')
         assert dict(load_module(str(path))) == {}
+
+    @pytest.mark.skipif(os.name == 'nt', reason="POSIX file permissions don't apply on Windows")
+    def test_save_ends_up_owner_only(self, tmp_path):
+        """FIX 5: config.yml/trakt.yml/etc hold the Plex token and
+        integration API keys/tokens in plaintext. This was already true
+        today only as an accident of tempfile.mkstemp()'s own default -
+        save_module now chmods explicitly rather than relying on that
+        implementation detail."""
+        config_dir = tmp_path / 'config'
+        config_dir.mkdir()
+        path = config_dir / 'trakt.yml'
+        data = load_module(str(path))
+        data['client_secret'] = 'super-secret'
+        save_module(str(path), data)
+
+        import stat
+        mode = stat.S_IMODE(os.stat(str(path)).st_mode)
+        assert mode == 0o600, f"trakt.yml was {oct(mode)}, expected 0o600"
 
 
 class TestSecretHelpers:

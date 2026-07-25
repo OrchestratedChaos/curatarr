@@ -16,11 +16,18 @@ Design notes:
   and every state-changing request's Origin/Referer must be too (blocks
   a page on any other origin from driving /run or /config/* - this app
   has no other session/auth boundary to rely on).
+- That guard alone is NOT authentication - it only stops browsers, not a
+  non-browser client that sets Host/Origin itself. web/app.py's own
+  main() is hardcoded to 127.0.0.1 only (see below), where that's an
+  acceptable trust boundary; web/docker_server.py binds non-loopback for
+  container use and additionally requires web.security.register_token_auth
+  (CURATARR_AUTH_TOKEN) on every request - see that module for why.
 """
 
 import atexit
 import os
 import queue
+import re
 import signal
 import socket
 import sys
@@ -49,7 +56,7 @@ from utils import (
 
 from .config_app import register_config_routes
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
-from .security import redact, register_origin_host_guard
+from .security import redact, register_origin_host_guard, register_token_auth
 from .status import find_user_watchlist, get_last_run_status, list_log_files, read_log_tail
 from .update_apply import (
     UpdateAlreadyInProgressError,
@@ -84,6 +91,52 @@ WATCHLIST_CSP = (
     "frame-ancestors 'none'"
 )
 
+# Baseline clickjacking/MIME-sniffing/CSP hardening applied to every
+# response (see _set_security_headers below) - the config UI had no CSP
+# and no X-Frame-Options at all before this, outside of
+# results_watchlist()'s own (stricter, above) - meaning it was framable,
+# and a click inside a same-origin iframe passes the Origin guard, so a
+# clickjacking page could drive e.g. the Auto-sync toggle.
+#
+# No upgrade-insecure-requests: this app serves plain HTTP by design
+# (see docs/DOCKER.md), that directive would break every resource load.
+# 'unsafe-inline' on script-src/style-src: base.html and run.html each
+# have one inline <script> block (the update-banner poll and the
+# window.CURATARR_HAS_JOB handoff to app.js), and templates use inline
+# style attributes - both confirmed by reading every template, nothing
+# else needed it. font-src 'self': fonts are served locally from
+# web/static/fonts/*.woff2 (confirmed - no template references an
+# external font CDN outside of results_watchlist()'s own page, which
+# keeps its stricter, separate CSP above).
+BASELINE_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'"
+)
+
+_BASELINE_SECURITY_HEADERS = {
+    'X-Frame-Options': 'DENY',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': BASELINE_CSP,
+}
+
+# Used by update_dismiss() below to validate a 'next' redirect target is
+# a genuine same-app relative path, not an open-redirect. A leading '/'
+# alone isn't sufficient: '/\evil.com' also starts with '/' and doesn't
+# start with '//', but some browsers normalize a leading backslash the
+# same as a second forward slash, turning it into a protocol-relative
+# URL to another origin (//evil.com) - a well-known open-redirect
+# bypass. Requiring the character right after the leading '/' to be
+# neither '/' nor '\' closes that off.
+_SAFE_RELATIVE_REDIRECT_RE = re.compile(r'^/[^/\\]')
+
 
 class _BrowserLikeTestClient(FlaskClient):
     """Flask's default test client sends bare requests (Host: localhost,
@@ -104,11 +157,22 @@ class _BrowserLikeTestClient(FlaskClient):
         return super().open(*args, **kwargs)
 
 
-def create_app(project_root: str = None) -> Flask:
+def create_app(project_root: str = None, bind_host: str = None) -> Flask:
     """Application factory. project_root is overridable so tests can
     point the app at a throwaway fixture repo instead of the real one.
+
+    bind_host is the address this app is ABOUT to be served on (not
+    something Flask/this factory binds itself) - passed through to
+    web.security.register_token_auth so it knows whether real token
+    auth needs to be enforced (non-loopback) or not (loopback - the
+    default, and the only thing web/app.py's own main() ever uses).
+    Defaults to CURATARR_UI_HOST if set (see web/docker_server.py, the
+    only caller that ever sets that env var) else '127.0.0.1', so every
+    existing call site - including every test - that doesn't pass this
+    explicitly keeps today's loopback-only, no-token-required behavior.
     """
     project_root = project_root or get_project_root()
+    bind_host = bind_host or os.environ.get('CURATARR_UI_HOST', '127.0.0.1')
     logs_dir = os.path.join(project_root, 'logs')
     external_dir = os.path.join(project_root, 'recommendations', 'external')
 
@@ -121,7 +185,20 @@ def create_app(project_root: str = None) -> Flask:
     app.test_client_class = _BrowserLikeTestClient
 
     register_origin_host_guard(app)
+    register_token_auth(app, bind_host)
     register_config_routes(app)
+
+    @app.after_request
+    def _set_security_headers(response):
+        """Only sets a header if the route hasn't already set one of its
+        own - results_watchlist() sets a stricter Content-Security-
+        Policy for served watchlist HTML (WATCHLIST_CSP above), and that
+        must always win over this baseline, never get overwritten by
+        it."""
+        for name, value in _BASELINE_SECURITY_HEADERS.items():
+            if name not in response.headers:
+                response.headers[name] = value
+        return response
 
     def _load_config():
         config_path = os.path.join(project_root, 'config', 'config.yml')
@@ -207,8 +284,10 @@ def create_app(project_root: str = None) -> Flask:
         version = request.form.get('version', '')
         next_url = request.form.get('next') or url_for('dashboard')
         # Only ever redirect to a same-app relative path - never let an
-        # attacker-controlled 'next' turn this into an open redirect.
-        if not next_url.startswith('/') or next_url.startswith('//'):
+        # attacker-controlled 'next' turn this into an open redirect
+        # (see _SAFE_RELATIVE_REDIRECT_RE's comment for the '/\' bypass
+        # a plain startswith('/') check alone would miss).
+        if not _SAFE_RELATIVE_REDIRECT_RE.match(next_url):
             next_url = url_for('dashboard')
         record_dismissal(version)
         return redirect(next_url, code=303)
