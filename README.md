@@ -27,9 +27,13 @@ Grab the binary for your platform - no Python, no `git clone`:
 | Platform | Asset |
 |---|---|
 | Windows x64 | `curatarr-windows-x86_64.exe` |
-| macOS universal (Intel + Apple Silicon) | `curatarr-macos-universal` |
+| macOS (Apple Silicon) | `curatarr-macos-arm64` |
 | Linux x64 | `curatarr-linux-x86_64` |
 | Linux arm64 | `curatarr-linux-arm64` |
+
+macOS binaries are Apple Silicon only - Intel Mac users should run from
+source (see [Quick Start](#quick-start) below). Details in
+[docs/BINARIES.md](docs/BINARIES.md).
 
 [Latest release](https://github.com/OrchestratedChaos/curatarr/releases/latest) · full platform-specific steps and checksums in [docs/BINARIES.md](docs/BINARIES.md)
 

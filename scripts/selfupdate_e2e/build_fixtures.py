@@ -42,7 +42,7 @@ def asset_name_for_this_platform():
     if sys.platform == 'win32':
         return 'curatarr-windows-x86_64.exe', 'curatarr.exe'
     if sys.platform == 'darwin':
-        return 'curatarr-macos-universal', 'curatarr'
+        return 'curatarr-macos-arm64', 'curatarr'
     if sys.platform.startswith('linux'):
         import platform as _platform
         machine = _platform.machine().lower()

@@ -2,6 +2,59 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.0] - 2026-07-25
+
+This release also carries the `scripts/release.sh` /
+`scripts/sign-release-checksums.sh` fixes recorded below under
+`[2.9.3]` - that version was never cut as its own tagged release (the
+last published release before this one is v2.9.2), so those fixes ship
+here for the first time alongside everything below.
+
+### Removed
+
+- **macOS Intel support removed.** `cryptography` 49.0.0 dropped
+  x86_64 macOS wheels entirely (deprecated in 46.0.0/47.0.0, removed
+  per its own CHANGELOG: "Support for x86_64 macOS has been removed"),
+  and GitHub's `macos-13` runner (the last Intel macOS CI runner) is
+  retired - only `macos-15-intel` remains, itself sunsetting Aug 2027.
+  With no supported way to build or test an Intel macOS binary going
+  forward, and lifetime downloads of the old `curatarr-macos-universal`
+  asset across all prior releases in the low single digits, macOS
+  binaries are now **Apple Silicon (arm64) only**. Intel Mac users
+  should run Curatarr from source instead (no architecture restriction
+  there) - see the README's Quick Start / `docs/BINARIES.md`.
+  - `.github/workflows/release.yml`'s separate `build-macos-universal`
+    job (python.org's universal2 interpreter pin, `delocate-merge`
+    wheel-fusing for `pyyaml`/`ruamel.yaml.clib`/`markupsafe`/`cffi`) is
+    gone; macOS is now a normal `macos-latest` entry in the
+    `build-binaries` matrix, same `actions/setup-python` build as every
+    other platform. Its `lipo -archs` sanity check is inverted from the
+    old universal2-era check: it now asserts the built binary is
+    **arm64-only and not fat**, so a regression back to a universal
+    build is caught in CI rather than shipped.
+  - **Transitional asset naming (this release only):** the canonical
+    macOS asset is now `curatarr-macos-arm64`
+    (`utils.self_update.select_asset_name()` returns this on macOS),
+    but this release *also* publishes an identical-bytes
+    `curatarr-macos-universal` duplicate (own `.sha256` sidecar, both
+    listed in `SHA256SUMS.txt`) purely so installs still running a
+    pre-2.10.0 binary - whose self-updater still requests the old name
+    - can self-update at least once more instead of 404ing and failing
+    closed. Drop the duplicate in a future release once no longer
+    needed.
+
+### Dependencies
+
+- `cryptography` 48.0.1 → 49.0.0. Previously held back specifically
+  because 49.0.0 dropped the x86_64 macOS wheel the old universal2
+  binary build needed (see above) - no longer a constraint now that
+  macOS builds are arm64-only. No known CVE was unpatched between the
+  two versions either way (checked pyca/cryptography's GHSA advisories
+  directly). `pip-audit` against all four regenerated locks
+  (`requirements.lock`, `requirements-ui.lock`,
+  `requirements-docker.lock`, `build-requirements.lock`) reports zero
+  known vulnerabilities.
+
 ## [2.9.3] - 2026-07-25
 
 Fixes `scripts/release.sh` and `scripts/sign-release-checksums.sh` so the

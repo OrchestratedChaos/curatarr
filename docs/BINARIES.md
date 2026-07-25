@@ -9,9 +9,23 @@ it, and it opens the web UI in your browser - no Python install, no
 | Platform | Asset |
 |---|---|
 | Windows (x86_64) | `curatarr-windows-x86_64.exe` |
-| macOS (Intel + Apple Silicon) | `curatarr-macos-universal` |
+| macOS (Apple Silicon) | `curatarr-macos-arm64` |
 | Linux (x86_64) | `curatarr-linux-x86_64` |
 | Linux (arm64) | `curatarr-linux-arm64` |
+
+macOS binaries are Apple Silicon (arm64) only as of this release -
+`cryptography` 49.0.0 removed x86_64 macOS wheels entirely, and
+GitHub's last Intel macOS CI runner (`macos-13`) is retired
+(`macos-15-intel` remains but sunsets Aug 2027), so there's no longer a
+supported way to build or test an Intel macOS binary. Intel Mac users
+should run Curatarr from source instead - see [Quick
+Start](../README.md#quick-start) in the main README; the source install
+has no architecture restriction. This one release also still publishes
+an identically-byte `curatarr-macos-universal` asset for a transitional
+period, purely so installs still running a pre-2.10.0 binary (whose
+self-updater requests that old name) can self-update at least once more
+- see [Self-updating](#self-updating) below. New installs should always
+download `curatarr-macos-arm64`.
 
 Each asset has a matching `<asset>.sha256` file with its checksum, and the
 release also publishes an aggregate `SHA256SUMS.txt` (every asset's checksum
@@ -39,16 +53,15 @@ why.
 
 ### macOS
 
-1. Download `curatarr-macos-universal` and make it executable:
-   `chmod +x curatarr-macos-universal`. It's a single **universal2**
-   binary that runs natively on both Intel and Apple Silicon
-   (M1/M2/M3/M4) Macs - no need to pick one.
+1. Download `curatarr-macos-arm64` and make it executable:
+   `chmod +x curatarr-macos-arm64`. Apple Silicon (M1/M2/M3/M4) only -
+   see the note above the asset table if you're on an Intel Mac.
 2. Gatekeeper will refuse to open an unsigned binary downloaded from
    the internet the normal way - see
    [Unsigned binaries](#unsigned-binaries) for the two ways around
    that.
 3. Run it (double-click in Finder after clearing Gatekeeper, or
-   `./curatarr-macos-universal` in Terminal). Your browser opens to
+   `./curatarr-macos-arm64` in Terminal). Your browser opens to
    `http://127.0.0.1:8787`.
 
 ### Linux
@@ -64,7 +77,7 @@ why.
 
 ```bash
 # macOS/Linux
-shasum -a 256 -c curatarr-macos-universal.sha256
+shasum -a 256 -c curatarr-macos-arm64.sha256
 
 # Windows (PowerShell)
 (Get-FileHash .\curatarr-windows-x86_64.exe -Algorithm SHA256).Hash.ToLower()
@@ -89,7 +102,7 @@ warn you the first time you run a downloaded binary:
   double-click on a freshly-downloaded unsigned binary will just say
   it "cannot be opened" and won't offer this option - it has to be the
   right-click path the first time.) Alternatively, clear the quarantine
-  attribute from a terminal: `xattr -d com.apple.quarantine curatarr-macos-universal`.
+  attribute from a terminal: `xattr -d com.apple.quarantine curatarr-macos-arm64`.
 - **Linux**: no equivalent gate; just needs `chmod +x`.
 
 Only download binaries from the official
@@ -221,19 +234,10 @@ Produces `dist/curatarr` (`dist/curatarr.exe` on Windows). See
 `.github/workflows/release.yml` for the CI matrix that does this for
 every tagged release.
 
-### Building the macOS universal2 binary yourself
+### Building the macOS binary yourself
 
-`curatarr-macos-universal` needs a **universal2** Python (Intel + Apple
-Silicon in one interpreter) - the regular python.org/Homebrew installer
-for your own Mac's architecture only produces a single-arch build, which
-PyInstaller can't turn into a universal2 binary on its own. You also
-need universal2 wheels for every compiled dependency; PyPI doesn't
-publish those for `pyyaml`, `ruamel.yaml.clib`, or `markupsafe` (only
-separate x86_64/arm64 wheels), so those three have to be fused into
-universal2 wheels first. See the `build-macos-universal` job in
-`.github/workflows/release.yml` for the exact, working recipe
-(install python.org's universal2 `.pkg`, then
-`delocate-merge` the three thin wheels, then
-`PYINSTALLER_TARGET_ARCH=universal2 pyinstaller --clean --noconfirm curatarr.spec`).
-Verify the result with `lipo -archs dist/curatarr` - it must list both
-`x86_64` and `arm64`.
+Build it on an Apple Silicon Mac with the "Building it yourself" recipe
+above - no special interpreter or wheel-fusing needed, unlike the old
+universal2 build. Verify the result with `lipo -archs dist/curatarr` -
+it must list `arm64` only; anything else means PyInstaller picked up an
+unexpected toolchain.

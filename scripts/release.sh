@@ -295,7 +295,7 @@ echo "==> Verified. Pushing ${TAG}"
 push_ref_and_confirm_on_github "tags" "$TAG"
 
 echo "==> Done. .github/workflows/release.yml will publish the GitHub Release for ${TAG}."
-echo "==> Once its build-binaries / build-macos-universal / finalize-checksums jobs finish"
+echo "==> Once its build-binaries / finalize-checksums jobs finish"
 echo "    (watch: gh run list --workflow=release.yml - delegate over SSH via CURATARR_GH_SSH_HOST"
 echo "    if gh isn't authenticated on this machine), sign the aggregate checksums on a machine"
 echo "    holding the release-signing PRIVATE key:"

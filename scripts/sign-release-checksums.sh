@@ -9,8 +9,8 @@
 #        (e.g. ./scripts/sign-release-checksums.sh 2.8.29)
 #
 # Run this AFTER scripts/release.sh has cut the release AND
-# .github/workflows/release.yml's build-binaries / build-macos-universal /
-# finalize-checksums jobs have all finished (check with
+# .github/workflows/release.yml's build-binaries / finalize-checksums
+# jobs have all finished (check with
 # `gh run list --workflow=release.yml` or the Actions tab) - this script
 # downloads the FINAL aggregate SHA256SUMS.txt (source archive + every
 # binary), not the source-archive-only one the `release` job publishes

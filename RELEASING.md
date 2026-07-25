@@ -151,13 +151,17 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
 6. Publishes the GitHub Release via `gh release create` (GitHub CLI only
    - no third-party marketplace actions), attaching both files.
 7. Once that job succeeds, the `build-binaries` matrix job (Windows,
-   Linux x64/arm64) and the `build-macos-universal` job each build a
-   standalone PyInstaller binary and upload it - plus a matching
-   `.sha256` checksum file - to the same release. Both depend on
-   `release` (`needs: release`) as their only gate: they never run for
-   a tag that failed the signature/fingerprint/version checks above,
-   and they do not re-verify them independently on top - one gate, not
-   two that could drift out of sync.
+   Linux x64/arm64, macOS arm64) builds a standalone PyInstaller binary
+   per platform and uploads it - plus a matching `.sha256` checksum
+   file - to the same release. It depends on `release` (`needs:
+   release`) as its only gate: it never runs for a tag that failed the
+   signature/fingerprint/version checks above, and it does not
+   re-verify them independently on top - one gate, not two that could
+   drift out of sync. The macOS matrix entry additionally publishes an
+   identical-bytes `curatarr-macos-universal` duplicate (own `.sha256`
+   too) - transitional-only, for pre-2.10.0 installs whose self-updater
+   still requests that old asset name; drop it in a future release once
+   no longer needed (see the job's own comment in `release.yml`).
 8. Once ALL of those finish, `finalize-checksums` downloads every
    per-binary `.sha256` plus the source-archive-only `SHA256SUMS.txt`
    from step 5, combines them into one aggregate `SHA256SUMS.txt`
@@ -178,8 +182,8 @@ signing. Signing `SHA256SUMS.txt` is therefore a separate, manual,
 offline step, run on whichever machine actually holds
 `~/.ssh/curatarr_release_signing` (this project's convention: a
 Windows machine, via Git Bash), **after** `scripts/release.sh` has cut
-the release and CI's `build-binaries` / `build-macos-universal` /
-`finalize-checksums` jobs have all finished:
+the release and CI's `build-binaries` / `finalize-checksums` jobs have
+all finished:
 
 ```
 ./scripts/sign-release-checksums.sh 2.8.29
