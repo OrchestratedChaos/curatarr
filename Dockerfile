@@ -17,7 +17,17 @@
 # ---------------------------------------------------------------------
 # Stage 1: build a venv from the hash-locked, pinned dependency set.
 # ---------------------------------------------------------------------
-FROM python:3.12-slim AS deps
+# Pinned by digest (in addition to the human-readable :3.12-slim tag)
+# so a tag repoint - upstream force-pushing a new image under the same
+# tag, or a registry compromise - can't silently change what actually
+# gets built, same supply-chain-integrity reasoning as requirements.lock
+# below. This is the multi-platform manifest-list digest (covers both
+# linux/amd64 and linux/arm64 - see docker buildx build --platform
+# above), not a single-arch image digest. To bump: `docker buildx
+# imagetools inspect python:3.12-slim` (or the registry API) for the
+# new tag's manifest-list digest, and update BOTH FROM lines in this
+# file (this stage and the runtime stage below) together.
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS deps
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -46,7 +56,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ---------------------------------------------------------------------
 # Stage 2: lean runtime - just the venv + app code, no compiler.
 # ---------------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
 
 LABEL org.opencontainers.image.title="Curatarr" \
       org.opencontainers.image.description="Personalized recommendations for your Plex library" \

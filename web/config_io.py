@@ -21,6 +21,8 @@ from typing import Dict, Optional
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+from utils.helpers import harden_file_permissions
+
 # Matches the plain-yaml.dump() formatting the rest of the codebase
 # already produces (utils/migrate_config.py, config.example.yml, etc.):
 # list items at the same column as their parent key, not indented an
@@ -74,6 +76,14 @@ def save_module(path: str, data: CommentedMap) -> None:
     Writes to a temp file in the same directory first, then renames it
     over the target - a crash partway through never corrupts the
     existing file, and readers never see a partially-written one.
+
+    *path* ends up owner-only readable/writable (0o600) - config.yml/
+    trakt.yml/sonarr.yml/radarr.yml hold the Plex token and integration
+    API keys/tokens. tempfile.mkstemp() already creates its temp file
+    0o600 on POSIX, and os.replace() carries that over, so this was
+    already true today - but only as an implementation detail of
+    mkstemp, not something to keep relying on implicitly. Explicit here
+    so it stays true even if the temp-file mechanism ever changes.
     """
     directory = os.path.dirname(path) or '.'
     os.makedirs(directory, exist_ok=True)
@@ -82,6 +92,7 @@ def save_module(path: str, data: CommentedMap) -> None:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             _yaml.dump(data, f)
         os.replace(tmp_path, path)
+        harden_file_permissions(path)
     except Exception:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)

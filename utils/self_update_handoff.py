@@ -89,7 +89,7 @@ import sys
 import tempfile
 from typing import Optional
 
-from .helpers import get_project_root
+from .helpers import get_project_root, resolve_system_executable
 from .self_update import sanitize_frozen_relaunch_env
 
 logger = logging.getLogger('curatarr')
@@ -121,7 +121,8 @@ param(
     [Parameter(Mandatory=$true)][string]$CurrentExePath,
     [Parameter(Mandatory=$true)][string]$NewAssetPath,
     [Parameter(Mandatory=$true)][int]$Port,
-    [Parameter(Mandatory=$true)][string]$TargetVersion
+    [Parameter(Mandatory=$true)][string]$TargetVersion,
+    [Parameter(Mandatory=$true)][string]$ExpectedSha256
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -176,11 +177,22 @@ if (Get-Process -Id $OldPid -ErrorAction SilentlyContinue) {{
     exit 0
 }}
 
-# 2) Swap: current -> .old, verified new asset -> current.
+# 2) Re-verify the asset's hash immediately before touching anything -
+#    closes the TOCTOU window between utils/self_update.py's own
+#    verification (ExpectedSha256 is that exact already-checked digest,
+#    never re-derived here) and this actually-untrusted-until-proven-
+#    otherwise script's use of the file. Get-FileHash is a PowerShell
+#    built-in cmdlet, not a PATH-resolved external tool - no new
+#    attacker surface beyond what this script already has. Then swap:
+#    current -> .old, verified new asset -> current.
 $bakPath = "$CurrentExePath.old"
 Remove-Item -Path $bakPath -Force -ErrorAction SilentlyContinue
 $swapped = $false
 try {{
+    $actualHash = (Get-FileHash -Path $NewAssetPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    if ($actualHash -ne $ExpectedSha256) {{
+        throw "asset hash changed since verification (expected $ExpectedSha256, got $actualHash) - refusing to swap"
+    }}
     Rename-Item -Path $CurrentExePath -NewName (Split-Path -Leaf $bakPath) -ErrorAction Stop
     Move-Item -Path $NewAssetPath -Destination $CurrentExePath -Force -ErrorAction Stop
     $swapped = $true
@@ -250,10 +262,30 @@ CURRENT_EXE="$2"
 NEW_ASSET="$3"
 PORT="$4"
 TARGET_VERSION="$5"
+EXPECTED_SHA256="$6"
 
 BAK_PATH="${{CURRENT_EXE}}.old"
 
 echo "[handoff] starting - old pid=$OLD_PID target=127.0.0.1:$PORT"
+
+# Re-verify the asset's hash immediately before it's used (see the "2)"
+# step below) - closes the TOCTOU window between utils/self_update.py's
+# own verification (EXPECTED_SHA256 is that exact already-checked
+# digest, never re-derived here) and this actually-untrusted-until-
+# proven-otherwise script's use of the file. Tries sha256sum first
+# (present on effectively every Linux system), falls back to
+# `shasum -a 256` (macOS, which typically lacks sha256sum by default) -
+# both are ordinary, ubiquitous POSIX-adjacent utilities, not a new
+# attacker surface beyond what this script already relies on (curl, mv,
+# kill, ...).
+compute_sha256() {{
+    f="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$f" 2>/dev/null | awk '{{print $1}}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$f" 2>/dev/null | awk '{{print $1}}'
+    fi
+}}
 
 launch_detached() {{
     exe="$1"
@@ -298,7 +330,11 @@ fi
 # 2) Swap: current -> .old, verified new asset -> current.
 SWAPPED=0
 rm -f "$BAK_PATH"
-if mv "$CURRENT_EXE" "$BAK_PATH" 2>/dev/null; then
+ACTUAL_SHA256=$(compute_sha256 "$NEW_ASSET")
+if [ -z "$ACTUAL_SHA256" ] || [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+    echo "[handoff] swap FAILED (asset hash changed since verification: expected $EXPECTED_SHA256, got ${{ACTUAL_SHA256:-<no sha256 tool found>}}) - refusing to swap"
+    rm -f "$NEW_ASSET"
+elif mv "$CURRENT_EXE" "$BAK_PATH" 2>/dev/null; then
     if mv "$NEW_ASSET" "$CURRENT_EXE" 2>/dev/null; then
         chmod +x "$CURRENT_EXE" 2>/dev/null
         SWAPPED=1
@@ -420,10 +456,21 @@ def _is_safe_debug_log_path(path: str) -> bool:
     return False
 
 
+def _windows_powershell_path() -> str:
+    system_root = os.environ.get('SystemRoot', r'C:\Windows')
+    candidate = os.path.join(system_root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    return resolve_system_executable(candidate, 'powershell')
+
+
+def _posix_sh_path() -> str:
+    return resolve_system_executable('/bin/sh', 'sh')
+
+
 def write_and_launch_handoff_script(
     old_pid: int,
     current_exe_path: str,
     verified_asset_path: str,
+    verified_asset_sha256: str,
     port: int,
     target_version: str,
 ) -> None:
@@ -434,6 +481,13 @@ def write_and_launch_handoff_script(
     self-update worker) has nothing further to do; the script now owns
     the swap+relaunch (and its own rollback-on-failure) entirely.
 
+    verified_asset_sha256 is the digest utils.self_update.
+    verify_downloaded_asset already checked against the signed sums file
+    (see VerifiedUpdate.asset_sha256) - passed through so the script can
+    re-check the asset against this EXACT already-trusted value again
+    immediately before the swap (TOCTOU close - see each script
+    template's own comment on this).
+
     Raises nothing that the caller needs to distinguish - if writing or
     launching the script itself somehow fails, that's exactly as fatal
     as any other unexpected worker failure (see
@@ -443,18 +497,20 @@ def write_and_launch_handoff_script(
     if os.name == 'nt':
         script_path = _write_script(_windows_script_content())
         cmd = [
-            'powershell', '-ExecutionPolicy', 'Bypass', '-File', script_path,
+            _windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script_path,
             '-OldPid', str(old_pid),
             '-CurrentExePath', current_exe_path,
             '-NewAssetPath', verified_asset_path,
             '-Port', str(port),
             '-TargetVersion', target_version,
+            '-ExpectedSha256', verified_asset_sha256,
         ]
     else:
         script_path = _write_script(_posix_script_content())
         cmd = [
-            'sh', script_path,
+            _posix_sh_path(), script_path,
             str(old_pid), current_exe_path, verified_asset_path, str(port), target_version,
+            verified_asset_sha256,
         ]
 
     env = sanitize_frozen_relaunch_env(os.environ)

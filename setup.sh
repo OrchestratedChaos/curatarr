@@ -7,6 +7,13 @@
 #   docker compose up    # Run after setup
 
 set -e
+# Exit on a failed command anywhere in a pipeline, not just the last one.
+# Several pipelines below deliberately tolerate their grep stage finding
+# no match (checked via `[ -n "$VAR" ]` right after - e.g. an OAuth
+# helper printing "ERROR:..." instead of the expected "URL:"/"CODE:"/
+# etc. prefix) and get an explicit `|| true` so THIS doesn't turn "no
+# match" into an unwanted hard exit for them.
+set -o pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -113,16 +120,16 @@ echo ""
 # Try to detect admin user
 ADMIN_USER=""
 if [ -n "$PYTHON_CMD" ]; then
-    ADMIN_USER=$($PYTHON_CMD -c "
+    ADMIN_USER=$($PYTHON_CMD -c '
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from plexapi.myplex import MyPlexAccount
-    account = MyPlexAccount(token='$PLEX_TOKEN')
+    account = MyPlexAccount(token=sys.argv[1])
     print(account.username)
 except:
-    print('')
-" 2>/dev/null) || true
+    print("")
+' "$PLEX_TOKEN" 2>/dev/null) || true
 fi
 
 # --- Optional: Trakt Integration ---
@@ -157,23 +164,23 @@ if [[ "$ENABLE_TRAKT" =~ ^[Yy]$ ]]; then
             echo ""
             echo -e "${CYAN}Authenticating with Trakt...${NC}"
 
-            TRAKT_AUTH=$($PYTHON_CMD -c "
+            TRAKT_AUTH=$($PYTHON_CMD -c '
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 from utils.trakt import TraktClient
 try:
-    client = TraktClient('$TRAKT_CLIENT_ID', '$TRAKT_CLIENT_SECRET')
+    client = TraktClient(sys.argv[1], sys.argv[2])
     device_info = client.get_device_code()
-    print('URL:' + device_info['verification_url'])
-    print('CODE:' + device_info['user_code'])
-    print('DEVICE:' + device_info['device_code'])
+    print("URL:" + device_info["verification_url"])
+    print("CODE:" + device_info["user_code"])
+    print("DEVICE:" + device_info["device_code"])
 except Exception as e:
-    print('ERROR:' + str(e))
-" 2>/dev/null) || true
+    print("ERROR:" + str(e))
+' "$TRAKT_CLIENT_ID" "$TRAKT_CLIENT_SECRET" 2>/dev/null) || true
 
-            TRAKT_URL=$(echo "$TRAKT_AUTH" | grep "^URL:" | cut -d: -f2-)
-            TRAKT_CODE=$(echo "$TRAKT_AUTH" | grep "^CODE:" | cut -d: -f2-)
-            TRAKT_DEVICE=$(echo "$TRAKT_AUTH" | grep "^DEVICE:" | cut -d: -f2-)
+            TRAKT_URL=$(echo "$TRAKT_AUTH" | grep "^URL:" | cut -d: -f2-) || true
+            TRAKT_CODE=$(echo "$TRAKT_AUTH" | grep "^CODE:" | cut -d: -f2-) || true
+            TRAKT_DEVICE=$(echo "$TRAKT_AUTH" | grep "^DEVICE:" | cut -d: -f2-) || true
 
             if [ -n "$TRAKT_CODE" ]; then
                 echo ""
@@ -182,18 +189,18 @@ except Exception as e:
                 echo ""
                 read -p "Press Enter after you've approved on Trakt..."
 
-                TRAKT_TOKENS=$($PYTHON_CMD -c "
+                TRAKT_TOKENS=$($PYTHON_CMD -c '
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 from utils.trakt import TraktClient
-client = TraktClient('$TRAKT_CLIENT_ID', '$TRAKT_CLIENT_SECRET')
-if client.poll_for_token('$TRAKT_DEVICE', interval=1, expires_in=30):
-    print('ACCESS:' + client.access_token)
-    print('REFRESH:' + client.refresh_token)
-" 2>/dev/null) || true
+client = TraktClient(sys.argv[1], sys.argv[2])
+if client.poll_for_token(sys.argv[3], interval=1, expires_in=30):
+    print("ACCESS:" + client.access_token)
+    print("REFRESH:" + client.refresh_token)
+' "$TRAKT_CLIENT_ID" "$TRAKT_CLIENT_SECRET" "$TRAKT_DEVICE" 2>/dev/null) || true
 
-                TRAKT_ACCESS=$(echo "$TRAKT_TOKENS" | grep "^ACCESS:" | cut -d: -f2-)
-                TRAKT_REFRESH=$(echo "$TRAKT_TOKENS" | grep "^REFRESH:" | cut -d: -f2-)
+                TRAKT_ACCESS=$(echo "$TRAKT_TOKENS" | grep "^ACCESS:" | cut -d: -f2-) || true
+                TRAKT_REFRESH=$(echo "$TRAKT_TOKENS" | grep "^REFRESH:" | cut -d: -f2-) || true
 
                 if [ -n "$TRAKT_ACCESS" ]; then
                     echo -e "${GREEN}✓ Trakt authenticated!${NC}"
@@ -373,21 +380,21 @@ if [[ "$ENABLE_SIMKL" =~ ^[Yy]$ ]]; then
         SIMKL_TOKEN=""
 
         if [ -n "$PYTHON_CMD" ]; then
-            SIMKL_PIN=$($PYTHON_CMD -c "
+            SIMKL_PIN=$($PYTHON_CMD -c '
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 try:
     from utils.simkl import SimklClient
-    client = SimklClient('$SIMKL_CLIENT_ID')
+    client = SimklClient(sys.argv[1])
     pin = client.get_pin_code()
-    print('CODE:' + pin['user_code'])
-    print('URL:' + pin['verification_url'])
+    print("CODE:" + pin["user_code"])
+    print("URL:" + pin["verification_url"])
 except Exception as e:
-    print('ERROR:' + str(e))
-" 2>/dev/null) || true
+    print("ERROR:" + str(e))
+' "$SIMKL_CLIENT_ID" 2>/dev/null) || true
 
-            PIN_CODE=$(echo "$SIMKL_PIN" | grep "^CODE:" | cut -d: -f2)
-            PIN_URL=$(echo "$SIMKL_PIN" | grep "^URL:" | cut -d: -f2-)
+            PIN_CODE=$(echo "$SIMKL_PIN" | grep "^CODE:" | cut -d: -f2) || true
+            PIN_URL=$(echo "$SIMKL_PIN" | grep "^URL:" | cut -d: -f2-) || true
 
             if [ -n "$PIN_CODE" ]; then
                 echo ""
@@ -395,16 +402,16 @@ except Exception as e:
                 echo -e "2. Enter code: ${YELLOW}$PIN_CODE${NC}"
                 read -p "Press Enter after authorizing..."
 
-                SIMKL_AUTH=$($PYTHON_CMD -c "
+                SIMKL_AUTH=$($PYTHON_CMD -c '
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 from utils.simkl import SimklClient
-client = SimklClient('$SIMKL_CLIENT_ID')
-if client.poll_for_token('$PIN_CODE', interval=2, expires_in=30):
-    print('TOKEN:' + client.access_token)
-" 2>/dev/null) || true
+client = SimklClient(sys.argv[1])
+if client.poll_for_token(sys.argv[2], interval=2, expires_in=30):
+    print("TOKEN:" + client.access_token)
+' "$SIMKL_CLIENT_ID" "$PIN_CODE" 2>/dev/null) || true
 
-                SIMKL_TOKEN=$(echo "$SIMKL_AUTH" | grep "^TOKEN:" | cut -d: -f2-)
+                SIMKL_TOKEN=$(echo "$SIMKL_AUTH" | grep "^TOKEN:" | cut -d: -f2-) || true
                 [ -n "$SIMKL_TOKEN" ] && echo -e "${GREEN}✓ Simkl authenticated!${NC}"
             fi
         fi

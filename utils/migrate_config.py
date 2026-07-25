@@ -20,6 +20,8 @@ from typing import List, Optional
 
 import yaml
 
+from .helpers import harden_file_permissions
+
 
 # Sections that belong in each module file
 TUNING_SECTIONS = [
@@ -354,23 +356,27 @@ def migrate_config(config_path: str, dry_run: bool = False) -> dict:
             f.write("# Curatarr Tuning Configuration\n")
             f.write("# Display options, weights, and scoring parameters\n\n")
             yaml.dump(tuning_config, f, default_flow_style=False, sort_keys=False)
+        harden_file_permissions(tuning_path)
         result['files_created'].append('tuning.yml')
         print(f"Created: tuning.yml")
 
-    # Write feature module files
+    # Write feature module files (sonarr.yml/radarr.yml/trakt.yml -
+    # these hold API keys/access tokens, so permissions matter here too)
     for feature, feature_config in feature_configs.items():
         feature_path = os.path.join(config_dir, f'{feature}.yml')
         with open(feature_path, 'w', encoding='utf-8') as f:
             f.write(f"# Curatarr {feature.title()} Configuration\n\n")
             yaml.dump(feature_config, f, default_flow_style=False, sort_keys=False)
+        harden_file_permissions(feature_path)
         result['files_created'].append(f'{feature}.yml')
         print(f"Created: {feature}.yml")
 
-    # Write slimmed config.yml
+    # Write slimmed config.yml (still holds the Plex token)
     with open(config_path, 'w', encoding='utf-8') as f:
         f.write("# Curatarr Configuration\n")
         f.write("# Core settings - see tuning.yml for display/scoring options\n\n")
         yaml.dump(core_config, f, default_flow_style=False, sort_keys=False)
+    harden_file_permissions(config_path)
     print(f"Updated: config.yml (slimmed to essentials)")
 
     result['migrated'] = True

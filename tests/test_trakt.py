@@ -146,6 +146,55 @@ class TestTraktClientMakeRequest:
         assert result == {"data": "success"}
         assert mock_request.call_count == 2
 
+    @patch('utils.trakt.time.sleep')
+    @patch('utils.trakt.requests.request')
+    def test_rate_limit_gives_up_after_max_retries(self, mock_request, mock_sleep):
+        """FIX 9: this used to recurse unboundedly on a 429 - a server
+        that never stops rate-limiting must not be able to hang/loop
+        this process forever."""
+        rate_limited = Mock()
+        rate_limited.status_code = 429
+        rate_limited.headers = {"Retry-After": "1"}
+        mock_request.return_value = rate_limited
+
+        client = TraktClient("id", "secret", access_token="token")
+
+        with pytest.raises(TraktAPIError):
+            client._make_request("GET", "/test")
+
+        # 1 initial attempt + TRAKT_MAX_429_RETRIES retries, never more.
+        from utils.trakt import TRAKT_MAX_429_RETRIES
+        assert mock_request.call_count == 1 + TRAKT_MAX_429_RETRIES
+
+    @patch('utils.trakt.time.sleep')
+    @patch('utils.trakt.requests.request')
+    def test_retry_after_is_clamped_to_a_ceiling(self, mock_request, mock_sleep):
+        """Retry-After is server-controlled input - a malicious/
+        misbehaving Trakt endpoint must not be able to stall this
+        process for an arbitrary amount of time by claiming an
+        enormous Retry-After."""
+        rate_limited = Mock()
+        rate_limited.status_code = 429
+        rate_limited.headers = {"Retry-After": "99999"}
+
+        success = Mock()
+        success.status_code = 200
+        success.json.return_value = {"data": "success"}
+
+        mock_request.side_effect = [rate_limited, success]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client._make_request("GET", "/test")
+
+        assert result == {"data": "success"}
+        # _rate_limit()'s own small pacing delay also calls time.sleep,
+        # so check the CLAMPED 429 wait is among the calls rather than
+        # asserting it's the only one.
+        from utils.trakt import TRAKT_MAX_RETRY_AFTER_SECONDS
+        sleep_durations = [call.args[0] for call in mock_sleep.call_args_list]
+        assert TRAKT_MAX_RETRY_AFTER_SECONDS in sleep_durations
+        assert 99999 not in sleep_durations
+
     @patch('utils.trakt.requests.request')
     def test_api_error_raises_exception(self, mock_request):
         """Test API error raises TraktAPIError."""

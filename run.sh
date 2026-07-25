@@ -4,6 +4,13 @@
 # This script handles everything: dependencies, setup, recommendations, collections, cron
 
 set -e  # Exit on error
+# Exit on a failed command anywhere in a pipeline, not just the last one
+# (e.g. `curl ... | tar -xz` silently "succeeding" on a failed curl
+# just because tar's own exit code was 0) - a few pipelines further down
+# deliberately tolerate their grep stage finding no match (checked via
+# `[ -n "$VAR" ]` right after) and get an explicit `|| true` so THIS
+# doesn't turn "no match" into an unwanted hard exit for them.
+set -o pipefail
 
 # Parse arguments
 DEBUG_FLAG=""
@@ -64,7 +71,7 @@ check_and_install_dependencies() {
     # instead of a wall of pip resolution errors, and this (working)
     # installation is left completely untouched.
     if [ -f "requirements.lock" ]; then
-        REQUIRED_PYTHON=$(grep -oE -- '--python-version [0-9]+\.[0-9]+' requirements.lock | head -1 | awk '{print $2}')
+        REQUIRED_PYTHON=$(grep -oE -- '--python-version [0-9]+\.[0-9]+' requirements.lock | head -1 | awk '{print $2}') || true
         if [ -n "$REQUIRED_PYTHON" ] && ! version_ge "$PYTHON_VERSION" "$REQUIRED_PYTHON"; then
             echo -e "${RED}❌ Python $PYTHON_VERSION found, but curatarr requires Python $REQUIRED_PYTHON+${NC}"
             echo ""
@@ -248,7 +255,7 @@ print('\n'.join(t[1] for t in tags))
         # just the first SHA256: token anywhere in the output — a
         # fingerprint injected elsewhere (e.g. a crafted tag message) can
         # never be selected in place of the actually-verified key.
-        tag_fpr=$(printf '%s\n' "$verify_output" | grep -oE 'with [A-Za-z0-9-]+ key SHA256:[A-Za-z0-9+/=]+' | grep -oE 'SHA256:[A-Za-z0-9+/=]+' | head -1)
+        tag_fpr=$(printf '%s\n' "$verify_output" | grep -oE 'with [A-Za-z0-9-]+ key SHA256:[A-Za-z0-9+/=]+' | grep -oE 'SHA256:[A-Za-z0-9+/=]+' | head -1) || true
         if [ -n "$tag_fpr" ] && [ "$tag_fpr" = "$RELEASE_SIGNER_FINGERPRINT" ]; then
             echo "$tag"
             return 0
@@ -346,7 +353,7 @@ print(mode)
     CANDIDATE_LOCK=$(git show "${SELECTED_TAG}:requirements.lock" 2>/dev/null) || true
     CANDIDATE_REQUIRED_PYTHON=""
     if [ -n "$CANDIDATE_LOCK" ]; then
-        CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+        CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}') || true
     fi
     CURRENT_PYTHON=$(python3 --version | awk '{print $2}')
     if [ -n "$CANDIDATE_REQUIRED_PYTHON" ] && ! version_ge "$CURRENT_PYTHON" "$CANDIDATE_REQUIRED_PYTHON"; then
@@ -768,7 +775,7 @@ if [ "${1:-}" = "--apply-verified-update" ]; then
     CANDIDATE_LOCK=$(git show "${SELECTED_TAG}:requirements.lock" 2>/dev/null) || true
     CANDIDATE_REQUIRED_PYTHON=""
     if [ -n "$CANDIDATE_LOCK" ]; then
-        CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+        CANDIDATE_REQUIRED_PYTHON=$(printf '%s\n' "$CANDIDATE_LOCK" | grep -oE -- '--python-version [0-9]+\.[0-9]+' | head -1 | awk '{print $2}') || true
     fi
     CURRENT_PYTHON=$(python3 --version | awk '{print $2}')
     if [ -n "$CANDIDATE_REQUIRED_PYTHON" ] && ! version_ge "$CURRENT_PYTHON" "$CANDIDATE_REQUIRED_PYTHON"; then

@@ -647,6 +647,16 @@ class TestGetPlexAccountIds:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -666,6 +676,16 @@ class TestGetPlexAccountIds:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -686,6 +706,16 @@ class TestGetPlexAccountIds:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -888,6 +918,16 @@ class TestGetWatchedMovieCount:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_get.return_value = mock_response
 
@@ -927,6 +967,16 @@ class TestGetWatchedMovieCount:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_get.return_value = mock_response
 
@@ -971,6 +1021,16 @@ class TestGetWatchedShowCount:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_get.return_value = mock_response
 
@@ -1008,6 +1068,16 @@ class TestFetchPlexWatchHistoryShows:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -1148,6 +1218,16 @@ class TestFetchPlexWatchHistoryMovies:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -1211,6 +1291,16 @@ class TestFetchWatchHistoryWithTmdb:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_response.status_code = 200
         mock_get.return_value = mock_response
@@ -1241,6 +1331,16 @@ class TestFetchWatchHistoryWithTmdb:
         from utils.plex import fetch_watch_history_with_tmdb
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 404
         mock_get.return_value = mock_response
 
@@ -1263,6 +1363,16 @@ class TestFetchWatchHistoryWithTmdb:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_content
         mock_response.status_code = 200
         mock_get.return_value = mock_response
@@ -1697,6 +1807,16 @@ class TestFetchShowCompletionData:
         </MediaContainer>'''
 
         mock_response = Mock()
+        # _capped_get/_capped_put now stream+cap the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        # Doesn't touch .content (a separate, independently-mocked
+        # attribute here, not derived from it the way a real
+        # Response's is).
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.content = xml_response
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
@@ -1800,6 +1920,8 @@ class TestApplyUserLabelRestrictions:
 
         # Setup mock GET response for users list (XML)
         mock_get_response = Mock()
+        mock_get_response.headers = {}
+        mock_get_response.iter_content = Mock(return_value=[])
         mock_get_response.content = b'''<MediaContainer>
             <User id="123" title="Jason" username="jason"/>
             <User id="456" title="Sarah" username="sarah"/>
@@ -1809,6 +1931,8 @@ class TestApplyUserLabelRestrictions:
 
         # Setup mock PUT response
         mock_put_response = Mock()
+        mock_put_response.headers = {}
+        mock_put_response.iter_content = Mock(return_value=[])
         mock_put_response.raise_for_status = Mock()
         mock_put.return_value = mock_put_response
 
@@ -1842,6 +1966,8 @@ class TestApplyUserLabelRestrictions:
         mock_account_class.return_value = mock_account
 
         mock_get_response = Mock()
+        mock_get_response.headers = {}
+        mock_get_response.iter_content = Mock(return_value=[])
         mock_get_response.content = b'''<MediaContainer>
             <User id="123" title="OtherUser" username="otheruser"/>
         </MediaContainer>'''
@@ -1849,6 +1975,8 @@ class TestApplyUserLabelRestrictions:
         mock_get.return_value = mock_get_response
 
         mock_put_response = Mock()
+        mock_put_response.headers = {}
+        mock_put_response.iter_content = Mock(return_value=[])
         mock_put_response.raise_for_status = Mock()
         mock_put.return_value = mock_put_response
 
@@ -1881,6 +2009,8 @@ class TestApplyUserLabelRestrictions:
         mock_account_class.return_value = mock_account
 
         mock_get_response = Mock()
+        mock_get_response.headers = {}
+        mock_get_response.iter_content = Mock(return_value=[])
         mock_get_response.content = b'''<MediaContainer>
             <User id="123" title="KnownUser" username="knownuser"/>
         </MediaContainer>'''
@@ -1888,6 +2018,8 @@ class TestApplyUserLabelRestrictions:
         mock_get.return_value = mock_get_response
 
         mock_put_response = Mock()
+        mock_put_response.headers = {}
+        mock_put_response.iter_content = Mock(return_value=[])
         mock_put_response.raise_for_status = Mock()
         mock_put.return_value = mock_put_response
 
@@ -1980,6 +2112,8 @@ class TestApplyUserLabelRestrictions:
         mock_account_class.return_value = mock_account
 
         mock_get_response = Mock()
+        mock_get_response.headers = {}
+        mock_get_response.iter_content = Mock(return_value=[])
         mock_get_response.content = b'''<MediaContainer>
             <User id="123" title="TestUser" username="testuser"/>
         </MediaContainer>'''
@@ -1987,6 +2121,8 @@ class TestApplyUserLabelRestrictions:
         mock_get.return_value = mock_get_response
 
         mock_put_response = Mock()
+        mock_put_response.headers = {}
+        mock_put_response.iter_content = Mock(return_value=[])
         mock_put_response.raise_for_status = Mock()
         mock_put.return_value = mock_put_response
 

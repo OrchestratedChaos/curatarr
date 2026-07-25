@@ -7,7 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
+from web.app import create_app
 from web.security import is_allowed_host, redact, redact_lines, safe_join
+from web.security import _is_loopback_bind
 
 
 class TestRedact:
@@ -182,3 +184,144 @@ class TestIsAllowedHostDockerOverride:
         monkeypatch.setenv('CURATARR_ALLOWED_HOSTS', '192.168.1.50:8787')
         assert is_allowed_host("localhost:8787") is True
         assert is_allowed_host("127.0.0.1") is True
+
+
+class TestIsLoopbackBind:
+    """Tests for _is_loopback_bind() - the server BIND address check
+    driving register_token_auth/web.docker_server's fail-closed startup
+    gate. NOT the same thing as is_allowed_host (a request's Host
+    header) - see that function's own docstring."""
+
+    def test_127_0_0_1_is_loopback(self):
+        assert _is_loopback_bind('127.0.0.1') is True
+
+    def test_ipv6_loopback_is_loopback(self):
+        assert _is_loopback_bind('::1') is True
+
+    def test_bare_localhost_is_loopback(self):
+        assert _is_loopback_bind('localhost') is True
+
+    def test_0_0_0_0_is_not_loopback(self):
+        assert _is_loopback_bind('0.0.0.0') is False
+
+    def test_lan_interface_is_not_loopback(self):
+        assert _is_loopback_bind('10.0.0.5') is False
+
+    def test_empty_or_none_is_not_loopback(self):
+        assert _is_loopback_bind('') is False
+        assert _is_loopback_bind(None) is False
+
+    def test_case_and_whitespace_insensitive(self):
+        assert _is_loopback_bind(' LOCALHOST ') is True
+
+
+class TestRegisterTokenAuth:
+    """FIX 1: real token authentication whenever the server is bound to
+    something other than loopback - see web/security.py's
+    register_token_auth. web/docker_server.py's own
+    _require_auth_token_or_exit is what stops a non-loopback bind from
+    ever running with no token configured at all (see
+    tests/test_web_docker_server.py's TestRequireAuthTokenOrExit); these
+    tests exercise the per-request guard itself, directly against a real
+    Flask app/test client - not a mock.
+    """
+
+    NON_LOOPBACK_HOST = '0.0.0.0'
+    TOKEN = 'a' * 32
+
+    def _client(self, curatarr_web_root, bind_host, monkeypatch, token=None):
+        if token is not None:
+            monkeypatch.setenv('CURATARR_AUTH_TOKEN', token)
+        else:
+            monkeypatch.delenv('CURATARR_AUTH_TOKEN', raising=False)
+        monkeypatch.delenv('CURATARR_TRUSTED_NETWORK', raising=False)
+        app = create_app(project_root=curatarr_web_root, bind_host=bind_host)
+        app.testing = True
+        return app.test_client()
+
+    def test_no_token_supplied_rejected(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.get('/')
+        assert resp.status_code == 401
+
+    def test_wrong_token_rejected(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.get('/', headers={'X-Curatarr-Token': 'w' * 32})
+        assert resp.status_code == 401
+
+    def test_correct_token_via_x_curatarr_token_header_accepted(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.get('/', headers={'X-Curatarr-Token': self.TOKEN})
+        assert resp.status_code == 200
+
+    def test_correct_token_via_bearer_header_accepted(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.get('/', headers={'Authorization': f'Bearer {self.TOKEN}'})
+        assert resp.status_code == 200
+
+    def test_correct_token_via_cookie_accepted(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        c.set_cookie('curatarr_token', self.TOKEN)
+        resp = c.get('/')
+        assert resp.status_code == 200
+
+    def test_healthz_reachable_without_token(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.get('/healthz')
+        assert resp.status_code == 200
+
+    def test_login_form_reachable_without_token(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.get('/login')
+        assert resp.status_code == 200
+
+    def test_login_submit_with_correct_token_sets_cookie_and_redirects(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.post('/login', data={'token': self.TOKEN}, follow_redirects=False)
+        assert resp.status_code == 303
+        set_cookie = resp.headers.get('Set-Cookie', '')
+        assert 'curatarr_token' in set_cookie
+        assert 'HttpOnly' in set_cookie
+        assert 'SameSite=Strict' in set_cookie
+        assert 'Secure' not in set_cookie  # plain HTTP by design - see login_submit's comment
+
+    def test_login_submit_with_wrong_token_does_not_set_cookie(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.post('/login', data={'token': 'nope'}, follow_redirects=False)
+        assert resp.status_code == 303
+        assert 'curatarr_token' not in resp.headers.get('Set-Cookie', '')
+
+    def test_loopback_bind_requires_no_token(self, curatarr_web_root, monkeypatch):
+        """Byte-for-byte unchanged native-install behavior - see
+        register_token_auth's own docstring."""
+        c = self._client(curatarr_web_root, '127.0.0.1', monkeypatch, token=None)
+        resp = c.get('/')
+        assert resp.status_code == 200
+
+    def test_forged_host_header_without_token_still_rejected(self, curatarr_web_root, monkeypatch):
+        """The exact scenario the audit proved live with curl: a non-
+        browser client sets Host: localhost to sail straight through
+        the Host/Origin guard (web/security.py's
+        register_origin_host_guard, which only ever proves something
+        about a BROWSER). Getting 401 here (not 400) proves the request
+        DID pass that guard and was rejected specifically for having no
+        valid token - the guard alone is not authentication."""
+        c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
+        resp = c.get('/', headers={'Host': 'localhost'})
+        assert resp.status_code == 401
+
+    def test_trusted_network_opt_out_allows_no_token(self, curatarr_web_root, monkeypatch):
+        monkeypatch.delenv('CURATARR_AUTH_TOKEN', raising=False)
+        monkeypatch.setenv('CURATARR_TRUSTED_NETWORK', 'true')
+        app = create_app(project_root=curatarr_web_root, bind_host=self.NON_LOOPBACK_HOST)
+        app.testing = True
+        resp = app.test_client().get('/')
+        assert resp.status_code == 200
+
+    def test_trusted_network_opt_out_ignored_once_a_token_is_configured(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv('CURATARR_AUTH_TOKEN', self.TOKEN)
+        monkeypatch.setenv('CURATARR_TRUSTED_NETWORK', 'true')
+        app = create_app(project_root=curatarr_web_root, bind_host=self.NON_LOOPBACK_HOST)
+        app.testing = True
+        resp = app.test_client().get('/')
+        assert resp.status_code == 401  # a configured token always wins

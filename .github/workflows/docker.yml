@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
   packages: write
+  # Needed for cosign's keyless signing below - it requests a short-lived
+  # OIDC token from GitHub Actions' own token issuer (no long-lived
+  # signing key stored as a repo secret at all) to sign the published
+  # image with Sigstore's public transparency log (Rekor) as the record
+  # of that signature.
+  id-token: write
 
 env:
   REGISTRY: ghcr.io
@@ -107,6 +113,7 @@ jobs:
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push (linux/amd64, linux/arm64)
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
@@ -114,3 +121,33 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Keyless signing: no long-lived private key stored as a repo
+      # secret anywhere - cosign requests a short-lived certificate from
+      # Sigstore's Fulcio CA using the OIDC token the id-token: write
+      # permission above lets this job's runner request from GitHub
+      # Actions' own token issuer, then records the signature in
+      # Sigstore's public transparency log (Rekor). Signs the image by
+      # its immutable digest (not a mutable tag), which is what
+      # `cosign verify` below then checks any tag pointing at that same
+      # digest against - see docs/DOCKER.md "Verifying the image" for
+      # the operator-facing verify command.
+      - name: Sign the published image (keyless)
+        run: cosign sign --yes "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+      # Report-only (exit-code 0, never fails the build): a base-image/
+      # OS-package CVE can appear (or lack an upstream fix yet) entirely
+      # outside a change this workflow run actually made, and blocking
+      # every push/tag on that would make this job flaky for reasons
+      # unrelated to curatarr's own code. HIGH/CRITICAL findings still
+      # show up in this job's log for a maintainer to act on.
+      - name: Scan published image for vulnerabilities (Trivy, report-only)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '0'

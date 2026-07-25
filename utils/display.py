@@ -8,6 +8,8 @@ import re
 import logging
 from typing import Dict, List
 
+from .redact import redact
+
 # ANSI color codes
 RED = '\033[91m'
 GREEN = '\033[92m'
@@ -51,6 +53,12 @@ class TeeLogger:
             self.stdout_buffer = sys.stdout
 
     def write(self, text):
+        # Redact before emitting to either destination (see
+        # utils/redact.py) - a recommender/client error message could in
+        # principle echo a token (e.g. a stray X-Plex-Token query
+        # parameter), and neither the console nor the on-disk log file
+        # this tees to should ever hold that in plaintext.
+        text = redact(text)
         try:
             # Write to console
             if hasattr(sys.stdout, 'buffer'):
@@ -160,15 +168,23 @@ def log_info(message: str) -> None:
 
 
 def log_warning(message: str) -> None:
-    """Log warning with yellow color (via ColoredFormatter)."""
+    """Log warning with yellow color (via ColoredFormatter).
+
+    Redacted before emitting (see utils/redact.py) - warnings frequently
+    wrap raw exception text (a failed request's URL, an API error body),
+    which could in principle contain a token.
+    """
     logger = logging.getLogger('curatarr')
-    logger.warning(message)
+    logger.warning(redact(message))
 
 
 def log_error(message: str) -> None:
-    """Log error with red color (via ColoredFormatter)."""
+    """Log error with red color (via ColoredFormatter).
+
+    Redacted before emitting - see log_warning's docstring above.
+    """
     logger = logging.getLogger('curatarr')
-    logger.error(message)
+    logger.error(redact(message))
 
 
 def clickable_link(url: str, text: str = None) -> str:
@@ -555,16 +571,25 @@ def _get_safari_applescript(file_url: str) -> str:
 
 def _open_html_windows(file_url: str) -> bool:
     """Handle browser opening on Windows."""
-    import subprocess
+    import os
     import webbrowser
 
     # Try to use PowerShell to check for existing browser windows
     # For now, just use the default browser - Windows doesn't have easy tab reuse
+    #
+    # os.startfile() (not subprocess.run(["start", "", file_url],
+    # shell=True, ...)) - shell=True runs the whole argv through
+    # cmd.exe, which is unnecessary indirection for what's just "ask
+    # Windows to open this with its default handler", and drops the
+    # needless shell=True attack surface (cmd.exe metacharacter
+    # interpretation of file_url) entirely. os.startfile() is the direct
+    # ShellExecute equivalent of double-clicking the file/URL - no shell
+    # involved at all.
     try:
-        subprocess.run(["start", "", file_url], shell=True, check=True, timeout=10)
+        os.startfile(file_url)
         print("Opened in default browser")
         return True
-    except subprocess.SubprocessError:
+    except OSError:
         webbrowser.open(file_url)
         return True
 

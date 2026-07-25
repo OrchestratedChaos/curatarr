@@ -1,5 +1,7 @@
 """Tests for utils/trakt_auth.py"""
 
+import os
+
 import pytest
 from unittest.mock import Mock, patch, mock_open
 import yaml
@@ -66,6 +68,29 @@ class TestTraktAuthSaveTokens:
 
         assert result['trakt']['access_token'] == 'new_access'
         assert result['trakt']['refresh_token'] == 'new_refresh'
+
+    @pytest.mark.skipif(os.name == 'nt', reason="POSIX file permissions don't apply on Windows")
+    def test_real_save_tokens_ends_up_owner_only(self, tmp_path, monkeypatch):
+        """FIX 5: trakt.yml holds the Trakt access/refresh tokens in
+        plaintext - a plain open(path, 'w') lands at the OS umask
+        default (typically 0o644 on Linux/Docker), which would leave it
+        world-readable. Exercises the REAL save_tokens (not the local
+        re-implementation the other test in this class uses)."""
+        import utils.trakt_auth as trakt_auth_module
+
+        config_dir = tmp_path / 'config'
+        config_dir.mkdir()
+        trakt_path = config_dir / 'trakt.yml'
+        trakt_path.write_text(
+            "enabled: true\nclient_id: test\nclient_secret: shh\n", encoding='utf-8',
+        )
+        monkeypatch.setattr(trakt_auth_module, 'get_config_dir', lambda: str(config_dir))
+
+        trakt_auth_module.save_tokens('new_access', 'new_refresh')
+
+        import stat
+        mode = stat.S_IMODE(os.stat(str(trakt_path)).st_mode)
+        assert mode == 0o600, f"trakt.yml was {oct(mode)}, expected 0o600"
 
 
 class TestTraktAuthMain:

@@ -6,10 +6,12 @@ image that runs both the web UI and the recommender, from
 
 - [Quick start (docker compose)](#quick-start-docker-compose)
 - [Quick start (docker run)](#quick-start-docker-run)
+- [Authentication](#authentication)
 - [Config and cache volumes](#config-and-cache-volumes)
 - [Accessing from another machine](#accessing-from-another-machine)
 - [Scheduling recommendation runs](#scheduling-recommendation-runs)
 - [Updating](#updating)
+- [Verifying the image](#verifying-the-image)
 - [Building the image yourself](#building-the-image-yourself)
 - [Troubleshooting](#troubleshooting)
 
@@ -22,12 +24,16 @@ mkdir -p config
 ./setup.sh                      # interactive setup wizard, writes config/config.yml
 # or: cp config/config.example.yml config/config.yml && edit it by hand
 
+# Required - see "Authentication" below. Uncomment CURATARR_AUTH_TOKEN in
+# docker-compose.yml and set it, e.g.:
+#   openssl rand -hex 32
 docker compose up -d
 ```
 
-Open `http://localhost:8787` - the dashboard, config screens
-(Connections/Libraries/Users/Settings), and run-with-live-log all work
-exactly as they do for a native install.
+Open `http://localhost:8787` and log in at `/login` with the token you
+set - the dashboard, config screens (Connections/Libraries/Users/
+Settings), and run-with-live-log all work exactly as they do for a
+native install once logged in.
 
 `docker-compose.yml` (in the repo root) is the template - it pulls the
 published image by default; uncomment `build: .` in it if you'd rather
@@ -39,7 +45,8 @@ build from source.
 mkdir -p config cache logs recommendations
 docker run -d \
   --name curatarr \
-  -p 8787:8787 \
+  -p 127.0.0.1:8787:8787 \
+  -e CURATARR_AUTH_TOKEN="$(openssl rand -hex 32)" \
   -v "$(pwd)/config:/data/config" \
   -v "$(pwd)/cache:/data/cache" \
   -v "$(pwd)/logs:/data/logs" \
@@ -47,6 +54,49 @@ docker run -d \
   --restart unless-stopped \
   ghcr.io/orchestratedchaos/curatarr:latest
 ```
+
+Note the token above is regenerated (and lost) every time this exact
+command is re-run - copy it down somewhere, or set `CURATARR_AUTH_TOKEN`
+to a fixed value of your own instead, the same as you would for
+`docker-compose.yml`.
+
+## Authentication
+
+The container always listens on `0.0.0.0` internally (see
+[Accessing from another machine](#accessing-from-another-machine) for
+why), so unlike the native app it needs real authentication, not just
+the Host/Origin check every bind gets - `CURATARR_AUTH_TOKEN` is
+required and the server refuses to start without one at least 16
+characters long. Set it to a strong random value (`openssl rand -hex
+32`) and keep it secret, the same as the Plex token/API keys under
+`config/` - anyone who has it has full access to this instance,
+including its Plex/Sonarr/Radarr/Trakt credentials.
+
+Once set, log in at `http://localhost:8787/login` (or whatever host/port
+you're reaching it on) with that token - a successful login sets a
+cookie so the browser doesn't need to resend it on every request.
+Scripts/reverse proxies can instead send it directly, either as
+`Authorization: Bearer <token>` or `X-Curatarr-Token: <token>`.
+
+### Opting out: `CURATARR_TRUSTED_NETWORK`
+
+If you've decided the published port is genuinely unreachable by
+anything untrusted (nothing published to the host at all, or a fully
+isolated network) and don't want to manage a token, set
+`CURATARR_TRUSTED_NETWORK=true` instead of `CURATARR_AUTH_TOKEN`. The
+container starts without requiring a token - but every request is then
+completely unauthenticated: anyone who CAN reach the port gets full
+read/write access to this instance's config (Plex token, Sonarr/Radarr/
+Trakt API keys, etc.) with no login at all. This is never inferred or
+defaulted - you have to type it out - and the container prints a
+prominent warning to its logs on every boot as a standing reminder that
+it's running this way. If `CURATARR_AUTH_TOKEN` is also set,
+`CURATARR_TRUSTED_NETWORK` has no effect - the token always wins.
+
+If neither `CURATARR_AUTH_TOKEN` nor `CURATARR_TRUSTED_NETWORK=true` is
+set and the bind host isn't loopback, the container refuses to start at
+all (see [Troubleshooting](#troubleshooting)) rather than silently
+running unauthenticated.
 
 ## Config and cache volumes
 
@@ -86,15 +136,28 @@ first, though, since there's no browser involved for that one.
 
 ## Accessing from another machine
 
-By default, the UI only accepts requests whose `Host` header is
-`localhost`/`127.0.0.1` (with or without a port) - the exact same rule
-the native (non-Docker) app enforces, and for the same reason: it's a
-defense against DNS-rebinding attacks, not just a bind-address choice.
-This means `http://localhost:8787` on the machine actually running
-Docker works out of the box, but reaching the container from another
-device (a LAN IP, a hostname behind a reverse proxy, a Tailscale
-address, etc.) will get a `400 Bad Request` until you opt that host in
-explicitly:
+The UI only accepts requests whose `Host` header is `localhost`/
+`127.0.0.1` (with or without a port) by default - the exact same rule
+the native (non-Docker) app enforces. **This is a defense against
+DNS-rebinding attacks and cross-site requests from a browser - it is
+NOT authentication.** It only constrains what a *browser* can be
+tricked into sending, because a browser is what actually enforces
+same-origin policy on the Host/Origin/Referer headers in the first
+place; a non-browser client (curl, a script, an attacker who found the
+port) can set all three to whatever it wants and walk straight through
+this check. Real access control for anything reachable from off the
+Docker host is `CURATARR_AUTH_TOKEN` (see
+[Authentication](#authentication)) - the container's process binds
+`0.0.0.0` internally regardless of the Host-header setting below, so it
+already requires that token to even start, but the Host check below is
+still worth keeping tight as defense in depth on top of it.
+
+`http://localhost:8787` on the machine actually running Docker works
+without any extra configuration beyond the required
+`CURATARR_AUTH_TOKEN`, but reaching the container from another device (a
+LAN IP, a hostname behind a reverse proxy, a Tailscale address, etc.)
+will get a `400 Bad Request` from the Host check above until you opt
+that host in explicitly:
 
 ```yaml
 environment:
@@ -103,7 +166,9 @@ environment:
 
 (comma-separated, exact host[:port] match, case-insensitive). This is
 additive-only - it never weakens the localhost/127.0.0.1 default, and
-is unset (i.e. has no effect) unless you set it.
+is unset (i.e. has no effect) unless you set it. It also has nothing to
+do with `CURATARR_AUTH_TOKEN` - both are required for LAN/reverse-proxy
+access; neither is a substitute for the other.
 
 ## Scheduling recommendation runs
 
@@ -162,6 +227,32 @@ control over when you move to a new release:
 published on every push to `main`, for testing unreleased changes -
 not recommended for normal use.
 
+## Verifying the image
+
+Every image `.github/workflows/docker.yml` publishes is signed
+keylessly with [cosign](https://github.com/sigstore/cosign) right after
+it's pushed - no long-lived private signing key exists anywhere for
+this (unlike the release binaries' signing key, which is maintainer-held
+and never touches CI - see `RELEASING.md`); instead cosign requests a
+short-lived certificate from Sigstore's public Fulcio CA using that CI
+job's own GitHub Actions OIDC identity, and records the signature in
+Sigstore's public transparency log (Rekor).
+
+Verify an image before running it with the
+[cosign CLI](https://docs.sigstore.dev/cosign/installation/):
+
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/OrchestratedChaos/curatarr/\.github/workflows/docker\.yml@refs/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/orchestratedchaos/curatarr:latest
+```
+
+(swap `:latest` for a specific version tag, e.g. `:v2.9.0`, to verify
+that exact release). A successful verification prints the signature's
+Rekor transparency-log entry; a tampered or unsigned image fails
+loudly instead of silently pulling.
+
 ## Building the image yourself
 
 ```bash
@@ -199,9 +290,15 @@ docker compose build --no-cache
 - **Connection refused to Plex** - use the host's IP, not `localhost`
   (the container has its own network namespace); `host.docker.internal`
   works on Docker Desktop.
+- **Container exits immediately with a `CURATARR_AUTH_TOKEN` error on
+  stderr** - expected, by design: see [Authentication](#authentication).
+  Set `CURATARR_AUTH_TOKEN` (or `CURATARR_TRUSTED_NETWORK=true` if you've
+  decided you don't need one) and restart.
 - **`400 Bad Request` from the UI** - see
   [Accessing from another machine](#accessing-from-another-machine)
   above.
+- **`401 Unauthorized` from the UI** - log in at `/login` with your
+  `CURATARR_AUTH_TOKEN` value; see [Authentication](#authentication).
 - **Permission denied under `/data`** - the container runs as uid/gid
   1000; `chown -R 1000:1000 config cache logs recommendations` on the
   host if those directories were created as a different user.

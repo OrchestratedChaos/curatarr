@@ -1,84 +1,34 @@
-"""Defense-in-depth secret redaction for anything the web UI renders.
+"""Defense-in-depth secret redaction for anything the web UI renders,
+plus the Host/Origin and token-auth guards protecting every route.
 
-The MVP has no config/settings forms, so it never renders config values
-directly. But recommender subprocess output (streamed live and written
-to logs) could in principle echo a URL or header containing a token
-(e.g. a stray ``X-Plex-Token`` query parameter in an error message).
-Everything the UI displays - streamed job output and log tails - is
-passed through :func:`redact` first.
+Recommender subprocess output (streamed live and written to logs) could
+in principle echo a URL or header containing a token (e.g. a stray
+``X-Plex-Token`` query parameter in an error message). Everything the UI
+displays - streamed job output and log tails - is passed through
+:func:`redact` first.
+
+redact()/redact_lines()/REDACTED actually live in utils.redact now (a
+neutral module with no web/Flask dependency - see that module's
+docstring for why: utils/display.py and web/job_runner.py both need to
+redact at WRITE time, not just when the web UI later reads a log back,
+and utils/display.py importing from web.* would be a layering
+violation). Re-exported here unchanged so every existing
+``from web.security import redact`` (and similar) import keeps working.
 """
 
+import hmac
 import os
 import re
 from typing import Iterable, List
 
-# Common secret-ish key names, matched case-insensitively.
-_SECRET_KEY_NAMES = (
-    "x-plex-token",
-    "access_token",
-    "refresh_token",
-    "client_secret",
-    "api_key",
-    "apikey",
-    "password",
-    "token",
-    "secret",
-)
+from utils.redact import REDACTED, redact, redact_lines
 
-_KEY_ALTERNATION = "|".join(re.escape(name) for name in _SECRET_KEY_NAMES)
-
-# Matches key=value / key: value / key="value" style occurrences. The
-# value class deliberately allows any non-whitespace, non-quote
-# character (not just alnum/._-+/) so a value that happens to start
-# with (or contain) a special char - `token: "$ecretValue"`,
-# `api_key=#deadbeef!`, a base64 value with a leading `/` or `+`, etc. -
-# still gets masked instead of silently passing through because the
-# old, narrower character class didn't match at that position at all.
-# The key name is kept (so redaction is still informative); only the
-# value is masked.
-_SECRET_PATTERN = re.compile(
-    r'(?i)\b(' + _KEY_ALTERNATION + r')\b\s*[:=]\s*["\']?([^\s"\']{4,})["\']?'
-)
-
-# "Authorization: Bearer <token>" style headers.
-_BEARER_PATTERN = re.compile(r'(?i)\bBearer\s+([A-Za-z0-9._\-]{8,})')
-
-# Bare high-entropy tokens that don't follow a recognizable key=value
-# shape but are still unambiguously a secret by their vendor-specific
-# prefix (GitHub PATs, Stripe/OpenAI-style sk- keys, Slack tokens, AWS
-# access key IDs, GitLab PATs, npm tokens, Google API keys, etc.) - a
-# recommender/client error message that echoes one of these raw (e.g.
-# in a stack trace argument) wouldn't otherwise be caught by
-# _SECRET_PATTERN since there's no "key: " / "key=" prefix at all.
-# Deliberately prefix-anchored rather than a generic
-# "any long mixed-case alnum run" heuristic, which would also catch
-# harmless things like git commit SHAs and cache/session IDs.
-_KNOWN_TOKEN_PREFIXES = (
-    "github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
-    "sk-live-", "sk-test-", "sk_live_", "sk_test_", "sk-",
-    "rk_live_", "rk_test_",
-    "xoxb-", "xoxp-", "xoxa-", "xoxr-",
-    "glpat-", "npm_", "AIza", "AKIA", "ASIA",
-)
-_PREFIX_ALTERNATION = "|".join(re.escape(prefix) for prefix in _KNOWN_TOKEN_PREFIXES)
-_BARE_TOKEN_PATTERN = re.compile(r'\b(' + _PREFIX_ALTERNATION + r')[A-Za-z0-9_\-]{8,}')
-
-REDACTED = "***REDACTED***"
-
-
-def redact(text: str) -> str:
-    """Return *text* with anything that looks like a secret masked out."""
-    if not text:
-        return text
-    text = _SECRET_PATTERN.sub(lambda m: f"{m.group(1)}={REDACTED}", text)
-    text = _BEARER_PATTERN.sub(lambda m: f"Bearer {REDACTED}", text)
-    text = _BARE_TOKEN_PATTERN.sub(lambda m: f"{m.group(1)}{REDACTED}", text)
-    return text
-
-
-def redact_lines(lines: Iterable[str]) -> List[str]:
-    """Apply :func:`redact` to every line in *lines*."""
-    return [redact(line) for line in lines]
+__all__ = [
+    'REDACTED', 'redact', 'redact_lines', 'safe_join',
+    'is_allowed_host', 'register_origin_host_guard',
+    'AUTH_TOKEN_ENV_VAR', 'AUTH_TOKEN_COOKIE_NAME', 'MIN_AUTH_TOKEN_LENGTH',
+    'register_token_auth',
+]
 
 
 def safe_join(base_dir: str, filename: str) -> str:
@@ -188,3 +138,184 @@ def register_origin_host_guard(app) -> None:
                 abort(403)
             if not is_allowed_host(urlsplit(source).netloc):
                 abort(403)
+
+
+# ---------------------------------------------------------------------------
+# Token authentication - required whenever the server isn't bound to
+# loopback (see register_token_auth's docstring for the full rationale;
+# short version: the Host/Origin guard above only ever proves something
+# about a *browser*, since it's the browser that enforces same-origin
+# policy on Host/Origin/Referer in the first place - a non-browser
+# client, e.g. curl, can set all three to whatever it wants and walk
+# straight through it. That's an acceptable trust model only when this
+# process is bound to loopback, where "who can even reach this port" is
+# already restricted to this same machine. See web/docker_server.py,
+# which binds 0.0.0.0 for container use and fails closed at startup if
+# this isn't configured.
+# ---------------------------------------------------------------------------
+
+# Shared secret a caller must present on every request once the server is
+# bound to something other than loopback. Read live (not cached at
+# import), same as CURATARR_ALLOWED_HOSTS above, so a running process
+# picks up a changed value on restart and tests can monkeypatch it.
+AUTH_TOKEN_ENV_VAR = 'CURATARR_AUTH_TOKEN'
+
+# Cookie name POST /login sets on success, so a browser session doesn't
+# have to hand-attach an Authorization/X-Curatarr-Token header on every
+# request - see register_token_auth's login routes.
+AUTH_TOKEN_COOKIE_NAME = 'curatarr_token'
+
+# Floor CURATARR_AUTH_TOKEN must meet to be treated as "set" at all -
+# below this, it's short enough to be brute-forceable and is treated the
+# same as unset (rejects every request). web/docker_server.py enforces
+# this same floor at startup, before the server even binds, so this
+# request-time check should never actually be what catches a weak token
+# in practice - it's the defensive backstop, not the primary gate.
+MIN_AUTH_TOKEN_LENGTH = 16
+
+# Explicit opt-out for an operator who has decided a non-loopback bind
+# with NO token is acceptable - e.g. the published port is only reachable
+# on a network they already fully trust (a private LAN with no other
+# untrusted devices, a container network with no host port published at
+# all, etc). Without this, web/docker_server.py's startup check refuses
+# to start at all rather than silently running unauthenticated - this is
+# the explicit, opt-in way to say "I understand the risk, start anyway."
+# Never auto-detected, never defaulted to true.
+TRUSTED_NETWORK_ENV_VAR = 'CURATARR_TRUSTED_NETWORK'
+
+
+def _trusted_network_ack() -> bool:
+    """True if the operator has explicitly set CURATARR_TRUSTED_NETWORK
+    to opt out of token auth on a non-loopback bind (see
+    TRUSTED_NETWORK_ENV_VAR above and web/docker_server.py's
+    _require_auth_token_or_exit, which is what actually gates startup on
+    this - this helper is also consulted here in register_token_auth so
+    the per-request guard doesn't reject with 401 forever once that
+    startup check has already let the operator's explicit choice
+    through)."""
+    return os.environ.get(TRUSTED_NETWORK_ENV_VAR, '').strip().lower() == 'true'
+
+
+# Hosts this process is considered loopback-only when bound to - the
+# same trust boundary web/app.py's main() has always hardcoded itself to
+# (127.0.0.1 only). ::1 (IPv6 loopback) and the bare hostname
+# 'localhost' are included too since a caller could plausibly set
+# CURATARR_UI_HOST to either and mean the same thing.
+_LOOPBACK_BIND_HOSTS = frozenset({'127.0.0.1', '::1', 'localhost'})
+
+
+def _is_loopback_bind(host: str) -> bool:
+    """True if *host* - a server BIND address (e.g. CURATARR_UI_HOST),
+    NOT a request's Host header (see is_allowed_host for that) - is
+    loopback-only. Anything else (0.0.0.0, a specific LAN interface,
+    ...) is reachable from other machines and needs real authentication,
+    not just the Host/Origin guard above."""
+    return (host or '').strip().lower() in _LOOPBACK_BIND_HOSTS
+
+
+# Exempt from the token requirement even on a non-loopback bind:
+# - /login itself (a browser can't already have the cookie the first
+#   time it visits a token-protected instance - see register_token_auth).
+# - /healthz (polled by container orchestration/liveness probes that
+#   have no way to carry a token; see web/app.py's healthz() docstring -
+#   it discloses nothing but a version string, same risk profile either
+#   way).
+_TOKEN_EXEMPT_PATHS = frozenset({'/login', '/healthz'})
+
+
+def _request_token(request) -> str:
+    """Pull the caller-supplied token out of *request*, checking (in
+    order) the Authorization: Bearer header, the X-Curatarr-Token
+    header, then the curatarr_token cookie a successful POST /login
+    leaves behind - whichever a given caller finds easiest: a
+    script/reverse proxy for the header forms, a browser for the
+    cookie."""
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        return auth_header[len('Bearer '):].strip()
+    header_token = request.headers.get('X-Curatarr-Token', '')
+    if header_token:
+        return header_token
+    return request.cookies.get(AUTH_TOKEN_COOKIE_NAME, '')
+
+
+def _valid_token(supplied: str) -> bool:
+    """hmac.compare_digest against the configured CURATARR_AUTH_TOKEN -
+    constant-time so a caller can't use response timing to guess the
+    token one character at a time. False (never an exception, never a
+    "trivially true") if the token isn't configured or nothing was
+    supplied."""
+    expected = os.environ.get(AUTH_TOKEN_ENV_VAR, '')
+    if len(expected) < MIN_AUTH_TOKEN_LENGTH or not supplied:
+        return False
+    return hmac.compare_digest(supplied, expected)
+
+
+def register_token_auth(app, bind_host: str) -> None:
+    """Register real token authentication, required on EVERY request
+    (not just state-changing ones - a GET can disclose saved config
+    values, see /config/connections) whenever *bind_host* is not
+    loopback-only (see _is_loopback_bind).
+
+    This runs IN ADDITION to register_origin_host_guard's Host/Origin
+    check above, never instead of it - that guard still blocks DNS
+    rebinding and cross-site form submissions from a browser regardless
+    of whether token auth is also active.
+
+    When *bind_host* IS loopback (the default for every native install -
+    see web/app.py's main(), always 127.0.0.1), this registers /login
+    (harmless either way - the cookie it sets is simply never checked)
+    but skips the before_request guard entirely, so a loopback-bound
+    server's request handling is byte-for-byte unchanged from before
+    this existed.
+
+    Also skips the guard when *bind_host* is non-loopback but no valid
+    token is configured AND the operator has explicitly set
+    CURATARR_TRUSTED_NETWORK=true (see _trusted_network_ack) - that env
+    var is what let web/docker_server.py's startup check let the process
+    boot at all in this state instead of refusing to start; without this
+    same check here, every single request would otherwise immediately
+    401 (there being no token that could ever satisfy _valid_token), which
+    would defeat the whole point of that explicit opt-out. If a valid
+    token IS configured, it's always enforced regardless of this env var -
+    CURATARR_TRUSTED_NETWORK only ever loosens the "no token configured"
+    case, never overrides an actually-configured one.
+    """
+    from flask import abort, make_response, redirect, render_template, request
+
+    @app.get('/login')
+    def login_form():
+        return render_template('login.html', error=request.args.get('error'))
+
+    @app.post('/login')
+    def login_submit():
+        supplied = request.form.get('token', '')
+        if not _valid_token(supplied):
+            return redirect('/login?error=1', code=303)
+        response = make_response(redirect('/', code=303))
+        response.set_cookie(
+            AUTH_TOKEN_COOKIE_NAME,
+            supplied,
+            httponly=True,
+            samesite='Strict',
+            path='/',
+            # No secure=True: this app is served over plain HTTP on a
+            # LAN by design (see docs/DOCKER.md) - Secure would make the
+            # browser silently refuse to ever send the cookie back on
+            # any request, with no HTTPS path to switch to instead.
+        )
+        return response
+
+    if _is_loopback_bind(bind_host):
+        return
+
+    token_configured = len(os.environ.get(AUTH_TOKEN_ENV_VAR, '')) >= MIN_AUTH_TOKEN_LENGTH
+    if not token_configured and _trusted_network_ack():
+        return
+
+    @app.before_request
+    def _token_auth_guard():
+        if request.path in _TOKEN_EXEMPT_PATHS:
+            return
+        if not _valid_token(_request_token(request)):
+            abort(401)

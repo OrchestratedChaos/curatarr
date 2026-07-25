@@ -80,6 +80,31 @@ class TestDashboard:
         assert b'No users configured' in resp.data
 
 
+class TestBaselineSecurityHeaders:
+    """FIX 6: every response gets a baseline set of hardening headers
+    (see web/app.py's _set_security_headers/_BASELINE_SECURITY_HEADERS),
+    not just the watchlist route's own stricter CSP (see
+    TestResults::test_watchlist_html_gets_restrictive_csp_header /
+    test_watchlist_md_gets_baseline_not_the_stricter_html_csp for that
+    one's own coverage)."""
+
+    def test_normal_route_gets_baseline_headers(self, client):
+        c, app, root = client
+        resp = c.get('/')
+        assert resp.status_code == 200
+        assert resp.headers.get('X-Frame-Options') == 'DENY'
+        assert resp.headers.get('X-Content-Type-Options') == 'nosniff'
+        assert resp.headers.get('Referrer-Policy') == 'no-referrer'
+        assert resp.headers.get('Content-Security-Policy') == app_module.BASELINE_CSP
+
+    def test_baseline_csp_has_no_upgrade_insecure_requests(self, client):
+        """This app serves plain HTTP by design (see docs/DOCKER.md) -
+        upgrade-insecure-requests would break every resource load."""
+        c, app, root = client
+        resp = c.get('/')
+        assert 'upgrade-insecure-requests' not in resp.headers.get('Content-Security-Policy', '')
+
+
 class TestRunPage:
     """Tests for GET/POST /run and /run/stream, /run/status"""
 
@@ -221,14 +246,22 @@ class TestResults:
         assert "frame-ancestors 'none'" in csp
         assert resp.headers.get('X-Content-Type-Options') == 'nosniff'
 
-    def test_watchlist_md_does_not_get_html_csp_header(self, client):
+    def test_watchlist_md_gets_baseline_not_the_stricter_html_csp(self, client):
+        """results_watchlist() only ever sets its OWN (stricter -
+        WATCHLIST_CSP) header for a .html response - a .md one still
+        gets a Content-Security-Policy, but the app-wide BASELINE_CSP
+        set by the after_request hook (see FIX 6/_set_security_headers),
+        not results_watchlist()'s own Google Fonts allowance, which
+        would be wrong for a plain-text response."""
         c, app, root = client
         ext_dir = os.path.join(root, 'recommendations', 'external')
         with open(os.path.join(ext_dir, 'alice_watchlist.md'), 'w') as f:
             f.write('# hello')
         resp = c.get('/results/watchlist/alice_watchlist.md')
         assert resp.status_code == 200
-        assert 'Content-Security-Policy' not in resp.headers
+        csp = resp.headers.get('Content-Security-Policy', '')
+        assert csp == app_module.BASELINE_CSP
+        assert 'fonts.googleapis.com' not in csp
 
     def test_watchlist_rejects_non_html_md_extension(self, client):
         c, app, root = client

@@ -351,6 +351,30 @@ class TestMigrateConfig:
         assert os.path.exists(str(tmp_path / 'tuning.yml'))
         assert os.path.exists(str(tmp_path / 'trakt.yml'))
 
+    @pytest.mark.skipif(os.name == 'nt', reason="POSIX file permissions don't apply on Windows")
+    def test_module_files_and_config_yml_end_up_owner_only(self, tmp_path):
+        """FIX 5: config.yml/tuning.yml/trakt.yml hold the Plex token and
+        Trakt client_secret/tokens in plaintext - a plain open(path, 'w')
+        lands at the OS umask default (typically 0o644 on Linux/Docker),
+        which would leave them world-readable."""
+        config_path = str(tmp_path / 'config.yml')
+        config = {
+            'plex': {'url': 'http://localhost', 'token': 'super-secret-plex-token'},
+            'tmdb': {'api_key': 'abc'},
+            'movies': {'limit_results': 50},
+            'trakt': {'enabled': True, 'client_id': 'xyz', 'client_secret': 'super-secret'},
+        }
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        result = migrate_config(config_path)
+
+        assert result['migrated'] is True
+        import stat
+        for name in ('config.yml', 'tuning.yml', 'trakt.yml'):
+            mode = stat.S_IMODE(os.stat(str(tmp_path / name)).st_mode)
+            assert mode == 0o600, f"{name} was {oct(mode)}, expected 0o600"
+
 
 class TestMigrateConfigLibraries:
     """Tests for the 'libraries' hook inside migrate_config (#157 Phase 1)"""

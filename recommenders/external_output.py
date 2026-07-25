@@ -112,8 +112,15 @@ def render_streaming_icons(
     if services:
         icons = []
         for service in services:
-            short_name = SERVICE_SHORT_NAMES.get(service, service.title())
-            css_class = f"streaming-icon {service}"
+            # Routed through _esc() below for consistency/defense-in-
+            # depth even though today's callers only ever pass values
+            # from a hardcoded allowlist (SERVICE_SHORT_NAMES etc.) -
+            # never assume that stays true forever just because it's
+            # true right now (see _esc()'s own docstring for the same
+            # reasoning applied to TMDB-sourced fields elsewhere in this
+            # module).
+            short_name = _esc(SERVICE_SHORT_NAMES.get(service, service.title()))
+            css_class = f"streaming-icon {_esc(service)}"
             if service in user_services:
                 css_class += " user-service"
             # Wrap in link to JustWatch if we have a title
@@ -125,14 +132,14 @@ def render_streaming_icons(
 
     # No streaming - check rent/buy availability
     if rent_services:
-        display = ', '.join(rent_services[:2])  # Show first 2
-        all_providers = ', '.join(rent_services)  # Tooltip shows all
+        display = _esc(', '.join(rent_services[:2]))  # Show first 2
+        all_providers = _esc(', '.join(rent_services))  # Tooltip shows all
         more = f" +{len(rent_services) - 2}" if len(rent_services) > 2 else ""
         return f'<span class="streaming-icon rent" title="Available: {all_providers}">Rent: {display}{more}</span>'
 
     if buy_services:
-        display = ', '.join(buy_services[:2])
-        all_providers = ', '.join(buy_services)
+        display = _esc(', '.join(buy_services[:2]))
+        all_providers = _esc(', '.join(buy_services))
         more = f" +{len(buy_services) - 2}" if len(buy_services) > 2 else ""
         return f'<span class="streaming-icon buy" title="Available: {all_providers}">Buy: {display}{more}</span>'
 

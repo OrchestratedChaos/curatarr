@@ -28,6 +28,11 @@ on:
       - feat/binary-self-update-2.8.29
   workflow_dispatch: {}
 
+# Least-privilege default - this job only checks out, builds, and tests;
+# it never needs to write anything back to the repo.
+permissions:
+  contents: read
+
 jobs:
   selfupdate-e2e:
     name: Self-update E2E (${{ matrix.os }})
@@ -51,7 +56,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt psutil
+          pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
+          pip install psutil
 
       - name: Build test fixtures (binaries + signed release dirs)
         shell: bash

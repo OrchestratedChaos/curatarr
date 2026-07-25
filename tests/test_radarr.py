@@ -52,6 +52,13 @@ class TestRadarrClientMakeRequest:
     def test_successful_request(self, mock_request):
         """Test successful API request."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "ok"}
         mock_request.return_value = mock_response
@@ -66,6 +73,13 @@ class TestRadarrClientMakeRequest:
     def test_unauthorized_raises_error(self, mock_request):
         """Test 401 raises RadarrAPIError."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 401
         mock_request.return_value = mock_response
 
@@ -78,6 +92,13 @@ class TestRadarrClientMakeRequest:
     def test_404_returns_none(self, mock_request):
         """Test 404 returns None."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 404
         mock_request.return_value = mock_response
 
@@ -90,6 +111,13 @@ class TestRadarrClientMakeRequest:
     def test_204_returns_none(self, mock_request):
         """Test 204 No Content returns None."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 204
         mock_request.return_value = mock_response
 
@@ -132,6 +160,13 @@ class TestRadarrClientMakeRequest:
     def test_error_response_parsing_list(self, mock_request):
         """Test error parsing with list response (Radarr/Sonarr style)."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 400
         mock_response.text = "Raw error"
         mock_response.json.return_value = [{"errorMessage": "Movie already exists"}]
@@ -146,6 +181,13 @@ class TestRadarrClientMakeRequest:
     def test_error_response_parsing_dict(self, mock_request):
         """Test error parsing with dict response."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 400
         mock_response.text = "Raw error"
         mock_response.json.return_value = {"message": "Invalid input"}
@@ -160,6 +202,13 @@ class TestRadarrClientMakeRequest:
     def test_error_response_parsing_invalid_json(self, mock_request):
         """Test error parsing falls back to raw text on invalid JSON."""
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 400
         mock_response.text = "Server error text"
         mock_response.json.side_effect = ValueError("Invalid JSON")

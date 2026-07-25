@@ -208,6 +208,51 @@ class TestSimklClientMakeRequest:
         assert result == {"ok": True}
         assert mock_request.call_count == 2
 
+    @patch('utils.simkl.time.sleep')
+    @patch('utils.simkl.requests.request')
+    def test_rate_limit_gives_up_after_max_retries(self, mock_request, mock_sleep):
+        """FIX 9: this used to recurse unboundedly on a 429 - a server
+        that never stops rate-limiting must not be able to hang/loop
+        this process forever."""
+        rate_limit_response = Mock()
+        rate_limit_response.status_code = 429
+        rate_limit_response.headers = {"Retry-After": "1"}
+        mock_request.return_value = rate_limit_response
+
+        client = SimklClient("id")
+
+        with pytest.raises(SimklAPIError):
+            client._make_request("GET", "/test", authenticated=False)
+
+        from utils.simkl import SIMKL_MAX_429_RETRIES
+        assert mock_request.call_count == 1 + SIMKL_MAX_429_RETRIES
+
+    @patch('utils.simkl.time.sleep')
+    @patch('utils.simkl.requests.request')
+    def test_retry_after_is_clamped_to_a_ceiling(self, mock_request, mock_sleep):
+        """Retry-After is server-controlled input - a malicious/
+        misbehaving Simkl endpoint must not be able to stall this
+        process for an arbitrary amount of time by claiming an
+        enormous Retry-After."""
+        rate_limit_response = Mock()
+        rate_limit_response.status_code = 429
+        rate_limit_response.headers = {"Retry-After": "99999"}
+
+        success_response = Mock()
+        success_response.status_code = 200
+        success_response.json.return_value = {"ok": True}
+
+        mock_request.side_effect = [rate_limit_response, success_response]
+
+        client = SimklClient("id")
+        result = client._make_request("GET", "/test", authenticated=False)
+
+        assert result == {"ok": True}
+        from utils.simkl import SIMKL_MAX_RETRY_AFTER_SECONDS
+        sleep_durations = [call.args[0] for call in mock_sleep.call_args_list]
+        assert SIMKL_MAX_RETRY_AFTER_SECONDS in sleep_durations
+        assert 99999 not in sleep_durations
+
     @patch('utils.simkl.requests.request')
     def test_generic_request_exception(self, mock_request):
         """Test generic RequestException raises SimklAPIError."""

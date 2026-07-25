@@ -31,6 +31,8 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from .security import redact
+
 ENGINES = ('full', 'movie', 'tv', 'external')
 
 # Sentinel pushed onto subscriber queues when a job finishes, so SSE
@@ -372,6 +374,14 @@ class JobManager:
             log_file = open(job.log_path, 'w', encoding='utf-8')
             assert job.process is not None and job.process.stdout is not None
             for line in job.process.stdout:
+                # Redact at write time, not just when the web UI later
+                # reads this back (see utils/redact.py) - a recommender
+                # subprocess could echo a token in its own output (e.g.
+                # a stray X-Plex-Token query param in an error message),
+                # and the log file on disk must never hold that in
+                # plaintext, independent of whether anyone ever views it
+                # through the UI.
+                line = redact(line)
                 log_file.write(line)
                 log_file.flush()
                 job._append_line(line.rstrip('\n'))

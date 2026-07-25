@@ -61,6 +61,9 @@ from web.update_apply import (
     _run_frozen_verify_and_handoff,
     _run_worker,
     _shut_down_old_server,
+    _windows_powershell_path,
+    _windows_tasklist_path,
+    _windows_taskkill_path,
     check_verified_update,
     run_self_update_worker,
 )
@@ -775,7 +778,7 @@ class TestWindowsBranches:
 
         assert result == 'v2.9.0'
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == 'powershell'
+        assert cmd[0] == _windows_powershell_path()
         assert '-CheckVerifiedUpdate' in cmd
 
     def test_pid_alive_uses_tasklist(self, monkeypatch):
@@ -783,7 +786,7 @@ class TestWindowsBranches:
         with patch('web.update_apply.subprocess.run') as mock_run:
             mock_run.return_value = Mock(stdout='1234 python.exe')
             assert _pid_alive(1234) is True
-            assert mock_run.call_args[0][0][0] == 'tasklist'
+            assert mock_run.call_args[0][0][0] == _windows_tasklist_path()
 
     def test_pid_alive_tasklist_exception_fails_toward_alive(self, monkeypatch):
         monkeypatch.setattr('web.update_apply.os.name', 'nt')
@@ -801,16 +804,16 @@ class TestWindowsBranches:
                 patch('web.update_apply.time.sleep'):
             _shut_down_old_server(1234, timeout=5)
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == 'taskkill'
+        assert cmd[0] == _windows_taskkill_path()
         assert '/F' in cmd
-        assert cmd == ['taskkill', '/F', '/PID', '1234']
+        assert cmd == [_windows_taskkill_path(), '/F', '/PID', '1234']
 
     @patch('web.update_apply.subprocess.Popen')
     def test_relaunch_ui_uses_powershell_and_creationflags(self, mock_popen, monkeypatch):
         monkeypatch.setattr('web.update_apply.os.name', 'nt')
         _relaunch_ui('/fake/root', 8787)
         args, kwargs = mock_popen.call_args
-        assert args[0][0] == 'powershell'
+        assert args[0][0] == _windows_powershell_path()
         assert 'creationflags' in kwargs
 
     @patch('web.update_apply.subprocess.Popen')
@@ -831,7 +834,7 @@ class TestWindowsBranches:
         mock_run.return_value = Mock(returncode=0, stdout='UPDATED:v2.9.0\n', stderr='')
         _run_worker('/fake/root', 12345, '127.0.0.1', 8787)
         apply_cmd = mock_run.call_args[0][0]
-        assert apply_cmd[0] == 'powershell'
+        assert apply_cmd[0] == _windows_powershell_path()
         assert '-ApplyVerifiedUpdate' in apply_cmd
 
 
@@ -889,7 +892,10 @@ class TestRunFrozenVerifyAndHandoff:
     tested below)."""
 
     def _verified(self, version='2.9.0', asset_path='/fake/root/.curatarr-update-x.tmp'):
-        return self_update.VerifiedUpdate(version=version, asset_path=asset_path, asset_name='curatarr-linux-x86_64')
+        return self_update.VerifiedUpdate(
+            version=version, asset_path=asset_path, asset_name='curatarr-linux-x86_64',
+            asset_sha256='deadbeef' * 8,
+        )
 
     @patch('web.update_apply.self_update_handoff.write_and_launch_handoff_script')
     @patch('web.update_apply._shut_down_old_server')
@@ -907,6 +913,7 @@ class TestRunFrozenVerifyAndHandoff:
             old_pid=12345,
             current_exe_path='/fake/root/curatarr',
             verified_asset_path='/fake/root/.curatarr-update-x.tmp',
+            verified_asset_sha256='deadbeef' * 8,
             port=8787,
             target_version='2.9.0',
         )

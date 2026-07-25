@@ -175,7 +175,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt
+          pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
 
       - name: Build binary with PyInstaller
         shell: bash
@@ -300,7 +300,7 @@ jobs:
           source .venv-universal2/bin/activate
           python -m pip install --upgrade pip
           pip install delocate
-          pip install -r requirements.txt -r requirements-ui.txt -r build-requirements.txt
+          pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
 
       - name: Fuse single-arch-only wheels into universal2
         shell: bash
@@ -434,10 +434,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+
           # Sorted + de-duplicated so re-running this job (e.g. a re-run
           # of a flaky matrix job) is idempotent rather than appending
           # duplicate lines.
-          cat checksums/SHA256SUMS.txt checksums/*.sha256 | sort -u -k2 > SHA256SUMS.txt
+          cat checksums/SHA256SUMS.txt checksums/*.sha256 | sort -u -k2 > SHA256SUMS.body.txt
+
+          # A leading `# curatarr-version: X.Y.Z` comment line - inside
+          # the file this whole workflow's later offline signing step
+          # (scripts/sign-release-checksums.sh, run by the maintainer -
+          # see that job's own comment above) signs as one blob, so the
+          # version number itself ends up covered by the same signature
+          # as every asset hash. utils.self_update.parse_sha256sums
+          # already skips any line starting with '#', so this is
+          # backward-compatible with every already-released binary that
+          # predates this field - see that function and
+          # download_and_verify_update's docstring for how a MISSING
+          # line (an older release) is handled (fail OPEN on absence,
+          # fail CLOSED on a present-but-wrong value).
+          {
+            echo "# curatarr-version: ${VERSION}"
+            cat SHA256SUMS.body.txt
+          } > SHA256SUMS.txt
+          rm -f SHA256SUMS.body.txt
+
           echo "Aggregate SHA256SUMS.txt:"
           cat SHA256SUMS.txt
           # Sanity check: every platform asset this release published a

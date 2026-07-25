@@ -44,6 +44,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_success_unwraps_data(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {
             'response': {'result': 'success', 'message': None, 'data': [{'user_id': 1}]}
@@ -63,6 +70,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_error_result_raises(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {
             'response': {'result': 'error', 'message': 'Invalid apikey', 'data': {}}
@@ -76,6 +90,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_unexpected_shape_raises(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 200
         mock_response.json.return_value = {"unexpected": True}
         mock_request.return_value = mock_response
@@ -87,6 +108,13 @@ class TestTautulliClientCall:
     @patch('utils.api_client.requests.request')
     def test_call_http_error_raises(self, mock_request):
         mock_response = Mock()
+        # BaseAPIClient now streams+caps the response body (see
+        # utils.helpers.read_response_capped) - a real requests.Response
+        # supports .headers (a real Mapping) and .iter_content()
+        # natively; a plain Mock() needs both spelled out explicitly so
+        # that code path doesn't choke on auto-generated Mock attributes.
+        mock_response.headers = {}
+        mock_response.iter_content = Mock(return_value=[])
         mock_response.status_code = 401
         mock_request.return_value = mock_response
 

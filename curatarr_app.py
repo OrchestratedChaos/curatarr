@@ -291,6 +291,21 @@ if __name__ == '__main__':
         run_self_update_worker(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--self-update':
         _run_self_update_cli()
+    elif len(sys.argv) > 1 and sys.argv[1] == '--version':
+        # Used by utils.self_update.perform_self_update's post-swap
+        # readback (see that function's docstring) to confirm the
+        # binary now on disk actually IS the version that was just
+        # verified/swapped in, by actually running it - not just
+        # trusting the swap itself succeeded. Deliberately the cheapest
+        # possible path (no config load, no Flask, nothing that could
+        # itself fail for a reason unrelated to "is this the right
+        # version" and be mistaken for a bad swap) and prints ONLY the
+        # bare version number (no leading 'v', matching
+        # utils.config.__version__'s own format) with nothing else on
+        # stdout, so a caller can compare it directly.
+        from utils.config import __version__
+        print(__version__)
+        sys.exit(0)
     else:
         if getattr(sys, 'frozen', False):
             # Best-effort cleanup of a leftover <exe>.old from a

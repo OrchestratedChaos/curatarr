@@ -21,6 +21,22 @@ SIMKL_RATE_LIMIT_DELAY = 0.2
 # HTTP request timeout in seconds
 SIMKL_REQUEST_TIMEOUT = 30
 
+# Bounds the 429 (rate limited) retry loop in _make_request - matching
+# the pattern already used correctly in utils/tmdb.py's
+# fetch_tmdb_with_retry (and utils/trakt.py's own _make_request, fixed
+# alongside this). Without a cap, a 429 response recursed forever,
+# sleeping for however long the server's own Retry-After header said to
+# (see SIMKL_MAX_RETRY_AFTER_SECONDS below for why that alone isn't
+# trustworthy either).
+SIMKL_MAX_429_RETRIES = 3
+
+# Ceiling on how long a single 429 retry will ever sleep for, regardless
+# of what the server's Retry-After header asks for - server-controlled
+# input, and a compromised/misbehaving Simkl endpoint (or a malicious
+# response) could otherwise stall this process for an arbitrary/huge
+# amount of time.
+SIMKL_MAX_RETRY_AFTER_SECONDS = 60
+
 
 class SimklAuthError(Exception):
     """Raised when Simkl authentication fails."""
@@ -93,9 +109,11 @@ class SimklClient:
 
         Returns:
             Response JSON or None for 204 responses
-        """
-        self._rate_limit()
 
+        Raises:
+            SimklAPIError: If still rate limited (429) after
+                SIMKL_MAX_429_RETRIES retries, or on any other API error.
+        """
         url = f"{SIMKL_API_URL}{endpoint}"
         headers = self._get_headers(authenticated)
 
@@ -106,21 +124,37 @@ class SimklClient:
             params['client_id'] = self.client_id
 
         try:
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                json=data,
-                params=params,
-                timeout=SIMKL_REQUEST_TIMEOUT
-            )
+            response = None
+            # Bounded retry loop for 429s - see SIMKL_MAX_429_RETRIES's
+            # comment above for why this used to recurse unboundedly.
+            for attempt in range(SIMKL_MAX_429_RETRIES + 1):
+                self._rate_limit()
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    json=data,
+                    params=params,
+                    timeout=SIMKL_REQUEST_TIMEOUT,
+                    # Never auto-follow redirects - requests only strips
+                    # the Authorization header on a cross-host hop, not
+                    # the custom simkl-api-key header this client also
+                    # sends (see _get_headers).
+                    allow_redirects=False,
+                )
 
-            # Handle rate limiting
-            if response.status_code == 429:
-                retry_after = int(response.headers.get('Retry-After', 1))
-                logger.warning(f"Simkl rate limited, waiting {retry_after}s")
+                if response.status_code != 429 or attempt == SIMKL_MAX_429_RETRIES:
+                    break
+
+                retry_after = min(
+                    int(response.headers.get('Retry-After', 1)),
+                    SIMKL_MAX_RETRY_AFTER_SECONDS,
+                )
+                logger.warning(
+                    f"Simkl rate limited, waiting {retry_after}s "
+                    f"(retry {attempt + 1}/{SIMKL_MAX_429_RETRIES})"
+                )
                 time.sleep(retry_after)
-                return self._make_request(method, endpoint, data, params, authenticated)
 
             # Handle auth errors
             if response.status_code == 401:
@@ -165,7 +199,8 @@ class SimklClient:
             response = requests.get(
                 url,
                 params=params,
-                timeout=SIMKL_REQUEST_TIMEOUT
+                timeout=SIMKL_REQUEST_TIMEOUT,
+                allow_redirects=False,
             )
 
             if response.status_code != 200:
@@ -204,7 +239,8 @@ class SimklClient:
                 response = requests.get(
                     url,
                     params=params,
-                    timeout=SIMKL_REQUEST_TIMEOUT
+                    timeout=SIMKL_REQUEST_TIMEOUT,
+                    allow_redirects=False,
                 )
 
                 if response.status_code == 200:

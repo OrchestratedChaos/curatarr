@@ -4,6 +4,14 @@ on:
   pull_request:
     types: [opened]
 
+# Least-privilege: this job only comments on and closes a PR - nothing
+# else. issues:write is needed alongside pull-requests:write because
+# createComment on a PR goes through the Issues API under the hood
+# (every PR is also an issue in GitHub's API model).
+permissions:
+  pull-requests: write
+  issues: write
+
 jobs:
   close-pr:
     runs-on: ubuntu-latest
