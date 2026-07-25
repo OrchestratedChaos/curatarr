@@ -2,6 +2,35 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.5] - 2026-07-25
+
+### Fixed
+
+- **The published `curatarr-linux-x86_64` and `curatarr-linux-arm64`
+  binaries required a newer glibc than most server distros ship,
+  failing to even start.** Both Linux entries in
+  `.github/workflows/release.yml`'s `build-binaries` matrix built on a
+  runner that resolves to Ubuntu 24.04 (glibc 2.39); glibc is backward-
+  but not forward-compatible, so the resulting binary failed on Debian
+  12 (glibc 2.36), Ubuntu 22.04 LTS (2.35), and RHEL/Rocky/AlmaLinux 9
+  (2.34) with `Failed to load Python shared library ... GLIBC_2.38' not
+  found` - a raw loader failure, not an actionable error. Reproduced on
+  a real clean Debian 12 install; confirmed Ubuntu 24.04 itself was
+  unaffected. Both Linux entries now build inside a pinned
+  `manylinux_2_28` container (glibc 2.28) instead of directly on the
+  runner - chosen because every compiled dependency
+  (`cryptography`, `cffi`, `markupsafe`, `pyyaml`, `charset-normalizer`)
+  already publishes a `manylinux_2_28`- or lower-tagged wheel for both
+  x86_64 and aarch64, so this floor needed compiling nothing from
+  source (see `build-binaries`' own comment for the full survey). This
+  covers all three baselines above with margin. A new build-time check
+  (`objdump -T` against the built binary's max referenced `GLIBC_*`
+  symbol) fails the job if a future dependency bump silently regresses
+  the floor. Verified with real container runs of the rebuilt binaries
+  on `debian:12`, `ubuntu:22.04`, `rockylinux:9`, and `ubuntu:24.04`
+  (`--version` on each). See `docs/BINARIES.md` for the documented
+  supported floor.
+
 ## [2.10.4] - 2026-07-25
 
 ### Fixed
