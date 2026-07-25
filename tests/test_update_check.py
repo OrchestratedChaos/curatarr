@@ -257,16 +257,25 @@ class TestGetLatestVersionSuccess:
         mock_get.assert_called_once()
 
     @patch('utils.update_check.requests.get')
-    def test_cache_write_failure_is_not_fatal(self, mock_get, monkeypatch):
+    def test_cache_write_failure_is_not_fatal(self, mock_get, monkeypatch, tmp_path):
         """A disk error writing the cache (permissions, full disk, a
         cache dir that doesn't exist, etc.) must not surface as an
         exception - worst case is just a re-check next call instead of
-        respecting the cache interval. Points the cache dir at a
-        nonexistent path (never created) so the real open() call fails
-        naturally, instead of risky global builtins.open patching."""
+        respecting the cache interval. Points the cache dir at a path
+        that can never be created - a plain file sits where the needed
+        parent directory would go, so os.makedirs always fails, on
+        every OS (a hardcoded '/nonexistent/...' string only reliably
+        stays uncreatable on POSIX, where a normal user can't mkdir
+        directly under '/' - on Windows, a normal user CAN mkdir
+        directly under a drive root, so that string would actually get
+        created for real and leak onto disk) - so the real open() call
+        fails naturally, instead of risky global builtins.open
+        patching."""
+        blocker = tmp_path / 'blocker'
+        blocker.write_bytes(b'not a directory')
         monkeypatch.setattr(
             'utils.update_check.get_project_root',
-            lambda: '/nonexistent/path/that/is/never/created',
+            lambda: str(blocker / 'unreachable'),
         )
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None

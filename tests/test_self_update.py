@@ -860,6 +860,14 @@ class TestSwapPosix:
     the near-identical test shape this mirrors.
     """
 
+    @pytest.mark.skipif(
+        sys.platform == 'win32',
+        reason="NTFS has no POSIX exec bit for an extensionless file (os.stat only "
+               "synthesizes S_IEXEC for specific extensions like .exe/.bat/.cmd) - "
+               "os.chmod's exec-bit request is a no-op here regardless. _swap_posix "
+               "is never invoked on Windows in production (swap_binary dispatches to "
+               "_swap_windows there - see TestSwapWindows), so this is POSIX-only.",
+    )
     def test_replaces_current_with_new_and_sets_exec_bit(self, tmp_path):
         current = tmp_path / 'curatarr'
         current.write_bytes(b'old content')
@@ -898,6 +906,16 @@ class TestSwapPosix:
 
         assert (tmp_path / 'curatarr.old').read_bytes() == b'old content'
 
+    @pytest.mark.skipif(
+        sys.platform == 'win32',
+        reason="_swap_posix's current -> old_path step deliberately still uses plain "
+               "os.rename() (never os.replace() - see _swap_windows's docstring for "
+               "why THAT one needed to change), relying on POSIX rename(2)'s "
+               "silent-overwrite-of-an-existing-destination semantics, which Windows' "
+               "os.rename doesn't have (WinError 183). That's fine: _swap_posix is "
+               "never invoked on Windows in production (swap_binary dispatches to "
+               "_swap_windows there - see TestSwapWindows's own version of this test).",
+    )
     def test_stale_old_sidecar_removal_failure_is_non_fatal(self, tmp_path):
         """A leftover .old that can't be removed (e.g. still locked by a
         slow-to-exit previous process) must not abort the swap - the
@@ -973,14 +991,15 @@ class TestCurrentBinaryPath:
 
 
 class TestSwapWindows:
-    """_swap_windows itself only calls os.rename/os.replace - both work
-    identically against plain files on any OS, so its rename-then-move
-    LOGIC (including rollback) is fully exercisable here without
-    actually running on Windows. The Windows-specific claim being
-    tested is "you can rename a file out from under a process still
-    using it", which is a real-OS fact asserted in the module's
-    docstring/comments, not something a unit test proves - see
-    docs/BINARIES.md and this PR's Windows E2E evidence for that part.
+    """_swap_windows itself only calls os.replace (see its own
+    docstring for why not os.rename) - that works identically against
+    plain files on any OS, so its rename-then-move LOGIC (including
+    rollback) is fully exercisable here without actually running on
+    Windows. The Windows-specific claim being tested is "you can
+    rename a file out from under a process still using it", which is a
+    real-OS fact asserted in the module's docstring/comments, not
+    something a unit test proves - see docs/BINARIES.md and this PR's
+    Windows E2E evidence for that part.
     """
 
     def test_success_path(self, tmp_path):
@@ -1031,7 +1050,9 @@ class TestSwapWindows:
         new = tmp_path / 'new_download.tmp'
         new.write_bytes(b'new content')
 
-        with patch('utils.self_update.os.rename', side_effect=OSError('locked')):
+        # current -> old_path uses os.replace(), not os.rename() (see
+        # _swap_windows's docstring for why) - patch that.
+        with patch('utils.self_update.os.replace', side_effect=OSError('locked')):
             with pytest.raises(self_update.SwapError, match='Could not rename'):
                 self_update._swap_windows(str(current), str(new))
         assert current.read_bytes() == b'old content'
@@ -1048,7 +1069,10 @@ class TestSwapWindows:
 
         def _flaky_replace(src, dst):
             calls['n'] += 1
-            if calls['n'] == 1:
+            # Call 1 is the current -> old_path step (must succeed for
+            # real, same as production); call 2 is the actual "move
+            # new binary into place" step this test targets.
+            if calls['n'] == 2:
                 raise OSError('could not move new binary into place')
             return real_replace(src, dst)
 
@@ -1065,7 +1089,20 @@ class TestSwapWindows:
         new = tmp_path / 'new_download.tmp'
         new.write_bytes(b'new content')
 
-        with patch('utils.self_update.os.replace', side_effect=OSError('everything is on fire')):
+        real_replace = os.replace
+        calls = {'n': 0}
+
+        def _fails_from_second_call(src, dst):
+            calls['n'] += 1
+            # Call 1 (current -> old_path) must succeed for real so
+            # there's something at old_path left to fail to restore
+            # from below; calls 2+ (the move, then the rollback
+            # attempt) both fail.
+            if calls['n'] == 1:
+                return real_replace(src, dst)
+            raise OSError('everything is on fire')
+
+        with patch('utils.self_update.os.replace', side_effect=_fails_from_second_call):
             with pytest.raises(self_update.SwapError, match='rollback failed'):
                 self_update._swap_windows(str(current), str(new))
         # current_path is gone (both replace attempts failed) but the
@@ -1112,8 +1149,18 @@ class TestPreservePermissions:
 
         self_update._preserve_permissions(str(source), str(dest))
 
-        import stat as stat_module
-        assert stat_module.S_IMODE(os.stat(str(dest)).st_mode) == 0o755
+        if sys.platform == 'win32':
+            # NTFS/os.chmod on Windows has one real degree of freedom:
+            # the read-only DOS attribute, toggled by whether the
+            # requested mode includes S_IWRITE - there's no granular
+            # owner/group/other bit storage to check 0o755 against.
+            # Source's mode (0o755) has the write bit set, so the only
+            # meaningful, platform-appropriate assertion is that dest
+            # ends up writable (not read-only) too.
+            assert os.access(str(dest), os.W_OK)
+        else:
+            import stat as stat_module
+            assert stat_module.S_IMODE(os.stat(str(dest)).st_mode) == 0o755
 
     def test_missing_source_does_not_raise(self, tmp_path):
         dest = tmp_path / 'dest'

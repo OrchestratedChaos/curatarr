@@ -355,19 +355,33 @@ class TestGetProjectRoot:
 
     @patch('utils.helpers.sys.frozen', True, create=True)
     def test_frozen_windows_falls_back_to_home_without_appdata(self, tmp_path, monkeypatch):
-        """No %APPDATA% set (unusual, but shouldn't crash): fall back to ~\\curatarr."""
+        """No %APPDATA% set (unusual, but shouldn't crash): fall back to ~\\curatarr.
+
+        Patches os.path.expanduser directly rather than the HOME env
+        var: get_project_root()'s fallback is os.path.expanduser('~'),
+        and on a real Windows interpreter that's ntpath.expanduser,
+        which prefers %USERPROFILE% over %HOME% - so setting HOME alone
+        doesn't actually redirect it when this test itself runs on
+        real Windows, only on POSIX. Patching expanduser exercises the
+        branch logic under test on every platform, which is the point.
+        """
         monkeypatch.setattr(os, 'name', 'nt')
         monkeypatch.delenv('APPDATA', raising=False)
-        monkeypatch.setenv('HOME', str(tmp_path))
+        monkeypatch.setattr(os.path, 'expanduser', lambda p: str(tmp_path))
         root = get_project_root()
         assert root == os.path.join(str(tmp_path), 'curatarr')
         assert os.path.isdir(root)
 
     @patch('utils.helpers.sys.frozen', True, create=True)
     def test_frozen_posix_uses_dot_curatarr_in_home(self, tmp_path, monkeypatch):
-        """A frozen binary on macOS/Linux uses ~/.curatarr."""
+        """A frozen binary on macOS/Linux uses ~/.curatarr.
+
+        Patches os.path.expanduser directly (see
+        test_frozen_windows_falls_back_to_home_without_appdata above
+        for why) rather than the HOME env var.
+        """
         monkeypatch.setattr(os, 'name', 'posix')
-        monkeypatch.setenv('HOME', str(tmp_path))
+        monkeypatch.setattr(os.path, 'expanduser', lambda p: str(tmp_path))
         root = get_project_root()
         assert root == os.path.join(str(tmp_path), '.curatarr')
         assert os.path.isdir(root)
@@ -376,7 +390,7 @@ class TestGetProjectRoot:
     def test_frozen_reuses_existing_dir(self, tmp_path, monkeypatch):
         """Second run against an already-populated data dir doesn't error."""
         monkeypatch.setattr(os, 'name', 'posix')
-        monkeypatch.setenv('HOME', str(tmp_path))
+        monkeypatch.setattr(os.path, 'expanduser', lambda p: str(tmp_path))
         existing = os.path.join(str(tmp_path), '.curatarr')
         os.makedirs(existing)
         with open(os.path.join(existing, 'marker.txt'), 'w') as f:

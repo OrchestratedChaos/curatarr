@@ -108,12 +108,21 @@ warn you the first time you run a downloaded binary:
 
 - **Windows SmartScreen**: "Windows protected your PC" -> click
   **More info** -> **Run anyway**.
-- **macOS Gatekeeper**: right-click (or Control-click) the binary in
-  Finder -> **Open** -> confirm **Open** in the dialog. (A plain
-  double-click on a freshly-downloaded unsigned binary will just say
-  it "cannot be opened" and won't offer this option - it has to be the
-  right-click path the first time.) Alternatively, clear the quarantine
-  attribute from a terminal: `xattr -d com.apple.quarantine curatarr-macos-arm64`.
+- **macOS Gatekeeper**: the binary is neither signed nor notarized
+  (`spctl -a -v` reports `rejected`). A normal Finder download gets the
+  `com.apple.quarantine` extended attribute, and Gatekeeper blocks it:
+  right-click (or Control-click) the binary in Finder -> **Open** ->
+  confirm **Open** in the dialog. (A plain double-click on a
+  freshly-downloaded unsigned binary will just say it "cannot be
+  opened" and won't offer this option - it has to be the right-click
+  path the first time.) If it's already been blocked once, allow it via
+  **System Settings -> Privacy & Security** instead. Alternatively,
+  clear the quarantine attribute directly from a terminal:
+  `xattr -d com.apple.quarantine curatarr-macos-arm64`. In a headless
+  context (SSH, CI, anything with no GUI session attached) neither
+  prompt can appear at all - a quarantined binary run that way hangs
+  indefinitely instead of failing fast, since it's waiting on a dialog
+  nothing can show. Clear the quarantine attribute first in that case.
 - **Linux**: no equivalent gate; just needs `chmod +x`.
 
 Only download binaries from the official

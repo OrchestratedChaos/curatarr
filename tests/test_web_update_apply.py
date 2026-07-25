@@ -62,6 +62,7 @@ from web.update_apply import (
     _run_frozen_verify_and_handoff,
     _run_worker,
     _shut_down_old_server,
+    _updater_script,
     _windows_powershell_path,
     _windows_tasklist_path,
     _windows_taskkill_path,
@@ -316,33 +317,48 @@ class TestLockConcurrency:
 class TestCheckVerifiedUpdate:
     """Unit tests for the precondition-check helper itself (not through
     the route) - mirrors run.sh's/run.ps1's own --check-verified-update
-    mode being shelled out to, never reimplemented."""
+    mode being shelled out to, never reimplemented.
+
+    Writes the script via _updater_script(), not a hardcoded 'run.sh':
+    check_verified_update() looks for run.ps1 on Windows and run.sh
+    everywhere else, so a hardcoded 'run.sh' would leave the "script"
+    that subprocess.run is mocked to be invoked for permanently
+    missing on a real Windows run - os.path.isfile() would return
+    False, check_verified_update() would take its own "no script"
+    early return before ever calling the mocked subprocess.run, and
+    every test below would pass for the wrong reason (or, for
+    test_verified_tag_returned, fail outright).
+    """
 
     def test_missing_script_returns_none(self, tmp_path):
         assert check_verified_update(str(tmp_path)) is None
 
     @patch('web.update_apply.subprocess.run')
     def test_nonzero_exit_returns_none(self, mock_run, tmp_path):
-        (tmp_path / 'run.sh').write_text('#!/bin/bash\n', encoding='utf-8')
+        with open(_updater_script(str(tmp_path)), 'w', encoding='utf-8') as f:
+            f.write('#!/bin/bash\n')
         mock_run.return_value = Mock(returncode=1, stdout='')
         assert check_verified_update(str(tmp_path)) is None
 
     @patch('web.update_apply.subprocess.run')
     def test_verified_tag_returned(self, mock_run, tmp_path):
-        (tmp_path / 'run.sh').write_text('#!/bin/bash\n', encoding='utf-8')
+        with open(_updater_script(str(tmp_path)), 'w', encoding='utf-8') as f:
+            f.write('#!/bin/bash\n')
         mock_run.return_value = Mock(returncode=0, stdout='v2.9.0\n')
         assert check_verified_update(str(tmp_path)) == 'v2.9.0'
 
     @patch('web.update_apply.subprocess.run')
     def test_exception_is_not_fatal(self, mock_run, tmp_path):
-        (tmp_path / 'run.sh').write_text('#!/bin/bash\n', encoding='utf-8')
+        with open(_updater_script(str(tmp_path)), 'w', encoding='utf-8') as f:
+            f.write('#!/bin/bash\n')
         mock_run.side_effect = Exception('boom')
         assert check_verified_update(str(tmp_path)) is None
 
     @patch('web.update_apply.subprocess.run')
     def test_timeout_is_not_fatal(self, mock_run, tmp_path):
         import subprocess as sp
-        (tmp_path / 'run.sh').write_text('#!/bin/bash\n', encoding='utf-8')
+        with open(_updater_script(str(tmp_path)), 'w', encoding='utf-8') as f:
+            f.write('#!/bin/bash\n')
         mock_run.side_effect = sp.TimeoutExpired(cmd='run.sh', timeout=20)
         assert check_verified_update(str(tmp_path)) is None
 
@@ -362,11 +378,18 @@ class TestPidAlive:
         assert _pid_alive(0) is False
         assert _pid_alive(-1) is False
 
-    def test_permission_error_means_alive_but_owned_by_someone_else(self):
+    def test_permission_error_means_alive_but_owned_by_someone_else(self, monkeypatch):
+        # os.kill is only reached on the POSIX branch - _pid_alive's
+        # 'nt' branch shells out to tasklist instead (see
+        # test_own_pid_is_alive above and the class docstring), which
+        # would bypass this mock entirely and query the real process
+        # table on an actual Windows run.
+        monkeypatch.setattr('web.update_apply.os.name', 'posix')
         with patch('web.update_apply.os.kill', side_effect=PermissionError()):
             assert _pid_alive(1234) is True
 
-    def test_generic_os_error_means_not_alive(self):
+    def test_generic_os_error_means_not_alive(self, monkeypatch):
+        monkeypatch.setattr('web.update_apply.os.name', 'posix')
         with patch('web.update_apply.os.kill', side_effect=OSError('weird')):
             assert _pid_alive(1234) is False
 
@@ -492,7 +515,14 @@ class TestShutDownOldServer:
 
     @patch('web.update_apply.time.sleep')
     @patch('web.update_apply.os.kill')
-    def test_signals_then_waits_for_exit(self, mock_kill, mock_sleep):
+    def test_signals_then_waits_for_exit(self, mock_kill, mock_sleep, monkeypatch):
+        # os.kill is only reached on the POSIX branch - _shut_down_old_server's
+        # 'nt' branch shells out to taskkill instead (see this module's own
+        # docstring). Without forcing the branch, a real Windows run would
+        # bypass this mock and launch a REAL taskkill /F /PID against
+        # whatever process actually happens to own pid 12345 - exactly what
+        # this class's docstring says must never happen.
+        monkeypatch.setattr('web.update_apply.os.name', 'posix')
         calls = {'n': 0}
 
         def _fake_alive(pid):
@@ -505,7 +535,11 @@ class TestShutDownOldServer:
 
     @patch('web.update_apply.time.sleep')
     @patch('web.update_apply.os.kill', side_effect=ProcessLookupError())
-    def test_process_vanishing_mid_signal_does_not_raise(self, mock_kill, mock_sleep):
+    def test_process_vanishing_mid_signal_does_not_raise(self, mock_kill, mock_sleep, monkeypatch):
+        # See test_signals_then_waits_for_exit above for why this must
+        # force the POSIX branch rather than let a real Windows run
+        # silently take the taskkill branch instead.
+        monkeypatch.setattr('web.update_apply.os.name', 'posix')
         with patch('web.update_apply._pid_alive', return_value=True):
             _shut_down_old_server(12345, timeout=5)  # must not raise
 

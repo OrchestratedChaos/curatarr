@@ -36,53 +36,58 @@ class TestCheckCacheVersion:
         assert result is False
 
     def test_returns_true_for_current_version(self):
+        # NamedTemporaryFile's own handle must be closed (i.e. outside
+        # the `with` block) before check_cache_version() touches the
+        # path - on Windows an open handle blocks a second open() AND
+        # the later os.unlink() with WinError 32; POSIX tolerates it,
+        # which is what let this go unnoticed for so long.
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump({'cache_version': CACHE_VERSION, 'data': {}}, f)
-            f.flush()
-            try:
-                result = check_cache_version(f.name)
-                assert result is True
-            finally:
-                os.unlink(f.name)
+            path = f.name
+        try:
+            result = check_cache_version(path)
+            assert result is True
+        finally:
+            os.unlink(path)
 
     def test_returns_false_for_old_version(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump({'cache_version': 1, 'data': {}}, f)
-            f.flush()
-            try:
-                result = check_cache_version(f.name)
-                assert result is False
-                # File should be deleted
-                assert not os.path.exists(f.name)
-            except Exception:
-                if os.path.exists(f.name):
-                    os.unlink(f.name)
-                raise
+            path = f.name
+        try:
+            result = check_cache_version(path)
+            assert result is False
+            # File should be deleted
+            assert not os.path.exists(path)
+        except Exception:
+            if os.path.exists(path):
+                os.unlink(path)
+            raise
 
     def test_returns_false_for_invalid_json(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             f.write("not valid json")
-            f.flush()
-            try:
-                result = check_cache_version(f.name)
-                assert result is False
-            finally:
-                if os.path.exists(f.name):
-                    os.unlink(f.name)
+            path = f.name
+        try:
+            result = check_cache_version(path)
+            assert result is False
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
 
     def test_defaults_to_v1_if_no_version(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump({'data': {}}, f)  # No cache_version key
-            f.flush()
-            try:
-                result = check_cache_version(f.name)
-                # Should return False because v1 < CACHE_VERSION (2)
-                assert result is False
-            except Exception:
-                pass
-            finally:
-                if os.path.exists(f.name):
-                    os.unlink(f.name)
+            path = f.name
+        try:
+            result = check_cache_version(path)
+            # Should return False because v1 < CACHE_VERSION (2)
+            assert result is False
+        except Exception:
+            pass
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 class TestGetConfigSection:
@@ -328,76 +333,80 @@ class TestLoadConfig:
     """Tests for load_config function with environment variable support"""
 
     def test_loads_yaml_config(self):
+        # NamedTemporaryFile's own handle must be closed (i.e. outside
+        # the `with` block) before load_config()/os.unlink() touch the
+        # path - Windows locks an open file against a second open() AND
+        # against unlink (WinError 32); POSIX tolerates it.
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("plex:\n  url: http://localhost:32400\n  token: abc123\n")
-            f.flush()
-            try:
-                result = load_config(f.name)
-                assert result['plex']['url'] == 'http://localhost:32400'
-                assert result['plex']['token'] == 'abc123'
-            finally:
-                os.unlink(f.name)
+            path = f.name
+        try:
+            result = load_config(path)
+            assert result['plex']['url'] == 'http://localhost:32400'
+            assert result['plex']['token'] == 'abc123'
+        finally:
+            os.unlink(path)
 
     def test_env_var_overrides_plex_token(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("plex:\n  url: http://localhost:32400\n  token: file_token\n")
-            f.flush()
-            try:
-                os.environ['PLEX_TOKEN'] = 'env_token'
-                result = load_config(f.name)
-                assert result['plex']['token'] == 'env_token'
-            finally:
-                del os.environ['PLEX_TOKEN']
-                os.unlink(f.name)
+            path = f.name
+        try:
+            os.environ['PLEX_TOKEN'] = 'env_token'
+            result = load_config(path)
+            assert result['plex']['token'] == 'env_token'
+        finally:
+            del os.environ['PLEX_TOKEN']
+            os.unlink(path)
 
     def test_env_var_overrides_plex_url(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("plex:\n  url: http://localhost:32400\n")
-            f.flush()
-            try:
-                os.environ['PLEX_URL'] = 'http://remote:32400'
-                result = load_config(f.name)
-                assert result['plex']['url'] == 'http://remote:32400'
-            finally:
-                del os.environ['PLEX_URL']
-                os.unlink(f.name)
+            path = f.name
+        try:
+            os.environ['PLEX_URL'] = 'http://remote:32400'
+            result = load_config(path)
+            assert result['plex']['url'] == 'http://remote:32400'
+        finally:
+            del os.environ['PLEX_URL']
+            os.unlink(path)
 
     def test_env_var_overrides_tmdb_api_key(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("tmdb:\n  api_key: file_key\n")
-            f.flush()
-            try:
-                os.environ['TMDB_API_KEY'] = 'env_key'
-                result = load_config(f.name)
-                assert result['tmdb']['api_key'] == 'env_key'
-            finally:
-                del os.environ['TMDB_API_KEY']
-                os.unlink(f.name)
+            path = f.name
+        try:
+            os.environ['TMDB_API_KEY'] = 'env_key'
+            result = load_config(path)
+            assert result['tmdb']['api_key'] == 'env_key'
+        finally:
+            del os.environ['TMDB_API_KEY']
+            os.unlink(path)
 
     def test_env_var_creates_section_if_missing(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("plex:\n  url: http://localhost:32400\n")
-            f.flush()
-            try:
-                os.environ['TMDB_API_KEY'] = 'env_key'
-                result = load_config(f.name)
-                assert result['tmdb']['api_key'] == 'env_key'
-            finally:
-                del os.environ['TMDB_API_KEY']
-                os.unlink(f.name)
+            path = f.name
+        try:
+            os.environ['TMDB_API_KEY'] = 'env_key'
+            result = load_config(path)
+            assert result['tmdb']['api_key'] == 'env_key'
+        finally:
+            del os.environ['TMDB_API_KEY']
+            os.unlink(path)
 
     def test_no_env_var_uses_file_value(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("plex:\n  token: file_token\n")
-            f.flush()
-            try:
-                # Ensure env var is not set
-                if 'PLEX_TOKEN' in os.environ:
-                    del os.environ['PLEX_TOKEN']
-                result = load_config(f.name)
-                assert result['plex']['token'] == 'file_token'
-            finally:
-                os.unlink(f.name)
+            path = f.name
+        try:
+            # Ensure env var is not set
+            if 'PLEX_TOKEN' in os.environ:
+                del os.environ['PLEX_TOKEN']
+            result = load_config(path)
+            assert result['plex']['token'] == 'file_token'
+        finally:
+            os.unlink(path)
 
 
 class TestModularConfigLoading:
@@ -443,12 +452,12 @@ class TestModularConfigLoading:
     def test_works_without_module_files(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("plex:\n  url: http://localhost:32400\n")
-            f.flush()
-            try:
-                result = load_config(f.name)
-                assert result['plex']['url'] == 'http://localhost:32400'
-            finally:
-                os.unlink(f.name)
+            path = f.name
+        try:
+            result = load_config(path)
+            assert result['plex']['url'] == 'http://localhost:32400'
+        finally:
+            os.unlink(path)
 
     def test_tuning_merges_into_config(self):
         import shutil

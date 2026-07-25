@@ -2,6 +2,70 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.6] - 2026-07-25
+
+### Fixed
+
+- **The Windows self-updater's `.old` sidecar cleanup could permanently
+  brick self-update on Windows if a previous swap's leftover `.old`
+  file couldn't be deleted right away** (e.g. still locked by a
+  slow-to-exit previous process - exactly the scenario the code's own
+  cleanup already anticipated as non-fatal). `utils/self_update.py`'s
+  `_swap_windows` used `os.rename()` for its current-binary ->
+  `.old` step; Windows' `os.rename()` refuses to overwrite an existing
+  destination (`WinError 183`), so once that best-effort pre-cleanup
+  failed once, every subsequent self-update attempt would raise
+  `SwapError` at that same rename, forever, until a human manually
+  deleted the stale sidecar - Linux CI never caught this because
+  POSIX's `os.rename()` silently overwrites. Switched to `os.replace()`
+  (the cross-platform atomic form, already used for the actual binary
+  swap two lines below), so a stubborn leftover `.old` no longer blocks
+  future updates.
+
+### Testing
+
+- Triaged all 28 Windows-only test failures on a real Windows dev
+  machine (stable, reproducible, none of them occur on Linux CI).
+  5 turned out to be self-inflicted pollution from two OTHER tests
+  (`test_update_check.py`/`test_update_dismissal.py`) that pointed
+  `get_project_root()` at a hardcoded `/nonexistent/...` path assuming
+  it could never be created - true on POSIX (an ordinary user can't
+  `mkdir` under `/`) but false on Windows (an ordinary user CAN `mkdir`
+  directly under a drive root), so the directory got created for real
+  and leaked into later test runs; fixed by pointing at a path that's
+  genuinely uncreatable on any OS (a plain file sitting where a needed
+  parent directory would go) instead. Of the rest: one was the real
+  production bug above; the remainder were test-only platform
+  assumptions (NTFS chmod not preserving POSIX permission/exec bits,
+  `tempfile.NamedTemporaryFile` handles held open across a call that
+  needs to read/delete that same path - fine on POSIX, `WinError 32` on
+  Windows, hardcoded `/`-joined path assertions, `os.path.expanduser()`
+  preferring `%USERPROFILE%` over `%HOME%` on Windows, and a couple of
+  tests that mocked `os.kill`/`subprocess.run` without also forcing
+  `os.name` to the branch they were meant to exercise - on a real
+  Windows run they silently fell through to the OS's OWN process-table
+  query/`taskkill` instead of the mock, which is both the wrong branch
+  under test and, for the `_shut_down_old_server` case, a real
+  `taskkill` launched against whatever process actually happened to
+  own an arbitrary test PID). All fixed at the test level except the
+  two genuinely POSIX-only code paths (`_swap_posix` direct-call tests,
+  never invoked on Windows in production), which are now
+  `skipif(sys.platform == 'win32', ...)` with the specific reason named
+  in each. No assertions weakened; no tests skipped to hide a real
+  failure. Full suite: 2199 passed / 28 failed / 5 skipped before,
+  2224 passed / 0 failed / 8 skipped after, on the same Windows machine;
+  unchanged and still green on Linux CI.
+
+### Documentation
+
+- `docs/BINARIES.md`: documented that the macOS binary is unsigned and
+  unnotarized (`spctl -a -v` reports `rejected`) and, specifically,
+  that a quarantined binary run in a headless context (SSH, CI, no GUI
+  session) hangs indefinitely instead of failing fast, since Gatekeeper
+  has no dialog to show and nothing to wait for - clear the quarantine
+  attribute (`xattr -d com.apple.quarantine curatarr-macos-arm64`)
+  before running it that way.
+
 ## [2.10.5] - 2026-07-25
 
 ### Fixed
