@@ -1294,6 +1294,7 @@ class TestPerformSelfUpdate:
         with pytest.raises(self_update.NotFrozenError):
             self_update.perform_self_update()
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_success_path_swaps_and_returns_version(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
@@ -1335,6 +1336,7 @@ class TestPerformSelfUpdate:
 
         swap_mock.assert_not_called()
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_swap_failure_still_cleans_up_the_verified_temp_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
@@ -1357,6 +1359,7 @@ class TestPerformSelfUpdate:
 
         assert not asset_path.exists()
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_swap_failure_cleanup_itself_failing_does_not_mask_the_real_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
@@ -1377,6 +1380,7 @@ class TestPerformSelfUpdate:
                 self_update.perform_self_update()
         assert current_exe.read_bytes() == b'old binary'
 
+    @patch('utils.self_update.__version__', '2.8.29')
     def test_passes_force_refresh_through(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
         current_exe = tmp_path / 'curatarr'
