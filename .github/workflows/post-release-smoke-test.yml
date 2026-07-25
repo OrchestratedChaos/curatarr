@@ -576,10 +576,32 @@ jobs:
 
           TITLE="Post-release smoke test failed: v${VERSION_INPUT}"
 
-          # Real output from the actual failing step(s), not a
-          # paraphrase - truncated to stay well under GitHub's issue
-          # body size limit.
-          LOG_EXCERPT="$(gh run view "$GITHUB_RUN_ID" --log-failed 2>&1 | tail -c 40000 || echo '(could not retrieve failed-step logs)')"
+          # Real output from the actual failing job(s), not a
+          # paraphrase. Deliberately NOT `gh run view --log-failed` -
+          # confirmed via a real failing run that it 404s/errors while
+          # THIS run is still in progress (which it always is here: this
+          # very job is one of its own jobs, so the overall run can
+          # never be "completed" yet when this executes). Per-JOB logs
+          # (not the whole run's) ARE already available via the REST API
+          # the moment that individual job finishes, regardless of
+          # whether sibling jobs (like this one) are still running - so
+          # this fetches the failed jobs' own logs directly instead.
+          # Truncated (per job, then overall) to stay well under
+          # GitHub's issue body size limit.
+          FAILED_JOBS="$(gh run view "$GITHUB_RUN_ID" --json jobs \
+            --jq '.jobs[] | select(.conclusion=="failure") | "\(.databaseId)\t\(.name)"')"
+
+          LOG_EXCERPT=""
+          if [ -n "$FAILED_JOBS" ]; then
+            while IFS=$'\t' read -r job_id job_name; do
+              [ -z "$job_id" ] && continue
+              JOB_LOG="$(gh api "repos/${GH_REPO}/actions/jobs/${job_id}/logs" 2>&1 | tail -c 8000)"
+              LOG_EXCERPT="$(printf '%s\n\n=== %s (job %s) ===\n%s\n' "$LOG_EXCERPT" "$job_name" "$job_id" "$JOB_LOG")"
+            done <<< "$FAILED_JOBS"
+          else
+            LOG_EXCERPT="(gh run view reported no failed jobs - see the run itself)"
+          fi
+          LOG_EXCERPT="$(printf '%s' "$LOG_EXCERPT" | tail -c 40000)"
 
           BODY_FILE="$(mktemp)"
           {
