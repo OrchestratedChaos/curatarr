@@ -106,7 +106,7 @@ import time
 from typing import Optional
 
 from utils import self_update, self_update_handoff
-from utils.helpers import resolve_system_executable
+from utils.helpers import no_window_kwargs, resolve_system_executable
 from utils.update_check import update_available
 
 logger = logging.getLogger('curatarr')
@@ -206,6 +206,7 @@ def check_verified_update(project_root: str, timeout: float = CHECK_TIMEOUT_SECO
             cmd = [_posix_bash_path(), script, '--check-verified-update']
         result = subprocess.run(
             cmd, cwd=project_root, capture_output=True, text=True, timeout=timeout,
+            **no_window_kwargs(),
         )
         if result.returncode != 0:
             return None
@@ -427,6 +428,7 @@ def _pid_alive(pid: int) -> bool:
             result = subprocess.run(
                 [_windows_tasklist_path(), '/FI', f'PID eq {pid}'],
                 capture_output=True, text=True, timeout=3,
+                **no_window_kwargs(),
             )
             return str(pid) in result.stdout
         except Exception:
@@ -510,7 +512,11 @@ def _shut_down_old_server(pid: int, timeout: float) -> None:
         return
     try:
         if os.name == 'nt':
-            subprocess.run([_windows_taskkill_path(), '/F', '/PID', str(pid)], capture_output=True, timeout=5)
+            subprocess.run(
+                [_windows_taskkill_path(), '/F', '/PID', str(pid)],
+                capture_output=True, timeout=5,
+                **no_window_kwargs(),
+            )
         else:
             os.kill(pid, signal.SIGTERM)
     except (ProcessLookupError, OSError):
@@ -778,6 +784,7 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
         try:
             result = subprocess.run(
                 apply_cmd, cwd=project_root, capture_output=True, text=True, timeout=APPLY_TIMEOUT_SECONDS,
+                **no_window_kwargs(),
             )
             output = (result.stdout or '').strip()
             print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)

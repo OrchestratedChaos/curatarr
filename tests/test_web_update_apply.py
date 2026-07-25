@@ -33,6 +33,7 @@ kill the test process/runner).
 """
 
 import os
+import subprocess
 import sys
 from unittest.mock import Mock, patch
 
@@ -780,6 +781,7 @@ class TestWindowsBranches:
         cmd = mock_run.call_args[0][0]
         assert cmd[0] == _windows_powershell_path()
         assert '-CheckVerifiedUpdate' in cmd
+        assert mock_run.call_args.kwargs.get('creationflags') == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
     def test_pid_alive_uses_tasklist(self, monkeypatch):
         monkeypatch.setattr('web.update_apply.os.name', 'nt')
@@ -787,6 +789,7 @@ class TestWindowsBranches:
             mock_run.return_value = Mock(stdout='1234 python.exe')
             assert _pid_alive(1234) is True
             assert mock_run.call_args[0][0][0] == _windows_tasklist_path()
+            assert mock_run.call_args.kwargs.get('creationflags') == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
     def test_pid_alive_tasklist_exception_fails_toward_alive(self, monkeypatch):
         monkeypatch.setattr('web.update_apply.os.name', 'nt')
@@ -807,6 +810,7 @@ class TestWindowsBranches:
         assert cmd[0] == _windows_taskkill_path()
         assert '/F' in cmd
         assert cmd == [_windows_taskkill_path(), '/F', '/PID', '1234']
+        assert mock_run.call_args.kwargs.get('creationflags') == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
     @patch('web.update_apply.subprocess.Popen')
     def test_relaunch_ui_uses_powershell_and_creationflags(self, mock_popen, monkeypatch):
@@ -836,6 +840,7 @@ class TestWindowsBranches:
         apply_cmd = mock_run.call_args[0][0]
         assert apply_cmd[0] == _windows_powershell_path()
         assert '-ApplyVerifiedUpdate' in apply_cmd
+        assert mock_run.call_args.kwargs.get('creationflags') == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
 class TestRunWorkerLogsApplyStderr:

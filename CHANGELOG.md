@@ -2,6 +2,26 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.9.2] - 2026-07-25
+
+Suppresses stray Windows console windows from background helper
+subprocesses on a windowed (console=False) build.
+
+### Fixed
+
+- Five subprocess spawns that were missing `CREATE_NO_WINDOW` on
+  Windows could each flash a console window: `web/job_runner.py`'s
+  stale-lock `tasklist` check, and `web/update_apply.py`'s
+  `-CheckVerifiedUpdate`/`-ApplyVerifiedUpdate` PowerShell
+  invocations, `tasklist` polling loop, and `taskkill`. All five
+  already pipe/capture their child's output, so hiding the window
+  loses nothing. Added a shared `utils.helpers.no_window_kwargs()`
+  helper (returns `{}` on non-Windows) rather than repeating the
+  `getattr(subprocess, 'CREATE_NO_WINDOW', 0)` guard at each site.
+- The daily 3 AM scheduled task (`run.ps1`'s `Setup-ScheduledTask`)
+  now launches with `-WindowStyle Hidden`, so it no longer pops a
+  console window when the user is logged in.
+
 ## [2.9.1] - 2026-07-24
 
 Maintenance release: dependency bump and lock file refresh. No feature

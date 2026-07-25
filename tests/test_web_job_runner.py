@@ -387,3 +387,35 @@ class TestWindowsSubprocessCreationFlags:
 
         assert 'creationflags' not in captured
         assert captured.get('start_new_session') is True
+
+
+class TestPidAliveWindowsTasklist:
+    """_pid_alive's Windows branch (a foreign-lockfile liveness probe -
+    see TestForeignLockfile above) shells out to tasklist, same
+    console-window concern as _build_command's own child above - see
+    utils.helpers.no_window_kwargs's docstring."""
+
+    def test_tasklist_call_suppresses_console_window(self, monkeypatch):
+        monkeypatch.setattr(job_runner_mod.os, 'name', 'nt')
+        captured = {}
+
+        def _fake_run(cmd, **kwargs):
+            captured['cmd'] = cmd
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout='1234 python.exe', stderr='')
+
+        monkeypatch.setattr(job_runner_mod.subprocess, 'run', _fake_run)
+
+        assert job_runner_mod._pid_alive(1234) is True
+        assert captured['cmd'][0] == 'tasklist'
+        assert captured.get('creationflags') == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+    def test_posix_branch_never_calls_subprocess(self, monkeypatch):
+        monkeypatch.setattr(job_runner_mod.os, 'name', 'posix')
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called on the POSIX branch")
+
+        monkeypatch.setattr(job_runner_mod.subprocess, 'run', _boom)
+
+        assert job_runner_mod._pid_alive(os.getpid()) is True

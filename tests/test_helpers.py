@@ -4,12 +4,13 @@ Tests for utils/helpers.py - Miscellaneous helper functions.
 
 import pytest
 import os
+import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 from utils.helpers import (
     normalize_title, map_path, cleanup_old_logs, compute_profile_hash,
-    get_project_root, TITLE_SUFFIXES_TO_STRIP,
+    get_project_root, no_window_kwargs, TITLE_SUFFIXES_TO_STRIP,
 )
 
 
@@ -421,3 +422,25 @@ class TestGetProjectRoot:
         root = get_project_root()
         assert os.path.isdir(os.path.join(root, 'utils'))
         assert os.path.isdir(os.path.join(root, 'web'))
+
+
+class TestNoWindowKwargs:
+    """no_window_kwargs() - shared subprocess.run()/Popen() kwargs that
+    suppress a console window on Windows for the short-lived helper
+    children (tasklist/taskkill/powershell precondition checks) spread
+    across web/job_runner.py and web/update_apply.py - see that
+    function's own docstring for why this is centralized rather than
+    each call site repeating its own getattr(...) guard.
+
+    subprocess.CREATE_NO_WINDOW only exists as an attribute on win32
+    Python builds, so both the implementation and these tests read it
+    via getattr(..., default=0) - monkeypatching os.name exercises both
+    branches without needing an actual Windows interpreter."""
+
+    def test_windows_returns_create_no_window_flag(self, monkeypatch):
+        monkeypatch.setattr(os, 'name', 'nt')
+        assert no_window_kwargs() == {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+
+    def test_posix_returns_empty_dict(self, monkeypatch):
+        monkeypatch.setattr(os, 'name', 'posix')
+        assert no_window_kwargs() == {}
