@@ -1,0 +1,608 @@
+name: Post-Release Smoke Test
+
+# Exercises a PUBLISHED release's real artifacts the way a real user
+# would - never re-verifies them the way release.yml's own build-time
+# checks already do. This exists because self-update shipped completely
+# broken across v2.9.2/v2.10.0/v2.10.2 while every release-time gate
+# reported green: SHA256SUMS.txt carried a stray CRLF, so `ssh-keygen`
+# (reads bytes) verified different bytes than the client (text mode,
+# strips \r) actually hashed. Nothing in CI had ever run the real client
+# against the real published bytes - this workflow is that missing
+# check, plus the two other shipped-and-invisible defects from the same
+# era (a glibc floor too new for real server distros, a Windows
+# self-update swap that could brick itself).
+#
+# Trigger design
+# ---------------
+# `SHA256SUMS.txt.sig` (the thing item 1 below actually needs to exist)
+# is produced by scripts/sign-release-checksums.sh - an OFFLINE, manual
+# step run on the maintainer's own machine AFTER release.yml's
+# `finalize-checksums` job has already finished. A `release: published`
+# trigger would run this workflow before that signature exists at all,
+# which means either a spurious failure every single time (annoying
+# enough that it would get ignored - exactly the "nobody watches it"
+# failure mode this workflow exists to prevent) or a poll-with-timeout
+# loop guessing how long a manual step takes.
+#
+# Instead, `workflow_dispatch` (with a required `version` input) is the
+# ONLY trigger, and scripts/sign-release-checksums.sh itself calls
+# `gh workflow run` against this workflow immediately after it uploads
+# SHA256SUMS.txt.sig (see that script's `gh_trigger_smoke_test`) - the
+# one moment the ordering is guaranteed correct by construction, no
+# polling needed. The exact same entry point also serves manual/backfill
+# runs (e.g. `gh workflow run post-release-smoke-test.yml -f
+# version=2.10.5`) against any past release - there is no second, weaker
+# trigger surface to keep in sync with this one.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Released version to smoke-test, no leading v (e.g. 2.10.5)'
+        required: true
+        type: string
+
+# One smoke test per version in flight at a time - a second dispatch for
+# the same version (e.g. a maintainer re-running by hand right after the
+# automatic trigger already fired) queues instead of racing the same
+# release's assets/mirror server. Different versions never block each
+# other.
+concurrency:
+  group: post-release-smoke-test-${{ inputs.version }}
+  cancel-in-progress: false
+
+# Least-privilege default for every job - this workflow only ever reads
+# already-published public release/package data. notify-on-failure
+# below is the one job that needs more (issues: write, actions: read to
+# pull failed-step logs) and declares its own, narrower permissions
+# block instead of widening this one.
+permissions:
+  contents: read
+
+# GH_REPO (not `-R` on every single `gh` invocation below) is how every
+# `gh` command in this workflow knows which repository to target - most
+# jobs below never check out this repo at all (no build step needs it,
+# only downloaded release assets), so there is no local git remote for
+# `gh` to auto-detect from the way it normally would.
+env:
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  # -------------------------------------------------------------------
+  # Validates the input, confirms the release actually exists, and
+  # determines the immediately-preceding published release
+  # programmatically (never hardcoded - curatarr's own tag history has
+  # gaps, e.g. v2.10.1/v2.10.3 were version bumps that were never
+  # tagged/released, so "previous version" is never just "decrement the
+  # patch number"). Every other job depends on this one's outputs so the
+  # version-resolution logic exists in exactly one place.
+  # -------------------------------------------------------------------
+  resolve-inputs:
+    name: Resolve target + previous release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      previous_version: ${{ steps.resolve.outputs.previous_version }}
+      previous_tag: ${{ steps.resolve.outputs.previous_tag }}
+    steps:
+      - name: Resolve version, confirm release exists, find the previous release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like X.Y.Z with no leading 'v' (got: $VERSION_INPUT)"
+            exit 1
+          fi
+          VERSION="$VERSION_INPUT"
+          TAG="v${VERSION}"
+
+          if ! gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            echo "::error::release $TAG does not exist - nothing to smoke-test"
+            exit 1
+          fi
+          echo "Confirmed: $TAG exists."
+
+          # Every non-draft, non-prerelease tag, oldest-to-newest by
+          # actual semver (NOT publish date - re-running an old backfill
+          # publish, or any out-of-order publish, must never reorder
+          # this) - '#'-stripped so `sort -V` compares numerically.
+          mapfile -t TAGS < <(
+            gh release list --json tagName,isDraft,isPrerelease --limit 200 \
+              --jq '.[] | select(.isDraft==false and .isPrerelease==false) | .tagName' \
+            | sed 's/^v//' \
+            | sort -V
+          )
+
+          PREV=""
+          for i in "${!TAGS[@]}"; do
+            if [ "${TAGS[$i]}" = "$VERSION" ]; then
+              if [ "$i" -gt 0 ]; then
+                PREV="${TAGS[$((i-1))]}"
+              fi
+              break
+            fi
+          done
+
+          if [ -z "$PREV" ]; then
+            echo "::error::could not determine a published, non-prerelease release before v$VERSION (is $TAG the very first release, or a prerelease/draft?)"
+            exit 1
+          fi
+          echo "Previous release: v$PREV"
+
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+            echo "previous_version=$PREV"
+            echo "previous_tag=v$PREV"
+          } >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------
+  # Everything that can be checked from the downloaded release assets
+  # alone: presence/absence of the exact expected asset set, no CRLF in
+  # SHA256SUMS.txt, the signed version-binding line, every published
+  # hash recomputed independently - and, the one this workflow exists
+  # for, the SHA256SUMS.txt.sig signature verified the way the real
+  # CLIENT does (utils.self_update.verify_downloaded_asset), not just
+  # `ssh-keygen -Y verify` re-checking its own work. Uses that module AS
+  # OF the released tag (a separate checkout, not this workflow's own
+  # `main` checkout) - checking main's copy would test today's fix, not
+  # what the release actually shipped.
+  # -------------------------------------------------------------------
+  verify-artifacts:
+    name: Verify published artifacts
+    needs: resolve-inputs
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve-inputs.outputs.version }}
+      TAG: ${{ needs.resolve-inputs.outputs.tag }}
+    steps:
+      - name: Checkout the released tag's own code (client-real verification must use code AS OF the release, not main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve-inputs.outputs.tag }}
+          path: at-tag
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the released tag's own core runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r at-tag/requirements.lock
+
+      - name: Download every published release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" -D assets
+          echo "Downloaded assets:"
+          ls -la assets
+
+      - name: Assert every expected asset is present (and curatarr-macos-universal is absent)
+        run: |
+          set -euo pipefail
+          cd assets
+
+          REQUIRED=(
+            "curatarr-windows-x86_64.exe"
+            "curatarr-linux-x86_64"
+            "curatarr-linux-arm64"
+            "curatarr-macos-arm64"
+            "curatarr-${VERSION}.tar.gz"
+            "SHA256SUMS.txt"
+            "SHA256SUMS.txt.sig"
+          )
+
+          MISSING=0
+          for f in "${REQUIRED[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing expected release asset: $f"
+              MISSING=1
+            fi
+          done
+
+          if [ -f "curatarr-macos-universal" ]; then
+            echo "::error::curatarr-macos-universal is present on $TAG but was removed in 2.10.2 - should never be published again"
+            MISSING=1
+          fi
+
+          [ "$MISSING" -eq 0 ]
+          echo "Confirmed: every expected asset is present, curatarr-macos-universal is absent."
+
+      - name: Assert SHA256SUMS.txt has no CRLF
+        run: |
+          set -euo pipefail
+          cd assets
+
+          FILE_REPORT="$(file SHA256SUMS.txt)"
+          echo "file(1): $FILE_REPORT"
+          CR_COUNT="$(grep -c $'\r' SHA256SUMS.txt || true)"
+          echo "carriage-return line count (grep -c): ${CR_COUNT:-0}"
+
+          if printf '%s' "$FILE_REPORT" | grep -q CRLF || [ "${CR_COUNT:-0}" -ne 0 ]; then
+            echo "::error::$TAG's SHA256SUMS.txt contains a carriage return - this is exactly the byte-level corruption that silently broke self-update signature verification across v2.9.2/v2.10.0/v2.10.2"
+            exit 1
+          fi
+          echo "Confirmed: SHA256SUMS.txt is LF-only."
+
+      - name: Assert SHA256SUMS.txt is version-bound
+        run: |
+          set -euo pipefail
+          cd assets
+
+          EXPECTED_LINE="# curatarr-version: ${VERSION}"
+          FIRST_LINE="$(head -n1 SHA256SUMS.txt)"
+          if [ "$FIRST_LINE" != "$EXPECTED_LINE" ]; then
+            echo "::error::SHA256SUMS.txt's first line was '$FIRST_LINE', expected '$EXPECTED_LINE'"
+            exit 1
+          fi
+          echo "Confirmed: SHA256SUMS.txt is version-bound to ${VERSION}."
+
+      - name: Recompute and compare every published hash
+        run: |
+          set -euo pipefail
+          cd assets
+
+          MISMATCH=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            case "$line" in '#'*) continue ;; esac
+
+            if [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?(.+)$ ]]; then
+              expected_hash="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
+              fname="${BASH_REMATCH[2]}"
+            else
+              echo "::error::unparseable line in SHA256SUMS.txt: $line"
+              MISMATCH=1
+              continue
+            fi
+
+            if [ ! -f "$fname" ]; then
+              echo "::error::SHA256SUMS.txt lists '$fname' but it was not published as a release asset"
+              MISMATCH=1
+              continue
+            fi
+
+            actual_hash="$(sha256sum "$fname" | awk '{print $1}')"
+            if [ "$expected_hash" != "$actual_hash" ]; then
+              echo "::error::hash mismatch for $fname: SHA256SUMS.txt says $expected_hash, recomputed $actual_hash"
+              MISMATCH=1
+            else
+              echo "OK: $fname matches $actual_hash"
+            fi
+          done < SHA256SUMS.txt
+
+          [ "$MISMATCH" -eq 0 ]
+
+      - name: Verify SHA256SUMS.txt.sig the way the real client does (utils/self_update.py AS OF the released tag)
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" <<'PY'
+          import sys
+
+          sys.path.insert(0, 'at-tag')
+          from utils.self_update import verify_downloaded_asset
+
+          version = sys.argv[1]
+          digest = verify_downloaded_asset(
+              'assets/curatarr-linux-x86_64',
+              'assets/SHA256SUMS.txt',
+              'assets/SHA256SUMS.txt.sig',
+              'curatarr-linux-x86_64',
+              target_version=version,
+          )
+          print(f"Client-real verification passed: curatarr-linux-x86_64 SHA256={digest}")
+          PY
+
+  # -------------------------------------------------------------------
+  # Regression guard, re-run post-publish against the actual published
+  # bytes (release.yml's own glibc-floor step only ever checks the
+  # freshly-built binary before it's uploaded - this checks what a real
+  # user actually downloads). objdump doesn't execute the binary, just
+  # reads its ELF symbol table, so this runs fine on ubuntu-latest for
+  # both architectures - no arm64 runner needed here.
+  # -------------------------------------------------------------------
+  glibc-floor:
+    name: Assert glibc floor (${{ matrix.asset_name }})
+    needs: resolve-inputs
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        asset_name: [curatarr-linux-x86_64, curatarr-linux-arm64]
+    steps:
+      - name: Download binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-inputs.outputs.tag }}
+          ASSET_NAME: ${{ matrix.asset_name }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" -p "$ASSET_NAME" -D .
+
+      - name: Assert glibc floor does not exceed 2.28
+        env:
+          ASSET_NAME: ${{ matrix.asset_name }}
+        run: |
+          set -euo pipefail
+          command -v objdump >/dev/null 2>&1 || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq binutils
+          }
+
+          MAX_GLIBC="$(objdump -T "$ASSET_NAME" \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | sed 's/^GLIBC_//' \
+            | sort -V \
+            | tail -1)"
+
+          if [ -z "$MAX_GLIBC" ]; then
+            echo "::error::could not find any GLIBC_* versioned symbol in $ASSET_NAME"
+            exit 1
+          fi
+          echo "Detected glibc floor for $ASSET_NAME: GLIBC_$MAX_GLIBC"
+
+          HIGHEST="$(printf '%s\n%s\n' "$MAX_GLIBC" "2.28" | sort -V | tail -1)"
+          if [ "$HIGHEST" != "2.28" ]; then
+            echo "::error::$ASSET_NAME references GLIBC_$MAX_GLIBC, exceeding the published floor of GLIBC_2.28 (Debian 12 / Ubuntu 22.04 / RHEL 9 baselines - see docs/BINARIES.md)"
+            exit 1
+          fi
+          echo "Confirmed: $ASSET_NAME's glibc floor (GLIBC_$MAX_GLIBC) is within GLIBC_2.28."
+
+  # -------------------------------------------------------------------
+  # Actually boots each published Linux binary on the real distros
+  # docs/BINARIES.md promises support for. `distro` x `arch` is a true
+  # cross product (8 jobs); `include` below only attaches per-arch
+  # fields (runner, asset name) without adding extra combinations.
+  # arm64 runs natively on `ubuntu-24.04-arm` - no QEMU emulation needed
+  # for either architecture, so this covers both, not just x86_64.
+  # -------------------------------------------------------------------
+  distro-start:
+    name: Linux binary starts (${{ matrix.distro }}, ${{ matrix.arch }})
+    needs: resolve-inputs
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ['debian:12', 'ubuntu:22.04', 'rockylinux:9', 'ubuntu:24.04']
+        arch: [x86_64, arm64]
+        include:
+          - arch: x86_64
+            runs_on: ubuntu-latest
+            asset_name: curatarr-linux-x86_64
+          - arch: arm64
+            runs_on: ubuntu-24.04-arm
+            asset_name: curatarr-linux-arm64
+    steps:
+      - name: Download binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-inputs.outputs.tag }}
+          ASSET_NAME: ${{ matrix.asset_name }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" -p "$ASSET_NAME" -D .
+          chmod +x "$ASSET_NAME"
+
+      - name: Run --version inside ${{ matrix.distro }}
+        env:
+          ASSET_NAME: ${{ matrix.asset_name }}
+          DISTRO: ${{ matrix.distro }}
+          VERSION: ${{ needs.resolve-inputs.outputs.version }}
+        run: |
+          set -euo pipefail
+          OUTPUT="$(docker run --rm -v "$PWD:/io" -w /io "$DISTRO" "/io/$ASSET_NAME" --version)"
+          echo "Reported version: $OUTPUT"
+          if [ "$OUTPUT" != "$VERSION" ]; then
+            echo "::error::$ASSET_NAME failed to start (or reported the wrong version) on $DISTRO: got '$OUTPUT', expected '$VERSION'"
+            exit 1
+          fi
+          echo "Confirmed: $ASSET_NAME starts and reports v$VERSION on $DISTRO."
+
+  # -------------------------------------------------------------------
+  # THE IMPORTANT ONE. Downloads the PREVIOUS release's real Linux
+  # binary and runs ITS real `--self-update` (utils/self_update.py as it
+  # shipped in that older release) against the current release's real
+  # published bytes - the exact end-to-end path a real installed user
+  # goes through, which is precisely what NEVER ran in CI across
+  # v2.9.2/v2.10.0/v2.10.2 and let a byte-level signature-verification
+  # break ship three times in a row undetected.
+  #
+  # The previous binary's update_check/self_update code always resolves
+  # "latest" against the REAL GitHub API and downloads from the REAL
+  # github.com by default - fine for smoke-testing whatever the actual
+  # newest release is right after it publishes, but wrong for a
+  # workflow_dispatch backfill against an older `version` (that binary
+  # would self-update to whatever is CURRENTLY latest on GitHub, not to
+  # the historical release being tested) and racy in general (another
+  # release could publish mid-run). CURATARR_RELEASES_API_OVERRIDE /
+  # CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE (both already built into
+  # utils/self_update.py and utils/update_check.py for exactly this
+  # purpose - see their own comments) point the previous binary at a
+  # small local HTTP mirror instead, serving the REAL downloaded bytes
+  # for the exact release under test - never fixtures, never a
+  # re-signed/rebuilt copy, byte-for-byte what GitHub actually published
+  # - so the target version is pinned deterministically while the code
+  # path, the artifacts, and the production signing key all stay 100%
+  # real.
+  # -------------------------------------------------------------------
+  self-update-from-previous:
+    name: Real self-update from previous release
+    needs: resolve-inputs
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve-inputs.outputs.version }}
+      TAG: ${{ needs.resolve-inputs.outputs.tag }}
+      PREVIOUS_VERSION: ${{ needs.resolve-inputs.outputs.previous_version }}
+      PREVIOUS_TAG: ${{ needs.resolve-inputs.outputs.previous_tag }}
+    steps:
+      - name: Download the previous release's Linux x86_64 binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p previous
+          gh release download "$PREVIOUS_TAG" -p 'curatarr-linux-x86_64' -D previous
+          chmod +x previous/curatarr-linux-x86_64
+
+      - name: Mirror the target release's real published assets locally
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "mirror/download/${TAG}" mirror/api
+          gh release download "$TAG" \
+            -p 'curatarr-linux-x86_64' \
+            -p 'SHA256SUMS.txt' \
+            -p 'SHA256SUMS.txt.sig' \
+            -D "mirror/download/${TAG}"
+          printf '{"tag_name": "%s"}' "$TAG" > mirror/api/latest
+          echo "Mirror layout:"
+          find mirror -type f
+
+      - name: Serve the mirror on the runner's own network namespace
+        run: |
+          set -euo pipefail
+          nohup python3 -m http.server 8899 --directory mirror > mirror-server.log 2>&1 &
+          echo $! > mirror-server.pid
+          for _ in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8899/api/latest >/dev/null && break
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8899/api/latest
+
+      # --network host: the previous binary's process (inside the
+      # container) shares the runner's own network namespace, the same
+      # one the mirror server above is bound into - this only works
+      # because both run directly on the runner's real Linux host, not
+      # inside any nested VM. (A local Docker-Desktop/Colima-on-Mac
+      # verification of this same technique needed the server running
+      # IN a --network host container too, since Mac hosts docker
+      # inside its own VM - GitHub's own ubuntu-latest runners have no
+      # such indirection.)
+      - name: Run the previous release's real --self-update against the mirrored target release
+        run: |
+          set -euo pipefail
+          docker run --rm --network host \
+            -v "$PWD/previous:/work" -w /work \
+            -e CURATARR_RELEASES_API_OVERRIDE="http://127.0.0.1:8899/api/latest" \
+            -e CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE="http://127.0.0.1:8899/download" \
+            ubuntu:24.04 \
+            ./curatarr-linux-x86_64 --self-update
+
+      - name: Assert the previous binary now reports the new version
+        run: |
+          set -euo pipefail
+          NEW_VERSION="$(docker run --rm -v "$PWD/previous:/work" -w /work ubuntu:24.04 ./curatarr-linux-x86_64 --version)"
+          echo "Binary reports version after self-update: $NEW_VERSION"
+          if [ "$NEW_VERSION" != "$VERSION" ]; then
+            echo "::error::v${PREVIOUS_VERSION}'s real self-update ran but the binary now reports '$NEW_VERSION', expected '$VERSION' - this is exactly the class of failure that shipped broken across v2.9.2/v2.10.0/v2.10.2"
+            exit 1
+          fi
+          echo "Confirmed: v${PREVIOUS_VERSION}'s real self-update landed on v${VERSION}."
+
+      - name: Stop the mirror server
+        if: always()
+        run: |
+          [ -f mirror-server.pid ] && kill "$(cat mirror-server.pid)" 2>/dev/null || true
+
+  # -------------------------------------------------------------------
+  # The container image (.github/workflows/docker.yml) is a separate
+  # publish path from the binaries/source archive above, signed
+  # keylessly with cosign at release-tag push time - verify the exact
+  # command docs/DOCKER.md tells operators to run, against the
+  # bare-semver tag docker/metadata-action's `type=semver,pattern=
+  # {{version}}` produces for a `vX.Y.Z` tag push (no leading 'v').
+  # -------------------------------------------------------------------
+  cosign-verify:
+    name: cosign verify published image
+    needs: resolve-inputs
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve-inputs.outputs.version }}
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: cosign verify ghcr.io/orchestratedchaos/curatarr:${{ needs.resolve-inputs.outputs.version }}
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity-regexp '^https://github\.com/OrchestratedChaos/curatarr/\.github/workflows/docker\.yml@refs/' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "ghcr.io/orchestratedchaos/curatarr:${VERSION}"
+
+  # -------------------------------------------------------------------
+  # Loud failure path. A silent red X on a workflow nobody watches is
+  # how the original bug survived three releases - so any failure above
+  # also opens (or comments on) a GitHub issue carrying the real failing
+  # output, not just a link. `if: failure()` scoped to this job's own
+  # `needs` fires if ANY of them failed; the workflow run itself is
+  # already red from that job's own failure regardless of what this job
+  # does.
+  # -------------------------------------------------------------------
+  notify-on-failure:
+    name: File/update an issue for the failure
+    needs:
+      - resolve-inputs
+      - verify-artifacts
+      - glibc-floor
+      - distro-start
+      - self-update-from-previous
+      - cosign-verify
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - name: Gather failing step output and file/update an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_INPUT: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          TITLE="Post-release smoke test failed: v${VERSION_INPUT}"
+
+          # Real output from the actual failing step(s), not a
+          # paraphrase - truncated to stay well under GitHub's issue
+          # body size limit.
+          LOG_EXCERPT="$(gh run view "$GITHUB_RUN_ID" --log-failed 2>&1 | tail -c 40000 || echo '(could not retrieve failed-step logs)')"
+
+          BODY_FILE="$(mktemp)"
+          {
+            echo "The post-release smoke test failed for **v${VERSION_INPUT}**."
+            echo
+            echo "Run: ${RUN_URL}"
+            echo
+            echo "<details><summary>Failing step output (tail)</summary>"
+            echo
+            echo '```'
+            printf '%s\n' "$LOG_EXCERPT"
+            echo '```'
+            echo
+            echo "</details>"
+          } > "$BODY_FILE"
+
+          EXISTING="$(gh issue list --state open --search "in:title \"${TITLE}\"" --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)"
+
+          if [ -n "$EXISTING" ]; then
+            echo "Updating existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE"
+          else
+            echo "Filing a new issue"
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE"
+          fi
