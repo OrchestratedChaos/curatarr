@@ -852,16 +852,28 @@ def _swap_windows(current_path: str, new_binary_path: str) -> None:
     extremely unlikely case that the rollback ITSELF also fails,
     SwapError's message points at where the original binary can still
     be recovered from (`<current_path>.old`) - see cleanup_stale_old_binary
-    for the normal (successful-swap) cleanup of that same sidecar path."""
+    for the normal (successful-swap) cleanup of that same sidecar path.
+
+    Uses os.replace(), not os.rename(), for the current -> old_path
+    step: the best-effort cleanup right above is exactly that - best
+    effort - so old_path can still be there (e.g. still locked by a
+    slow-to-exit previous process, per that cleanup's own comment)
+    when this runs. os.rename() refuses to overwrite an existing
+    destination on Windows (WinError 183) - it would turn a merely
+    stale sidecar into a hard failure of every subsequent update
+    attempt, forever, until a human manually deletes it. os.replace()
+    is the cross-platform atomic form and overwrites unconditionally,
+    same as this same rename already relies on further down for the
+    rollback path."""
     old_path = _old_sidecar_path(current_path)
     try:
         if os.path.isfile(old_path):
             os.remove(old_path)  # clear out any leftover before reusing the name
     except OSError:
-        pass  # non-fatal - the rename below will just fail loudly if this is actually a problem
+        pass  # non-fatal - the os.replace() below tolerates old_path still being there
 
     try:
-        os.rename(current_path, old_path)
+        os.replace(current_path, old_path)
     except OSError as e:
         raise SwapError(f"Could not rename running exe {current_path} -> {old_path}: {e}") from e
 

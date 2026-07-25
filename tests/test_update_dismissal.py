@@ -163,17 +163,22 @@ class TestFailOpen:
         _seed_dismissal(tmp_path, {'dismissed_at': time.time()})
         assert is_dismissed('2.9.0') is False
 
-    def test_record_dismissal_write_failure_is_not_fatal(self, monkeypatch):
+    def test_record_dismissal_write_failure_is_not_fatal(self, monkeypatch, tmp_path):
         """A disk error writing the dismissal state (permissions, full
         disk, etc.) must not raise - worst case, the notice just keeps
         reappearing every check instead of being snoozed. Points the
-        cache dir at a nonexistent, never-created path so the real
-        open() call fails naturally, same technique tests/
-        test_update_check.py's own test_cache_write_failure_is_not_fatal
-        uses."""
+        cache dir at a path that can never be created - a plain file
+        sits where the needed parent directory would go, so
+        os.makedirs always fails, on every OS - so the real open()
+        call fails naturally, same technique tests/test_update_check.py's
+        own test_cache_write_failure_is_not_fatal uses (see its comment
+        for why a hardcoded '/nonexistent/...' string isn't reliably
+        uncreatable on Windows)."""
+        blocker = tmp_path / 'blocker'
+        blocker.write_bytes(b'not a directory')
         monkeypatch.setattr(
             'utils.update_dismissal.get_project_root',
-            lambda: '/nonexistent/path/that/is/never/created',
+            lambda: str(blocker / 'unreachable'),
         )
         try:
             record_dismissal('2.9.0')

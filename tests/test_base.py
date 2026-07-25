@@ -39,7 +39,11 @@ class TestBaseCacheInit:
 
         cache = ConcreteCache('/tmp/cache')
 
-        assert cache.cache_path == '/tmp/cache/test_cache.json'
+        # os.path.join, not a hardcoded '/'-joined string: cache_path is
+        # built with os.path.join in production (see recommenders/base.py),
+        # which uses '\\' on Windows - matches that, same as every other
+        # cache_path assertion in this class.
+        assert cache.cache_path == os.path.join('/tmp/cache', 'test_cache.json')
 
     @patch('recommenders.base.load_media_cache')
     def test_init_loads_cache(self, mock_load):

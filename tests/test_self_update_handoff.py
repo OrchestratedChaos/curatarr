@@ -188,6 +188,15 @@ class TestWriteScript:
         finally:
             shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
+    @pytest.mark.skipif(
+        sys.platform == 'win32',
+        reason="NTFS has no POSIX exec bit for a .sh file (os.stat only synthesizes "
+               "S_IEXEC for specific extensions like .exe/.bat/.cmd/.com) - os.chmod's "
+               "exec-bit request is a no-op here regardless. The os.name != 'nt' branch "
+               "under test never runs on Windows in production (the Windows hand-off "
+               "always writes .ps1 - see test_uses_ps1_extension_on_windows above), so "
+               "this is POSIX-only.",
+    )
     def test_uses_sh_extension_and_is_executable_on_posix(self, monkeypatch):
         monkeypatch.setattr(self_update_handoff.os, 'name', 'posix')
         path = self_update_handoff._write_script('#!/bin/sh\necho hi\n')
