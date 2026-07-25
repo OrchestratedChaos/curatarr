@@ -2,6 +2,25 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.2] - 2026-07-25
+
+### Removed
+
+- **Transitional `curatarr-macos-universal` compat asset removed.**
+  v2.10.0 dropped Intel macOS support and renamed the macOS asset to
+  `curatarr-macos-arm64`, but published both names (identical bytes) for
+  one release so installs still on 2.9.2 or earlier - whose self-updater
+  requests the old name - could self-update at least once more instead
+  of 404ing. That transitional period is now over: `release.yml` no
+  longer builds or publishes `curatarr-macos-universal` or its `.sha256`
+  sidecar, and only `curatarr-macos-arm64` is published for macOS going
+  forward. **Installs still on 2.9.2 or earlier on macOS can no longer
+  self-update** - they must download `curatarr-macos-arm64` manually
+  from the [releases page](https://github.com/OrchestratedChaos/curatarr/releases)
+  (see `docs/BINARIES.md`) and replace their binary by hand. Installs
+  already on 2.10.0+ are unaffected, since `select_asset_name()` has
+  only ever requested the canonical `curatarr-macos-arm64` name.
+
 ## [2.10.1] - 2026-07-25
 
 ### Fixed

@@ -13,19 +13,20 @@ it, and it opens the web UI in your browser - no Python install, no
 | Linux (x86_64) | `curatarr-linux-x86_64` |
 | Linux (arm64) | `curatarr-linux-arm64` |
 
-macOS binaries are Apple Silicon (arm64) only as of this release -
-`cryptography` 49.0.0 removed x86_64 macOS wheels entirely, and
-GitHub's last Intel macOS CI runner (`macos-13`) is retired
-(`macos-15-intel` remains but sunsets Aug 2027), so there's no longer a
-supported way to build or test an Intel macOS binary. Intel Mac users
-should run Curatarr from source instead - see [Quick
-Start](../README.md#quick-start) in the main README; the source install
-has no architecture restriction. This one release also still publishes
-an identically-byte `curatarr-macos-universal` asset for a transitional
-period, purely so installs still running a pre-2.10.0 binary (whose
-self-updater requests that old name) can self-update at least once more
-- see [Self-updating](#self-updating) below. New installs should always
-download `curatarr-macos-arm64`.
+macOS binaries are Apple Silicon (arm64) only as of the release that
+dropped Intel macOS support - `cryptography` 49.0.0 removed x86_64
+macOS wheels entirely, and GitHub's last Intel macOS CI runner
+(`macos-13`) is retired (`macos-15-intel` remains but sunsets Aug
+2027), so there's no longer a supported way to build or test an Intel
+macOS binary. Intel Mac users should run Curatarr from source instead -
+see [Quick Start](../README.md#quick-start) in the main README; the
+source install has no architecture restriction. A transitional
+identical-bytes `curatarr-macos-universal` asset was published for one
+release so pre-2.10.0 installs (whose self-updater requested that old
+name) could self-update at least once more; that duplicate has since
+been removed - an install still requesting it must download
+`curatarr-macos-arm64` manually instead (see [Self-updating](#self-updating)
+below).
 
 Each asset has a matching `<asset>.sha256` file with its checksum, and the
 release also publishes an aggregate `SHA256SUMS.txt` (every asset's checksum
