@@ -53,26 +53,90 @@ git config gpg.format ssh
 for the tag-signing command itself - it doesn't need to be your default
 `user.email`.)
 
-Also make sure `gh auth status` is logged in with repo write access.
+Also make sure `gh auth status` is logged in with repo write access
+(needed for the bump PR below; `scripts/release.sh` itself no longer
+calls `gh` at all - see "Two-hop push" and "Cutting a release" below).
 
-## Cutting a release (one command)
+### Machine setup for `scripts/release.sh` / `scripts/sign-release-checksums.sh`
 
-```
-./scripts/release.sh 2.8.22
-```
+Two things this project's actual machine layout requires that neither
+script can assume by default (no personal hostnames or paths are
+hardcoded into either - both fail with a clear message instead of
+guessing):
 
-This does everything end to end:
+- **Two-hop push.** If the `origin` remote on the machine you run
+  `scripts/release.sh` from does **not** point at
+  `github.com/OrchestratedChaos/curatarr` (e.g. it points at another one
+  of your own machines, which in turn has a GitHub-connected `origin`),
+  set:
+  ```
+  export CURATARR_GH_SSH_HOST=<ssh-alias-of-the-github-connected-machine>
+  export CURATARR_GH_SSH_REPO_DIR=<absolute-path-to-its-curatarr-checkout>
+  ```
+  `scripts/release.sh` pushes the tag to `origin` first, then - only if
+  `origin` isn't GitHub - SSHes to `$CURATARR_GH_SSH_HOST`, `cd`s to
+  `$CURATARR_GH_SSH_REPO_DIR`, and runs `git push origin <tag>` there,
+  then confirms (via a direct `git ls-remote` against
+  `https://github.com/OrchestratedChaos/curatarr.git`, independent of
+  either host) that the tag actually landed before declaring success. If
+  it never lands, the script fails loudly rather than silently leaving
+  `.github/workflows/release.yml` un-triggered.
+- **gh delegation.** `scripts/sign-release-checksums.sh` must run on the
+  machine holding the signing **private** key, which isn't necessarily
+  the machine where `gh` is authenticated. It checks `gh auth status`
+  locally first; if that fails, it requires `CURATARR_GH_SSH_HOST` (same
+  var as above) and delegates every `gh release view/download/upload`
+  call to that host over SSH. Only the public `SHA256SUMS.txt` /
+  `SHA256SUMS.txt.sig` files ever cross that connection - the private
+  key is read only locally and never transferred.
 
-1. Checks you're on a clean, up-to-date `main`.
-2. Bumps `__version__` in `utils/config.py` on a `release/vX.Y.Z` branch.
-3. Pushes the branch, opens a PR, waits for the `test` check, and
-   squash-merges it.
-4. Pulls the merged commit back into local `main`.
-5. Creates a **signed annotated tag** `vX.Y.Z` (`git tag -s`), signed with
+Set both env vars in your shell profile on any machine where they apply;
+neither script has (or should have) a working default for them.
+
+## Cutting a release
+
+The version bump and the tag are two separate steps on purpose: `main` only
+ever moves via a reviewed PR (nothing pushes to `main` directly), so the
+bump has to land **before** `scripts/release.sh` runs - the script's own
+precondition check enforces this instead of racing it.
+
+1. **Bump the version** (separate PR, merged like any other change): bump
+   `__version__` in `utils/config.py`, add a `## [X.Y.Z] - YYYY-MM-DD`
+   entry to `CHANGELOG.md`, open a PR, get the `test` check green, squash-merge
+   it, and sync local `main` on whichever machine you'll run
+   `scripts/release.sh` from.
+2. **Dry-run it** (recommended - catches a stale local `main`, a missing
+   `CURATARR_GH_SSH_HOST`/`CURATARR_GH_SSH_REPO_DIR`, a missing
+   `CHANGELOG.md` entry, etc. before touching anything):
+   ```
+   ./scripts/release.sh --dry-run 2.8.22
+   ```
+   This runs every precondition and prints the exact `git tag` / `git
+   verify-tag` / `git push` (and, if needed, the two-hop `ssh ... git push`)
+   commands a real run would execute, without running any of them.
+3. **Cut it for real:**
+   ```
+   ./scripts/release.sh 2.8.22
+   ```
+
+This:
+
+1. Checks you're on a clean `main` whose `__version__` already equals
+   `2.8.22` (i.e. step 1's PR has merged) and whose `CHANGELOG.md` has a
+   `[2.8.22]` entry, and that local `main` matches
+   `github.com/OrchestratedChaos/curatarr`'s `main` exactly.
+2. Creates a **signed annotated tag** `vX.Y.Z` (`git tag -s`), signed with
    the noreply principal so the push won't hit GH007.
-6. Verifies the tag locally against `.github/allowed_signers` and the
+3. Verifies the tag locally against `.github/allowed_signers` and the
    pinned fingerprint - if that fails, it aborts and does **not** push.
-7. Pushes the tag.
+4. Pushes the tag (two-hop if configured, see above) and confirms it
+   actually reached GitHub before finishing.
+
+Note: pushing a `v*` tag is itself subject to the repo's tag protection
+ruleset (see "Tag protection ruleset" below) - the account/token doing the
+push (locally, or on `$CURATARR_GH_SSH_HOST` in the two-hop case) needs to
+be on that ruleset's bypass list (Admin role), or the push is rejected by
+GitHub regardless of how correctly the script itself ran.
 
 Pushing the tag triggers `.github/workflows/release.yml`, which:
 
@@ -113,14 +177,24 @@ release-signing **private** key stays off CI entirely, same as tag
 signing. Signing `SHA256SUMS.txt` is therefore a separate, manual,
 offline step, run on whichever machine actually holds
 `~/.ssh/curatarr_release_signing` (this project's convention: a
-Windows machine, via Git Bash - `ssh-keygen`/`gh` both work fine
-there), **after** `scripts/release.sh` has cut the release and CI's
-`build-binaries` / `build-macos-universal` / `finalize-checksums` jobs
-have all finished:
+Windows machine, via Git Bash), **after** `scripts/release.sh` has cut
+the release and CI's `build-binaries` / `build-macos-universal` /
+`finalize-checksums` jobs have all finished:
 
 ```
 ./scripts/sign-release-checksums.sh 2.8.29
 ```
+
+(`--dry-run 2.8.29` first is recommended - it runs every prerequisite
+check, including whether `gh` needs to be delegated over SSH, and prints
+the exact commands a real run would execute without downloading, signing,
+or uploading anything.)
+
+The signing machine does not need `gh` authenticated on it - see "gh
+delegation" above. If it isn't, this delegates `gh release
+view/download/upload` over SSH to `$CURATARR_GH_SSH_HOST`; only the
+public `SHA256SUMS.txt`/`SHA256SUMS.txt.sig` ever cross that connection,
+never `~/.ssh/curatarr_release_signing` itself.
 
 This downloads the tag's aggregate `SHA256SUMS.txt`, signs it with
 `ssh-keygen -Y sign -f ~/.ssh/curatarr_release_signing -n file
