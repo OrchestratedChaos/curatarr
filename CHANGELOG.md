@@ -2,6 +2,46 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.9.3] - 2026-07-25
+
+Fixes `scripts/release.sh` and `scripts/sign-release-checksums.sh` so the
+documented release path matches how releases actually get cut on this
+project's machines, instead of assuming a single host with both `gh`
+authenticated and the signing key present.
+
+### Fixed
+
+- `scripts/release.sh`'s version precondition was inverted from reality:
+  it aborted whenever `__version__` already matched the target version,
+  but the version bump lands via its own PR (merged to `main` like any
+  other change) *before* tagging, since nothing can push to `main`
+  directly. The precondition now requires `__version__` to already equal
+  the target version and that `CHANGELOG.md` has a matching entry,
+  failing with a clear message naming the missing bump PR otherwise. The
+  script no longer bumps `__version__` or opens/merges a PR itself.
+- Neither script assumed the machine holding the release-signing
+  **private** key might not have `gh` authenticated on it (or installed
+  at all). `scripts/sign-release-checksums.sh` now detects this and
+  delegates `gh release view/download/upload` over SSH to
+  `CURATARR_GH_SSH_HOST`, transferring only the public
+  `SHA256SUMS.txt`/`SHA256SUMS.txt.sig` - the private key is read only
+  locally and never leaves the signing machine. `scripts/release.sh` no
+  longer depends on `gh` at all (tagging and pushing are plain git).
+- Neither script accounted for a two-hop remote topology (a checkout
+  whose own `origin` is another machine, which is the one actually
+  connected to GitHub): a tag pushed from such a checkout reached only
+  the intermediate host, so `.github/workflows/release.yml` silently
+  never fired. `scripts/release.sh` now detects whether `origin` points
+  at GitHub, pushes onward from `CURATARR_GH_SSH_HOST`/
+  `CURATARR_GH_SSH_REPO_DIR` when it doesn't, and confirms via a direct
+  `git ls-remote` against `github.com/OrchestratedChaos/curatarr` that
+  the ref actually landed before proceeding - failing loudly instead of
+  silently if it never does.
+- Added `--dry-run` to both scripts: runs every precondition (including
+  the `gh`-delegation detection) and prints the exact commands a real
+  run would execute, without tagging, pushing, signing, or uploading
+  anything.
+
 ## [2.9.2] - 2026-07-25
 
 Suppresses stray Windows console windows from background helper

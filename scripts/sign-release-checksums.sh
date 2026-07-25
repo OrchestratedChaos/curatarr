@@ -5,7 +5,8 @@
 # module's docstring and RELEASING.md's "Signing a release's checksums"
 # section for the full authenticity model.
 #
-# Usage: ./scripts/sign-release-checksums.sh <version>   (e.g. ./scripts/sign-release-checksums.sh 2.8.29)
+# Usage: ./scripts/sign-release-checksums.sh [--dry-run] <version>
+#        (e.g. ./scripts/sign-release-checksums.sh 2.8.29)
 #
 # Run this AFTER scripts/release.sh has cut the release AND
 # .github/workflows/release.yml's build-binaries / build-macos-universal /
@@ -16,16 +17,25 @@
 # first.
 #
 # Must be run on a machine that has:
-#   - `gh` authenticated (`gh auth status`) with repo write access
 #   - the release-signing PRIVATE key, which lives ONLY here - never in
-#     CI, never in this repo. Default path: ~/.ssh/curatarr_release_signing
-#     (override with CURATARR_SIGNING_KEY=/path/to/key). See
-#     RELEASING.md's "One-time setup" for how that key was generated.
+#     CI, never in this repo, and it is never copied off this machine by
+#     this script. Default path: ~/.ssh/curatarr_release_signing (override
+#     with CURATARR_SIGNING_KEY=/path/to/key). See RELEASING.md's
+#     "One-time setup" for how that key was generated.
+#
+# `gh` (GitHub CLI) does the actual publish/download/upload calls, but it
+# does NOT need to be authenticated on this machine: if `gh auth status`
+# fails locally, this script delegates every `gh` call over SSH to
+# CURATARR_GH_SSH_HOST (a machine where `gh auth status` succeeds), and
+# only ever transfers the public SHA256SUMS.txt / SHA256SUMS.txt.sig files
+# over that connection - the private signing key never leaves this
+# machine. CURATARR_GH_SSH_HOST is required (no default hardcoded here)
+# whenever local gh isn't authenticated.
 #
 # What it does:
-#   1. Verifies prerequisites (gh, ssh-keygen, the signing key, its
-#      fingerprint) and that the target release + its SHA256SUMS.txt
-#      asset actually exist.
+#   1. Verifies prerequisites (ssh-keygen, the signing key, its
+#      fingerprint, a usable `gh` - local or delegated) and that the
+#      target release + its SHA256SUMS.txt asset actually exist.
 #   2. Downloads that SHA256SUMS.txt.
 #   3. Signs it: `ssh-keygen -Y sign -f <key> -n file SHA256SUMS.txt`
 #      (namespace "file" - matches SIGNATURE_NAMESPACE in
@@ -37,6 +47,10 @@
 #      "never publish something that doesn't even verify against our
 #      own key" discipline as scripts/release.sh's tag signing.
 #   5. Uploads SHA256SUMS.txt.sig to the release.
+#
+# --dry-run runs every prerequisite check (including the gh-delegation
+# detection) and prints what it would do, without downloading, signing,
+# or uploading anything.
 
 set -euo pipefail
 
@@ -52,18 +66,39 @@ RELEASE_SIGNER_FINGERPRINT="SHA256:yrqOXw6sWZGPKON9mJJvjhsBKTgMzsn3VTGdNL5mxKU"
 # defense here is the fingerprint check below, not which principal
 # string is used.
 VERIFY_PRINCIPAL="jasonbsmith1568@gmail.com"
+GITHUB_REPO="OrchestratedChaos/curatarr"
 SUMS_FILENAME="SHA256SUMS.txt"
 SIG_FILENAME="SHA256SUMS.txt.sig"
 
 # ---------------------------------------------------------------------------
 # Args
 # ---------------------------------------------------------------------------
-if [ $# -ne 1 ]; then
-  echo "Usage: $0 <version>   (e.g. $0 2.8.29)" >&2
+DRY_RUN=0
+VERSION=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)
+      DRY_RUN=1
+      ;;
+    -*)
+      echo "ERROR: unknown flag: $arg" >&2
+      exit 1
+      ;;
+    *)
+      if [ -n "$VERSION" ]; then
+        echo "ERROR: unexpected extra argument: $arg" >&2
+        exit 1
+      fi
+      VERSION="$arg"
+      ;;
+  esac
+done
+
+if [ -z "$VERSION" ]; then
+  echo "Usage: $0 [--dry-run] <version>   (e.g. $0 2.8.29)" >&2
   exit 1
 fi
 
-VERSION="$1"
 TAG="v${VERSION}"
 
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -74,15 +109,76 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-echo "==> Signing checksums for ${TAG} from $(pwd)"
+echo "==> Signing checksums for ${TAG} from $(pwd)$([ "$DRY_RUN" -eq 1 ] && echo ' [dry-run]')"
+
+# ---------------------------------------------------------------------------
+# gh delegation: run `gh` locally if authenticated here, else over SSH on
+# CURATARR_GH_SSH_HOST. The signing key never leaves this machine either
+# way - only these wrapper functions ever call `gh`, and only to
+# view/download/upload plain, public release assets.
+# ---------------------------------------------------------------------------
+GH_DELEGATE=0
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  echo "==> gh is authenticated locally - running gh commands directly"
+else
+  echo "==> gh is not authenticated locally - delegating gh calls over SSH"
+  if [ -z "${CURATARR_GH_SSH_HOST:-}" ]; then
+    echo "ERROR: gh is not authenticated locally (or not installed), and CURATARR_GH_SSH_HOST is" >&2
+    echo "       unset. Set CURATARR_GH_SSH_HOST to the SSH alias of a machine where" >&2
+    echo "       'gh auth status' succeeds." >&2
+    exit 1
+  fi
+  if ! ssh "$CURATARR_GH_SSH_HOST" "command -v gh >/dev/null 2>&1 && gh auth status" >/dev/null 2>&1; then
+    echo "ERROR: gh is not authenticated on \$CURATARR_GH_SSH_HOST ($CURATARR_GH_SSH_HOST) either." >&2
+    exit 1
+  fi
+  GH_DELEGATE=1
+  echo "==> Will delegate gh calls to $CURATARR_GH_SSH_HOST"
+fi
+
+# $1=tag - true if the release exists (view only, no output kept).
+gh_release_view() {
+  if [ "$GH_DELEGATE" -eq 1 ]; then
+    ssh "$CURATARR_GH_SSH_HOST" "gh release view '$1' -R '$GITHUB_REPO'" >/dev/null
+  else
+    gh release view "$1" -R "$GITHUB_REPO" >/dev/null
+  fi
+}
+
+# $1=tag $2=asset pattern $3=local destination path - downloads straight
+# to $3, streaming over SSH via `-O -` when delegated so the asset never
+# needs to land in an intermediate file on the delegate host.
+gh_release_download_to() {
+  local tag="$1" pattern="$2" dest="$3"
+  if [ "$GH_DELEGATE" -eq 1 ]; then
+    ssh "$CURATARR_GH_SSH_HOST" "gh release download '$tag' -p '$pattern' -O - -R '$GITHUB_REPO'" > "$dest"
+  else
+    gh release download "$tag" -p "$pattern" -O "$dest" -R "$GITHUB_REPO"
+  fi
+}
+
+# $1=tag $2=local file path - uploads $2 to the release. When delegated,
+# `gh release upload` has no stdin/stdout form (unlike download), so the
+# file is scp'd to a throwaway remote temp dir, uploaded from there, and
+# that temp dir is removed - only ever the already-self-verified public
+# .sig file, never the private key.
+gh_release_upload() {
+  local tag="$1" local_file="$2" base remote_tmp
+  base="$(basename "$local_file")"
+  if [ "$GH_DELEGATE" -eq 1 ]; then
+    remote_tmp="$(ssh "$CURATARR_GH_SSH_HOST" 'mktemp -d')"
+    scp -q "$local_file" "$CURATARR_GH_SSH_HOST:$remote_tmp/$base"
+    ssh "$CURATARR_GH_SSH_HOST" "gh release upload '$tag' '$remote_tmp/$base' --clobber -R '$GITHUB_REPO' && rm -rf '$remote_tmp'"
+  else
+    gh release upload "$tag" "$local_file" --clobber -R "$GITHUB_REPO"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
 echo "==> Checking prerequisites"
 
-command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI not found" >&2; exit 1; }
-gh auth status >/dev/null 2>&1 || { echo "ERROR: gh is not authenticated (run: gh auth login)" >&2; exit 1; }
 command -v ssh-keygen >/dev/null 2>&1 || { echo "ERROR: ssh-keygen not found" >&2; exit 1; }
 
 if [ ! -f "$SIGNING_KEY" ]; then
@@ -104,9 +200,30 @@ if [ "$KEY_FPR" != "$RELEASE_SIGNER_FINGERPRINT" ]; then
 fi
 echo "==> Signing key fingerprint OK: $KEY_FPR"
 
-if ! gh release view "$TAG" >/dev/null 2>&1; then
+if ! gh_release_view "$TAG"; then
   echo "ERROR: release $TAG not found - has scripts/release.sh been run for this version?" >&2
   exit 1
+fi
+echo "==> Release $TAG exists"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "==> [dry-run] All prerequisites passed for ${TAG}."
+  echo "[dry-run] A real run would execute:"
+  if [ "$GH_DELEGATE" -eq 1 ]; then
+    echo "  ssh \"$CURATARR_GH_SSH_HOST\" \"gh release download '$TAG' -p '$SUMS_FILENAME' -O - -R '$GITHUB_REPO'\" > <tmp>/$SUMS_FILENAME"
+  else
+    echo "  gh release download \"$TAG\" -p \"$SUMS_FILENAME\" -O <tmp>/$SUMS_FILENAME -R \"$GITHUB_REPO\""
+  fi
+  echo "  ssh-keygen -Y sign -f \"$SIGNING_KEY\" -n file <tmp>/$SUMS_FILENAME"
+  echo "  ssh-keygen -Y verify -f \"$ALLOWED_SIGNERS_FILE\" -I \"$VERIFY_PRINCIPAL\" -n file -s <tmp>/$SIG_FILENAME < <tmp>/$SUMS_FILENAME"
+  if [ "$GH_DELEGATE" -eq 1 ]; then
+    echo "  scp <tmp>/$SIG_FILENAME \"$CURATARR_GH_SSH_HOST:<remote-tmp>/$SIG_FILENAME\""
+    echo "  ssh \"$CURATARR_GH_SSH_HOST\" \"gh release upload '$TAG' '<remote-tmp>/$SIG_FILENAME' --clobber -R '$GITHUB_REPO'\""
+  else
+    echo "  gh release upload \"$TAG\" <tmp>/$SIG_FILENAME --clobber -R \"$GITHUB_REPO\""
+  fi
+  echo "[dry-run] Nothing was downloaded, signed, or uploaded."
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -117,7 +234,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 cd "$WORKDIR"
 
 echo "==> Downloading ${SUMS_FILENAME} from ${TAG}"
-if ! gh release download "$TAG" -p "$SUMS_FILENAME" -O "$SUMS_FILENAME" -R OrchestratedChaos/curatarr; then
+if ! gh_release_download_to "$TAG" "$SUMS_FILENAME" "$SUMS_FILENAME"; then
   echo "ERROR: could not download ${SUMS_FILENAME} from ${TAG} - has the release.yml workflow's" >&2
   echo "       finalize-checksums job finished yet? Check: gh run list --workflow=release.yml" >&2
   exit 1
@@ -147,6 +264,6 @@ fi
 echo "==> Self-verification OK"
 
 echo "==> Uploading ${SIG_FILENAME} to ${TAG}"
-gh release upload "$TAG" "$WORKDIR/$SIG_FILENAME" --clobber -R OrchestratedChaos/curatarr
+gh_release_upload "$TAG" "$WORKDIR/$SIG_FILENAME"
 
 echo "==> Done. ${TAG}'s SHA256SUMS.txt is now signed - self-update targeting ${TAG} will verify."
