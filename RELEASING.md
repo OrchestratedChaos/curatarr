@@ -239,7 +239,7 @@ never apply a tag whose version isn't strictly greater than its current
 
 ## Repo hygiene this depends on
 
-- Branch protection on `main` (required PR review, no direct pushes).
+- Branch protection on `main` (required PR + required status checks, no direct pushes) - see "Branch protection on `main`" below for exactly what's enforced.
 - 2FA enforced on all maintainer GitHub accounts.
 - The release-signing private key stays off any server; only the
   maintainer's own machine(s) hold it.
@@ -302,6 +302,41 @@ never apply a tag whose version isn't strictly greater than its current
   token anywhere in the captured text. This means a fingerprint that
   ended up elsewhere in that text (e.g. injected into a tag message)
   can never be picked up in place of the actually-verified signing key.
+
+### Branch protection on `main`
+
+Applied via the API (`gh api --method PUT
+repos/OrchestratedChaos/curatarr/branches/main/protection`) as classic
+branch protection - this repo's tag protection uses the newer rulesets
+API instead (see "Tag protection ruleset" below), but branch protection
+on `main` predates that and there's no functional reason to migrate it.
+Enforces:
+
+- **Require a pull request before merging**, required approving review
+  count **0**. This is a single-maintainer repo with no second reviewer,
+  so requiring approvals would permanently block every merge - the
+  required status checks below are the actual gate, not a human review.
+- **Required status checks**, using the exact context names a real
+  `tests.yml` run reports rather than a guess: `test` and
+  `secret-scan` (both jobs in `.github/workflows/tests.yml`, which runs
+  on every PR targeting `main`). `strict: true` - the branch must be up
+  to date with `main` before merging, which prevents two independently-
+  green PRs from landing a combination that's actually broken.
+- Force pushes to `main` and deletion of `main` are both blocked.
+- **Admins are not enforced (`enforce_admins: false`)** - the maintainer
+  can bypass this protection if genuinely necessary. This is intentional:
+  there's no second maintainer who could unblock an emergency lockout, so
+  admin bypass is the escape hatch, not an oversight. The required checks
+  still gate the normal `gh pr merge` flow.
+- **Signed commits: evaluated, not enabled.** GitHub signs its own
+  squash-merge commits, so this would likely work for every commit that
+  currently reaches `main` (all of them arrive via squash merge), but it
+  adds lockout risk if a direct push to `main` is ever genuinely needed.
+  Left off unless that tradeoff is revisited.
+
+To recreate or inspect it by hand: repo Settings -> Branches -> Branch
+protection rules -> `main`. Verify with `gh api
+repos/OrchestratedChaos/curatarr/branches/main/protection`.
 
 ### Tag protection ruleset
 
