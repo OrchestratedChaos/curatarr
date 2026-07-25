@@ -161,6 +161,50 @@ jobs:
   # `select_asset_name()` returns for macOS) is the only macOS asset
   # published from here on; an install still on the old name must
   # download the current binary manually (docs/BINARIES.md) instead.
+  #
+  # The two Linux entries (`ubuntu-latest`, `ubuntu-24.04-arm`) do NOT
+  # build directly on the runner like Windows/macOS do - both runner
+  # images resolve to Ubuntu 24.04, whose glibc (2.39) is newer than
+  # what a large share of real server distros ship: Debian 12 is 2.36,
+  # Ubuntu 22.04 LTS is 2.35, RHEL/Rocky/Alma 9 is 2.34 (all confirmed
+  # via `ldd --version` in each distro's official image, not guessed).
+  # glibc is backward- but not forward-compatible, so a binary built on
+  # 24.04 raw fails on all three with a loader error
+  # (`GLIBC_2.38' not found`) - see this fix's CHANGELOG entry. Instead,
+  # both Linux entries build inside a pinned `manylinux_2_28` container
+  # (glibc 2.28, AlmaLinux-8-based, the standard PyPA wide-compat build
+  # environment) via `matrix.container` + `docker run` below - chosen
+  # over an older runner image (e.g. `ubuntu-22.04`, which only gets us
+  # to glibc 2.35 and is one more OS EOL clock to track) and over
+  # dropping all the way to `manylinux2014` (glibc 2.17, which every
+  # compiled dependency here also happens to publish a wheel for - but
+  # going lower than the target baselines need buys nothing and the
+  # `manylinux_2_28` toolchain is the more actively maintained one of
+  # the two). 2.28 clears all three target baselines above with margin;
+  # every compiled dependency (`cryptography`, `cffi`, `markupsafe`,
+  # `pyyaml`, `charset-normalizer`) publishes a `manylinux2014`- or
+  # `manylinux_2_28`-tagged wheel for both x86_64 and aarch64 (verified
+  # against PyPI's own file listing for each pinned version in
+  # requirements.lock/requirements-ui.lock), so this floor is reachable
+  # by wheel selection alone - no dependency needs compiling from source
+  # to get there (that's the trap that cost Intel macOS support above;
+  # see the paragraph before this one). A wheel's manylinux TAG is only
+  # what its build environment supports, not necessarily the actual
+  # glibc symbol floor of the compiled code inside it - a real build
+  # showed the manylinux_2_28-tagged `cryptography` wheel this installs
+  # only references glibc symbols up to 2.17 in practice - which is
+  # exactly why the "Assert Linux binary's glibc floor" step below
+  # checks the built binary's actual referenced symbols with `objdump`
+  # rather than trusting any wheel tag. PyInstaller's own Linux
+  # bootloader (embedded in every onefile binary it produces) ships as a
+  # `manylinux2014` wheel already, so it was never the constraint either.
+  # `docker run`'s own `-v "$PWD:/io"` bind mount (not `docker cp`) is
+  # fine here specifically because these are real Linux hosts with a
+  # normal working directory - not the Colima VM used for local Mac
+  # verification (see docs/BINARIES.md), where `-v` silently mounts an
+  # empty directory for any host path outside Colima's own default
+  # `$HOME`-only share (`/tmp` isn't shared by default), which is what
+  # actually made `docker cp` necessary there, not a virtiofs bug.
   # ---------------------------------------------------------------------
   build-binaries:
     name: Build binary (${{ matrix.asset_name }})
@@ -173,15 +217,24 @@ jobs:
           - os: windows-latest
             asset_name: curatarr-windows-x86_64.exe
             dist_name: curatarr.exe
+            container: ''
           - os: ubuntu-latest
             asset_name: curatarr-linux-x86_64
             dist_name: curatarr
+            # Digest-pinned per this repo's convention (every action/image
+            # reference here is SHA-pinned) - `quay.io/pypa/manylinux_2_28_x86_64`.
+            container: 'quay.io/pypa/manylinux_2_28_x86_64@sha256:fdb9a9c223b215604dc7b6f7e8fff4b39bfea5fbaa7777a2e5544a60dfa437f8'
+            glibc_floor: '2.28'
           - os: ubuntu-24.04-arm
             asset_name: curatarr-linux-arm64
             dist_name: curatarr
+            # Digest-pinned - `quay.io/pypa/manylinux_2_28_aarch64`.
+            container: 'quay.io/pypa/manylinux_2_28_aarch64@sha256:e7035406e58d96b7407246af1f6514a3cbd753a0025b42b9adfbeadd3b29ba80'
+            glibc_floor: '2.28'
           - os: macos-latest
             asset_name: curatarr-macos-arm64
             dist_name: curatarr
+            container: ''
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -191,7 +244,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Windows/macOS: unchanged, builds directly with the runner's own
+      # Python (see "Set up Python" above). Linux: skipped - see the
+      # container-based step below instead, which uses the pinned
+      # manylinux image's own Python so every compiled dependency wheel
+      # it selects is bounded by that image's (older) glibc rather than
+      # the runner's.
       - name: Install dependencies
+        if: matrix.container == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -199,10 +259,104 @@ jobs:
           pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
 
       - name: Build binary with PyInstaller
+        if: matrix.container == ''
         shell: bash
         run: |
           set -euo pipefail
           pyinstaller --clean --noconfirm curatarr.spec
+
+      # Linux only (see build-binaries' own comment above for why): both
+      # dependency install and the PyInstaller build happen inside the
+      # pinned manylinux container in one `docker run`. This deliberately
+      # does NOT use the container's own baked `/opt/python/cp312-cp312`
+      # interpreters - confirmed via a real build attempt that every
+      # manylinux-image Python is built `--enable-shared=no` (no
+      # `libpython*.so` at all, only a static `.a`), because manylinux
+      # images exist to build *wheels* (which don't need libpython.so at
+      # wheel-install time), not to embed/freeze a whole interpreter the
+      # way PyInstaller requires - it fails outright with "Python was
+      # built without a shared library". Instead this installs the
+      # AlmaLinux 8 OS-packaged `python3.12`/`python3.12-devel` (`dnf`),
+      # which IS built shared (confirmed: `libpython3.12.so.1.0` present,
+      # `Py_ENABLE_SHARED=1`) and, being built by the same AlmaLinux 8
+      # base this image's manylinux_2_28 spec already requires, carries
+      # the same glibc 2.28 floor - not the runner's newer system Python.
+      # One invocation rather than two separate steps because each
+      # `docker run` starts a fresh, disposable container - packages
+      # `pip install`ed in a first container would not exist in a second
+      # one. Runs as the container's default root (needed for `dnf
+      # install` above) against the bind-mounted checkout, which on a
+      # real (non-rootless) Docker host means everything it writes under
+      # `dist/`/`build/` lands root-owned on the runner's filesystem -
+      # the final `chown -R "$HOST_UID:$HOST_GID"` hands it back to the
+      # actual runner user before the container exits, so the later
+      # "Rename binary and compute SHA256" step (which runs as that
+      # user, not root) can still `mv`/read it.
+      - name: Install dependencies and build binary (manylinux container)
+        if: matrix.container != ''
+        shell: bash
+        env:
+          CONTAINER_IMAGE: ${{ matrix.container }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/io" \
+            -w /io \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
+            "$CONTAINER_IMAGE" \
+            bash -c '
+              set -euo pipefail
+              dnf install -y -q python3.12 python3.12-devel python3.12-pip
+              PY=/usr/bin/python3.12
+              "$PY" -m pip install --quiet --upgrade pip
+              "$PY" -m pip install --quiet --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
+              "$PY" -m PyInstaller --clean --noconfirm curatarr.spec
+              chown -R "$HOST_UID:$HOST_GID" /io/dist /io/build
+            '
+
+      # Regression guard for the glibc-floor fix itself: a future
+      # dependency bump could silently pick up a newer manylinux wheel
+      # (or the pinned container image could change) and reintroduce the
+      # exact "GLIBC_2.38' not found" failure this fix addresses - fail
+      # the build, not a future clean-install report, if that happens.
+      # `objdump -T` lists every dynamic symbol the binary references,
+      # including its versioned libc symbols (`GLIBC_x.y`); the highest
+      # one found is the actual minimum glibc this binary needs at
+      # runtime, independent of what any wheel tag claims.
+      - name: Assert Linux binary's glibc floor (regression guard)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          DIST_NAME: ${{ matrix.dist_name }}
+          INTENDED_FLOOR: ${{ matrix.glibc_floor }}
+        run: |
+          set -euo pipefail
+          command -v objdump >/dev/null 2>&1 || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq binutils
+          }
+
+          MAX_GLIBC="$(objdump -T "dist/$DIST_NAME" \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | sed 's/^GLIBC_//' \
+            | sort -V \
+            | tail -1)"
+
+          if [ -z "$MAX_GLIBC" ]; then
+            echo "::error::could not find any GLIBC_* versioned symbol in dist/$DIST_NAME - objdump output was not what this check expects, investigate before releasing"
+            exit 1
+          fi
+
+          echo "Detected glibc floor for dist/$DIST_NAME: GLIBC_$MAX_GLIBC (intended ceiling: GLIBC_$INTENDED_FLOOR)"
+
+          HIGHEST="$(printf '%s\n%s\n' "$MAX_GLIBC" "$INTENDED_FLOOR" | sort -V | tail -1)"
+          if [ "$HIGHEST" != "$INTENDED_FLOOR" ]; then
+            echo "::error::dist/$DIST_NAME references GLIBC_$MAX_GLIBC, which exceeds the intended floor of GLIBC_$INTENDED_FLOOR - this would regress the minimum supported glibc (Debian 12 / Ubuntu 22.04 LTS / RHEL 9 baselines documented in docs/BINARIES.md). A dependency bump likely pulled in a newer manylinux wheel, or the pinned container image changed - investigate before releasing."
+            exit 1
+          fi
+
+          echo "Confirmed: dist/$DIST_NAME's glibc floor (GLIBC_$MAX_GLIBC) is within the intended ceiling (GLIBC_$INTENDED_FLOOR)."
 
       - name: Verify macOS binary is arm64-only (not a universal/fat binary)
         if: runner.os == 'macOS'
