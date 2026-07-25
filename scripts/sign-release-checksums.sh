@@ -47,10 +47,19 @@
 #      "never publish something that doesn't even verify against our
 #      own key" discipline as scripts/release.sh's tag signing.
 #   5. Uploads SHA256SUMS.txt.sig to the release.
+#   6. Dispatches .github/workflows/post-release-smoke-test.yml for this
+#      version - this is the FIRST moment SHA256SUMS.txt.sig actually
+#      exists, which is exactly what that workflow's client-real
+#      signature-verification step needs (see its own "Trigger design"
+#      comment for why it isn't triggered on `release: published`
+#      instead). Not fatal on its own if it fails to fire (network
+#      hiccup, etc.) - steps 1-5 above already completed the thing this
+#      script exists for; a failure here just prints the equivalent
+#      manual `gh workflow run` command instead.
 #
 # --dry-run runs every prerequisite check (including the gh-delegation
 # detection) and prints what it would do, without downloading, signing,
-# or uploading anything.
+# uploading, or dispatching anything.
 
 set -euo pipefail
 
@@ -174,6 +183,27 @@ gh_release_upload() {
   fi
 }
 
+# $1=version - fires .github/workflows/post-release-smoke-test.yml's
+# workflow_dispatch now that this version's SHA256SUMS.txt.sig has just
+# been uploaded (see that workflow's own "Trigger design" comment for
+# why THIS moment, not `release: published`, is what it's triggered
+# from: the smoke test's client-real signature check needs the .sig to
+# already exist, and this is the one point in the whole release flow
+# where that's guaranteed true by construction). Never fatal on its own
+# - the signing above already succeeded and is the thing this script
+# exists for, so a failure here (e.g. a network hiccup, or `gh workflow
+# run` needing a scope the delegated/local `gh` login doesn't have)
+# only prints a clear fallback instruction rather than making the whole
+# script report failure.
+gh_trigger_smoke_test() {
+  local version="$1"
+  if [ "$GH_DELEGATE" -eq 1 ]; then
+    ssh "$CURATARR_GH_SSH_HOST" "gh workflow run post-release-smoke-test.yml -R '$GITHUB_REPO' -f version='$version'"
+  else
+    gh workflow run post-release-smoke-test.yml -R "$GITHUB_REPO" -f version="$version"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
@@ -219,10 +249,12 @@ if [ "$DRY_RUN" -eq 1 ]; then
   if [ "$GH_DELEGATE" -eq 1 ]; then
     echo "  scp <tmp>/$SIG_FILENAME \"$CURATARR_GH_SSH_HOST:<remote-tmp>/$SIG_FILENAME\""
     echo "  ssh \"$CURATARR_GH_SSH_HOST\" \"gh release upload '$TAG' '<remote-tmp>/$SIG_FILENAME' --clobber -R '$GITHUB_REPO'\""
+    echo "  ssh \"$CURATARR_GH_SSH_HOST\" \"gh workflow run post-release-smoke-test.yml -R '$GITHUB_REPO' -f version='$VERSION'\""
   else
     echo "  gh release upload \"$TAG\" <tmp>/$SIG_FILENAME --clobber -R \"$GITHUB_REPO\""
+    echo "  gh workflow run post-release-smoke-test.yml -R \"$GITHUB_REPO\" -f version=\"$VERSION\""
   fi
-  echo "[dry-run] Nothing was downloaded, signed, or uploaded."
+  echo "[dry-run] Nothing was downloaded, signed, uploaded, or dispatched."
   exit 0
 fi
 
@@ -267,3 +299,11 @@ echo "==> Uploading ${SIG_FILENAME} to ${TAG}"
 gh_release_upload "$TAG" "$WORKDIR/$SIG_FILENAME"
 
 echo "==> Done. ${TAG}'s SHA256SUMS.txt is now signed - self-update targeting ${TAG} will verify."
+
+echo "==> Triggering the post-release smoke test for ${VERSION}"
+if gh_trigger_smoke_test "$VERSION"; then
+  echo "==> Smoke test dispatched - see: gh run list --workflow=post-release-smoke-test.yml -R $GITHUB_REPO"
+else
+  echo "WARNING: could not automatically trigger the post-release smoke test." >&2
+  echo "         Run it by hand: gh workflow run post-release-smoke-test.yml -R $GITHUB_REPO -f version=$VERSION" >&2
+fi

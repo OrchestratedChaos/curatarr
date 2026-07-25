@@ -209,7 +209,11 @@ update time), **self-verifies** the resulting signature locally against
 `.github/allowed_signers` and the pinned key fingerprint before uploading
 anything (fail closed, same discipline as `scripts/release.sh`'s own
 tag verify-before-push), then uploads `SHA256SUMS.txt.sig` to the
-release.
+release, and finally dispatches the post-release smoke test (see below)
+for this version - not fatal if that last dispatch itself fails to
+fire, since everything the script is actually FOR has already
+succeeded by that point; it just prints the equivalent manual `gh
+workflow run` command to fall back on.
 
 Until this step runs for a given tag, that tag's binaries are still
 published and manually downloadable/verifiable (see
@@ -218,6 +222,63 @@ self-updater can't yet treat that tag as a verified self-update
 target - `utils.self_update.verify_pinned_signature()` fails closed
 (no `SHA256SUMS.txt.sig` published yet = no signature to verify = no
 swap), which is exactly the intended behavior, not a bug.
+
+## Post-release smoke test
+
+Every other gate above (`release.yml`'s tag/version checks, its
+build-time CRLF guard and glibc-floor assertion, both added only as
+part of the v2.10.4/v2.10.5 fixes below) runs BEFORE or DURING publish,
+against artifacts still sitting in the CI job's own workspace. None of
+them ever download the actual published bytes back down and drive them
+the way a real installed user would - which is exactly why self-update
+shipped completely broken across v2.9.2, v2.10.0, and v2.10.2 with
+nothing catching it at the time: `SHA256SUMS.txt` carried a stray CRLF
+(the build-time guard that would now catch this didn't exist yet), and
+`ssh-keygen -Y verify` (reads raw bytes) verified different bytes than
+the shipping client (`utils/self_update.py`, which read the file in
+text mode, silently stripping `\r`) ever actually hashed - see the
+`[2.10.4]` `CHANGELOG.md` entry for the full root-cause writeup.
+
+`.github/workflows/post-release-smoke-test.yml` is the check that closes
+that gap. It runs *after* `sign-release-checksums.sh` above (that script
+dispatches it automatically the moment `SHA256SUMS.txt.sig` is uploaded
+- see that job's own "Trigger design" comment for why it can't run on
+`release: published` instead, since the signature doesn't exist yet at
+that point) and:
+
+1. Re-verifies `SHA256SUMS.txt.sig` the way the real CLIENT does -
+   `utils.self_update.verify_downloaded_asset`, loaded from the released
+   TAG's own code (not `main`) - not just re-running `ssh-keygen -Y
+   verify` a second time.
+2. Asserts `SHA256SUMS.txt` has no CRLF and is version-bound
+   (`# curatarr-version: X.Y.Z`), and recomputes every published asset's
+   hash independently.
+3. Asserts the exact expected asset set is present (and that the
+   retired `curatarr-macos-universal` asset is absent).
+4. Re-checks both Linux binaries' glibc floor (`objdump -T`) against the
+   actual published bytes, not just the pre-upload build artifact.
+5. Actually boots both Linux binaries on `debian:12`, `ubuntu:22.04`,
+   `rockylinux:9`, and `ubuntu:24.04` (x86_64 and arm64, natively - no
+   QEMU).
+6. **The important one**: downloads the PREVIOUS release's real Linux
+   binary and runs ITS real `--self-update` against this release's real
+   published bytes, and asserts it lands on the new version - the actual
+   end-to-end path that never ran in CI across the three-release outage
+   above.
+7. `cosign verify`s the published container image at its bare-semver
+   tag.
+
+Any failure opens (or comments on) a GitHub issue titled for the
+release, carrying the real failing step's output - a red X on a
+workflow nobody watches is how the original bug survived three
+releases undetected.
+
+Also runnable by hand against any past release, for backfill or
+re-verification:
+
+```
+gh workflow run post-release-smoke-test.yml -f version=2.10.5
+```
 
 ## Manual sanity-check
 

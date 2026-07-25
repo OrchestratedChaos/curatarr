@@ -2,6 +2,36 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.7] - 2026-07-25
+
+### Added
+
+- **Automated post-release smoke test**
+  (`.github/workflows/post-release-smoke-test.yml`) that exercises a
+  published release's real artifacts the way a real user would, instead
+  of re-checking them the way `release.yml` already does at build time.
+  This is the check that would have caught the self-update outage
+  across v2.9.2/v2.10.0/v2.10.2 (see the `[2.10.4]` entry below): it
+  verifies `SHA256SUMS.txt.sig` using the shipping client's own
+  verification code (`utils.self_update.verify_downloaded_asset`,
+  loaded from the released tag, not `main`), asserts no CRLF and a
+  correct `# curatarr-version:` binding, recomputes every published
+  hash, confirms the exact expected asset set (and that the retired
+  `curatarr-macos-universal` asset stays gone), re-checks both Linux
+  binaries' glibc floor against the actual published bytes, boots both
+  Linux binaries on `debian:12`/`ubuntu:22.04`/`rockylinux:9`/
+  `ubuntu:24.04` (x86_64 and arm64, natively), downloads the PREVIOUS
+  release's real binary and runs its real `--self-update` against this
+  release's real published bytes to confirm it lands on the new
+  version, and `cosign verify`s the published container image.
+  `scripts/sign-release-checksums.sh` now dispatches it automatically
+  right after uploading `SHA256SUMS.txt.sig` (the first moment the
+  signature this all depends on actually exists); it's also runnable by
+  hand (`gh workflow run post-release-smoke-test.yml -f
+  version=X.Y.Z`) against any past release for backfill/re-verification.
+  Any failure opens or updates a GitHub issue carrying the real failing
+  step's output. See `RELEASING.md`'s "Post-release smoke test" section.
+
 ## [2.10.6] - 2026-07-25
 
 ### Fixed
