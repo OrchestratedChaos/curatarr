@@ -139,10 +139,30 @@ jobs:
   # No independent re-verification here on purpose - one gate, not two
   # that could drift out of sync.
   #
-  # macOS is deliberately NOT in this matrix - see build-macos-universal
-  # below. It needs a different toolchain (a universal2 Python instead
-  # of actions/setup-python's single-arch macOS builds), so it can't
-  # share these steps.
+  # macOS is a normal member of this matrix as of the release that
+  # dropped Intel macOS support: `cryptography` 49.0.0 removed x86_64
+  # macOS wheels entirely (deprecated in 46.0.0/47.0.0, removed per its
+  # own CHANGELOG: "Support for x86_64 macOS has been removed"), and
+  # GitHub's `macos-13` (last Intel runner) is retired - only
+  # `macos-15-intel` remains, sunsetting Aug 2027. With no supported way
+  # to build a universal2 binary going forward, macOS now gets the exact
+  # same actions/setup-python + PyInstaller build as every other
+  # platform (`macos-latest` is an arm64 runner, so this produces a
+  # native arm64-only binary with no cross-build machinery at all) -
+  # the old build-macos-universal job (python.org's universal2
+  # interpreter, delocate-merge wheel fusing) is gone.
+  #
+  # Asset naming is transitional for exactly this one release: the
+  # canonical name is `curatarr-macos-arm64` (what
+  # `utils/self_update.py`'s `select_asset_name()` returns for macOS
+  # going forward), but existing installs running an older binary still
+  # request the old `curatarr-macos-universal` name when checking for
+  # updates - so this job publishes BOTH names, identical bytes, each
+  # with its own `.sha256` sidecar, so those installs can still
+  # self-update at least once more (to a version whose
+  # select_asset_name() has moved on) instead of 404ing and failing
+  # closed. Drop the `curatarr-macos-universal` duplicate-publish steps
+  # in a future release once this is no longer needed.
   # ---------------------------------------------------------------------
   build-binaries:
     name: Build binary (${{ matrix.asset_name }})
@@ -160,6 +180,9 @@ jobs:
             dist_name: curatarr
           - os: ubuntu-24.04-arm
             asset_name: curatarr-linux-arm64
+            dist_name: curatarr
+          - os: macos-latest
+            asset_name: curatarr-macos-arm64
             dist_name: curatarr
     steps:
       - name: Checkout
@@ -183,6 +206,24 @@ jobs:
           set -euo pipefail
           pyinstaller --clean --noconfirm curatarr.spec
 
+      - name: Verify macOS binary is arm64-only (not a universal/fat binary)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHES="$(lipo -archs dist/curatarr)"
+          echo "dist/curatarr archs: $ARCHES"
+          # Inverted from the old universal2-era check (which asserted
+          # BOTH x86_64 and arm64 were present): this asserts arm64-only
+          # and NOT fat, so a regression back to a universal2 build (e.g.
+          # a future PYINSTALLER_TARGET_ARCH reintroduction) is caught
+          # here instead of silently shipping a binary bigger and
+          # differently-signed than intended.
+          if [ "$ARCHES" != "arm64" ]; then
+            echo "::error::expected dist/curatarr to be arm64-only, got '$ARCHES' - macos-latest's actions/setup-python build should never produce a fat/universal binary; investigate before releasing"
+            exit 1
+          fi
+
       - name: Rename binary and compute SHA256
         shell: bash
         env:
@@ -203,6 +244,28 @@ jobs:
           "
           cat "$ASSET_NAME.sha256"
 
+      # Transitional-only (see the build-binaries job comment above):
+      # publish the exact same bytes under the old curatarr-macos-universal
+      # name too, so installs running a pre-2.10.0 binary (whose
+      # select_asset_name() still requests that name) can self-update at
+      # least once more instead of 404ing and failing closed.
+      - name: Publish transitional curatarr-macos-universal duplicate (identical bytes, old asset name)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp curatarr-macos-arm64 curatarr-macos-universal
+          python -c "
+          import hashlib
+          h = hashlib.sha256()
+          with open('curatarr-macos-universal', 'rb') as f:
+              for chunk in iter(lambda: f.read(1 << 20), b''):
+                  h.update(chunk)
+          with open('curatarr-macos-universal.sha256', 'w') as out:
+              out.write(f'{h.hexdigest()}  curatarr-macos-universal\n')
+          "
+          cat curatarr-macos-universal.sha256
+
       - name: Upload binary to the release
         shell: bash
         env:
@@ -215,156 +278,8 @@ jobs:
             "$ASSET_NAME.sha256" \
             --clobber
 
-  # ---------------------------------------------------------------------
-  # macOS universal2 binary - one file that runs natively on both Intel
-  # and Apple Silicon Macs, replacing the old two-job split (a
-  # macos-latest arm64-only build + a macos-13 Intel-only build that had
-  # started stalling on GitHub's macos-13 runner capacity).
-  #
-  # This can't reuse the build-binaries matrix above because
-  # actions/setup-python's macOS Python builds are single-arch only -
-  # separate darwin-arm64 and darwin-x64 downloads, never a universal2
-  # one (see actions/python-versions' versions-manifest.json) - so a
-  # universal2 PyInstaller build needs python.org's own official
-  # universal2 installer instead, installed system-wide (GitHub-hosted
-  # runners have passwordless sudo) so its hardcoded
-  # /Library/Frameworks/Python.framework install-name references
-  # resolve correctly.
-  #
-  # A handful of curatarr's macOS dependencies also don't publish a
-  # macosx_*_universal2 wheel on PyPI - only separate x86_64/arm64 ones
-  # (pyyaml, ruamel.yaml.clib, markupsafe, and cffi, as of the versions
-  # pinned in requirements.txt/requirements-ui.txt - checked directly
-  # against PyPI's JSON API). Those get downloaded as both single-arch
-  # wheels and fused into a real universal2 wheel with `delocate-merge`
-  # (from the `delocate` package) before the PyInstaller build runs. If
-  # a future dependency bump adds another compiled-extension package
-  # without a universal2 wheel, this job will fail loudly at the
-  # PyInstaller step (single-arch .so bundled into a universal2 EXE)
-  # rather than silently shipping a broken binary - see the "Verify the
-  # binary is truly universal2" step below, which is exactly the same
-  # lipo check used to prove this locally.
-  #
-  # cffi is transitive (pulled in by cryptography, added in v2.8.29 for
-  # the self-update signature verifier) and was missed here the first
-  # time - it doesn't ship a universal2 wheel either, only thin
-  # cp<NN>-cp<NN> per-Python-version x86_64/arm64 wheels (unlike
-  # cryptography itself, which is NOT in this list: 48.0.1, the version
-  # pinned in requirements.txt, ships a real prebuilt universal2 wheel
-  # already - no fuse needed for it). This is exactly what broke the
-  # v2.8.29 release: the job DID fail loudly as designed, just on
-  # cryptography's own single-arch (49.0.0 dropped macOS x86_64
-  # entirely) rather than on this transitive dep - see PR #190.
-  #
-  # Verified locally on Apple Silicon (M1) before this job was written:
-  # `lipo -archs dist/curatarr` -> "x86_64 arm64", a native arm64 launch
-  # served HTTP 200, and `arch -x86_64 ./dist/curatarr` (Rosetta) also
-  # served HTTP 200 (confirmed via `vmmap` showing "Code Type: X86-64
-  # (translated)").
-  # ---------------------------------------------------------------------
-  build-macos-universal:
-    name: Build binary (curatarr-macos-universal)
-    needs: release
-    runs-on: macos-latest
-    env:
-      # Latest 3.12.x for which python.org still publishes a macOS
-      # universal2 installer (.pkg) - 3.12.11+ dropped it, source-only.
-      # SHA256 pinned against the exact file downloaded from
-      # python.org's own https:// (defense in depth beyond TLS, same
-      # pinning convention as requirements.lock). Bump deliberately.
-      PYTHON_VERSION: "3.12.10"
-      PYTHON_PKG_SHA256: "8373e58da4ea146b3eb1c1f9834f19a319440b6b679b06050b1f9ee3237aa8e4"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install python.org universal2 Python
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -sL -o python-universal2.pkg \
-            "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-macos11.pkg"
-          echo "${PYTHON_PKG_SHA256}  python-universal2.pkg" | shasum -a 256 -c -
-          sudo installer -pkg python-universal2.pkg -target /
-
-          PY_BIN="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
-          echo "PYTHON_BIN=$PY_BIN" >> "$GITHUB_ENV"
-          "$PY_BIN" --version
-          echo "python3.12 archs: $(lipo -archs "$PY_BIN")"
-
-      - name: Create venv and install dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          "$PYTHON_BIN" -m venv .venv-universal2
-          source .venv-universal2/bin/activate
-          python -m pip install --upgrade pip
-          pip install delocate
-          pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
-
-      - name: Fuse single-arch-only wheels into universal2
-        shell: bash
-        run: |
-          set -euo pipefail
-          source .venv-universal2/bin/activate
-          mkdir -p fuse/arm64 fuse/x86_64 fuse/out
-
-          # Single-arch-only-on-PyPI deps that need delocate-merge fusing
-          # into a universal2 wheel - see the job comment above.
-          THIN_WHEEL_DEPS=(pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3 cffi==2.1.0)
-
-          pip download --no-deps --only-binary=:all: --python-version 312 \
-            --implementation cp --platform macosx_11_0_arm64 \
-            -d fuse/arm64 "${THIN_WHEEL_DEPS[@]}"
-
-          # x86_64 wheels for these deps use different minimum-macOS-version
-          # platform tags depending on the package - checked directly
-          # against PyPI (pip's --platform match is an EXACT tag match,
-          # not a compatibility range, so a single shared tag can't fetch
-          # all of them): pyyaml/ruamel.yaml.clib/markupsafe publish
-          # macosx_10_13_x86_64; cffi publishes macosx_10_15_x86_64.
-          pip download --no-deps --only-binary=:all: --python-version 312 \
-            --implementation cp --platform macosx_10_13_x86_64 \
-            -d fuse/x86_64 pyyaml==6.0.3 ruamel.yaml.clib==0.2.15 markupsafe==3.0.3
-          pip download --no-deps --only-binary=:all: --python-version 312 \
-            --implementation cp --platform macosx_10_15_x86_64 \
-            -d fuse/x86_64 cffi==2.1.0
-
-          for arm_whl in fuse/arm64/*.whl; do
-            base="$(basename "$arm_whl")"
-            prefix="${base%-macosx_*}"
-            x86_whl="$(ls fuse/x86_64/${prefix}-macosx_*x86_64.whl)"
-            echo "fusing: $arm_whl + $x86_whl"
-            delocate-merge "$arm_whl" "$x86_whl" -w fuse/out
-          done
-
-          pip install --force-reinstall --no-deps fuse/out/*.whl
-
-      - name: Build binary with PyInstaller (universal2)
-        shell: bash
-        run: |
-          set -euo pipefail
-          source .venv-universal2/bin/activate
-          PYINSTALLER_TARGET_ARCH=universal2 pyinstaller --clean --noconfirm curatarr.spec
-
-      - name: Verify the binary is truly universal2
-        shell: bash
-        run: |
-          set -euo pipefail
-          ARCHES="$(lipo -archs dist/curatarr)"
-          echo "dist/curatarr archs: $ARCHES"
-          echo "$ARCHES" | grep -q x86_64
-          echo "$ARCHES" | grep -q arm64
-
-      - name: Rename binary and compute SHA256
-        shell: bash
-        run: |
-          set -euo pipefail
-          mv dist/curatarr curatarr-macos-universal
-          shasum -a 256 curatarr-macos-universal > curatarr-macos-universal.sha256
-          cat curatarr-macos-universal.sha256
-
-      - name: Upload binary to the release
+      - name: Upload transitional curatarr-macos-universal duplicate to the release
+        if: runner.os == 'macOS'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -385,9 +300,10 @@ jobs:
   # its target asset's hash against THIS file, not any of the individual
   # `<asset>.sha256` sidecars - see docs/BINARIES.md and RELEASING.md.
   #
-  # `needs: [release, build-binaries, build-macos-universal]` is a hard
-  # gate, same reasoning as build-binaries' own comment: if ANY platform
-  # failed to build, this job is skipped entirely rather than publishing
+  # `needs: [release, build-binaries]` is a hard gate, same reasoning
+  # as build-binaries' own comment: if ANY platform (macOS is now just
+  # another matrix entry in that job, not a separate one) failed to
+  # build, this job is skipped entirely rather than publishing
   # a SHA256SUMS.txt that's silently missing an asset - a self-updater
   # verifying against an incomplete-but-present sums file would fail
   # closed anyway (HashMismatchError: "not listed"), but never even
@@ -403,15 +319,15 @@ jobs:
   # ---------------------------------------------------------------------
   finalize-checksums:
     name: Aggregate SHA256SUMS.txt (source archive + all binaries)
-    needs: [release, build-binaries, build-macos-universal]
+    needs: [release, build-binaries]
     runs-on: ubuntu-latest
     steps:
       # This job's own `gh release download`/`gh release upload` calls
       # below rely on `gh` auto-detecting owner/repo from the checked-out
       # git remote, same as every other `gh release` call in this
-      # workflow (see `release`/`build-binaries`/`build-macos-universal`
-      # above) - none of them pass `--repo` explicitly. This job was
-      # missing its own Checkout step (the only job in this workflow that
+      # workflow (see `release`/`build-binaries` above) - none of them
+      # pass `--repo` explicitly. This job was missing its own Checkout
+      # step (the only job in this workflow that
       # was), so `gh` had no repo to resolve and failed with "fatal: not
       # a git repository" the first time this job actually ran (v2.8.29 -
       # it was added alongside the self-update feature and had never

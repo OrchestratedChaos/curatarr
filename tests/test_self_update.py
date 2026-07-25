@@ -112,11 +112,16 @@ class TestSelectAssetName:
         with pytest.raises(self_update.UnsupportedPlatformError, match='Windows/ARM64'):
             self_update.select_asset_name('win32', 'ARM64')
 
-    def test_macos_universal_regardless_of_arch_x86_64(self):
-        assert self_update.select_asset_name('darwin', 'x86_64') == 'curatarr-macos-universal'
+    def test_macos_arm64_regardless_of_machine_field_x86_64(self):
+        # select_asset_name() never branches on `machine` for darwin -
+        # verifies that stays true now that only one macOS asset exists
+        # (previously true because one universal2 binary covered both
+        # architectures; now because only arm64 is built at all - see
+        # ASSET_MACOS_ARM64's comment).
+        assert self_update.select_asset_name('darwin', 'x86_64') == 'curatarr-macos-arm64'
 
-    def test_macos_universal_regardless_of_arch_arm64(self):
-        assert self_update.select_asset_name('darwin', 'arm64') == 'curatarr-macos-universal'
+    def test_macos_arm64_regardless_of_machine_field_arm64(self):
+        assert self_update.select_asset_name('darwin', 'arm64') == 'curatarr-macos-arm64'
 
     def test_linux_x86_64(self):
         assert self_update.select_asset_name('linux', 'x86_64') == 'curatarr-linux-x86_64'

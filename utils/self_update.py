@@ -179,7 +179,17 @@ class VersionReadbackError(SelfUpdateError):
 ASSET_WINDOWS_X86_64 = 'curatarr-windows-x86_64.exe'
 ASSET_LINUX_X86_64 = 'curatarr-linux-x86_64'
 ASSET_LINUX_ARM64 = 'curatarr-linux-arm64'
-ASSET_MACOS_UNIVERSAL = 'curatarr-macos-universal'
+# Canonical name as of the release that dropped Intel macOS support
+# (cryptography 49.0.0 removed x86_64 macOS wheels entirely, and
+# GitHub's last Intel macOS runner is retired) - macOS binaries are now
+# arm64-only, same one-name-per-platform shape as every other OS. The
+# old 'curatarr-macos-universal' name is still published as an
+# identical-bytes duplicate for exactly one transitional release (see
+# release.yml's build-binaries job comment) so pre-2.10.0 installs can
+# still self-update at least once more, but this function - which only
+# ever runs INSIDE the binary requesting its OWN next asset - always
+# requests the canonical name going forward.
+ASSET_MACOS_ARM64 = 'curatarr-macos-arm64'
 
 _X86_64_MACHINE_NAMES = ('x86_64', 'amd64')
 _ARM64_MACHINE_NAMES = ('aarch64', 'arm64')
@@ -214,9 +224,16 @@ def select_asset_name(sys_platform: Optional[str] = None, machine: Optional[str]
         )
 
     if sys_platform == 'darwin':
-        # One universal2 binary covers both Intel and Apple Silicon - no
-        # architecture branch needed, unlike Windows/Linux.
-        return ASSET_MACOS_UNIVERSAL
+        # Only an arm64 binary is published as of the release that
+        # dropped Intel macOS support (see ASSET_MACOS_ARM64's own
+        # comment) - no architecture branch here, same as before, but
+        # now because there's only one build rather than because one
+        # build covers both architectures. This is exactly why the
+        # transitional curatarr-macos-universal duplicate exists on the
+        # release side (see release.yml): a pre-2.10.0 binary's OWN
+        # baked-in copy of this function still requests that old name,
+        # not this one.
+        return ASSET_MACOS_ARM64
 
     if sys_platform.startswith('linux'):
         if machine_l in _X86_64_MACHINE_NAMES:
