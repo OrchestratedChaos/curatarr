@@ -152,17 +152,15 @@ jobs:
   # the old build-macos-universal job (python.org's universal2
   # interpreter, delocate-merge wheel fusing) is gone.
   #
-  # Asset naming is transitional for exactly this one release: the
-  # canonical name is `curatarr-macos-arm64` (what
-  # `utils/self_update.py`'s `select_asset_name()` returns for macOS
-  # going forward), but existing installs running an older binary still
-  # request the old `curatarr-macos-universal` name when checking for
-  # updates - so this job publishes BOTH names, identical bytes, each
-  # with its own `.sha256` sidecar, so those installs can still
-  # self-update at least once more (to a version whose
-  # select_asset_name() has moved on) instead of 404ing and failing
-  # closed. Drop the `curatarr-macos-universal` duplicate-publish steps
-  # in a future release once this is no longer needed.
+  # The transitional `curatarr-macos-universal` duplicate-publish steps
+  # (identical bytes uploaded under the old pre-2.10.0 asset name, so
+  # installs still requesting that name could self-update at least once
+  # more instead of 404ing) have now been removed - see CHANGELOG.md's
+  # [2.10.0] and later entries for why they existed and when they were
+  # dropped. `curatarr-macos-arm64` (what `utils/self_update.py`'s
+  # `select_asset_name()` returns for macOS) is the only macOS asset
+  # published from here on; an install still on the old name must
+  # download the current binary manually (docs/BINARIES.md) instead.
   # ---------------------------------------------------------------------
   build-binaries:
     name: Build binary (${{ matrix.asset_name }})
@@ -244,28 +242,6 @@ jobs:
           "
           cat "$ASSET_NAME.sha256"
 
-      # Transitional-only (see the build-binaries job comment above):
-      # publish the exact same bytes under the old curatarr-macos-universal
-      # name too, so installs running a pre-2.10.0 binary (whose
-      # select_asset_name() still requests that name) can self-update at
-      # least once more instead of 404ing and failing closed.
-      - name: Publish transitional curatarr-macos-universal duplicate (identical bytes, old asset name)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp curatarr-macos-arm64 curatarr-macos-universal
-          python -c "
-          import hashlib
-          h = hashlib.sha256()
-          with open('curatarr-macos-universal', 'rb') as f:
-              for chunk in iter(lambda: f.read(1 << 20), b''):
-                  h.update(chunk)
-          with open('curatarr-macos-universal.sha256', 'w') as out:
-              out.write(f'{h.hexdigest()}  curatarr-macos-universal\n')
-          "
-          cat curatarr-macos-universal.sha256
-
       - name: Upload binary to the release
         shell: bash
         env:
@@ -276,18 +252,6 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" \
             "$ASSET_NAME" \
             "$ASSET_NAME.sha256" \
-            --clobber
-
-      - name: Upload transitional curatarr-macos-universal duplicate to the release
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release upload "$GITHUB_REF_NAME" \
-            curatarr-macos-universal \
-            curatarr-macos-universal.sha256 \
             --clobber
 
   # ---------------------------------------------------------------------

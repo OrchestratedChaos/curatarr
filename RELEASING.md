@@ -157,11 +157,12 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    release`) as its only gate: it never runs for a tag that failed the
    signature/fingerprint/version checks above, and it does not
    re-verify them independently on top - one gate, not two that could
-   drift out of sync. The macOS matrix entry additionally publishes an
-   identical-bytes `curatarr-macos-universal` duplicate (own `.sha256`
-   too) - transitional-only, for pre-2.10.0 installs whose self-updater
-   still requests that old asset name; drop it in a future release once
-   no longer needed (see the job's own comment in `release.yml`).
+   drift out of sync. (The macOS matrix entry additionally published an
+   identical-bytes `curatarr-macos-universal` duplicate for one
+   transitional release, so pre-2.10.0 installs whose self-updater still
+   requested that old asset name could self-update once more - that
+   duplicate-publish step has since been removed; see CHANGELOG.md and
+   the job's own comment in `release.yml`.)
 8. Once ALL of those finish, `finalize-checksums` downloads every
    per-binary `.sha256` plus the source-archive-only `SHA256SUMS.txt`
    from step 5, combines them into one aggregate `SHA256SUMS.txt`
