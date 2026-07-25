@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urljoin, urlsplit
 
 from .helpers import read_response_capped
+from .metrics import record_api_call
 
 logger = logging.getLogger('curatarr')
 
@@ -197,6 +198,18 @@ class BaseAPIClient:
         if headers is None:
             headers = self._get_headers()
 
+        # curatarr_api_requests_total/curatarr_api_request_duration_seconds
+        # (see utils/metrics.py), keyed by api_name (radarr/sonarr/
+        # mdblist/tautulli - every BaseAPIClient subclass) - timed from
+        # here (after rate-limiting, which is client-side pacing, not
+        # part of the request itself) through the return/raise below.
+        # outcome only ever flips to 'success' immediately before
+        # returning, so ANY exception path here (a raised
+        # self.exception_class from _handle_response's own status-code
+        # handling included, not just the requests-level exceptions
+        # this try/except itself translates) is recorded as 'error'.
+        request_start = time.time()
+        outcome = 'error'
         try:
             response = requests.request(
                 method=method,
@@ -224,7 +237,9 @@ class BaseAPIClient:
                 read_response_capped(response)
             except ValueError as e:
                 raise self.exception_class(f"{self.api_name} response rejected: {e}")
-            return self._handle_response(response)
+            result = self._handle_response(response)
+            outcome = 'success'
+            return result
 
         except requests.exceptions.Timeout:
             raise self.exception_class(f"Request timeout after {self.request_timeout}s")
@@ -232,3 +247,5 @@ class BaseAPIClient:
             raise self.exception_class(f"Could not connect to {self.api_name}")
         except requests.exceptions.RequestException as e:
             raise self.exception_class(f"Request failed: {e}")
+        finally:
+            record_api_call(self.api_name.lower(), outcome, time.time() - request_start)

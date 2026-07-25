@@ -4,6 +4,7 @@ Handles Plex server connections, watch history, collections, and user management
 """
 
 import logging
+import time
 import requests
 import urllib3
 import xml.etree.ElementTree as ET
@@ -20,6 +21,7 @@ from plexapi.myplex import MyPlexAccount
 
 from .display import GREEN, YELLOW, RED, RESET, log_warning, log_error
 from .helpers import normalize_title, read_response_capped
+from .metrics import record_api_call
 
 
 def _resolve_verify_ssl(config: dict) -> bool:
@@ -46,25 +48,46 @@ def _capped_get(url, **kwargs):
     requests.RequestException (same as every other failure mode already
     handled at each call site) rather than the ValueError
     read_response_capped itself raises, so no call site needs its own
-    except clause changed."""
-    kwargs.setdefault('stream', True)
-    response = requests.get(url, **kwargs)
+    except clause changed.
+
+    Records curatarr_api_requests_total/curatarr_api_request_duration_seconds
+    (see utils/metrics.py, service='plex') - this and _capped_put below
+    are this module's own central choke point for raw Plex HTTP calls
+    (every call site in this file goes through one or the other); calls
+    plexapi itself makes internally via its own HTTP session (e.g.
+    PlexServer()/MyPlexAccount() construction, library.search()) aren't
+    separately wrapped, so this is a useful floor on Plex API traffic,
+    not a complete count of every request plexapi issues."""
+    start = time.time()
+    outcome = 'error'
     try:
-        read_response_capped(response)
-    except ValueError as e:
-        raise requests.RequestException(f"Plex response rejected: {e}") from e
-    return response
+        kwargs.setdefault('stream', True)
+        response = requests.get(url, **kwargs)
+        try:
+            read_response_capped(response)
+        except ValueError as e:
+            raise requests.RequestException(f"Plex response rejected: {e}") from e
+        outcome = 'success'
+        return response
+    finally:
+        record_api_call('plex', outcome, time.time() - start)
 
 
 def _capped_put(url, **kwargs):
     """See _capped_get's docstring - identical reasoning, for PUT."""
-    kwargs.setdefault('stream', True)
-    response = requests.put(url, **kwargs)
+    start = time.time()
+    outcome = 'error'
     try:
-        read_response_capped(response)
-    except ValueError as e:
-        raise requests.RequestException(f"Plex response rejected: {e}") from e
-    return response
+        kwargs.setdefault('stream', True)
+        response = requests.put(url, **kwargs)
+        try:
+            read_response_capped(response)
+        except ValueError as e:
+            raise requests.RequestException(f"Plex response rejected: {e}") from e
+        outcome = 'success'
+        return response
+    finally:
+        record_api_call('plex', outcome, time.time() - start)
 
 
 def init_plex(config: dict) -> plexapi.server.PlexServer:

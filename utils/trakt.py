@@ -11,6 +11,8 @@ import logging
 import requests
 from typing import Dict, Optional, Any, List
 
+from .metrics import record_api_call
+
 logger = logging.getLogger('curatarr')
 
 # Trakt API endpoints
@@ -124,6 +126,16 @@ class TraktClient:
         url = f"{TRAKT_API_URL}{endpoint}"
         headers = self._get_headers(authenticated)
 
+        # curatarr_api_requests_total/curatarr_api_request_duration_seconds
+        # (see utils/metrics.py) - one record per call to THIS method,
+        # including a 401-triggered recursive retry (that recursive call
+        # is a genuine separate request attempt and records its own
+        # entry too - both are real). outcome only flips to 'success'
+        # right before a normal return, so every raised path below
+        # (TraktAuthError, TraktAPIError, or a re-raised
+        # requests.RequestException) is recorded as 'error'.
+        request_start = time.time()
+        outcome = 'error'
         try:
             response = None
             # Bounded retry loop for 429s - see TRAKT_MAX_429_RETRIES's
@@ -160,6 +172,10 @@ class TraktClient:
             if response.status_code == 401 and retry_auth and self.refresh_token:
                 logger.info("Trakt token expired, refreshing...")
                 if self._refresh_access_token():
+                    # This attempt itself still got a 401 (recorded as
+                    # 'error' below via the unchanged `outcome`) - the
+                    # retried call below is a separate request attempt
+                    # and records its own outcome independently.
                     return self._make_request(method, endpoint, data, authenticated, retry_auth=False)
                 raise TraktAuthError("Failed to refresh Trakt token")
 
@@ -168,12 +184,15 @@ class TraktClient:
                 raise TraktAPIError(f"Trakt API error {response.status_code}: {response.text}")
 
             # Return JSON or None for no-content responses
+            outcome = 'success'
             if response.status_code == 204:
                 return None
             return response.json()
 
         except requests.RequestException as e:
             raise TraktAPIError(f"Trakt request failed: {e}")
+        finally:
+            record_api_call('trakt', outcome, time.time() - request_start)
 
     # =========================================================================
     # Device Authentication Flow

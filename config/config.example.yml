@@ -51,9 +51,15 @@ huntarr:
   sequel_huntarr: true    # Missing movies from collections you've started
   horizon_huntarr: true   # Upcoming unreleased movies from collections you own
 
-# Optional: Logging level
+# Optional: Logging level and format
 logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR
+  # format: text (default) - colored, human-readable console output.
+  # format: json - structured JSON-lines (one JSON object per log line:
+  #   timestamp, level, logger, message, plus any extra fields a call
+  #   site attaches) for log aggregators/SIEMs. Secrets are redacted the
+  #   same way either format.
+  # format: text
 
 # Optional: Multi-library support
 # Define one entry per Plex library you want Curatarr to manage separately
