@@ -15,6 +15,41 @@ from recommenders.movie import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_plex_watched_lookups(monkeypatch):
+    """File-wide safety net: PlexMovieRecommender.__init__ eagerly gathers
+    watched data on every construction (there is no "skip watched data"
+    mode), which means _get_watched_count() -> get_watched_movie_count()
+    and, since none of these tests have a real watched-cache file on
+    disk, _get_plex_watched_data() -> get_plex_account_ids() also run for
+    real on almost every test in this file. Both are real utils/plex.py
+    functions that make outbound network calls (get_watched_movie_count
+    constructs a real plexapi MyPlexAccount(token=...), which talks to
+    plex.tv; get_plex_account_ids does a real requests.get() against
+    config['plex']['url'], which in these tests is "http://localhost")
+    unless a test explicitly re-patches them - most tests here don't,
+    because they're not testing this behavior.
+
+    Discovered via instrumenting socket.socket.connect: without this,
+    most tests in this file open real TCP connections to plex.tv and to
+    localhost:80, which is a token/network leak at best and a
+    multi-minute CI hang at worst if either connect stalls instead of
+    failing fast.
+
+    Defaults both to their "no reachable Plex" return values (0 / [])
+    so every test here is network-safe by default. A test that cares
+    about the specific watched-count/account-id behavior patches
+    recommenders.movie.get_watched_movie_count /
+    recommenders.movie.get_plex_account_ids itself (see
+    TestPlexMovieRecommenderWatchedCount, TestGetPlexWatchedDataMovie
+    below) - that per-test patch is applied after this fixture and so
+    overrides it for the life of the test, same layering conftest.py's
+    suite-wide safety nets already use.
+    """
+    monkeypatch.setattr('recommenders.movie.get_watched_movie_count', lambda *a, **kw: 0)
+    monkeypatch.setattr('recommenders.movie.get_plex_account_ids', lambda *a, **kw: [])
+
+
 class TestMovieCache:
     """Tests for MovieCache class."""
 

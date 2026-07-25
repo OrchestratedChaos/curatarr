@@ -1,6 +1,7 @@
 """Tests for recommenders/external.py - HTML watchlist and export functionality"""
 
 import pytest
+import requests
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
 import os
@@ -788,8 +789,19 @@ class TestExportToTraktAutoSync:
 class TestExportToTraktUserMode:
     """Tests for export_to_trakt user_mode configuration."""
 
-    def test_mapping_mode_requires_valid_plex_users(self):
-        """Test that mapping mode requires configured plex_users."""
+    @patch('recommenders.external_exports.get_authenticated_trakt_client')
+    def test_mapping_mode_requires_valid_plex_users(self, mock_get_auth_client):
+        """Test that mapping mode requires configured plex_users.
+
+        export_to_trakt() gets an authenticated client - a real
+        get_authenticated_trakt_client() call, before this test's own
+        plex_users check even runs - so this must be mocked here too,
+        same as the other TestExportToTraktUserMode tests below.
+        """
+        mock_client = Mock()
+        mock_client.get_username.return_value = 'trakt_user'
+        mock_get_auth_client.return_value = mock_client
+
         config = {
             'trakt': {
                 'enabled': True,
@@ -807,8 +819,17 @@ class TestExportToTraktUserMode:
         result = export_to_trakt(config, [], 'api_key')
         assert result is None
 
-    def test_mapping_mode_rejects_empty_plex_users(self):
-        """Test that mapping mode rejects empty plex_users list."""
+    @patch('recommenders.external_exports.get_authenticated_trakt_client')
+    def test_mapping_mode_rejects_empty_plex_users(self, mock_get_auth_client):
+        """Test that mapping mode rejects empty plex_users list.
+
+        See test_mapping_mode_requires_valid_plex_users's docstring above
+        for why get_authenticated_trakt_client must be mocked here.
+        """
+        mock_client = Mock()
+        mock_client.get_username.return_value = 'trakt_user'
+        mock_get_auth_client.return_value = mock_client
+
         config = {
             'trakt': {
                 'enabled': True,
@@ -2931,9 +2952,17 @@ class TestDiscoverPopularByGenre:
 class TestFindSimilarContentThinProfile:
     """Tests for thin profile handling in find_similar_content_with_profile"""
 
-    def test_thin_profile_uses_reduced_iterations(self):
+    @patch('recommenders.external.requests.get')
+    def test_thin_profile_uses_reduced_iterations(self, mock_get):
         """Test that thin profiles use reduced iterations instead of full discovery"""
         from recommenders.external import find_similar_content_with_profile, is_thin_profile
+
+        # discover_candidates_by_profile hits the real TMDB Discover API via
+        # requests.get - mock it to fail the way an unreachable/uncalled API
+        # would (all callers here catch requests.RequestException and
+        # continue with empty results), rather than actually reaching
+        # api.themoviedb.org for real.
+        mock_get.side_effect = requests.RequestException("no real API in tests")
 
         # Create a thin profile (less than 40 items)
         thin_profile = {

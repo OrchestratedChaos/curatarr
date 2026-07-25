@@ -911,8 +911,18 @@ class TestTraktClientImport:
 
         assert result == {"tt111", "tt222"}
 
-    def test_get_watched_movies_no_auth(self):
-        """Test get_watched_movies returns empty when not authenticated."""
+    @patch('utils.trakt.requests.request')
+    def test_get_watched_movies_no_auth(self, mock_request):
+        """Test get_watched_movies returns empty when not authenticated.
+
+        No access_token means _get_headers() omits the Authorization
+        header, but get_username() still makes a real (unauthenticated)
+        /users/settings request - the client has no local "skip the call
+        if unauthenticated" short-circuit, so this mocks the real 401 a
+        real Trakt server would return, rather than relying on an actual
+        unmocked network round-trip to produce one.
+        """
+        mock_request.return_value = Mock(status_code=401, text="Unauthorized")
         client = TraktClient("id", "secret")
         result = client.get_watched_movies()
         assert result == []
@@ -945,8 +955,14 @@ class TestTraktClientImport:
         result = client.get_watched_shows()
         assert result == []
 
-    def test_get_watchlist_no_auth(self):
-        """Test get_watchlist returns empty when not authenticated."""
+    @patch('utils.trakt.requests.request')
+    def test_get_watchlist_no_auth(self, mock_request):
+        """Test get_watchlist returns empty when not authenticated.
+
+        See test_get_watched_movies_no_auth's docstring above - same
+        reasoning (get_username() always makes a real request).
+        """
+        mock_request.return_value = Mock(status_code=401, text="Unauthorized")
         client = TraktClient("id", "secret")
         result = client.get_watchlist()
         assert result == []
@@ -975,8 +991,14 @@ class TestTraktClientImport:
         result = client.get_ratings()
         assert result == []
 
-    def test_get_ratings_no_auth(self):
-        """Test get_ratings returns empty when not authenticated."""
+    @patch('utils.trakt.requests.request')
+    def test_get_ratings_no_auth(self, mock_request):
+        """Test get_ratings returns empty when not authenticated.
+
+        See test_get_watched_movies_no_auth's docstring above - same
+        reasoning (get_username() always makes a real request).
+        """
+        mock_request.return_value = Mock(status_code=401, text="Unauthorized")
         client = TraktClient("id", "secret")
         result = client.get_ratings()
         assert result == []

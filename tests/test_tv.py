@@ -15,6 +15,37 @@ from recommenders.tv import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_plex_watched_lookups(monkeypatch):
+    """File-wide safety net: PlexTVRecommender.__init__ eagerly gathers
+    watched data on every construction, which means _get_watched_count()
+    -> get_watched_show_count() and, since none of these tests have a
+    real watched-cache file on disk, _get_plex_watched_shows_data() ->
+    _get_plex_account_ids() -> get_plex_account_ids() also run for real
+    on almost every test in this file. Both are real utils/plex.py
+    functions that make outbound network calls (get_watched_show_count
+    constructs a real plexapi MyPlexAccount(token=...), which talks to
+    plex.tv; get_plex_account_ids does a real requests.get() against
+    config['plex']['url'], which in these tests is "http://localhost")
+    unless a test explicitly re-patches them - most tests here don't,
+    because they're not testing this behavior. See the identical
+    fixture/docstring in tests/test_movie.py for how this was found
+    (socket.socket.connect instrumentation) - same class of leak, same
+    fix, mirrored here for the TV recommender.
+
+    Defaults both to their "no reachable Plex" return values (0 / [])
+    so every test here is network-safe by default. A test that cares
+    about the specific watched-count/account-id behavior patches
+    recommenders.tv.get_watched_show_count /
+    recommenders.tv.get_plex_account_ids itself - that per-test patch is
+    applied after this fixture and so overrides it for the life of the
+    test, same layering conftest.py's suite-wide safety nets already
+    use.
+    """
+    monkeypatch.setattr('recommenders.tv.get_watched_show_count', lambda *a, **kw: 0)
+    monkeypatch.setattr('recommenders.tv.get_plex_account_ids', lambda *a, **kw: [])
+
+
 class TestShowCache:
     """Tests for ShowCache class."""
 
@@ -877,6 +908,8 @@ class TestPlexTVRecommenderShowDetails:
 class TestPlexTVRecommenderPlexAccountIds:
     """Tests for PlexTVRecommender Plex account ID methods."""
 
+    @patch('recommenders.tv.fetch_show_completion_data')
+    @patch('recommenders.tv.fetch_plex_watch_history_shows')
     @patch('recommenders.tv.get_plex_account_ids')
     @patch('recommenders.tv.ShowCache')
     @patch('recommenders.base.init_plex')
@@ -884,7 +917,7 @@ class TestPlexTVRecommenderPlexAccountIds:
     @patch('recommenders.base.get_tmdb_config')
     @patch('recommenders.base.load_config')
     @patch('os.makedirs')
-    def test_get_plex_account_ids_calls_utility(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_get_ids):
+    def test_get_plex_account_ids_calls_utility(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_get_ids, mock_history, mock_completion):
         """Test that _get_plex_account_ids uses utility function."""
         mock_load.return_value = {
             'plex': {'url': 'http://localhost', 'token': 'abc'},
@@ -900,6 +933,16 @@ class TestPlexTVRecommenderPlexAccountIds:
         mock_plex.return_value = mock_plex_inst
         mock_cache.return_value = Mock(cache={'shows': {}})
         mock_get_ids.return_value = {'user1': '12345'}
+        # get_plex_account_ids returning a truthy value above means __init__'s
+        # own eager watched-data gather (_get_plex_watched_shows_data) takes
+        # the "found accounts" branch and calls both of these too - mock
+        # them so neither reaches the real network (see
+        # _no_real_plex_watched_lookups in this file for why that matters).
+        # fetch_show_completion_data in particular runs unconditionally
+        # whenever negative_signals.dropped_shows is enabled (the default),
+        # regardless of whether any shows were actually watched.
+        mock_history.return_value = (set(), {})
+        mock_completion.return_value = {}
 
         recommender = PlexTVRecommender('/path/to/config.yml')
         result = recommender._get_plex_account_ids()

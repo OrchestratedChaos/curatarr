@@ -2,6 +2,38 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.1] - 2026-07-25
+
+### Fixed
+
+- **Test suite leaked real network connections.** `tests/test_movie.py`
+  and `tests/test_tv.py` construct `PlexMovieRecommender`/
+  `PlexTVRecommender` in most of their tests; construction eagerly
+  gathers watched-history data, and several of the utility calls in
+  that path (`get_watched_movie_count`/`get_watched_show_count`,
+  `get_plex_account_ids`, `fetch_show_completion_data`) weren't mocked
+  in most tests - so the suite was making real HTTPS calls to `plex.tv`
+  and real HTTP calls to whatever `plex.url` happened to be in the
+  test's fake config (usually `http://localhost`). Traced by
+  instrumenting `socket.socket.connect`. Beyond the token/network
+  leakage itself, an unreachable/slow real connect turns into a hang -
+  observed once as a 24-minute CI run that an identical re-run of the
+  same commit completed in 1m35s. Both files now default those calls to
+  their "nothing reachable" return values via a file-scoped autouse
+  fixture; tests that care about the specific behavior continue to
+  patch it themselves, same as before. The same unmocked-real-call
+  pattern (relying on a real request failing a particular way rather
+  than mocking it) was also found and fixed in three
+  `tests/test_trakt.py` "not authenticated" tests and three
+  `tests/test_external.py` tests reaching TMDB/Trakt for real.
+- **Added a suite-wide regression guard** (`tests/conftest.py`) that
+  blocks any `socket.connect()` to a non-loopback address during the
+  test run and raises immediately with the offending host in the
+  message, so a future accidental network call fails loudly and
+  instantly instead of silently leaking or hanging. Loopback
+  (`127.0.0.1`/`::1`/`localhost`) is still permitted, for the couple of
+  tests that legitimately bind and poll a real local server socket.
+
 ## [2.10.0] - 2026-07-25
 
 This release also carries the `scripts/release.sh` /
