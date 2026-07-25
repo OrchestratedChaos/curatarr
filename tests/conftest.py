@@ -1,13 +1,79 @@
 """Shared fixtures for the whole tests/ suite (web/ Flask UI fixtures,
-plus a couple of suite-wide safety nets - see _no_real_update_check_network
-and _isolated_update_dismissal_dir below)."""
+plus a couple of suite-wide safety nets - see _no_real_update_check_network,
+_isolated_update_dismissal_dir, and _block_non_loopback_sockets below)."""
 
 import os
+import socket as _socket_module
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _is_loopback_address(address) -> bool:
+    """True if a socket.connect() address targets only this machine.
+
+    address is whatever was passed to socket.socket.connect() - for
+    AF_INET it's (host, port), for AF_INET6 it's (host, port, flowinfo,
+    scopeid), for AF_UNIX it's a path string (not a network egress at
+    all, so always allowed). By the time a real network stack call
+    reaches .connect(), the host is normally already a resolved IP
+    (requests/urllib3 resolve via getaddrinfo first), but 'localhost' is
+    allowed too for anything that connects before resolving.
+    """
+    if not isinstance(address, tuple) or not address:
+        return True
+    host = address[0]
+    if isinstance(host, bytes):
+        host = host.decode('ascii', 'ignore')
+    host = str(host)
+    return host in ('127.0.0.1', '::1', 'localhost') or host.startswith('127.')
+
+
+@pytest.fixture(autouse=True)
+def _block_non_loopback_sockets(monkeypatch):
+    """Suite-wide regression guard for tests/test_movie.py's and
+    tests/test_tv.py's network leak (PlexMovieRecommender/PlexTVRecommender
+    construction reaching real plex.tv / TMDB / etc. via unmocked
+    utils/plex.py calls - see _no_real_plex_watched_lookups in those two
+    files for the specific fix). That leak was traced by instrumenting
+    socket.socket.connect and observing real outbound TCP attempts from
+    otherwise fully-mocked tests; a runaway connect attempt like that can
+    silently leak the test runner's network position (and a real Plex
+    token, if one happens to be set in the environment) at best, and
+    hang CI for many minutes at worst (observed once: a 24-minute hang
+    that an identical re-run of the same commit did not reproduce,
+    because whether the outbound connect fails fast or hangs depends on
+    the runner's network egress policy, not on the test itself).
+
+    Patches socket.socket.connect (the single choke point every TCP
+    connection - direct socket use, socket.create_connection(), and
+    therefore urllib3/requests - eventually goes through) to allow
+    127.0.0.1/::1/localhost (loopback - e.g. tests/test_web_routes.py's
+    TestWaitForListening/TestBindRetry classes, which bind a real local
+    server socket and poll it) and raise immediately, with the offending
+    host in the message, for anything else. A loud, instant,
+    self-diagnosing failure instead of a silent leak or a multi-minute
+    hang - any test that legitimately needs to reach a real non-loopback
+    host must mock the call instead (mirroring the rest of this suite's
+    existing convention of mocking requests.get/MyPlexAccount/etc. rather
+    than hitting the network for real).
+    """
+    real_connect = _socket_module.socket.connect
+
+    def _guarded_connect(self, address, *args, **kwargs):
+        if not _is_loopback_address(address):
+            raise AssertionError(
+                f"Blocked outbound network connect attempt to {address!r} during "
+                "test run - tests must mock all real network calls (Plex, TMDB, "
+                "GitHub, etc.) rather than reach the network. If this is a "
+                "legitimate local-server test, it must connect to "
+                "127.0.0.1/::1/localhost only."
+            )
+        return real_connect(self, address, *args, **kwargs)
+
+    monkeypatch.setattr(_socket_module.socket, 'connect', _guarded_connect)
 
 
 @pytest.fixture(autouse=True)
