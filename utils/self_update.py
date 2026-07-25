@@ -589,16 +589,41 @@ def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asse
     module's docstring and download_and_verify_update.
     """
     try:
-        with open(sums_path, 'r', encoding='utf-8') as f:
-            sums_text = f.read()
-        with open(sig_path, 'r', encoding='utf-8') as f:
-            sig_text = f.read()
+        # 'rb', not 'r' - the signature is over the EXACT bytes that were
+        # signed, and text-mode reads apply Python's universal-newline
+        # translation (any \r\n or bare \r silently becomes \n) before we
+        # ever see the content. A published SHA256SUMS.txt containing so
+        # much as one CRLF line ending (observed in practice on the
+        # Windows binary's checksum line - the sidecar that job writes
+        # is CRLF, and finalize-checksums' aggregation carries that
+        # through - see .github/workflows/release.yml) would then get
+        # hashed as a DIFFERENT byte sequence than what
+        # scripts/sign-release-checksums.sh actually signed, and
+        # signature verification would fail for every self-update - not
+        # a corrupted download, not a bad key, just this file being
+        # decoded before its signature was checked. Decoding to text
+        # (below) only happens AFTER verify_pinned_signature() has
+        # already proven these exact bytes are the ones that were
+        # signed - line-ending differences in the now-trusted text are
+        # harmless from here on, since parse_sha256sums()/
+        # parse_sha256sums_version() both use str.strip()/splitlines(),
+        # which already treat \r\n, \r, and \n as equivalent.
+        with open(sums_path, 'rb') as f:
+            sums_bytes = f.read()
+        with open(sig_path, 'rb') as f:
+            sig_bytes = f.read()
     except OSError as e:
         # Missing/unreadable either file (e.g. the .sig never got
         # downloaded/published at all) is exactly as fail-closed as a
         # signature that doesn't verify - never fall through and treat
         # "we don't have a signature" as "unsigned is fine".
         raise SignatureVerificationError(f"Could not read checksum/signature files: {e}") from e
+
+    # The armor is plain ASCII (BEGIN/END markers + base64 body) - _decode_armor
+    # strips whitespace per line regardless, so decoding this one to text
+    # (unlike sums_bytes above) has no bytes-vs-signature implication; it's
+    # only ever parsed, never itself hashed or compared byte-for-byte.
+    sig_text = sig_bytes.decode('utf-8')
 
     # Authenticity FIRST: SHA256SUMS.txt was just downloaded over
     # anonymous HTTPS and is no more trustworthy than the asset itself
@@ -607,9 +632,12 @@ def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asse
     # attacker able to substitute the asset could trivially also
     # substitute a matching-but-unsigned (or unsigned-differently) sums
     # file, so checking the hash before the signature would verify
-    # nothing.
-    verify_pinned_signature(sums_text.encode('utf-8'), sig_text)
+    # nothing. Verified against the RAW bytes read above - never a
+    # decode()/encode() round trip, so there is no representation of
+    # this content that could differ from what was actually signed.
+    verify_pinned_signature(sums_bytes, sig_text)
 
+    sums_text = sums_bytes.decode('utf-8')
     sums = parse_sha256sums(sums_text)
     expected = sums.get(asset_name)
     if not expected:
