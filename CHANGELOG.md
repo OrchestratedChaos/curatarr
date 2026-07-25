@@ -2,6 +2,67 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.4] - 2026-07-25
+
+### Fixed
+
+- **`curatarr_app.py` imported the web UI (`from web.app import main`) at
+  module level, unconditionally, before any argv dispatch.** A
+  CLI/cron-only source install - `pip install --require-hashes -r
+  requirements.lock`, which `requirements.txt`'s own header states is
+  sufficient, with UI-only deps deliberately split into
+  `requirements-ui.txt`/`.lock` so "a plain CLI/cron update never pulls
+  in the heavier UI stack" - had no `flask` installed, so **every**
+  invocation (`--version`, `--run-recommender`, everything) died with
+  `ModuleNotFoundError: No module named 'flask'` before reaching any
+  dispatch logic. Reproduced with a fresh venv + hash-verified
+  `requirements.lock`-only install.
+  The import is now deferred to `_launch_web_ui()`, reached only by the
+  actual web-UI launch path, and a CLI-only invocation that does hit it
+  (running the exe with no flags and no `requirements-ui.txt` installed)
+  now gets one clear, actionable message pointing at
+  `requirements-ui.txt` instead of a raw traceback. Still a plain
+  function-scoped `from web.app import main` (not `importlib`/
+  `__import__`), so PyInstaller's static import analysis still bundles
+  it into the standalone binary - confirmed via a real local build per
+  `docs/BINARIES.md`.
+
+- **In-binary self-update was completely broken since at least v2.9.2 -
+  every self-update attempt failed with `SSH signature does not verify
+  against the pinned release-signing key`, even though the release
+  itself was correctly signed.** Root cause:
+  `utils/self_update.py::verify_downloaded_asset()` read
+  `SHA256SUMS.txt` in **text mode**, which silently strips any `\r` via
+  Python's universal-newline translation; the published file's Windows
+  binary checksum line contained a CRLF line ending (the "Rename binary
+  and compute SHA256" step in `.github/workflows/release.yml` wrote it
+  with a plain text-mode `open(..., 'w')`, which turns `\n` into
+  `os.linesep` - `\r\n` - on the `windows-latest` runner), so the bytes
+  actually hashed for verification differed from the bytes
+  `scripts/sign-release-checksums.sh` had signed. Confirmed by
+  downloading the real published `SHA256SUMS.txt` for v2.9.2, v2.10.0,
+  and v2.10.2: all three contain a CRLF line ending on exactly that
+  line. Fixed on both ends:
+  - **Client**: `verify_downloaded_asset()` now reads `SHA256SUMS.txt`
+    and `SHA256SUMS.txt.sig` in binary mode and verifies the signature
+    against the exact bytes on disk - never a decoded/re-encoded
+    representation of them. This fixes every already-installed binary
+    the next time it attempts a self-update.
+  - **Release workflow**: the Windows `.sha256` sidecar is now written
+    with `newline='\n'` (no more CRLF at the source), and
+    `finalize-checksums` additionally strips any stray `\r` when
+    aggregating and fails the build if the published `SHA256SUMS.txt`
+    isn't LF-only - defense in depth, not just a fix at the one
+    location this was traced to.
+  Existing installs affected by this could not have self-updated to any
+  version before this fix landed; once v2.10.4 is published (and its own
+  `SHA256SUMS.txt` is confirmed LF-only), self-update resumes working
+  for them.
+
+Note: `2.10.1` and `2.10.3` (both above) landed on `main` but were never
+cut as their own published release/tag - their changes ship for the
+first time as part of this `2.10.4` release.
+
 ## [2.10.3] - 2026-07-25
 
 ### Fixed

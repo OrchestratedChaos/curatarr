@@ -25,6 +25,7 @@ and _configure_windowed_launch()'s not-frozen/not-Windows no-op guard.
 
 import os
 import runpy
+import subprocess
 import sys
 from unittest.mock import Mock, patch
 
@@ -34,10 +35,15 @@ import curatarr_app
 
 
 class TestCuratarrApp:
-    def test_imports_main_from_web_app(self):
-        """curatarr_app.main is the same function web.app.main() is."""
-        from web.app import main as web_app_main
-        assert curatarr_app.main is web_app_main
+    def test_launch_web_ui_imports_and_calls_web_app_main(self):
+        """_launch_web_ui() is the only place in this module that
+        imports web.app.main - deliberately deferred here (not at
+        module level, see this module's docstring and
+        _launch_web_ui's own) so CLI/cron-only paths (--version,
+        --run-recommender, --self-update) never need flask installed."""
+        with patch('web.app.main') as mock_main:
+            curatarr_app._launch_web_ui()
+        mock_main.assert_called_once_with()
 
     @patch('web.app.main')
     def test_running_as_script_calls_main(self, mock_main):
@@ -45,6 +51,80 @@ class TestCuratarrApp:
         calls main() exactly once, matching run-ui.sh / run-ui.ps1."""
         runpy.run_module('curatarr_app', run_name='__main__')
         mock_main.assert_called_once_with()
+
+
+class TestCliPathsDontNeedFlask:
+    """Regression coverage for the CLI-only-install bug fixed alongside
+    _launch_web_ui() (v2.10.4): `curatarr_app.py` used to do
+    `from web.app import main` at module level, unconditionally, before
+    any argv dispatch - so a CLI/cron-only install (`pip install -r
+    requirements.lock` per requirements.txt's own header, deliberately
+    without requirements-ui.txt/.lock's flask) died with
+    `ModuleNotFoundError: No module named 'flask'` on *every* invocation,
+    including `--version` and `--run-recommender`, neither of which
+    touch the web UI.
+
+    Run in a real subprocess with a meta path finder that makes
+    `import flask` raise ModuleNotFoundError, the same failure shape a
+    genuine CLI-only install (flask never pip-installed at all) hits -
+    proving these paths don't merely avoid *calling* flask code but
+    never attempt to import it in the first place. An in-process
+    `sys.modules` check can't do this reliably in a full suite run: other
+    test modules (test_web_*.py) import flask/web.app first and leave
+    them cached in sys.modules for the rest of the session regardless of
+    import order.
+    """
+
+    _BLOCK_FLASK = (
+        "import sys\n"
+        "class _BlockFlask:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'flask' or name.startswith('flask.'):\n"
+        "            raise ModuleNotFoundError(f'blocked for test: {name}', name=name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _BlockFlask())\n"
+    )
+
+    def _run(self, extra_argv):
+        repo_root = os.path.dirname(os.path.abspath(curatarr_app.__file__))
+        script = (
+            self._BLOCK_FLASK
+            + f"sys.argv = ['curatarr_app.py'] + {extra_argv!r}\n"
+            + "import runpy\n"
+            + "runpy.run_path('curatarr_app.py', run_name='__main__')\n"
+        )
+        return subprocess.run(
+            [sys.executable, '-c', script],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_version_flag_succeeds_with_flask_unimportable(self):
+        result = self._run(['--version'])
+        from utils.config import __version__
+        assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        assert result.stdout.strip() == __version__
+
+    def test_run_recommender_dispatch_does_not_need_flask(self):
+        """Only checks dispatch reaches _run_one_recommender without
+        ModuleNotFoundError on flask - the unknown-engine branch exits
+        (2) before touching Plex/network, keeping this a fast,
+        deterministic subprocess check."""
+        result = self._run(['--run-recommender', 'bogus'])
+        assert result.returncode == 2, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        assert 'ModuleNotFoundError' not in result.stderr
+        assert 'flask' not in result.stderr.lower()
+
+    def test_normal_launch_gives_actionable_error_not_a_traceback(self):
+        """The no-flag (web UI) launch path DOES need flask - but a
+        CLI-only install missing it must get one clear, actionable
+        message pointing at requirements-ui.txt, never a raw
+        ModuleNotFoundError traceback."""
+        result = self._run([])
+        assert result.returncode == 2, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        assert 'requirements-ui.txt' in result.stderr
+        assert 'Traceback' not in result.stderr
 
 
 class TestDispatchViaRunpy:

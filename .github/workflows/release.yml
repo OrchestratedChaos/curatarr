@@ -237,7 +237,15 @@ jobs:
           with open(path, 'rb') as f:
               for chunk in iter(lambda: f.read(1 << 20), b''):
                   h.update(chunk)
-          with open(path + '.sha256', 'w') as out:
+          # newline='\n' - without it, Python's default text-mode write
+          # translates \n to os.linesep, which is \r\n on windows-latest
+          # (the only OS in this matrix where the two differ). That CRLF
+          # then survives finalize-checksums' plain cat/sort verbatim
+          # into the published aggregate SHA256SUMS.txt, which no longer
+          # byte-matches what scripts/sign-release-checksums.sh signs -
+          # breaking utils/self_update.py's signature verification for
+          # every self-update (see that fix's CHANGELOG entry).
+          with open(path + '.sha256', 'w', newline='\n') as out:
               out.write(f'{h.hexdigest()}  {path}\n')
           "
           cat "$ASSET_NAME.sha256"
@@ -318,8 +326,15 @@ jobs:
 
           # Sorted + de-duplicated so re-running this job (e.g. a re-run
           # of a flaky matrix job) is idempotent rather than appending
-          # duplicate lines.
-          cat checksums/SHA256SUMS.txt checksums/*.sha256 | sort -u -k2 > SHA256SUMS.body.txt
+          # duplicate lines. `tr -d '\r'` strips any stray CR before
+          # sorting - defense in depth on top of the "Rename binary and
+          # compute SHA256" step's own newline='\n' fix above, in case a
+          # future change (or a differently-behaving runner) reintroduces
+          # one: the aggregate published here is exactly what
+          # scripts/sign-release-checksums.sh signs, so even one CR
+          # anywhere in it breaks utils/self_update.py's signature
+          # verification for every self-update, not just cosmetically.
+          cat checksums/SHA256SUMS.txt checksums/*.sha256 | tr -d '\r' | sort -u -k2 > SHA256SUMS.body.txt
 
           # A leading `# curatarr-version: X.Y.Z` comment line - inside
           # the file this whole workflow's later offline signing step
@@ -352,6 +367,20 @@ jobs:
               exit 1
             }
           done
+
+          # Regression guard for the CRLF signature-verification outage
+          # (see this fix's CHANGELOG entry): fail the build, not just a
+          # future self-update, if a CR ever makes it into the file this
+          # job publishes. Checked via file(1)'s own report rather than
+          # grepping for a raw \r byte directly - portable and avoids any
+          # grep-implementation-specific newline handling.
+          FILE_REPORT="$(file SHA256SUMS.txt)"
+          echo "file(1): $FILE_REPORT"
+          if printf '%s' "$FILE_REPORT" | grep -q CRLF; then
+            echo "::error::SHA256SUMS.txt contains a carriage return - this breaks utils/self_update.py's byte-exact signature verification for every client."
+            exit 1
+          fi
+          echo "Confirmed: SHA256SUMS.txt is LF-only."
 
       - name: Upload the aggregate SHA256SUMS.txt
         shell: bash

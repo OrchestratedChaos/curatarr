@@ -434,11 +434,17 @@ class TestVerifyDownloadedAsset:
         if version_line is not None:
             sums_text += f"# curatarr-version: {version_line}\n"
         sums_text += f"{digest}  {self.ASSET_NAME}\n"
+        sums_bytes = sums_text.encode('utf-8')
         sums_path = tmp_path / 'SHA256SUMS.txt'
-        sums_path.write_text(sums_text, encoding='utf-8')
-        sig_text = _sign(signing_key['key_path'], sums_text.encode('utf-8'), tmp_path)
+        # write_bytes(), not write_text() - write_text() applies the same
+        # os.linesep newline translation on write that verify_downloaded_
+        # asset's CRLF fix exists to be immune to on read: on Windows it
+        # would turn every \n here into \r\n on disk, no longer
+        # byte-identical to what actually gets signed on the next line.
+        sums_path.write_bytes(sums_bytes)
+        sig_text = _sign(signing_key['key_path'], sums_bytes, tmp_path)
         sig_path = tmp_path / 'SHA256SUMS.txt.sig'
-        sig_path.write_text(sig_text, encoding='utf-8')
+        sig_path.write_bytes(sig_text.encode('utf-8'))
         return str(asset_path), str(sums_path), str(sig_path)
 
     def test_passes_end_to_end(self, tmp_path, signing_key, monkeypatch):
@@ -509,6 +515,77 @@ class TestVerifyDownloadedAsset:
         assert digest == expected
 
 
+class TestVerifyDownloadedAssetCRLFSignedContent:
+    """Regression coverage for the v2.10.4 self-update outage: every
+    published SHA256SUMS.txt (v2.9.2 through v2.10.2, confirmed via
+    `file` on the real downloaded releases) contained a CRLF line
+    ending on the Windows binary's checksum line - the "Rename binary
+    and compute SHA256" step's `open(..., 'w')` used Python's default
+    text-mode write, which translates \\n to os.linesep (\\r\\n) on
+    windows-latest (see .github/workflows/release.yml). Reading that
+    same file back in text mode (the pre-fix
+    verify_downloaded_asset) silently strips the \\r on ANY platform
+    (Python's universal-newline translation isn't OS-specific on the
+    read side), producing a different byte sequence than what
+    scripts/sign-release-checksums.sh actually signed - so every
+    self-update, on every platform, failed
+    SignatureVerificationError."""
+
+    ASSET_NAME = 'curatarr-windows-x86_64.exe'
+
+    def test_text_mode_read_diverges_from_the_bytes_on_disk(self, tmp_path):
+        """Dependency-free proof of the underlying discrepancy (doesn't
+        need ssh-keygen): a file written with a CRLF line ending, read
+        back in text mode and re-encoded, is NOT the same bytes as what
+        was actually written to disk - i.e. no signature computed over
+        one could ever validate against the other."""
+        sums_bytes = b"abc123  " + self.ASSET_NAME.encode('ascii') + b"\r\n"
+        sums_path = tmp_path / 'SHA256SUMS.txt'
+        sums_path.write_bytes(sums_bytes)
+
+        with open(sums_path, 'r', encoding='utf-8') as f:
+            text_mode_reencoded = f.read().encode('utf-8')
+        with open(sums_path, 'rb') as f:
+            binary_mode = f.read()
+
+        assert binary_mode == sums_bytes
+        assert text_mode_reencoded != sums_bytes
+
+    @requires_ssh_keygen
+    def test_verify_downloaded_asset_succeeds_against_a_crlf_signed_file(self, tmp_path, signing_key, monkeypatch):
+        """The actual regression test: sign bytes that ALREADY contain a
+        CRLF line ending (matching the real published files, not a
+        CRLF introduced after signing), write those exact bytes to
+        disk, and confirm verify_downloaded_asset - reading the file in
+        binary mode - still verifies successfully."""
+        monkeypatch.setattr(self_update, '_pinned_public_key', lambda: signing_key['public_key'])
+
+        asset_path = tmp_path / self.ASSET_NAME
+        asset_path.write_bytes(b'fake windows binary bytes')
+        digest = self_update.sha256_file(str(asset_path))
+
+        # Same shape as the real published files: one LF-only entry,
+        # then the Windows asset's line terminated with CRLF - and the
+        # CR is present in what actually gets signed below, not added
+        # afterward.
+        sums_bytes = (
+            b"# curatarr-version: 9.9.9\n"
+            + (b"deadbeef" * 8) + b"  curatarr-linux-x86_64\n"
+            + digest.encode('ascii') + b"  " + self.ASSET_NAME.encode('ascii') + b"\r\n"
+        )
+        sums_path = tmp_path / 'SHA256SUMS.txt'
+        sums_path.write_bytes(sums_bytes)
+
+        sig_text = _sign(signing_key['key_path'], sums_bytes, tmp_path)
+        sig_path = tmp_path / 'SHA256SUMS.txt.sig'
+        sig_path.write_bytes(sig_text.encode('utf-8'))
+
+        result_digest = self_update.verify_downloaded_asset(  # must not raise
+            str(asset_path), str(sums_path), str(sig_path), self.ASSET_NAME, target_version='9.9.9',
+        )
+        assert result_digest == digest
+
+
 class TestVerifyDownloadedAssetVersionBinding:
     """FIX 17: the version NUMBER itself is bound to the same signature
     that already covers every asset hash (see .github/workflows/
@@ -526,11 +603,17 @@ class TestVerifyDownloadedAssetVersionBinding:
         if version_line is not None:
             sums_text += f"# curatarr-version: {version_line}\n"
         sums_text += f"{digest}  {self.ASSET_NAME}\n"
+        sums_bytes = sums_text.encode('utf-8')
         sums_path = tmp_path / 'SHA256SUMS.txt'
-        sums_path.write_text(sums_text, encoding='utf-8')
-        sig_text = _sign(signing_key['key_path'], sums_text.encode('utf-8'), tmp_path)
+        # write_bytes(), not write_text() - write_text() applies the same
+        # os.linesep newline translation on write that verify_downloaded_
+        # asset's CRLF fix exists to be immune to on read: on Windows it
+        # would turn every \n here into \r\n on disk, no longer
+        # byte-identical to what actually gets signed on the next line.
+        sums_path.write_bytes(sums_bytes)
+        sig_text = _sign(signing_key['key_path'], sums_bytes, tmp_path)
         sig_path = tmp_path / 'SHA256SUMS.txt.sig'
-        sig_path.write_text(sig_text, encoding='utf-8')
+        sig_path.write_bytes(sig_text.encode('utf-8'))
         return str(asset_path), str(sums_path), str(sig_path)
 
     def test_matching_version_line_passes(self, tmp_path, signing_key, monkeypatch):

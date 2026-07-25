@@ -7,6 +7,13 @@ install, so the binary and the source-install web UI stay identical in
 behavior. All UI logic lives in web/app.py - keep it that way rather
 than adding anything here.
 
+`from web.app import main` is deferred to inside _launch_web_ui(),
+reached only by the no-flag launch path below, rather than imported at
+module level - a CLI/cron-only source install (requirements.txt, no
+requirements-ui.txt - see that file's header) never has flask
+installed, and every other flag (--version, --run-recommender,
+--self-update, --self-update-worker) needs to keep working without it.
+
 Where a packaged binary reads/writes config/cache/logs: see
 utils.helpers.get_project_root() - when running frozen (this file,
 built by PyInstaller), that resolves to a per-user data directory
@@ -75,8 +82,6 @@ import ctypes
 import logging
 import os
 import sys
-
-from web.app import main
 
 
 def _suppress_windows_crash_dialogs() -> None:  # pragma: no cover - real Windows API call, same category as _attach_or_setup_console below (not unit-testable on non-Windows CI)
@@ -250,6 +255,46 @@ def _run_self_update_cli() -> None:
     print(f"curatarr: updated to v{applied_version} - run curatarr again to use it.")
 
 
+def _launch_web_ui() -> None:
+    """Import and call web.app.main() - the normal (no-flag) launch path.
+
+    The import is deliberately deferred to here, inside a function, and
+    only reached by the final `else` branch of the dispatch below - NOT
+    at module level - so that `--version`, `--run-recommender`,
+    `--self-update`, and `--self-update-worker` never pull in the web
+    UI's stack (flask et al.) at all. Those are the paths a CLI/cron-only
+    source install (requirements.txt, no requirements-ui.txt - see that
+    file's header) actually uses; requiring flask just to import this
+    module made every one of them fail with a raw ModuleNotFoundError
+    even though none of them touch the UI.
+
+    Still a plain `from web.app import main` (not `importlib`/
+    `__import__`) so PyInstaller's static AST-walking import analysis
+    still discovers it for the frozen binary build - see this module's
+    docstring and _run_one_recommender's, and curatarr.spec's
+    hiddenimports, which lists flask/jinja2/werkzeug explicitly as
+    defense in depth regardless.
+    """
+    try:
+        from web.app import main
+    except ModuleNotFoundError as e:
+        if e.name is not None and (e.name == 'flask' or e.name.startswith('flask.')):
+            print(
+                "curatarr: the web UI needs additional dependencies that "
+                "aren't installed (flask and friends).\n"
+                "curatarr: install them with: pip install -r requirements-ui.txt\n"
+                "curatarr: (or use requirements-ui.lock for a hash-verified "
+                "install - see run-ui.sh/run-ui.ps1)\n"
+                "curatarr: for CLI/cron-only use, no extra install is needed - "
+                "run a recommender directly instead:\n"
+                "curatarr:   curatarr --run-recommender <movie|tv|external|full> [user]",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        raise
+    main()
+
+
 def _dispatch_recommender(argv: list) -> None:
     """argv is sys.argv[2:], e.g. ['movie', 'alice'] or ['external'] or
     ['full']. See the module docstring above for why this exists."""
@@ -316,4 +361,4 @@ if __name__ == '__main__':
             from utils.self_update import cleanup_stale_old_binary
             cleanup_stale_old_binary()
         _configure_windowed_launch()
-        main()
+        _launch_web_ui()
