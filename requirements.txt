@@ -59,4 +59,4 @@ pyyaml==6.0.3
 # between 48.0.1 and 49.0.0 (checked pyca/cryptography's GHSA
 # advisories directly). Bump only alongside re-verifying PyPI still
 # publishes a macOS universal2 wheel for the target version.
-cryptography==48.0.1
+cryptography==49.0.0
