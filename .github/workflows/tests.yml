@@ -83,7 +83,19 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            git fetch origin "$PR_BASE_REF" --depth=1
+            # No --depth here: the checkout step above already used
+            # fetch-depth: 0 (full history), so this is just an
+            # incremental fetch of any new commits on the base branch,
+            # not an expensive full re-fetch. A shallow (--depth=1)
+            # fetch of a base ref that's already an ancestor of HEAD
+            # through a full-history checkout (e.g. after a PR branch
+            # is updated with a merge of main) plants a shallow-graft
+            # boundary that stops rev-list's UNINTERESTING propagation
+            # at that commit, making `origin/main..HEAD` spuriously
+            # include the base branch's entire prior history instead of
+            # just the PR's own commits - which then makes gitleaks
+            # scan (and can flag) history that already exists on main.
+            git fetch origin "$PR_BASE_REF"
             echo "range=origin/${PR_BASE_REF}..HEAD" >> "$GITHUB_OUTPUT"
           else
             if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
