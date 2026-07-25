@@ -138,11 +138,11 @@ negative_signals:
 # These override global settings for specific users
 users:
   preferences:
-    # jasonsmith523:
-    #   display_name: Jason
+    # testuser_alpha:
+    #   display_name: Alpha
     #   # no max_rating = no filtering
-    # homehouse165:
-    #   display_name: Home
+    # testuser_charlie:
+    #   display_name: Charlie
     #   max_rating: PG-13  # filters out R, NC-17
     # kid_account:
     #   display_name: Kid

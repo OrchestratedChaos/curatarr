@@ -166,12 +166,12 @@ class TestTrakt:
                 pass
 
             def get_username(self):
-                return 'jasonsmith523'
+                return 'testuser_alpha'
 
         monkeypatch.setattr(cc, 'TraktClient', _FakeClient)
         result = cc.test_trakt('cid', 'csecret', 'atoken', 'rtoken')
         assert result['ok'] is True
-        assert 'jasonsmith523' in result['message']
+        assert 'testuser_alpha' in result['message']
 
     def test_expired_token_fails(self, monkeypatch):
         class _FakeClient:

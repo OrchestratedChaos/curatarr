@@ -241,16 +241,16 @@ class TestMapUsers:
         assert result == {'1': '501'}
 
     def test_falls_back_to_username_when_no_email_match(self):
-        plex_identities = [{'id': '2', 'username': 'ericarutyunov', 'email': None}]
-        tautulli_users = [{'user_id': 502, 'username': 'ericarutyunov', 'email': 'someone-else@example.com'}]
+        plex_identities = [{'id': '2', 'username': 'testuser_bravo', 'email': None}]
+        tautulli_users = [{'user_id': 502, 'username': 'testuser_bravo', 'email': 'someone-else@example.com'}]
 
         result = map_users(plex_identities, tautulli_users)
 
         assert result == {'2': '502'}
 
     def test_falls_back_to_friendly_name(self):
-        plex_identities = [{'id': '3', 'username': 'homehouse165', 'email': None}]
-        tautulli_users = [{'user_id': 503, 'username': 'random_login', 'friendly_name': 'homehouse165', 'email': None}]
+        plex_identities = [{'id': '3', 'username': 'testuser_charlie', 'email': None}]
+        tautulli_users = [{'user_id': 503, 'username': 'random_login', 'friendly_name': 'testuser_charlie', 'email': None}]
 
         result = map_users(plex_identities, tautulli_users)
 
