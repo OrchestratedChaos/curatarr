@@ -10,7 +10,9 @@ import plexapi.exceptions
 from unittest.mock import Mock, patch, MagicMock
 from collections import Counter
 
+import recommenders.base as base_module
 from recommenders.base import BaseCache, BaseRecommender
+from utils.helpers import get_project_root
 
 
 class ConcreteCache(BaseCache):
@@ -538,6 +540,170 @@ class TestBaseRecommenderInit:
         recommender = BadWeightsRecommender('/path/to/config.yml')
 
         mock_warn.assert_called()
+
+
+class TestBaseRecommenderCacheDirResolution:
+    """Tests for BaseRecommender's cache_dir setup (recommenders/base.py).
+
+    Prior to 2.10.3 this was computed relative to base.py's own
+    __file__, bypassing get_project_root() entirely - meaning it ignored
+    CURATARR_CONFIG_DIR (Docker) and, for a frozen binary, resolved
+    inside the PyInstaller temp unpack dir that's deleted on exit. These
+    tests cover the fix: cache_dir must go through get_project_root(),
+    same as utils/cli.py and recommenders/external.py, honoring both
+    that override and the config-level 'cache_dir' override.
+
+    get_project_root() is @lru_cache(maxsize=1), so tests that rely on
+    the real (unmocked) function clear its cache before/after - same
+    convention as TestGetProjectRoot in tests/test_helpers.py.
+    """
+
+    def setup_method(self):
+        get_project_root.cache_clear()
+
+    def teardown_method(self):
+        get_project_root.cache_clear()
+
+    @patch('recommenders.base.migrate_legacy_cache_dir')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_cache_dir_honors_config_dir_env_override(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_migrate,
+        tmp_path, monkeypatch,
+    ):
+        """CURATARR_CONFIG_DIR (Docker) must be honored by cache_dir,
+        not just the fixed default of a directory next to base.py."""
+        override = str(tmp_path / "data")
+        monkeypatch.setenv('CURATARR_CONFIG_DIR', override)
+
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.5, 'actor': 0.5},
+        }
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender('/path/to/config.yml')
+
+        assert recommender.cache_dir == os.path.join(override, 'cache')
+
+    @patch('recommenders.base.migrate_legacy_cache_dir')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_cache_dir_config_override_relative_name(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_migrate,
+    ):
+        """config.yml's cache_dir: <relative subdir name> is joined onto
+        the resolved project root, matching external.py's own handling."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.5, 'actor': 0.5},
+            'cache_dir': 'my_custom_cache',
+        }
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        with patch('recommenders.base.get_project_root', return_value=os.path.join('C:\\', 'project', 'root')):
+            recommender = ConcreteRecommender('/path/to/config.yml')
+
+        assert recommender.cache_dir == os.path.join('C:\\', 'project', 'root', 'my_custom_cache')
+
+    @patch('recommenders.base.migrate_legacy_cache_dir')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_cache_dir_config_override_absolute_path(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_migrate, tmp_path,
+    ):
+        """config.yml's cache_dir: <absolute path> is used verbatim -
+        os.path.join() discards the project root when the second
+        component is already absolute, so this must NOT get nested
+        under the resolved project root."""
+        absolute_cache_dir = str(tmp_path / "abs_cache")
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.5, 'actor': 0.5},
+            'cache_dir': absolute_cache_dir,
+        }
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        with patch('recommenders.base.get_project_root', return_value=os.path.join('C:\\', 'project', 'root')):
+            recommender = ConcreteRecommender('/path/to/config.yml')
+
+        assert recommender.cache_dir == absolute_cache_dir
+        assert not recommender.cache_dir.startswith(os.path.join('C:\\', 'project', 'root'))
+
+    @patch('recommenders.base.migrate_legacy_cache_dir')
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_cache_dir_defaults_to_cache_subdir(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_migrate,
+    ):
+        """No config-level cache_dir override -> defaults to 'cache' under
+        the resolved project root (unchanged default behavior)."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.5, 'actor': 0.5},
+        }
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        with patch('recommenders.base.get_project_root', return_value=os.path.join('C:\\', 'project', 'root')):
+            recommender = ConcreteRecommender('/path/to/config.yml')
+
+        assert recommender.cache_dir == os.path.join('C:\\', 'project', 'root', 'cache')
+
+    @patch('recommenders.base.init_plex')
+    @patch('recommenders.base.get_configured_users')
+    @patch('recommenders.base.get_tmdb_config')
+    @patch('recommenders.base.load_config')
+    @patch('os.makedirs')
+    def test_init_invokes_legacy_cache_migration(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex,
+    ):
+        """The best-effort legacy-cache-dir migration is invoked once per
+        init with the pre-2.10.3 __file__-relative path and the resolved
+        cache_dir - actual migration behavior is covered separately in
+        tests/test_helpers.py::TestMigrateLegacyCacheDir."""
+        mock_load.return_value = {
+            'plex': {'url': 'http://localhost', 'token': 'abc'},
+            'general': {},
+            'weights': {'genre': 0.5, 'actor': 0.5},
+        }
+        mock_users.return_value = {'plex_users': [], 'managed_users': [], 'admin_user': 'admin'}
+        mock_tmdb.return_value = {'use_keywords': True, 'api_key': 'key'}
+        mock_plex.return_value = Mock()
+
+        expected_legacy_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(base_module.__file__))),
+            'cache',
+        )
+
+        with patch('recommenders.base.get_project_root', return_value=os.path.join('C:\\', 'project', 'root')), \
+             patch('recommenders.base.migrate_legacy_cache_dir') as mock_migrate:
+            recommender = ConcreteRecommender('/path/to/config.yml')
+
+        mock_migrate.assert_called_once_with(expected_legacy_dir, recommender.cache_dir)
 
 
 class TestBaseRecommenderGetUserContext:

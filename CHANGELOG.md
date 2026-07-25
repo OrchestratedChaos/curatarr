@@ -2,6 +2,33 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.3] - 2026-07-25
+
+### Fixed
+
+- **`recommenders/base.py` computed its cache directory relative to its
+  own `__file__` instead of going through `get_project_root()`**, the
+  resolver every other cache/config/log path in the app already uses
+  (`utils/cli.py`, `recommenders/external.py`, `utils/update_check.py`,
+  `utils/update_dismissal.py`, `web/app.py`). Two consequences:
+  - **Docker**: this resolved to `/app/cache`, which `docker-compose.yml`
+    never mounts (it mounts `./cache:/data/cache`, matching the
+    documented `CURATARR_CONFIG_DIR=/data` layout) - so the movie/TV
+    library cache, per-user watched-history cache, and the Trakt/TMDB
+    lookup caches were silently lost on every container recreate.
+    Existing Docker installs will see one slower run while these
+    caches rebuild in the correct, now-persistent location.
+  - **Frozen (PyInstaller) binary**: this resolved inside `sys._MEIPASS`,
+    a temp directory deleted on exit, so these same caches never
+    persisted across runs at all for binary installs. They now persist
+    in the same per-user data directory (`%APPDATA%\curatarr` /
+    `~/.curatarr`) already used for config/logs.
+  Plain source installs without `CURATARR_CONFIG_DIR` set are unaffected
+  - old and new paths were already identical for that case. A source
+    install run with `CURATARR_CONFIG_DIR` set will have its existing
+    cache files moved automatically (best-effort, logged, never blocks
+    a run) from the old repo-relative `cache/` to the correct location.
+
 ## [2.10.2] - 2026-07-25
 
 ### Removed
