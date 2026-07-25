@@ -188,14 +188,23 @@ jobs:
   # requirements.lock/requirements-ui.lock), so this floor is reachable
   # by wheel selection alone - no dependency needs compiling from source
   # to get there (that's the trap that cost Intel macOS support above;
-  # see the paragraph before this one). PyInstaller's own Linux
+  # see the paragraph before this one). A wheel's manylinux TAG is only
+  # what its build environment supports, not necessarily the actual
+  # glibc symbol floor of the compiled code inside it - a real build
+  # showed the manylinux_2_28-tagged `cryptography` wheel this installs
+  # only references glibc symbols up to 2.17 in practice - which is
+  # exactly why the "Assert Linux binary's glibc floor" step below
+  # checks the built binary's actual referenced symbols with `objdump`
+  # rather than trusting any wheel tag. PyInstaller's own Linux
   # bootloader (embedded in every onefile binary it produces) ships as a
-  # `manylinux2014` wheel already, so it was never the constraint.
+  # `manylinux2014` wheel already, so it was never the constraint either.
   # `docker run`'s own `-v "$PWD:/io"` bind mount (not `docker cp`) is
-  # fine here specifically because these are real Linux hosts, not the
-  # virtiofs-backed Colima VM used for local Mac verification (see
-  # docs/BINARIES.md) - that mount quirk doesn't apply to GitHub-hosted
-  # Linux runners.
+  # fine here specifically because these are real Linux hosts with a
+  # normal working directory - not the Colima VM used for local Mac
+  # verification (see docs/BINARIES.md), where `-v` silently mounts an
+  # empty directory for any host path outside Colima's own default
+  # `$HOME`-only share (`/tmp` isn't shared by default), which is what
+  # actually made `docker cp` necessary there, not a virtiofs bug.
   # ---------------------------------------------------------------------
   build-binaries:
     name: Build binary (${{ matrix.asset_name }})
@@ -258,13 +267,31 @@ jobs:
 
       # Linux only (see build-binaries' own comment above for why): both
       # dependency install and the PyInstaller build happen inside the
-      # pinned manylinux container in one `docker run`, using that
-      # image's own baked CPython 3.12 (`/opt/python/cp312-cp312`, built
-      # from source in that same container so it inherits its glibc
-      # floor too - not the runner's system Python). One invocation
-      # rather than two separate steps because each `docker run` starts
-      # a fresh, disposable container - packages `pip install`s in a
-      # first container would not exist in a second one.
+      # pinned manylinux container in one `docker run`. This deliberately
+      # does NOT use the container's own baked `/opt/python/cp312-cp312`
+      # interpreters - confirmed via a real build attempt that every
+      # manylinux-image Python is built `--enable-shared=no` (no
+      # `libpython*.so` at all, only a static `.a`), because manylinux
+      # images exist to build *wheels* (which don't need libpython.so at
+      # wheel-install time), not to embed/freeze a whole interpreter the
+      # way PyInstaller requires - it fails outright with "Python was
+      # built without a shared library". Instead this installs the
+      # AlmaLinux 8 OS-packaged `python3.12`/`python3.12-devel` (`dnf`),
+      # which IS built shared (confirmed: `libpython3.12.so.1.0` present,
+      # `Py_ENABLE_SHARED=1`) and, being built by the same AlmaLinux 8
+      # base this image's manylinux_2_28 spec already requires, carries
+      # the same glibc 2.28 floor - not the runner's newer system Python.
+      # One invocation rather than two separate steps because each
+      # `docker run` starts a fresh, disposable container - packages
+      # `pip install`ed in a first container would not exist in a second
+      # one. Runs as the container's default root (needed for `dnf
+      # install` above) against the bind-mounted checkout, which on a
+      # real (non-rootless) Docker host means everything it writes under
+      # `dist/`/`build/` lands root-owned on the runner's filesystem -
+      # the final `chown -R "$HOST_UID:$HOST_GID"` hands it back to the
+      # actual runner user before the container exits, so the later
+      # "Rename binary and compute SHA256" step (which runs as that
+      # user, not root) can still `mv`/read it.
       - name: Install dependencies and build binary (manylinux container)
         if: matrix.container != ''
         shell: bash
@@ -275,13 +302,17 @@ jobs:
           docker run --rm \
             -v "$PWD:/io" \
             -w /io \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
             "$CONTAINER_IMAGE" \
             bash -c '
               set -euo pipefail
-              PY=/opt/python/cp312-cp312/bin/python3.12
-              "$PY" -m pip install --upgrade pip
-              "$PY" -m pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
+              dnf install -y -q python3.12 python3.12-devel python3.12-pip
+              PY=/usr/bin/python3.12
+              "$PY" -m pip install --quiet --upgrade pip
+              "$PY" -m pip install --quiet --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
               "$PY" -m PyInstaller --clean --noconfirm curatarr.spec
+              chown -R "$HOST_UID:$HOST_GID" /io/dist /io/build
             '
 
       # Regression guard for the glibc-floor fix itself: a future

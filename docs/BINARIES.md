@@ -267,15 +267,25 @@ for x86_64:
 docker run --rm -v "$PWD:/io" -w /io \
   quay.io/pypa/manylinux_2_28_x86_64@sha256:fdb9a9c223b215604dc7b6f7e8fff4b39bfea5fbaa7777a2e5544a60dfa437f8 \
   bash -c '
-    PY=/opt/python/cp312-cp312/bin/python3.12
+    dnf install -y -q python3.12 python3.12-devel python3.12-pip
+    PY=/usr/bin/python3.12
     "$PY" -m pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r build-requirements.lock
     "$PY" -m PyInstaller --clean --noconfirm curatarr.spec
   '
 ```
+
+The `dnf install` step matters: the manylinux image's own baked
+`/opt/python/cp*` interpreters are all built `--enable-shared=no`
+(no `libpython*.so`, only a static `.a`) since manylinux images exist to
+build *wheels*, not to embed a whole interpreter - PyInstaller fails
+outright ("Python was built without a shared library") against them.
+The AlmaLinux 8 OS package is built shared and still carries the same
+glibc 2.28 floor, since it's built by that same AlmaLinux 8 base.
 
 Swap in `quay.io/pypa/manylinux_2_28_aarch64@sha256:e7035406e58d96b7407246af1f6514a3cbd753a0025b42b9adfbeadd3b29ba80`
 for an arm64 build (native `docker run`, no emulation, on an arm64 host;
 `--platform linux/amd64` plus qemu on anything else). Verify the result
 with `objdump -T dist/curatarr | grep -oE 'GLIBC_[0-9.]+' | sort -V | tail -1` -
 it must not exceed `GLIBC_2.28`, matching the CI job's own regression
-guard.
+guard (real builds have come in well under that, at `GLIBC_2.17`
+arm64 / `GLIBC_2.14` x86_64, so there's margin).
