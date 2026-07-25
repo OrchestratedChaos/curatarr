@@ -5,6 +5,7 @@ Miscellaneous helper utilities for Curatarr.
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timedelta
 from functools import lru_cache
@@ -130,6 +131,33 @@ def resolve_system_executable(preferred_path: str, fallback_name: str) -> str:
     if os.path.isfile(preferred_path):
         return preferred_path
     return fallback_name
+
+
+def no_window_kwargs() -> Dict[str, int]:
+    """subprocess.run()/Popen() kwargs to suppress a console window on
+    Windows for a short-lived helper child (tasklist/taskkill/powershell
+    precondition-check invocations) whose output is already captured via
+    capture_output=True/stdout=PIPE - never anything a visible window
+    would show the user that a log/capture doesn't already have. Returns
+    {} on non-Windows: subprocess.CREATE_NO_WINDOW doesn't exist there,
+    so a bare reference would raise AttributeError (same reasoning as
+    web/job_runner.py's/web/update_apply.py's own getattr(...) guard
+    around this constant, which this centralizes for every call site
+    that only needs the plain "no window" flag - not the
+    CREATE_NEW_PROCESS_GROUP/DETACHED_PROCESS combinations
+    web/update_apply.py's _relaunch_ui and utils/self_update_handoff.py
+    use for their own detached, longer-lived children, which stay
+    exactly as they are).
+
+    Deliberately NOT gated on debug mode: every call site this is used
+    from already pipes its child's stdout/stderr, so hiding the window
+    never hides any output - see curatarr_app.py's _debug_requested()/
+    AllocConsole() path for the separate, existing mechanism that gives
+    the main process itself a console on request.
+    """
+    if os.name == 'nt':
+        return {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+    return {}
 
 
 def harden_file_permissions(path: str) -> None:

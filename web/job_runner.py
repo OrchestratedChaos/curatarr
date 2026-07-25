@@ -31,6 +31,8 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from utils.helpers import no_window_kwargs
+
 from .security import redact
 
 ENGINES = ('full', 'movie', 'tv', 'external')
@@ -94,6 +96,7 @@ def _pid_alive(pid: int) -> bool:
             result = subprocess.run(
                 ['tasklist', '/FI', f'PID eq {pid}'],
                 capture_output=True, text=True, timeout=3,
+                **no_window_kwargs(),
             )
             return str(pid) in result.stdout
         except Exception:

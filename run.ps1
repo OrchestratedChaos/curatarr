@@ -1422,7 +1422,7 @@ function Setup-ScheduledTask {
     }
 
     try {
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"$ScriptDir\run.ps1`"" -WorkingDirectory $ScriptDir
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptDir\run.ps1`"" -WorkingDirectory $ScriptDir
         $trigger = New-ScheduledTaskTrigger -Daily -At 3am
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
