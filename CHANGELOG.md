@@ -2,6 +2,70 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.16] - 2026-07-25
+
+### Fixed
+
+- **`scripts/selfupdate_e2e/build_fixtures.py`'s pinned-signing-key patcher
+  silently stopped working after the 2.10.14 `ruff format` reformat,
+  breaking `selfupdate-e2e.yml` on all three platforms.** That script
+  temporarily rewrites `utils/self_update.py`'s
+  `PINNED_SIGNING_PUBLIC_KEY_B64`/`PINNED_SIGNING_KEY_FINGERPRINT` to a
+  throwaway test key before building the CI-only test binaries (see that
+  script's module docstring), by matching the constants' declaration as
+  literal source text. The 2.10.14 reformat changed that declaration
+  from a multi-line parenthesized single-quoted form to a single-line
+  double-quoted one; the old regex then matched zero times, so
+  `patch_pinned_key()` silently never ran (the built test binaries still
+  trusted the real, maintainer-only pinned key instead of the throwaway
+  one), and every downstream fixture-signing/verification step failed
+  with cascading, confusing errors instead. Last known-green run of that
+  workflow: 2026-07-25T05:58Z, before the reformat merged.
+  - Fixed by parsing the file with `ast` and locating the two
+    assignments by their target NAME rather than by any particular
+    source-text shape, then rewriting only that AST node's exact span -
+    this survives quote-style, line-wrapping, and parenthesization
+    changes without needing to be touched again. Still fails loudly
+    (`SystemExit`) if it can't find exactly one matching assignment,
+    rather than silently skipping the patch - that fail-loud design is
+    what surfaced this bug in the first place, and is preserved
+    unchanged.
+  - The same fragile-regex pattern was also used for `utils/config.py`'s
+    `__version__` bump/read - converted to the same AST-based approach
+    for the same reason, even though it hadn't broken yet.
+  - Audited `scripts/selfupdate_stub_e2e/` (the separate, fast local
+    hand-off-script harness) for the same class of bug: it has none -
+    it never parses or regex-matches any real production source file at
+    all (its stub "binaries" are built from its own template file with
+    plain placeholder substitution, and it calls
+    `utils/self_update_handoff.py`'s real functions directly rather than
+    text-patching them).
+  - Added `tests/test_selfupdate_e2e_build_fixtures.py`, which feeds the
+    new AST-based patcher the old multi-line form, the new single-line
+    form, a third plausible reformatting, and this repo's own actual
+    current `utils/self_update.py` verbatim - reverting to the old regex
+    reproduces the original 0-match failure against the new/third forms,
+    confirming the test would have caught it.
+
+### Changed
+
+- **`selfupdate-e2e.yml` now runs on pull requests and pushes into
+  `main` that touch self-update code, instead of only on push to a
+  long-stale feature branch (`feat/binary-self-update-2.8.29`) plus
+  manual dispatch** - that stale-branch-only trigger is exactly why the
+  2.10.14 reformat's breakage above could merge into `main` completely
+  undetected: nothing in the real PR pipeline ever ran this workflow.
+  Scoped to a path filter (`utils/self_update.py`,
+  `utils/self_update_handoff.py`, `web/update_apply.py`,
+  `scripts/selfupdate_e2e/**`) rather than every PR unconditionally,
+  since this is a slow (35min timeout), 3-platform real-binary job; a
+  weekly scheduled run is added alongside it as a safety net for drift a
+  path filter can't foresee (dependency/Python/PyInstaller version
+  bumps, or a whole-repo tool pass like the 2.10.14 reformat touching
+  one of these paths as a side effect of something unrelated).
+  Deliberately not added to branch protection's required checks - see
+  the workflow file's own comment for why.
+
 ## [2.10.15] - 2026-07-25
 
 ### Fixed

@@ -21,11 +21,47 @@ name: Self-Update E2E
 # fixtures without ever touching the real maintainer-only release
 # signing key (which never leaves the maintainer's own machine - see
 # RELEASING.md).
-
+#
+# Trigger design (2.10.16): this used to auto-run only on push to a
+# long-abandoned feature branch (feat/binary-self-update-2.8.29, ~23
+# commits diverged from main in both directions) plus workflow_dispatch
+# - i.e. never on a normal PR into main. That's exactly why the 2.10.14
+# ruff reformat could silently break
+# scripts/selfupdate_e2e/build_fixtures.py's source patching (see that
+# file's module docstring / 2.10.16 CHANGELOG) and merge undetected:
+# nothing in the real CI pipeline ever ran this workflow to catch it.
+# Fixed by wiring it into pull_request/push on main - but NOT
+# unconditionally on every PR: this is a slow (~35min timeout),
+# 3-platform job, so it's restricted to a path filter covering only the
+# files whose changes this workflow actually exists to catch (the
+# self-update runtime code + this harness itself), plus a weekly
+# scheduled run as a safety net for drift a path filter can't foresee
+# (e.g. a dependency/Python/PyInstaller version bump, or a whole-repo
+# tool pass like the 2.10.14 reformat touching one of these paths as a
+# side effect of something else). Deliberately NOT added as a required
+# branch-protection check: a required check that's skipped by its own
+# path filter on an unrelated PR can permanently block merging on some
+# GitHub configurations, which would be worse than the gap this closes.
 on:
   push:
     branches:
-      - feat/binary-self-update-2.8.29
+      - main
+    paths:
+      - "utils/self_update.py"
+      - "utils/self_update_handoff.py"
+      - "web/update_apply.py"
+      - "scripts/selfupdate_e2e/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "utils/self_update.py"
+      - "utils/self_update_handoff.py"
+      - "web/update_apply.py"
+      - "scripts/selfupdate_e2e/**"
+  schedule:
+    # Monday 07:00 UTC - the drift safety net described above.
+    - cron: "0 7 * * 1"
   workflow_dispatch: {}
 
 # Least-privilege default - this job only checks out, builds, and tests;
