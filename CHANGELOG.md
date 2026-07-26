@@ -2,6 +2,58 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.15] - 2026-07-25
+
+### Fixed
+
+- **Two pre-existing bugs surfaced by ruff during the 2.10.14 reformat, both
+  confirmed unreachable/dormant in production today - fixed rather than
+  left as judgment calls, since both are the same class of latent crash
+  risk (`F821` undefined name).**
+  - `recommenders/external.py`'s `discover_popular_by_genre()` referenced
+    `TMDB_RATE_LIMIT_DELAY` without importing it. **Not reachable from any
+    production code path** - the function is never called outside its
+    own tests (`is_thin_profile()` is used by
+    `find_similar_content_with_profile()`, but only to shrink
+    `max_iterations`; it never calls `discover_popular_by_genre()`
+    itself). It *is* exercised directly by
+    `tests/test_external.py::TestDiscoverPopularByGenre`, though: every
+    existing test there mocks `time.sleep` but still evaluates the
+    undefined name as the call's argument, raising a `NameError` that
+    the function's own broad `except Exception` swallowed and logged as
+    a generic `"Genre discover failed for {genre}"` warning - so the
+    tests kept passing (the recommendations were already collected
+    before the sleep call) while silently never rate-limiting and
+    spamming a misleading warning on every genre. Fixed by importing the
+    existing `TMDB_RATE_LIMIT_DELAY` constant from `utils/config.py`
+    (already used identically by `recommenders/base.py`) rather than
+    defining a duplicate local constant. Added
+    `test_applies_rate_limit_delay_between_genre_calls`, which asserts
+    `time.sleep` is actually called with the real constant - reverting
+    the import reproduces the original swallowed-`NameError` warning and
+    fails the new assertion (`sleep` called 0 times), confirming the
+    test would have caught it.
+  - `utils/radarr.py`'s `create_radarr_client()` had an unreachable
+    `return RadarrClient(url, api_key)` after its real
+    `return create_radarr_client_from(...)` - `url`/`api_key` aren't
+    even local names in that scope, so it could never have run; it's
+    vestigial code left over from before the `#157` Phase 2 per-library
+    refactor extracted `create_radarr_client_from()`. The sibling
+    `utils/sonarr.py::create_sonarr_client()` has no such trailing line,
+    confirming the earlier `create_radarr_client_from(...)` return is
+    the intended (and only correct) behavior. Deleted the dead line; no
+    new test added; there's no way a runtime test can execute
+    genuinely-unreachable code after an unconditional `return`, and
+    ruff's `F821` is exactly the mechanism that already caught it.
+  - Audited every other `F821` finding in the codebase (`ruff check
+    --select F821`) - these were the only 3 in the entire repo (the
+    `TMDB_RATE_LIMIT_DELAY` one above, plus the `url`/`api_key` pair on
+    the same dead line above). None left unaddressed.
+  - `ruff check` now finds 125 violations (down from 128), still
+    non-blocking - the rest remain deliberate judgment calls per the
+    2.10.14 entry above. Full suite: 2334 passed, 1 skipped (2333 from
+    2.10.14 + the new regression test).
+
 ## [2.10.14] - 2026-07-25
 
 ### Changed
