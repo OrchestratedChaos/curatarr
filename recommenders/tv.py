@@ -8,39 +8,58 @@ import logging
 import math
 import re
 import traceback
-from typing import Dict, Set, Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 # Import shared utilities
 from utils import (
-    RED, GREEN, YELLOW, RESET,
+    COLLECTION_BONUS_BASE,
+    COLLECTION_BONUS_CAP,
+    COLLECTION_BONUS_LOG_FACTOR,
+    DEFAULT_NEGATIVE_THRESHOLD,
+    GREEN,
+    RATING_MULTIPLIER_2_STAR,
+    RATING_MULTIPLIER_3_STAR,
+    RATING_MULTIPLIER_4_STAR,
+    RATING_MULTIPLIER_5_STAR,
+    RATING_MULTIPLIER_UNRATED,
+    RATING_TIER_3_STAR,
+    RATING_TIER_4_STAR,
+    RATING_TIER_5_STAR,
+    RED,
+    RESET,
     TOP_CAST_COUNT,
-    COLLECTION_BONUS_BASE, COLLECTION_BONUS_LOG_FACTOR, COLLECTION_BONUS_CAP,
-    RATING_TIER_5_STAR, RATING_TIER_4_STAR, RATING_TIER_3_STAR,
-    RATING_MULTIPLIER_5_STAR, RATING_MULTIPLIER_4_STAR,
-    RATING_MULTIPLIER_3_STAR, RATING_MULTIPLIER_2_STAR, RATING_MULTIPLIER_UNRATED,
-    DEFAULT_NEGATIVE_THRESHOLD, get_negative_multiplier,
-    get_plex_account_ids, get_watched_show_count,
-    fetch_plex_watch_history_shows,
-    fetch_show_completion_data, identify_dropped_shows,
-    fetch_tautulli_show_watched_data, merge_show_watched_data,
-    log_warning, log_error,
-    calculate_recency_multiplier, calculate_rewatch_multiplier,
-    calculate_similarity_score,
-    show_progress,
-    extract_genres, extract_ids_from_guids, extract_rating,
+    YELLOW,
     adapt_config_for_media_type,
-    format_media_output,
-    print_similarity_breakdown,
-    create_empty_counters, process_counters_from_cache,
+    calculate_recency_multiplier,
+    calculate_rewatch_multiplier,
+    calculate_similarity_score,
     compute_profile_hash,
+    create_empty_counters,
+    extract_genres,
+    extract_ids_from_guids,
+    extract_rating,
+    fetch_plex_watch_history_shows,
+    fetch_show_completion_data,
+    fetch_tautulli_show_watched_data,
+    format_media_output,
+    get_negative_multiplier,
+    get_plex_account_ids,
     get_project_root,
-    setup_log_file,
-    teardown_log_file,
+    get_watched_show_count,
+    identify_dropped_shows,
+    log_error,
+    log_warning,
+    merge_show_watched_data,
+    print_similarity_breakdown,
+    process_counters_from_cache,
     run_recommender_main,
+    setup_log_file,
+    show_progress,
+    teardown_log_file,
 )
 
 # Module-level logger - configured by setup_logging() in main()
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Import base classes
 from recommenders.base import BaseCache, BaseRecommender
@@ -49,9 +68,9 @@ from recommenders.base import BaseCache, BaseRecommender
 class ShowCache(BaseCache):
     """Cache for TV show metadata including TMDB data, genres, and keywords."""
 
-    media_type = 'tv'
-    media_key = 'shows'
-    cache_filename = 'all_shows_cache.json'
+    media_type = "tv"
+    media_key = "shows"
+    cache_filename = "all_shows_cache.json"
 
     def _process_item(self, show, tmdb_api_key: Optional[str]) -> Optional[Dict]:
         """Process a single TV show and return its info dict.
@@ -64,23 +83,26 @@ class ShowCache(BaseCache):
             Dict with show metadata or None on error
         """
         # Get TMDB data using base class method
-        tmdb_data = self._get_tmdb_data(show, tmdb_api_key) if tmdb_api_key else {
-            'tmdb_id': None, 'imdb_id': None, 'keywords': []
-        }
+        tmdb_data = (
+            self._get_tmdb_data(show, tmdb_api_key)
+            if tmdb_api_key
+            else {"tmdb_id": None, "imdb_id": None, "keywords": []}
+        )
 
         return {
-            'title': show.title,
-            'year': getattr(show, 'year', None),
-            'genres': [g.tag.lower() for g in show.genres] if hasattr(show, 'genres') else [],
-            'studio': getattr(show, 'studio', 'N/A'),
-            'cast': [r.tag for r in show.roles[:TOP_CAST_COUNT]] if hasattr(show, 'roles') else [],
-            'summary': getattr(show, 'summary', ''),
-            'language': self._get_language(show),
-            'tmdb_keywords': tmdb_data['keywords'],
-            'tmdb_id': tmdb_data['tmdb_id'],
-            'imdb_id': tmdb_data['imdb_id'],
-            'production_company_ids': tmdb_data.get('production_company_ids', [])
+            "title": show.title,
+            "year": getattr(show, "year", None),
+            "genres": [g.tag.lower() for g in show.genres] if hasattr(show, "genres") else [],
+            "studio": getattr(show, "studio", "N/A"),
+            "cast": [r.tag for r in show.roles[:TOP_CAST_COUNT]] if hasattr(show, "roles") else [],
+            "summary": getattr(show, "summary", ""),
+            "language": self._get_language(show),
+            "tmdb_keywords": tmdb_data["keywords"],
+            "tmdb_id": tmdb_data["tmdb_id"],
+            "imdb_id": tmdb_data["imdb_id"],
+            "production_company_ids": tmdb_data.get("production_company_ids", []),
         }
+
 
 class PlexTVRecommender(BaseRecommender):
     """Generates personalized TV show recommendations based on Plex watch history.
@@ -91,19 +113,19 @@ class PlexTVRecommender(BaseRecommender):
     """
 
     # Required class attributes for BaseRecommender
-    media_type = 'tv'
-    media_key = 'shows'
-    library_config_key = 'tv_library'
-    default_library_name = 'TV Shows'
+    media_type = "tv"
+    media_key = "shows"
+    library_config_key = "tv_library"
+    default_library_name = "TV Shows"
 
     def _load_weights(self, weights_config: Dict) -> Dict:
         """Load TV-specific scoring weights from config."""
         return {
-            'genre': weights_config.get('genre', weights_config.get('genre_weight', 0.20)),
-            'actor': weights_config.get('actor', weights_config.get('actor_weight', 0.15)),
-            'studio': weights_config.get('studio', weights_config.get('studio_weight', 0.15)),
-            'keyword': weights_config.get('keyword', weights_config.get('keyword_weight', 0.45)),
-            'language': weights_config.get('language', weights_config.get('language_weight', 0.05)),
+            "genre": weights_config.get("genre", weights_config.get("genre_weight", 0.20)),
+            "actor": weights_config.get("actor", weights_config.get("actor_weight", 0.15)),
+            "studio": weights_config.get("studio", weights_config.get("studio_weight", 0.15)),
+            "keyword": weights_config.get("keyword", weights_config.get("keyword_weight", 0.45)),
+            "language": weights_config.get("language", weights_config.get("language_weight", 0.05)),
         }
 
     def __init__(self, config_path: str, single_user: str = None, library: Optional[Dict] = None):
@@ -129,8 +151,8 @@ class PlexTVRecommender(BaseRecommender):
         self.show_cache.update_cache(self.plex, self.library_title, self.tmdb_api_key)
 
         # Verify Plex user configuration
-        if self.users['plex_users']:
-            users_to_process = [self.single_user] if self.single_user else self.users['plex_users']
+        if self.users["plex_users"]:
+            users_to_process = [self.single_user] if self.single_user else self.users["plex_users"]
             print(f"{GREEN}Processing recommendations for Plex users: {users_to_process}{RESET}")
 
         # Verify library exists
@@ -149,13 +171,9 @@ class PlexTVRecommender(BaseRecommender):
 
         # Clean up both watched show tracking mechanisms
         self.plex_watched_rating_keys = {
-            rk for rk in self.plex_watched_rating_keys
-            if int(rk) in current_library_rating_keys
+            rk for rk in self.plex_watched_rating_keys if int(rk) in current_library_rating_keys
         }
-        self.watched_ids = {
-            show_id for show_id in self.watched_ids
-            if show_id in current_library_rating_keys
-        }
+        self.watched_ids = {show_id for show_id in self.watched_ids if show_id in current_library_rating_keys}
 
         if self.plex_tmdb_cache is None:
             self.plex_tmdb_cache = {}
@@ -164,13 +182,13 @@ class PlexTVRecommender(BaseRecommender):
 
         current_watched_count = self._get_watched_count()
         cache_exists = os.path.exists(self.watched_cache_path)
-        
+
         if (not cache_exists) or (current_watched_count != self.cached_watched_count):
             print("Watched count changed or no cache found; gathering watched data now. This may take a while...\n")
             # Clear existing data to force actual fetch (prevents early returns in fetch functions)
             self.watched_data_counters = None
             self.watched_ids = set()
-            if self.users['plex_users']:
+            if self.users["plex_users"]:
                 self.watched_data = self._get_plex_watched_shows_data()
             else:
                 self.watched_data = self._get_managed_users_watched_data()
@@ -181,8 +199,8 @@ class PlexTVRecommender(BaseRecommender):
             print(f"Watched count unchanged. Using cached data for {self.cached_watched_count} shows")
             self.watched_data = self.watched_data_counters
             # Ensure watched_ids are preserved (cache file uses 'watched_show_ids' key)
-            if not self.watched_ids and 'watched_show_ids' in watched_cache:
-                self.watched_ids = {int(id_) for id_ in watched_cache['watched_show_ids'] if str(id_).isdigit()}
+            if not self.watched_ids and "watched_show_ids" in watched_cache:
+                self.watched_ids = {int(id_) for id_ in watched_cache["watched_show_ids"] if str(id_).isdigit()}
             logger.debug(f"Using cached data: {self.cached_watched_count} watched shows, {len(self.watched_ids)} IDs")
 
         # Enhance profile with Trakt watch history (if enabled)
@@ -200,10 +218,10 @@ class PlexTVRecommender(BaseRecommender):
         # Determine which users to process
         if self.single_user:
             users_to_check = [self.single_user]
-        elif self.users.get('plex_users'):
-            users_to_check = self.users['plex_users']
+        elif self.users.get("plex_users"):
+            users_to_check = self.users["plex_users"]
         else:
-            users_to_check = self.users.get('managed_users', [])
+            users_to_check = self.users.get("managed_users", [])
 
         # Use shared utility function
         return get_watched_show_count(self.config, users_to_check)
@@ -228,10 +246,10 @@ class PlexTVRecommender(BaseRecommender):
         rating_int = int(round(user_rating))
 
         # Check if negative signals are enabled
-        ns_config = self.config.get('negative_signals', {})
-        bad_ratings_config = ns_config.get('bad_ratings', {})
-        ns_enabled = ns_config.get('enabled', True) and bad_ratings_config.get('enabled', True)
-        threshold = bad_ratings_config.get('threshold', DEFAULT_NEGATIVE_THRESHOLD)
+        ns_config = self.config.get("negative_signals", {})
+        bad_ratings_config = ns_config.get("bad_ratings", {})
+        ns_enabled = ns_config.get("enabled", True) and bad_ratings_config.get("enabled", True)
+        threshold = bad_ratings_config.get("threshold", DEFAULT_NEGATIVE_THRESHOLD)
 
         # Return negative multiplier for low ratings if enabled
         if ns_enabled and rating_int <= threshold:
@@ -250,25 +268,25 @@ class PlexTVRecommender(BaseRecommender):
     def _get_plex_account_ids(self):
         """Get Plex account IDs for configured users with flexible name matching"""
         # Determine which users to process
-        users_to_match = [self.single_user] if self.single_user else self.users['plex_users']
+        users_to_match = [self.single_user] if self.single_user else self.users["plex_users"]
 
         # Use shared utility function
         return get_plex_account_ids(self.config, users_to_match)
 
     def _get_plex_watched_shows_data(self) -> Dict:
         """Get watched show data from Plex's native history (using Plex API)"""
-        if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
+        if not self.single_user and hasattr(self, "watched_data_counters") and self.watched_data_counters:
             return self.watched_data_counters
 
         shows_section = self.plex.library.section(self.library_title)
-        counters = create_empty_counters('tv')
+        counters = create_empty_counters("tv")
         watched_ids = set()
         not_found_count = 0
 
-        log_warning(f"Querying Plex watch history directly...")
+        log_warning("Querying Plex watch history directly...")
         account_ids = self._get_plex_account_ids()
         if not account_ids:
-            log_error(f"No valid users found!")
+            log_error("No valid users found!")
             return counters
 
         # Use shared utility to fetch watch history with timestamps for recency decay
@@ -280,7 +298,7 @@ class PlexTVRecommender(BaseRecommender):
         # Plex history. Covers users whose Plex-native history is thin (e.g.
         # shared/external users). Falls back to Plex-only if disabled,
         # unreachable, or no users could be mapped.
-        if self.config.get('tautulli', {}).get('enabled', False):
+        if self.config.get("tautulli", {}).get("enabled", False):
             tautulli_ids, tautulli_timestamps = fetch_tautulli_show_watched_data(self.config, account_ids)
             if tautulli_ids:
                 plex_count = len(watched_ids)
@@ -298,9 +316,9 @@ class PlexTVRecommender(BaseRecommender):
         # Detect dropped shows (started but abandoned)
         dropped_show_ids = set()
         show_completion_data = {}  # Initialize before conditional block
-        ns_config = self.config.get('negative_signals', {})
-        dropped_config = ns_config.get('dropped_shows', {})
-        if ns_config.get('enabled', True) and dropped_config.get('enabled', True):
+        ns_config = self.config.get("negative_signals", {})
+        dropped_config = ns_config.get("dropped_shows", {})
+        if ns_config.get("enabled", True) and dropped_config.get("enabled", True):
             print(f"{YELLOW}Analyzing show completion for dropped show detection...{RESET}")
             show_completion_data = fetch_show_completion_data(self.config, account_ids, shows_section)
             dropped_show_ids = identify_dropped_shows(show_completion_data, self.config)
@@ -309,7 +327,9 @@ class PlexTVRecommender(BaseRecommender):
                 for show_id in dropped_show_ids:
                     if show_id in show_completion_data:
                         data = show_completion_data[show_id]
-                        logger.debug(f"Dropped: {data.get('title')} ({data['watched_episodes']}/{data['total_episodes']} eps, {data['completion_percent']:.0f}%)")
+                        logger.debug(
+                            f"Dropped: {data.get('title')} ({data['watched_episodes']}/{data['total_episodes']} eps, {data['completion_percent']:.0f}%)"
+                        )
 
         # Build rewatch data and user ratings for shows
         # Each show gets base weight of 1.0 regardless of episode count
@@ -321,18 +341,18 @@ class PlexTVRecommender(BaseRecommender):
                 show_id = int(show.ratingKey)
                 if show_id in watched_ids:
                     # Get rewatch count
-                    if hasattr(show, 'viewCount') and show.viewCount:
+                    if hasattr(show, "viewCount") and show.viewCount:
                         view_count = int(show.viewCount)
                         # Get watched episode count from completion data
                         watched_eps = 1
                         if show_id in show_completion_data:
-                            watched_eps = max(1, show_completion_data[show_id].get('watched_episodes', 1))
+                            watched_eps = max(1, show_completion_data[show_id].get("watched_episodes", 1))
                         # Calculate actual show rewatches (viewCount / watched_episodes)
                         # If > 1, user rewatched some episodes
                         show_rewatch_counts[show_id] = max(1, view_count // watched_eps)
 
                     # Get user rating if available
-                    if hasattr(show, 'userRating') and show.userRating:
+                    if hasattr(show, "userRating") and show.userRating:
                         user_ratings[show_id] = float(show.userRating)
         except Exception as e:
             logger.debug(f"Error getting rewatch counts/ratings for shows: {e}")
@@ -340,8 +360,10 @@ class PlexTVRecommender(BaseRecommender):
         # Process show metadata from cache - exclude dropped shows from positive signals
         # Each show weighted equally (1.0 base) regardless of episode count
         normal_watched = watched_ids - dropped_show_ids
-        print(f"")
-        print(f"Processing {len(normal_watched)} watched shows with recency decay (excluding {len(dropped_show_ids)} dropped):")
+        print("")
+        print(
+            f"Processing {len(normal_watched)} watched shows with recency decay (excluding {len(dropped_show_ids)} dropped):"
+        )
 
         # Track production companies for franchise/spinoff bonus
         production_companies = {}  # production_company_id -> weighted count
@@ -349,11 +371,13 @@ class PlexTVRecommender(BaseRecommender):
         for i, show_id in enumerate(normal_watched, 1):
             show_progress("Processing", i, len(normal_watched))
 
-            show_info = self.show_cache.cache['shows'].get(str(show_id))
+            show_info = self.show_cache.cache["shows"].get(str(show_id))
             if show_info:
                 # Calculate recency multiplier based on last episode watched
                 viewed_at = show_timestamps.get(show_id)
-                recency_multiplier = calculate_recency_multiplier(viewed_at, self.config.get('recency_decay', {})) if viewed_at else 1.0
+                recency_multiplier = (
+                    calculate_recency_multiplier(viewed_at, self.config.get("recency_decay", {})) if viewed_at else 1.0
+                )
 
                 # Base weight 1.0 per show, with rewatch bonus only if actually rewatched
                 rewatch_multiplier = calculate_rewatch_multiplier(show_rewatch_counts.get(show_id, 1))
@@ -363,38 +387,40 @@ class PlexTVRecommender(BaseRecommender):
 
                 # Combined weight: recency * rewatch * rating
                 weight = recency_multiplier * rewatch_multiplier * rating_multiplier
-                process_counters_from_cache(show_info, counters, media_type='tv', weight=weight)
+                process_counters_from_cache(show_info, counters, media_type="tv", weight=weight)
 
-                if tmdb_id := show_info.get('tmdb_id'):
-                    counters['tmdb_ids'].add(tmdb_id)
+                if tmdb_id := show_info.get("tmdb_id"):
+                    counters["tmdb_ids"].add(tmdb_id)
 
                 # Track production companies with weight for franchise bonus
-                for pc_id in show_info.get('production_company_ids', []):
+                for pc_id in show_info.get("production_company_ids", []):
                     production_companies[pc_id] = production_companies.get(pc_id, 0) + weight
             else:
                 not_found_count += 1
 
         # Process dropped shows as negative signals
         if dropped_show_ids:
-            penalty_mult = dropped_config.get('penalty_multiplier', -0.4)
-            print(f"")
+            penalty_mult = dropped_config.get("penalty_multiplier", -0.4)
+            print("")
             print(f"{YELLOW}Processing {len(dropped_show_ids)} dropped shows as negative signals...{RESET}")
 
             for show_id in dropped_show_ids:
-                show_info = self.show_cache.cache['shows'].get(str(show_id))
+                show_info = self.show_cache.cache["shows"].get(str(show_id))
                 if show_info:
                     # Process with negative weight
-                    cap_penalty = dropped_config.get('cap_penalty', 0.5)
-                    process_counters_from_cache(show_info, counters, media_type='tv', weight=penalty_mult, cap_penalty=cap_penalty)
+                    cap_penalty = dropped_config.get("cap_penalty", 0.5)
+                    process_counters_from_cache(
+                        show_info, counters, media_type="tv", weight=penalty_mult, cap_penalty=cap_penalty
+                    )
 
                     # Still track TMDB ID so we don't recommend the same show
-                    if tmdb_id := show_info.get('tmdb_id'):
-                        counters['tmdb_ids'].add(tmdb_id)
+                    if tmdb_id := show_info.get("tmdb_id"):
+                        counters["tmdb_ids"].add(tmdb_id)
 
         logger.debug(f"Watched shows not in cache: {not_found_count}, TMDB IDs collected: {len(counters['tmdb_ids'])}")
 
         # Store production companies for franchise/spinoff bonus during scoring
-        counters['production_companies'] = production_companies
+        counters["production_companies"] = production_companies
 
         return counters
 
@@ -416,11 +442,7 @@ class PlexTVRecommender(BaseRecommender):
 
     def _find_plex_item(self, section, rec: Dict):
         """Find a Plex show matching the recommendation."""
-        return next(
-            (s for s in section.search(title=rec['title'])
-             if s.year == rec.get('year')),
-            None
-        )
+        return next((s for s in section.search(title=rec["title"]) if s.year == rec.get("year")), None)
 
     # ------------------------------------------------------------------------
     # LIBRARY UTILITIES
@@ -433,17 +455,17 @@ class PlexTVRecommender(BaseRecommender):
                 # Handle both normal titles and titles with embedded years
                 title = show.title.lower()
                 year = show.year
-                
+
                 # Add normal version
                 library_shows.add((title, year))
-                
+
                 # Check for and strip embedded year pattern
-                year_match = re.search(r'\s*\((\d{4})\)$', title)
+                year_match = re.search(r"\s*\((\d{4})\)$", title)
                 if year_match:
-                    clean_title = title.replace(year_match.group(0), '').strip()
+                    clean_title = title.replace(year_match.group(0), "").strip()
                     embedded_year = int(year_match.group(1))
                     library_shows.add((clean_title, embedded_year))
-                
+
             return library_shows
         except Exception as e:
             log_error(f"Error getting library shows: {e}")
@@ -458,46 +480,44 @@ class PlexTVRecommender(BaseRecommender):
 
             # Extract IDs using utility
             ids = extract_ids_from_guids(show)
-            imdb_id = ids['imdb_id']
+            imdb_id = ids["imdb_id"]
             audience_rating = 0
             tmdb_keywords = []
-            
+
             # Extract rating using shared utility
             if self.show_rating:
                 audience_rating = extract_rating(show)
-                            
+
             if self.use_tmdb_keywords and self.tmdb_api_key:
                 tmdb_id = self._get_plex_item_tmdb_id(show)
                 if tmdb_id:
                     tmdb_keywords = list(self._get_tmdb_keywords_for_id(tmdb_id))
-            
+
             show_info = {
-                'title': show.title,
-                'year': getattr(show, 'year', None),
-                'genres': extract_genres(show),
-                'summary': getattr(show, 'summary', ''),
-                'studio': getattr(show, 'studio', 'N/A'),
-                'language': self.show_cache._get_language(show),
-                'imdb_id': imdb_id,
-                'ratings': {
-                    'audience_rating': audience_rating
-                } if audience_rating > 0 else {},
-                'cast': [],
-                'tmdb_keywords': tmdb_keywords
+                "title": show.title,
+                "year": getattr(show, "year", None),
+                "genres": extract_genres(show),
+                "summary": getattr(show, "summary", ""),
+                "studio": getattr(show, "studio", "N/A"),
+                "language": self.show_cache._get_language(show),
+                "imdb_id": imdb_id,
+                "ratings": {"audience_rating": audience_rating} if audience_rating > 0 else {},
+                "cast": [],
+                "tmdb_keywords": tmdb_keywords,
             }
-            
-            if self.show_cast and hasattr(show, 'roles'):
-                show_info['cast'] = [r.tag for r in show.roles[:TOP_CAST_COUNT]]
-                
+
+            if self.show_cast and hasattr(show, "roles"):
+                show_info["cast"] = [r.tag for r in show.roles[:TOP_CAST_COUNT]]
+
             return show_info
-                
+
         except Exception as e:
             log_warning(f"Error getting show details for {show.title}: {e}")
             return {}
 
     def _get_watched_data(self) -> Dict:
         """Get watched TV show data from Plex (implements abstract method from base)."""
-        if self.users['plex_users']:
+        if self.users["plex_users"]:
             return self._get_plex_watched_shows_data()
         return self._get_managed_users_watched_data()
 
@@ -514,36 +534,36 @@ class PlexTVRecommender(BaseRecommender):
         """Calculate similarity score using cached show data and return score with breakdown"""
         # Build user profile from watched data
         user_profile = {
-            'genres': self.watched_data.get('genres', {}),
-            'studios': self.watched_data.get('studios', {}),
-            'actors': self.watched_data.get('actors', {}),
-            'languages': self.watched_data.get('languages', {}),
-            'keywords': self.watched_data.get('tmdb_keywords', {})
+            "genres": self.watched_data.get("genres", {}),
+            "studios": self.watched_data.get("studios", {}),
+            "actors": self.watched_data.get("actors", {}),
+            "languages": self.watched_data.get("languages", {}),
+            "keywords": self.watched_data.get("tmdb_keywords", {}),
         }
 
         # Build content info dict
         content_info = {
-            'genres': show_info.get('genres', []),
-            'studio': show_info.get('studio', 'N/A'),
-            'cast': show_info.get('cast', []),
-            'language': show_info.get('language', 'N/A'),
-            'keywords': show_info.get('tmdb_keywords', []),
-            'vote_count': show_info.get('vote_count', 0)
+            "genres": show_info.get("genres", []),
+            "studio": show_info.get("studio", "N/A"),
+            "cast": show_info.get("cast", []),
+            "language": show_info.get("language", "N/A"),
+            "keywords": show_info.get("tmdb_keywords", []),
+            "vote_count": show_info.get("vote_count", 0),
         }
 
         # Use shared scoring function
         score, breakdown = calculate_similarity_score(
             content_info=content_info,
             user_profile=user_profile,
-            media_type='tv',
+            media_type="tv",
             weights=self.weights,
             normalize_counters=self.normalize_counters,
-            use_fuzzy_keywords=self.use_tmdb_keywords
+            use_fuzzy_keywords=self.use_tmdb_keywords,
         )
 
         # Apply franchise/spinoff bonus based on shared production companies
-        show_pc_ids = show_info.get('production_company_ids', [])
-        user_production_companies = self.watched_data.get('production_companies', {})
+        show_pc_ids = show_info.get("production_company_ids", [])
+        user_production_companies = self.watched_data.get("production_companies", {})
         if show_pc_ids and user_production_companies:
             # Find max weight from any shared production company
             max_pc_weight = 0
@@ -559,14 +579,16 @@ class PlexTVRecommender(BaseRecommender):
                 bonus = COLLECTION_BONUS_BASE * (1 + math.log2(max(1, max_pc_weight)) * COLLECTION_BONUS_LOG_FACTOR)
                 bonus = min(bonus, COLLECTION_BONUS_CAP)
                 score = min(1.0, score * (1 + bonus))
-                breakdown['franchise_bonus'] = round(bonus, 3)
-                breakdown['details']['franchise'] = f"Shared production company (weight: {max_pc_weight:.1f}, bonus: {round(bonus * 100, 1)}%)"
+                breakdown["franchise_bonus"] = round(bonus, 3)
+                breakdown["details"]["franchise"] = (
+                    f"Shared production company (weight: {max_pc_weight:.1f}, bonus: {round(bonus * 100, 1)}%)"
+                )
 
         return score, breakdown
 
     def _print_similarity_breakdown(self, show_info: Dict, score: float, breakdown: Dict):
         """Print detailed breakdown of similarity score calculation"""
-        print_similarity_breakdown(show_info, score, breakdown, 'tv')
+        print_similarity_breakdown(show_info, score, breakdown, "tv")
 
     # get_recommendations() and manage_plex_labels() are inherited from BaseRecommender
 
@@ -574,47 +596,52 @@ class PlexTVRecommender(BaseRecommender):
 # ------------------------------------------------------------------------
 # OUTPUT FORMATTING
 # ------------------------------------------------------------------------
-def format_show_output(show: Dict,
-                      show_summary: bool = False,
-                      index: Optional[int] = None,
-                      show_cast: bool = False,
-                      show_language: bool = False,
-                      show_rating: bool = False,
-                      show_imdb_link: bool = False) -> str:
+def format_show_output(
+    show: Dict,
+    show_summary: bool = False,
+    index: Optional[int] = None,
+    show_cast: bool = False,
+    show_language: bool = False,
+    show_rating: bool = False,
+    show_imdb_link: bool = False,
+) -> str:
     """Format TV show for display - delegates to shared utility"""
     return format_media_output(
         media=show,
-        media_type='tv',
+        media_type="tv",
         show_summary=show_summary,
         index=index,
         show_cast=show_cast,
         show_language=show_language,
         show_rating=show_rating,
-        show_imdb_link=show_imdb_link
+        show_imdb_link=show_imdb_link,
     )
+
 
 # ------------------------------------------------------------------------
 # CONFIG ADAPTER
 # ------------------------------------------------------------------------
 def adapt_root_config_to_legacy(root_config):
     """Convert root config.yml format to legacy TRFP format"""
-    return adapt_config_for_media_type(root_config, 'tv')
+    return adapt_config_for_media_type(root_config, "tv")
+
 
 def main():
     """Entry point for TV show recommendations."""
     run_recommender_main(
-        media_type='TV Show',
-        description='TV Show Recommendations for Plex',
+        media_type="TV Show",
+        description="TV Show Recommendations for Plex",
         adapt_config_func=adapt_root_config_to_legacy,
         process_func=process_recommendations,
-        media_type_key='tv'
+        media_type_key="tv",
     )
+
 
 def process_recommendations(config, config_path, log_retention_days, single_user=None, library=None):
     """Process and display TV show recommendations for configured users."""
     original_stdout = sys.stdout
-    log_dir = os.path.join(get_project_root(), 'logs')
-    setup_log_file(log_dir, log_retention_days, single_user, 'recommendations')
+    log_dir = os.path.join(get_project_root(), "logs")
+    setup_log_file(log_dir, log_retention_days, single_user, "recommendations")
 
     try:
         # Create recommender with single user context
@@ -622,21 +649,23 @@ def process_recommendations(config, config_path, log_retention_days, single_user
         recommendations = recommender.get_recommendations()
 
         print(f"\n{GREEN}=== Recommended Unwatched Shows in Your Library ==={RESET}")
-        plex_recs = recommendations.get('plex_recommendations', [])
+        plex_recs = recommendations.get("plex_recommendations", [])
         if plex_recs:
             for i, show in enumerate(plex_recs, start=1):
-                print(format_show_output(
-                    show,
-                    show_summary=recommender.show_summary,
-                    index=i,
-                    show_cast=recommender.show_cast,
-                    show_language=recommender.show_language,
-                    show_rating=recommender.show_rating,
-                    show_imdb_link=recommender.show_imdb_link
-                ))
+                print(
+                    format_show_output(
+                        show,
+                        show_summary=recommender.show_summary,
+                        index=i,
+                        show_cast=recommender.show_cast,
+                        show_language=recommender.show_language,
+                        show_rating=recommender.show_rating,
+                        show_imdb_link=recommender.show_imdb_link,
+                    )
+                )
                 print()
         else:
-            log_warning(f"No recommendations found in your Plex library matching your criteria.")
+            log_warning("No recommendations found in your Plex library matching your criteria.")
 
         # Always manage labels (to remove old ones even if no new recommendations)
         recommender.manage_plex_labels(plex_recs)

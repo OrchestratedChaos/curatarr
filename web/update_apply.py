@@ -109,9 +109,9 @@ from utils import self_update, self_update_handoff
 from utils.helpers import no_window_kwargs, resolve_system_executable
 from utils.update_check import update_available
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
-UPDATE_LOG_FILENAME = 'update_apply.log'
+UPDATE_LOG_FILENAME = "update_apply.log"
 
 # A git fetch against a slow/unreachable remote shouldn't hang the
 # /update/apply request itself - this is just the *precondition check*
@@ -144,25 +144,25 @@ RELAUNCH_MAX_ATTEMPTS = 3
 # operation. Each falls back to the bare name if the expected absolute
 # path doesn't exist on this machine.
 def _windows_powershell_path() -> str:
-    system_root = os.environ.get('SystemRoot', r'C:\Windows')
-    candidate = os.path.join(system_root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    return resolve_system_executable(candidate, 'powershell')
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return resolve_system_executable(candidate, "powershell")
 
 
 def _posix_bash_path() -> str:
-    return resolve_system_executable('/bin/bash', 'bash')
+    return resolve_system_executable("/bin/bash", "bash")
 
 
 def _windows_tasklist_path() -> str:
-    system_root = os.environ.get('SystemRoot', r'C:\Windows')
-    candidate = os.path.join(system_root, 'System32', 'tasklist.exe')
-    return resolve_system_executable(candidate, 'tasklist')
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = os.path.join(system_root, "System32", "tasklist.exe")
+    return resolve_system_executable(candidate, "tasklist")
 
 
 def _windows_taskkill_path() -> str:
-    system_root = os.environ.get('SystemRoot', r'C:\Windows')
-    candidate = os.path.join(system_root, 'System32', 'taskkill.exe')
-    return resolve_system_executable(candidate, 'taskkill')
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = os.path.join(system_root, "System32", "taskkill.exe")
+    return resolve_system_executable(candidate, "taskkill")
 
 
 class UpdateAlreadyInProgressError(Exception):
@@ -178,11 +178,11 @@ def _fresh_worker_temp_dir() -> str:
     """A guaranteed-unique directory under the system temp root, used
     as the frozen self-update worker's own TEMP/TMP - see the frozen
     branch of UpdateManager._spawn_worker for why."""
-    return tempfile.mkdtemp(prefix=f'curatarr-worker-{os.getpid()}-')
+    return tempfile.mkdtemp(prefix=f"curatarr-worker-{os.getpid()}-")
 
 
 def _updater_script(project_root: str) -> str:
-    return os.path.join(project_root, 'run.ps1' if os.name == 'nt' else 'run.sh')
+    return os.path.join(project_root, "run.ps1" if os.name == "nt" else "run.sh")
 
 
 def check_verified_update(project_root: str, timeout: float = CHECK_TIMEOUT_SECONDS) -> Optional[str]:
@@ -200,12 +200,16 @@ def check_verified_update(project_root: str, timeout: float = CHECK_TIMEOUT_SECO
     if not os.path.isfile(script):
         return None
     try:
-        if os.name == 'nt':
-            cmd = [_windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script, '-CheckVerifiedUpdate']
+        if os.name == "nt":
+            cmd = [_windows_powershell_path(), "-ExecutionPolicy", "Bypass", "-File", script, "-CheckVerifiedUpdate"]
         else:
-            cmd = [_posix_bash_path(), script, '--check-verified-update']
+            cmd = [_posix_bash_path(), script, "--check-verified-update"]
         result = subprocess.run(
-            cmd, cwd=project_root, capture_output=True, text=True, timeout=timeout,
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             **no_window_kwargs(),
         )
         if result.returncode != 0:
@@ -232,7 +236,7 @@ def _check_update_available_for_binary() -> Optional[str]:
     and "check itself failed" collapse to the same None, same fail-open
     contract as update_available() itself."""
     try:
-        latest, _current, is_newer = update_available(update_mode='notify', force_refresh=True)
+        latest, _current, is_newer = update_available(update_mode="notify", force_refresh=True)
     except Exception as e:
         logger.warning(f"Binary update precondition check failed (non-fatal): {e}")
         return None
@@ -297,13 +301,13 @@ class UpdateManager:
             self._in_progress = True
 
         try:
-            if os.environ.get('RUNNING_IN_DOCKER') == 'true':
+            if os.environ.get("RUNNING_IN_DOCKER") == "true":
                 raise UpdateNotAvailableError(
                     "Self-update isn't available in Docker - pull the new "
                     "image instead, e.g.: docker pull "
                     "ghcr.io/orchestratedchaos/curatarr:latest"
                 )
-            if getattr(sys, 'frozen', False):
+            if getattr(sys, "frozen", False):
                 tag = _check_update_available_for_binary()
             else:
                 tag = check_verified_update(self.project_root)
@@ -343,7 +347,7 @@ class UpdateManager:
         """
         os.makedirs(self.logs_dir, exist_ok=True)
         log_path = os.path.join(self.logs_dir, UPDATE_LOG_FILENAME)
-        log_file = open(log_path, 'a', encoding='utf-8')
+        log_file = open(log_path, "a", encoding="utf-8")
 
         popen_kwargs = dict(
             cwd=self.project_root,
@@ -352,12 +356,16 @@ class UpdateManager:
             stdin=subprocess.DEVNULL,
             close_fds=True,
         )
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             cmd = [
-                sys.executable, '--self-update-worker',
-                '--pid', str(os.getpid()),
-                '--host', host,
-                '--port', str(port),
+                sys.executable,
+                "--self-update-worker",
+                "--pid",
+                str(os.getpid()),
+                "--host",
+                host,
+                "--port",
+                str(port),
             ]
             # This process (the running server) is itself a frozen
             # curatarr.exe instance and may have PyInstaller onefile's
@@ -383,18 +391,23 @@ class UpdateManager:
             # to download+verify the update and hand off to the script.
             worker_env = self_update.sanitize_frozen_relaunch_env(os.environ)
             fresh_temp = _fresh_worker_temp_dir()
-            worker_env['TEMP'] = fresh_temp
-            worker_env['TMP'] = fresh_temp
-            popen_kwargs['env'] = worker_env
+            worker_env["TEMP"] = fresh_temp
+            worker_env["TMP"] = fresh_temp
+            popen_kwargs["env"] = worker_env
         else:
             cmd = [
-                sys.executable, os.path.abspath(__file__),
-                '--project-root', self.project_root,
-                '--pid', str(os.getpid()),
-                '--host', host,
-                '--port', str(port),
+                sys.executable,
+                os.path.abspath(__file__),
+                "--project-root",
+                self.project_root,
+                "--pid",
+                str(os.getpid()),
+                "--host",
+                host,
+                "--port",
+                str(port),
             ]
-        if os.name == 'nt':
+        if os.name == "nt":
             # getattr(...) defaults (not a bare subprocess.X reference)
             # for both flags - matches web/job_runner.py's own
             # CREATE_NO_WINDOW precedent: these constants only exist in
@@ -402,12 +415,11 @@ class UpdateManager:
             # would raise AttributeError if this branch were ever
             # exercised (e.g. via a test monkeypatching os.name) on a
             # non-Windows Python.
-            popen_kwargs['creationflags'] = (
-                getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
-                | getattr(subprocess, 'DETACHED_PROCESS', 0x00000008)
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200) | getattr(
+                subprocess, "DETACHED_PROCESS", 0x00000008
             )
         else:
-            popen_kwargs['start_new_session'] = True
+            popen_kwargs["start_new_session"] = True
 
         subprocess.Popen(cmd, **popen_kwargs)
         logger.info(f"Update worker started for {host}:{port} (log: {log_path})")
@@ -418,16 +430,19 @@ class UpdateManager:
 # UpdateManager._spawn_worker above. Never called in-process.
 # =============================================================================
 
+
 def _pid_alive(pid: int) -> bool:
     """Best-effort liveness probe - mirrors web/job_runner.py's
     _pid_alive."""
     if pid <= 0:
         return False
-    if os.name == 'nt':
+    if os.name == "nt":
         try:
             result = subprocess.run(
-                [_windows_tasklist_path(), '/FI', f'PID eq {pid}'],
-                capture_output=True, text=True, timeout=3,
+                [_windows_tasklist_path(), "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
                 **no_window_kwargs(),
             )
             return str(pid) in result.stdout
@@ -450,7 +465,7 @@ def _pid_alive(pid: int) -> bool:
 # PID of whatever recommender subprocess is currently running, if any),
 # not something that needs (or should have) an in-process coupling
 # between the two modules.
-_JOB_LOCK_FILENAME = 'webui_job.lock'
+_JOB_LOCK_FILENAME = "webui_job.lock"
 
 
 def _recommender_job_in_progress(project_root: str) -> bool:
@@ -472,9 +487,9 @@ def _recommender_job_in_progress(project_root: str) -> bool:
     on any read error, same fail-safe direction as _pid_alive's own
     "can't confirm, assume alive" branches.
     """
-    lock_path = os.path.join(project_root, 'logs', _JOB_LOCK_FILENAME)
+    lock_path = os.path.join(project_root, "logs", _JOB_LOCK_FILENAME)
     try:
-        with open(lock_path, 'r', encoding='utf-8') as f:
+        with open(lock_path, "r", encoding="utf-8") as f:
             pid = int(f.read().strip())
     except FileNotFoundError:
         return False
@@ -511,10 +526,11 @@ def _shut_down_old_server(pid: int, timeout: float) -> None:
     if not _pid_alive(pid):
         return
     try:
-        if os.name == 'nt':
+        if os.name == "nt":
             subprocess.run(
-                [_windows_taskkill_path(), '/F', '/PID', str(pid)],
-                capture_output=True, timeout=5,
+                [_windows_taskkill_path(), "/F", "/PID", str(pid)],
+                capture_output=True,
+                timeout=5,
                 **no_window_kwargs(),
             )
         else:
@@ -543,19 +559,23 @@ def _relaunch_ui(project_root: str, port: int) -> None:
     script instead (see utils/self_update_handoff.py's module
     docstring for why) and returns before ever getting here.
     """
-    script = os.path.join(project_root, 'run-ui.ps1' if os.name == 'nt' else 'run-ui.sh')
+    script = os.path.join(project_root, "run-ui.ps1" if os.name == "nt" else "run-ui.sh")
     env = dict(os.environ)
-    env['CURATARR_UI_PORT'] = str(port)
+    env["CURATARR_UI_PORT"] = str(port)
     # The user's existing browser tab is already open and will reload
     # itself once /healthz comes back (see base.html) - don't also pop
     # open a brand new tab/window here.
-    env['CURATARR_SKIP_BROWSER_OPEN'] = '1'
+    env["CURATARR_SKIP_BROWSER_OPEN"] = "1"
 
-    if os.name == 'nt':
-        cmd = [_windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script]
+    if os.name == "nt":
+        cmd = [_windows_powershell_path(), "-ExecutionPolicy", "Bypass", "-File", script]
         subprocess.Popen(
-            cmd, cwd=project_root, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            cmd,
+            cwd=project_root,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
             # NOT DETACHED_PROCESS - confirmed via real end-to-end
             # testing (see utils/self_update_handoff.py's identical
             # comment, and this repo's v2.8.29 PR description) that a
@@ -564,15 +584,19 @@ def _relaunch_ui(project_root: str, port: int) -> None:
             # script's content - CREATE_NO_WINDOW is the flag that
             # actually keeps it invisible AND working.
             creationflags=(
-                getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
-                | getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
             ),
         )
     else:
         cmd = [_posix_bash_path(), script]
         subprocess.Popen(
-            cmd, cwd=project_root, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            cmd,
+            cwd=project_root,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
 
@@ -584,7 +608,7 @@ def _port_is_listening(port: int, timeout: float = 0.3) -> bool:
     start accepting connections here")."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout)
-        return sock.connect_ex(('127.0.0.1', port)) == 0
+        return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
 def _relaunch_and_verify(project_root: str, port: int) -> None:
@@ -628,8 +652,7 @@ def _relaunch_and_verify(project_root: str, port: int) -> None:
                 return
             time.sleep(0.5)
         print(
-            f"[update-worker] relaunch attempt {attempt} did not come up within "
-            f"{RELAUNCH_VERIFY_TIMEOUT_SECONDS}s",
+            f"[update-worker] relaunch attempt {attempt} did not come up within {RELAUNCH_VERIFY_TIMEOUT_SECONDS}s",
             flush=True,
         )
 
@@ -669,8 +692,7 @@ def _run_frozen_verify_and_handoff(project_root: str, old_pid: int, port: int) -
     # see _recommender_job_in_progress's docstring.
     if _recommender_job_in_progress(project_root):
         print(
-            "[update-worker] a recommender run started during download/verify - "
-            "aborting, old server left untouched",
+            "[update-worker] a recommender run started during download/verify - aborting, old server left untouched",
             flush=True,
         )
         if os.path.isfile(verified.asset_path):
@@ -756,7 +778,7 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
             )
             return
 
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             try:
                 _run_frozen_verify_and_handoff(project_root, old_pid, port)
             except Exception as e:
@@ -775,18 +797,29 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
         _shut_down_old_server(old_pid, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
 
         script = _updater_script(project_root)
-        if os.name == 'nt':
-            apply_cmd = [_windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script, '-ApplyVerifiedUpdate']
+        if os.name == "nt":
+            apply_cmd = [
+                _windows_powershell_path(),
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script,
+                "-ApplyVerifiedUpdate",
+            ]
         else:
-            apply_cmd = [_posix_bash_path(), script, '--apply-verified-update']
+            apply_cmd = [_posix_bash_path(), script, "--apply-verified-update"]
 
         print("[update-worker] applying verified update...", flush=True)
         try:
             result = subprocess.run(
-                apply_cmd, cwd=project_root, capture_output=True, text=True, timeout=APPLY_TIMEOUT_SECONDS,
+                apply_cmd,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=APPLY_TIMEOUT_SECONDS,
                 **no_window_kwargs(),
             )
-            output = (result.stdout or '').strip()
+            output = (result.stdout or "").strip()
             print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)
             if result.stderr:
                 print(f"[update-worker] apply stderr: {result.stderr.strip()}", flush=True)
@@ -815,12 +848,12 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
 
 def _parse_worker_args(argv):
     parser = argparse.ArgumentParser(
-        description='Detached worker for the web UI update-apply flow - not meant to be run by hand.'
+        description="Detached worker for the web UI update-apply flow - not meant to be run by hand."
     )
-    parser.add_argument('--project-root', required=True)
-    parser.add_argument('--pid', type=int, required=True)
-    parser.add_argument('--host', required=True)
-    parser.add_argument('--port', type=int, required=True)
+    parser.add_argument("--project-root", required=True)
+    parser.add_argument("--pid", type=int, required=True)
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--port", type=int, required=True)
     return parser.parse_args(argv)
 
 
@@ -832,11 +865,11 @@ def _parse_binary_worker_args(argv):
     per-user data dir) the same way every other frozen entry point
     does."""
     parser = argparse.ArgumentParser(
-        description='Detached self-update worker for a frozen binary - not meant to be run by hand.'
+        description="Detached self-update worker for a frozen binary - not meant to be run by hand."
     )
-    parser.add_argument('--pid', type=int, required=True)
-    parser.add_argument('--host', required=True)
-    parser.add_argument('--port', type=int, required=True)
+    parser.add_argument("--pid", type=int, required=True)
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--port", type=int, required=True)
     return parser.parse_args(argv)
 
 
@@ -847,10 +880,13 @@ def run_self_update_worker(argv) -> None:
     install - see this module's docstring for why a frozen binary can't
     do that)."""
     from utils.helpers import get_project_root
+
     args = _parse_binary_worker_args(argv)
     _run_worker(get_project_root(), args.pid, args.host, args.port)
 
 
-if __name__ == '__main__':  # pragma: no cover - detached-process entry point; the decision logic it calls (_run_worker and everything it calls) is exercised directly by tests/test_web_update_apply.py, but actually spawning/killing real processes from a unit test is neither safe nor meaningful - see that file's module docstring, matching this repo's existing precedent for excluding OS-process-boundary code (e.g. curatarr_app.py's _attach_or_setup_console).
+if (
+    __name__ == "__main__"
+):  # pragma: no cover - detached-process entry point; the decision logic it calls (_run_worker and everything it calls) is exercised directly by tests/test_web_update_apply.py, but actually spawning/killing real processes from a unit test is neither safe nor meaningful - see that file's module docstring, matching this repo's existing precedent for excluding OS-process-boundary code (e.g. curatarr_app.py's _attach_or_setup_console).
     _args = _parse_worker_args(sys.argv[1:])
     _run_worker(_args.project_root, _args.pid, _args.host, _args.port)

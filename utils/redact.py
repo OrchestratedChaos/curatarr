@@ -45,12 +45,10 @@ _KEY_ALTERNATION = "|".join(re.escape(name) for name in _SECRET_KEY_NAMES)
 # old, narrower character class didn't match at that position at all.
 # The key name is kept (so redaction is still informative); only the
 # value is masked.
-_SECRET_PATTERN = re.compile(
-    r'(?i)\b(' + _KEY_ALTERNATION + r')\b\s*[:=]\s*["\']?([^\s"\']{4,})["\']?'
-)
+_SECRET_PATTERN = re.compile(r"(?i)\b(" + _KEY_ALTERNATION + r')\b\s*[:=]\s*["\']?([^\s"\']{4,})["\']?')
 
 # "Authorization: Bearer <token>" style headers.
-_BEARER_PATTERN = re.compile(r'(?i)\bBearer\s+([A-Za-z0-9._\-]{8,})')
+_BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9._\-]{8,})")
 
 # Bare high-entropy tokens that don't follow a recognizable key=value
 # shape but are still unambiguously a secret by their vendor-specific
@@ -63,14 +61,31 @@ _BEARER_PATTERN = re.compile(r'(?i)\bBearer\s+([A-Za-z0-9._\-]{8,})')
 # "any long mixed-case alnum run" heuristic, which would also catch
 # harmless things like git commit SHAs and cache/session IDs.
 _KNOWN_TOKEN_PREFIXES = (
-    "github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
-    "sk-live-", "sk-test-", "sk_live_", "sk_test_", "sk-",
-    "rk_live_", "rk_test_",
-    "xoxb-", "xoxp-", "xoxa-", "xoxr-",
-    "glpat-", "npm_", "AIza", "AKIA", "ASIA",
+    "github_pat_",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "sk-live-",
+    "sk-test-",
+    "sk_live_",
+    "sk_test_",
+    "sk-",
+    "rk_live_",
+    "rk_test_",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "glpat-",
+    "npm_",
+    "AIza",
+    "AKIA",
+    "ASIA",
 )
 _PREFIX_ALTERNATION = "|".join(re.escape(prefix) for prefix in _KNOWN_TOKEN_PREFIXES)
-_BARE_TOKEN_PATTERN = re.compile(r'\b(' + _PREFIX_ALTERNATION + r')[A-Za-z0-9_\-]{8,}')
+_BARE_TOKEN_PATTERN = re.compile(r"\b(" + _PREFIX_ALTERNATION + r")[A-Za-z0-9_\-]{8,}")
 
 REDACTED = "***REDACTED***"
 

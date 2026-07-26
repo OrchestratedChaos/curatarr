@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from .api_client import BaseAPIClient
 from .display import log_warning
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 TAUTULLI_RATE_LIMIT_DELAY = 0.1
 TAUTULLI_REQUEST_TIMEOUT = 30
@@ -27,11 +27,12 @@ TAUTULLI_REQUEST_TIMEOUT = 30
 # users' full history in one call without paging.
 TAUTULLI_DEFAULT_HISTORY_LENGTH = 5000
 
-PLACEHOLDER_API_KEY = 'YOUR_TAUTULLI_API_KEY'
+PLACEHOLDER_API_KEY = "YOUR_TAUTULLI_API_KEY"
 
 
 class TautulliAPIError(Exception):
     """Raised when a Tautulli API request fails."""
+
     pass
 
 
@@ -56,7 +57,7 @@ class TautulliClient(BaseAPIClient):
             api_key: Tautulli API key (Settings -> Web Interface -> API Key)
         """
         super().__init__()
-        self.base_url = url.rstrip('/')
+        self.base_url = url.rstrip("/")
         self.api_key = api_key
 
     def _get_headers(self) -> Dict[str, str]:
@@ -77,21 +78,21 @@ class TautulliClient(BaseAPIClient):
         Raises:
             TautulliAPIError: On HTTP errors, timeouts, or an error result
         """
-        query = {'apikey': self.api_key, 'cmd': cmd}
+        query = {"apikey": self.api_key, "cmd": cmd}
         if params:
             query.update(params)
 
         url = f"{self.base_url}/api/v2"
         result = self._make_request_to_url("GET", url, params=query)
 
-        if not isinstance(result, dict) or 'response' not in result:
+        if not isinstance(result, dict) or "response" not in result:
             raise TautulliAPIError(f"Unexpected response shape from Tautulli cmd={cmd}")
 
-        envelope = result['response']
-        if envelope.get('result') != 'success':
-            raise TautulliAPIError(envelope.get('message') or f"Tautulli cmd={cmd} failed")
+        envelope = result["response"]
+        if envelope.get("result") != "success":
+            raise TautulliAPIError(envelope.get("message") or f"Tautulli cmd={cmd} failed")
 
-        return envelope.get('data')
+        return envelope.get("data")
 
     def get_users(self) -> List[Dict]:
         """
@@ -100,7 +101,7 @@ class TautulliClient(BaseAPIClient):
         Returns:
             List of user dicts (user_id, username, email, friendly_name, ...)
         """
-        data = self._call('get_users')
+        data = self._call("get_users")
         return data or []
 
     def get_history(self, user_id: Any, length: int = TAUTULLI_DEFAULT_HISTORY_LENGTH) -> List[Dict]:
@@ -115,10 +116,10 @@ class TautulliClient(BaseAPIClient):
             List of history row dicts (rating_key, grandparent_rating_key,
             media_type, stopped, date, watched_status, ...)
         """
-        data = self._call('get_history', params={'user_id': user_id, 'length': length})
+        data = self._call("get_history", params={"user_id": user_id, "length": length})
         if isinstance(data, dict):
             # Tautulli wraps history in a DataTables-style envelope: {"data": [...], ...}
-            return data.get('data') or []
+            return data.get("data") or []
         return data or []
 
 
@@ -132,13 +133,13 @@ def create_tautulli_client(config: Dict) -> Optional[TautulliClient]:
     Returns:
         TautulliClient if configured and enabled, None otherwise
     """
-    tautulli_config = config.get('tautulli', {}) or {}
+    tautulli_config = config.get("tautulli", {}) or {}
 
-    if not tautulli_config.get('enabled', False):
+    if not tautulli_config.get("enabled", False):
         return None
 
-    url = tautulli_config.get('url')
-    api_key = tautulli_config.get('api_key')
+    url = tautulli_config.get("url")
+    api_key = tautulli_config.get("api_key")
 
     if not url or not api_key or api_key == PLACEHOLDER_API_KEY:
         log_warning("Tautulli enabled but 'url'/'api_key' not configured - skipping Tautulli history")
@@ -157,8 +158,7 @@ class TautulliHistoryItem:
     downstream weighting code.
     """
 
-    def __init__(self, rating_key: str, viewed_at: Optional[datetime] = None,
-                 user_rating: Optional[float] = None):
+    def __init__(self, rating_key: str, viewed_at: Optional[datetime] = None, user_rating: Optional[float] = None):
         self.ratingKey = rating_key
         self.viewedAt = viewed_at
         self.userRating = user_rating
@@ -193,24 +193,28 @@ def build_user_map(client: TautulliClient, config: Dict) -> Dict[str, str]:
         # need the API client (and to keep this module easy to unit test).
         from plexapi.myplex import MyPlexAccount
 
-        account = MyPlexAccount(token=config['plex']['token'])
-        plex_identities = [{
-            # Plex convention: the server owner's account_id in the
-            # `/accounts` endpoint (what get_plex_account_ids() /
-            # fetch_plex_watch_history_movies/shows() actually use) is
-            # always local id '1', which differs from the owner's global
-            # plex.tv account.id used everywhere else in this account
-            # object. Key on '1' here so owner history correctly merges.
-            'id': '1',
-            'username': account.username,
-            'email': getattr(account, 'email', None),
-        }]
+        account = MyPlexAccount(token=config["plex"]["token"])
+        plex_identities = [
+            {
+                # Plex convention: the server owner's account_id in the
+                # `/accounts` endpoint (what get_plex_account_ids() /
+                # fetch_plex_watch_history_movies/shows() actually use) is
+                # always local id '1', which differs from the owner's global
+                # plex.tv account.id used everywhere else in this account
+                # object. Key on '1' here so owner history correctly merges.
+                "id": "1",
+                "username": account.username,
+                "email": getattr(account, "email", None),
+            }
+        ]
         for u in account.users():
-            plex_identities.append({
-                'id': str(u.id),
-                'username': u.title,
-                'email': getattr(u, 'email', None),
-            })
+            plex_identities.append(
+                {
+                    "id": str(u.id),
+                    "username": u.title,
+                    "email": getattr(u, "email", None),
+                }
+            )
     except Exception as e:
         log_warning(f"Tautulli: could not fetch Plex users for mapping: {e}")
         return {}
@@ -233,27 +237,27 @@ def map_users(plex_identities: List[Dict], tautulli_users: List[Dict]) -> Dict[s
     by_username: Dict[str, str] = {}
 
     for tu in tautulli_users:
-        if tu.get('user_id') is None:
+        if tu.get("user_id") is None:
             continue
-        tautulli_id = str(tu['user_id'])
+        tautulli_id = str(tu["user_id"])
 
-        email = (tu.get('email') or '').strip().lower()
+        email = (tu.get("email") or "").strip().lower()
         if email and email not in by_email:
             by_email[email] = tautulli_id
 
-        for name_field in ('username', 'friendly_name'):
-            name = (tu.get(name_field) or '').strip().lower()
+        for name_field in ("username", "friendly_name"):
+            name = (tu.get(name_field) or "").strip().lower()
             if name and name not in by_username:
                 by_username[name] = tautulli_id
 
     user_map: Dict[str, str] = {}
     for identity in plex_identities:
-        plex_id = identity.get('id')
+        plex_id = identity.get("id")
         if not plex_id:
             continue
 
-        email = (identity.get('email') or '').strip().lower()
-        username = (identity.get('username') or '').strip().lower()
+        email = (identity.get("email") or "").strip().lower()
+        username = (identity.get("username") or "").strip().lower()
 
         tautulli_id = None
         if email and email in by_email:
@@ -311,16 +315,16 @@ def fetch_tautulli_movie_history(
             continue
 
         for row in rows:
-            if row.get('media_type') != 'movie':
+            if row.get("media_type") != "movie":
                 continue
-            if row.get('watched_status') != 1:
+            if row.get("watched_status") != 1:
                 continue
 
-            rating_key = row.get('rating_key')
+            rating_key = row.get("rating_key")
             if not rating_key:
                 continue
 
-            ts = row.get('stopped') or row.get('date')
+            ts = row.get("stopped") or row.get("date")
             viewed_at = datetime.fromtimestamp(int(ts)) if ts else None
 
             items.append(TautulliHistoryItem(str(rating_key), viewed_at, None))
@@ -372,19 +376,19 @@ def fetch_tautulli_show_watched_data(
             continue
 
         for row in rows:
-            if row.get('media_type') != 'episode':
+            if row.get("media_type") != "episode":
                 continue
-            if row.get('watched_status') != 1:
+            if row.get("watched_status") != 1:
                 continue
 
-            show_key = row.get('grandparent_rating_key')
+            show_key = row.get("grandparent_rating_key")
             if not show_key:
                 continue
 
             show_id = int(show_key)
             watched_ids.add(show_id)
 
-            ts = row.get('stopped') or row.get('date')
+            ts = row.get("stopped") or row.get("date")
             if ts:
                 ts = int(ts)
                 if show_id not in timestamps or ts > timestamps[show_id]:

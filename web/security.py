@@ -19,15 +19,20 @@ violation). Re-exported here unchanged so every existing
 import hmac
 import os
 import re
-from typing import Iterable, List
 
 from utils.redact import REDACTED, redact, redact_lines
 
 __all__ = [
-    'REDACTED', 'redact', 'redact_lines', 'safe_join',
-    'is_allowed_host', 'register_origin_host_guard',
-    'AUTH_TOKEN_ENV_VAR', 'AUTH_TOKEN_COOKIE_NAME', 'MIN_AUTH_TOKEN_LENGTH',
-    'register_token_auth',
+    "REDACTED",
+    "redact",
+    "redact_lines",
+    "safe_join",
+    "is_allowed_host",
+    "register_origin_host_guard",
+    "AUTH_TOKEN_ENV_VAR",
+    "AUTH_TOKEN_COOKIE_NAME",
+    "MIN_AUTH_TOKEN_LENGTH",
+    "register_token_auth",
 ]
 
 
@@ -55,11 +60,12 @@ def safe_join(base_dir: str, filename: str) -> str:
 # with or without a port. app.run() only ever binds 127.0.0.1 (see
 # web/app.py), so anything else in the Host header means either a
 # misconfigured reverse proxy or a DNS-rebinding attempt.
-_ALLOWED_HOST_RE = re.compile(r'^(127\.0\.0\.1|localhost)(:\d+)?$', re.IGNORECASE)
+_ALLOWED_HOST_RE = re.compile(r"^(127\.0\.0\.1|localhost)(:\d+)?$", re.IGNORECASE)
 
 # Methods that mutate server state - every route using one of these is
 # a save/trigger/test-connection endpoint, never a plain page view.
-STATE_CHANGING_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
+STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
 
 # Additional exact-match hosts to allow, on top of the hardcoded
 # 127.0.0.1/localhost above - opt-in via CURATARR_ALLOWED_HOSTS
@@ -80,10 +86,8 @@ STATE_CHANGING_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 # Read live (not cached at import) so tests can monkeypatch it and a
 # running container can pick up a changed env var on restart.
 def _extra_allowed_hosts() -> frozenset:
-    raw = os.environ.get('CURATARR_ALLOWED_HOSTS', '')
-    return frozenset(
-        host.strip().lower() for host in raw.split(',') if host.strip()
-    )
+    raw = os.environ.get("CURATARR_ALLOWED_HOSTS", "")
+    return frozenset(host.strip().lower() for host in raw.split(",") if host.strip())
 
 
 def is_allowed_host(netloc: str) -> bool:
@@ -133,7 +137,7 @@ def register_origin_host_guard(app) -> None:
         if not is_allowed_host(request.host):
             abort(400)
         if request.method in STATE_CHANGING_METHODS:
-            source = request.headers.get('Origin') or request.headers.get('Referer')
+            source = request.headers.get("Origin") or request.headers.get("Referer")
             if not source:
                 abort(403)
             if not is_allowed_host(urlsplit(source).netloc):
@@ -158,12 +162,12 @@ def register_origin_host_guard(app) -> None:
 # bound to something other than loopback. Read live (not cached at
 # import), same as CURATARR_ALLOWED_HOSTS above, so a running process
 # picks up a changed value on restart and tests can monkeypatch it.
-AUTH_TOKEN_ENV_VAR = 'CURATARR_AUTH_TOKEN'
+AUTH_TOKEN_ENV_VAR = "CURATARR_AUTH_TOKEN"
 
 # Cookie name POST /login sets on success, so a browser session doesn't
 # have to hand-attach an Authorization/X-Curatarr-Token header on every
 # request - see register_token_auth's login routes.
-AUTH_TOKEN_COOKIE_NAME = 'curatarr_token'
+AUTH_TOKEN_COOKIE_NAME = "curatarr_token"
 
 # Floor CURATARR_AUTH_TOKEN must meet to be treated as "set" at all -
 # below this, it's short enough to be brute-forceable and is treated the
@@ -181,7 +185,7 @@ MIN_AUTH_TOKEN_LENGTH = 16
 # to start at all rather than silently running unauthenticated - this is
 # the explicit, opt-in way to say "I understand the risk, start anyway."
 # Never auto-detected, never defaulted to true.
-TRUSTED_NETWORK_ENV_VAR = 'CURATARR_TRUSTED_NETWORK'
+TRUSTED_NETWORK_ENV_VAR = "CURATARR_TRUSTED_NETWORK"
 
 
 def _trusted_network_ack() -> bool:
@@ -193,7 +197,7 @@ def _trusted_network_ack() -> bool:
     the per-request guard doesn't reject with 401 forever once that
     startup check has already let the operator's explicit choice
     through)."""
-    return os.environ.get(TRUSTED_NETWORK_ENV_VAR, '').strip().lower() == 'true'
+    return os.environ.get(TRUSTED_NETWORK_ENV_VAR, "").strip().lower() == "true"
 
 
 # Hosts this process is considered loopback-only when bound to - the
@@ -201,7 +205,7 @@ def _trusted_network_ack() -> bool:
 # (127.0.0.1 only). ::1 (IPv6 loopback) and the bare hostname
 # 'localhost' are included too since a caller could plausibly set
 # CURATARR_UI_HOST to either and mean the same thing.
-_LOOPBACK_BIND_HOSTS = frozenset({'127.0.0.1', '::1', 'localhost'})
+_LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def _is_loopback_bind(host: str) -> bool:
@@ -210,7 +214,7 @@ def _is_loopback_bind(host: str) -> bool:
     loopback-only. Anything else (0.0.0.0, a specific LAN interface,
     ...) is reachable from other machines and needs real authentication,
     not just the Host/Origin guard above."""
-    return (host or '').strip().lower() in _LOOPBACK_BIND_HOSTS
+    return (host or "").strip().lower() in _LOOPBACK_BIND_HOSTS
 
 
 # Exempt from the token requirement even on a non-loopback bind:
@@ -220,7 +224,7 @@ def _is_loopback_bind(host: str) -> bool:
 #   have no way to carry a token; see web/app.py's healthz() docstring -
 #   it discloses nothing but a version string, same risk profile either
 #   way).
-_TOKEN_EXEMPT_PATHS = frozenset({'/login', '/healthz'})
+_TOKEN_EXEMPT_PATHS = frozenset({"/login", "/healthz"})
 
 
 def _request_token(request) -> str:
@@ -230,13 +234,13 @@ def _request_token(request) -> str:
     leaves behind - whichever a given caller finds easiest: a
     script/reverse proxy for the header forms, a browser for the
     cookie."""
-    auth_header = request.headers.get('Authorization', '')
-    if auth_header.startswith('Bearer '):
-        return auth_header[len('Bearer '):].strip()
-    header_token = request.headers.get('X-Curatarr-Token', '')
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[len("Bearer ") :].strip()
+    header_token = request.headers.get("X-Curatarr-Token", "")
     if header_token:
         return header_token
-    return request.cookies.get(AUTH_TOKEN_COOKIE_NAME, '')
+    return request.cookies.get(AUTH_TOKEN_COOKIE_NAME, "")
 
 
 def _valid_token(supplied: str) -> bool:
@@ -245,7 +249,7 @@ def _valid_token(supplied: str) -> bool:
     token one character at a time. False (never an exception, never a
     "trivially true") if the token isn't configured or nothing was
     supplied."""
-    expected = os.environ.get(AUTH_TOKEN_ENV_VAR, '')
+    expected = os.environ.get(AUTH_TOKEN_ENV_VAR, "")
     if len(expected) < MIN_AUTH_TOKEN_LENGTH or not supplied:
         return False
     return hmac.compare_digest(supplied, expected)
@@ -283,22 +287,22 @@ def register_token_auth(app, bind_host: str) -> None:
     """
     from flask import abort, make_response, redirect, render_template, request
 
-    @app.get('/login')
+    @app.get("/login")
     def login_form():
-        return render_template('login.html', error=request.args.get('error'))
+        return render_template("login.html", error=request.args.get("error"))
 
-    @app.post('/login')
+    @app.post("/login")
     def login_submit():
-        supplied = request.form.get('token', '')
+        supplied = request.form.get("token", "")
         if not _valid_token(supplied):
-            return redirect('/login?error=1', code=303)
-        response = make_response(redirect('/', code=303))
+            return redirect("/login?error=1", code=303)
+        response = make_response(redirect("/", code=303))
         response.set_cookie(
             AUTH_TOKEN_COOKIE_NAME,
             supplied,
             httponly=True,
-            samesite='Strict',
-            path='/',
+            samesite="Strict",
+            path="/",
             # No secure=True: this app is served over plain HTTP on a
             # LAN by design (see docs/DOCKER.md) - Secure would make the
             # browser silently refuse to ever send the cookie back on
@@ -309,7 +313,7 @@ def register_token_auth(app, bind_host: str) -> None:
     if _is_loopback_bind(bind_host):
         return
 
-    token_configured = len(os.environ.get(AUTH_TOKEN_ENV_VAR, '')) >= MIN_AUTH_TOKEN_LENGTH
+    token_configured = len(os.environ.get(AUTH_TOKEN_ENV_VAR, "")) >= MIN_AUTH_TOKEN_LENGTH
     if not token_configured and _trusted_network_ack():
         return
 

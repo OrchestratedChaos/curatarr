@@ -5,14 +5,15 @@ Provides common functionality for rate limiting, request handling, and error par
 
 import logging
 import time
-import requests
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin, urlsplit
+
+import requests
 
 from .helpers import read_response_capped
 from .metrics import record_api_call
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Redirect statuses requests would otherwise follow automatically.
 _REDIRECT_STATUSES = (301, 302, 303, 307, 308)
@@ -76,9 +77,9 @@ class BaseAPIClient:
         try:
             error_data = response.json()
             if isinstance(error_data, list) and error_data:
-                error_msg = error_data[0].get('errorMessage', error_msg)
+                error_msg = error_data[0].get("errorMessage", error_msg)
             elif isinstance(error_data, dict):
-                error_msg = error_data.get('message', error_data.get('error', error_msg))
+                error_msg = error_data.get("message", error_data.get("error", error_msg))
         except Exception as e:
             logger.debug(f"Failed to parse error response JSON: {e}")
         return error_msg
@@ -121,9 +122,14 @@ class BaseAPIClient:
 
         return response.json()
 
-    def _follow_same_host_redirect(self, method: str, response: requests.Response,
-                                    headers: Dict[str, str], data: Optional[Dict],
-                                    params: Optional[Dict]) -> requests.Response:
+    def _follow_same_host_redirect(
+        self,
+        method: str,
+        response: requests.Response,
+        headers: Dict[str, str],
+        data: Optional[Dict],
+        params: Optional[Dict],
+    ) -> requests.Response:
         """Manually re-issue a redirected request, but ONLY when the
         redirect target is the same host the request was already
         trusted to go to.
@@ -142,7 +148,7 @@ class BaseAPIClient:
         """
         hops = 0
         while response.status_code in _REDIRECT_STATUSES and hops < _MAX_REDIRECT_HOPS:
-            location = response.headers.get('Location')
+            location = response.headers.get("Location")
             if not location:
                 break
             original_host = urlsplit(response.url).netloc
@@ -166,17 +172,20 @@ class BaseAPIClient:
             )
             hops += 1
         else:
-            if response.status_code in _REDIRECT_STATUSES and response.headers.get('Location'):
+            if response.status_code in _REDIRECT_STATUSES and response.headers.get("Location"):
                 logger.warning(
-                    f"{self.api_name} redirected more than {_MAX_REDIRECT_HOPS} times "
-                    f"- refusing to follow further."
+                    f"{self.api_name} redirected more than {_MAX_REDIRECT_HOPS} times - refusing to follow further."
                 )
         return response
 
-    def _make_request_to_url(self, method: str, url: str,
-                              data: Optional[Dict] = None,
-                              params: Optional[Dict] = None,
-                              headers: Optional[Dict] = None) -> Any:
+    def _make_request_to_url(
+        self,
+        method: str,
+        url: str,
+        data: Optional[Dict] = None,
+        params: Optional[Dict] = None,
+        headers: Optional[Dict] = None,
+    ) -> Any:
         """
         Make an HTTP request with rate limiting and error handling.
 
@@ -209,7 +218,7 @@ class BaseAPIClient:
         # handling included, not just the requests-level exceptions
         # this try/except itself translates) is recorded as 'error'.
         request_start = time.time()
-        outcome = 'error'
+        outcome = "error"
         try:
             response = requests.request(
                 method=method,
@@ -238,7 +247,7 @@ class BaseAPIClient:
             except ValueError as e:
                 raise self.exception_class(f"{self.api_name} response rejected: {e}")
             result = self._handle_response(response)
-            outcome = 'success'
+            outcome = "success"
             return result
 
         except requests.exceptions.Timeout:

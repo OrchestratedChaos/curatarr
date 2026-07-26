@@ -86,7 +86,7 @@ def _require_auth_token_or_exit(host: str) -> None:
     """
     if _is_loopback_bind(host):
         return
-    token = os.environ.get(AUTH_TOKEN_ENV_VAR, '')
+    token = os.environ.get(AUTH_TOKEN_ENV_VAR, "")
     if len(token) >= MIN_AUTH_TOKEN_LENGTH:
         return
     if _trusted_network_ack():
@@ -127,12 +127,12 @@ def _require_auth_token_or_exit(host: str) -> None:
 
 
 def main() -> None:
-    port = int(os.environ.get('CURATARR_UI_PORT', DEFAULT_PORT))
-    host = os.environ.get('CURATARR_UI_HOST', '0.0.0.0')
+    port = int(os.environ.get("CURATARR_UI_PORT", DEFAULT_PORT))
+    host = os.environ.get("CURATARR_UI_HOST", "0.0.0.0")
     _require_auth_token_or_exit(host)
     app = create_app(bind_host=host)
     waitress.serve(app, host=host, port=port, threads=THREADS)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

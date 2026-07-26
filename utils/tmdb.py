@@ -4,30 +4,59 @@ Handles TMDB API calls, keyword fetching, and ID lookups.
 """
 
 import json
+import logging
 import os
 import time
-import logging
-import requests
 from typing import Dict, List, Optional
+
+import requests
 
 from .config import TMDB_REQUEST_TIMEOUT
 from .metrics import record_api_call
 
 # Module-level logger
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Cache version for IMDB→TMDB mappings
 IMDB_TMDB_CACHE_VERSION = 1
 
 # Language code mappings
 LANGUAGE_CODES = {
-    'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German', 'it': 'Italian',
-    'pt': 'Portuguese', 'ru': 'Russian', 'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese',
-    'ar': 'Arabic', 'hi': 'Hindi', 'nl': 'Dutch', 'sv': 'Swedish', 'no': 'Norwegian',
-    'da': 'Danish', 'fi': 'Finnish', 'pl': 'Polish', 'tr': 'Turkish', 'el': 'Greek',
-    'he': 'Hebrew', 'th': 'Thai', 'vi': 'Vietnamese', 'id': 'Indonesian', 'ms': 'Malay',
-    'cs': 'Czech', 'hu': 'Hungarian', 'ro': 'Romanian', 'uk': 'Ukrainian', 'fa': 'Persian',
-    'bn': 'Bengali', 'ta': 'Tamil', 'te': 'Telugu', 'mr': 'Marathi', 'ur': 'Urdu'
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "nl": "Dutch",
+    "sv": "Swedish",
+    "no": "Norwegian",
+    "da": "Danish",
+    "fi": "Finnish",
+    "pl": "Polish",
+    "tr": "Turkish",
+    "el": "Greek",
+    "he": "Hebrew",
+    "th": "Thai",
+    "vi": "Vietnamese",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "cs": "Czech",
+    "hu": "Hungarian",
+    "ro": "Romanian",
+    "uk": "Ukrainian",
+    "fa": "Persian",
+    "bn": "Bengali",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "mr": "Marathi",
+    "ur": "Urdu",
 }
 
 
@@ -65,7 +94,7 @@ def fetch_tmdb_with_retry(url: str, params: Dict, max_retries: int = 3, timeout:
     # 'success'/'error' here is simply "did we end up with a result".
     start = time.time()
     result = _fetch_tmdb_with_retry_impl(url, params, max_retries, timeout)
-    record_api_call('tmdb', 'success' if result is not None else 'error', time.time() - start)
+    record_api_call("tmdb", "success" if result is not None else "error", time.time() - start)
     return result
 
 
@@ -86,10 +115,12 @@ def _fetch_tmdb_with_retry_impl(url: str, params: Dict, max_retries: int = 3, ti
             logging.debug(f"TMDB request failed with status {resp.status_code}")
             return None
 
-        except (requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout,
-                requests.exceptions.ChunkedEncodingError) as e:
-            logging.warning(f"TMDB connection error, retrying... ({attempt+1}/{max_retries})")
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ) as e:
+            logging.warning(f"TMDB connection error, retrying... ({attempt + 1}/{max_retries})")
             time.sleep(1)
             if attempt == max_retries - 1:
                 logging.warning(f"TMDB request failed after {max_retries} tries: {e}")
@@ -100,7 +131,7 @@ def _fetch_tmdb_with_retry_impl(url: str, params: Dict, max_retries: int = 3, ti
     return None
 
 
-def get_tmdb_id_for_item(item, tmdb_api_key: str, media_type: str = 'movie', cache: Dict = None) -> Optional[int]:
+def get_tmdb_id_for_item(item, tmdb_api_key: str, media_type: str = "movie", cache: Dict = None) -> Optional[int]:
     """
     Get TMDB ID for a Plex item using multiple fallback methods.
 
@@ -116,52 +147,48 @@ def get_tmdb_id_for_item(item, tmdb_api_key: str, media_type: str = 'movie', cac
     from .plex import extract_ids_from_guids
 
     # Check cache first
-    cache_key = str(getattr(item, 'ratingKey', None))
+    cache_key = str(getattr(item, "ratingKey", None))
     if cache and cache_key in cache:
         return cache[cache_key]
 
     # Method 1: Extract from Plex GUIDs
     ids = extract_ids_from_guids(item)
-    if ids['tmdb_id']:
+    if ids["tmdb_id"]:
         if cache is not None:
-            cache[cache_key] = ids['tmdb_id']
-        return ids['tmdb_id']
+            cache[cache_key] = ids["tmdb_id"]
+        return ids["tmdb_id"]
 
     # Method 2: Search TMDB API
     if tmdb_api_key:
-        title = getattr(item, 'title', '')
-        year = getattr(item, 'year', None)
+        title = getattr(item, "title", "")
+        year = getattr(item, "year", None)
 
         search_url = f"https://api.themoviedb.org/3/search/{media_type}"
-        params = {
-            'api_key': tmdb_api_key,
-            'query': title,
-            'include_adult': False
-        }
+        params = {"api_key": tmdb_api_key, "query": title, "include_adult": False}
 
         # Add year parameter (different field name for TV)
         if year:
-            if media_type == 'movie':
-                params['year'] = year
+            if media_type == "movie":
+                params["year"] = year
             else:
-                params['first_air_date_year'] = year
+                params["first_air_date_year"] = year
 
         data = fetch_tmdb_with_retry(search_url, params)
-        if data and data.get('results'):
-            tmdb_id = data['results'][0]['id']
+        if data and data.get("results"):
+            tmdb_id = data["results"][0]["id"]
             if cache is not None:
                 cache[cache_key] = tmdb_id
             return tmdb_id
 
     # Method 3: Try via IMDb ID if available
-    if ids['imdb_id'] and tmdb_api_key:
+    if ids["imdb_id"] and tmdb_api_key:
         find_url = f"https://api.themoviedb.org/3/find/{ids['imdb_id']}"
-        params = {'api_key': tmdb_api_key, 'external_source': 'imdb_id'}
+        params = {"api_key": tmdb_api_key, "external_source": "imdb_id"}
         data = fetch_tmdb_with_retry(find_url, params)
         if data:
-            results_key = 'movie_results' if media_type == 'movie' else 'tv_results'
+            results_key = "movie_results" if media_type == "movie" else "tv_results"
             if data.get(results_key):
-                tmdb_id = data[results_key][0]['id']
+                tmdb_id = data[results_key][0]["id"]
                 if cache is not None:
                     cache[cache_key] = tmdb_id
                 return tmdb_id
@@ -169,7 +196,7 @@ def get_tmdb_id_for_item(item, tmdb_api_key: str, media_type: str = 'movie', cac
     return None
 
 
-def get_tmdb_keywords(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie', cache: Dict = None) -> List[str]:
+def get_tmdb_keywords(tmdb_api_key: str, tmdb_id: int, media_type: str = "movie", cache: Dict = None) -> List[str]:
     """
     Get keywords for a TMDB item.
 
@@ -190,15 +217,15 @@ def get_tmdb_keywords(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie'
     if cache and cache_key in cache:
         return list(cache[cache_key])
 
-    media = 'movie' if media_type == 'movie' else 'tv'
+    media = "movie" if media_type == "movie" else "tv"
     url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}/keywords"
-    params = {'api_key': tmdb_api_key}
+    params = {"api_key": tmdb_api_key}
 
     data = fetch_tmdb_with_retry(url, params)
     if data:
         # Movies use 'keywords', TV uses 'results'
-        keywords_list = data.get('keywords', data.get('results', []))
-        keywords = [k['name'].lower() for k in keywords_list if 'name' in k]
+        keywords_list = data.get("keywords", data.get("results", []))
+        keywords = [k["name"].lower() for k in keywords_list if "name" in k]
 
         if cache is not None and keywords:
             cache[cache_key] = keywords
@@ -218,13 +245,13 @@ def load_imdb_tmdb_cache(cache_dir: str) -> Dict[str, int]:
     Returns:
         Dict mapping IMDB IDs to TMDB IDs
     """
-    cache_path = os.path.join(cache_dir, 'imdb_tmdb_cache.json')
+    cache_path = os.path.join(cache_dir, "imdb_tmdb_cache.json")
     if os.path.exists(cache_path):
         try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
+            with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if data.get('version', 0) >= IMDB_TMDB_CACHE_VERSION:
-                    return data.get('mappings', {})
+                if data.get("version", 0) >= IMDB_TMDB_CACHE_VERSION:
+                    return data.get("mappings", {})
         except Exception as e:
             logger.debug(f"Failed to load IMDB-TMDB cache: {e}")
     return {}
@@ -238,16 +265,17 @@ def save_imdb_tmdb_cache(cache_dir: str, cache: Dict[str, int]):
         cache_dir: Directory where cache file is stored
         cache: Dict mapping IMDB IDs to TMDB IDs
     """
-    cache_path = os.path.join(cache_dir, 'imdb_tmdb_cache.json')
+    cache_path = os.path.join(cache_dir, "imdb_tmdb_cache.json")
     try:
-        with open(cache_path, 'w', encoding='utf-8') as f:
-            json.dump({'version': IMDB_TMDB_CACHE_VERSION, 'mappings': cache}, f)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"version": IMDB_TMDB_CACHE_VERSION, "mappings": cache}, f)
     except Exception as e:
         logger.debug(f"Failed to save IMDB-TMDB cache: {e}")
 
 
-def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'movie',
-                          cache: Dict[str, int] = None) -> Optional[int]:
+def get_tmdb_id_from_imdb(
+    tmdb_api_key: str, imdb_id: str, media_type: str = "movie", cache: Dict[str, int] = None
+) -> Optional[int]:
     """
     Convert IMDB ID to TMDB ID using TMDB's find API.
 
@@ -265,24 +293,24 @@ def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'mo
         return cache[imdb_id]
 
     start = time.time()
-    outcome = 'error'
+    outcome = "error"
     try:
         url = f"https://api.themoviedb.org/3/find/{imdb_id}"
-        params = {'api_key': tmdb_api_key, 'external_source': 'imdb_id'}
+        params = {"api_key": tmdb_api_key, "external_source": "imdb_id"}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT, allow_redirects=False)
 
         if response.status_code == 200:
-            outcome = 'success'
+            outcome = "success"
             data = response.json()
-            results_key = 'movie_results' if media_type == 'movie' else 'tv_results'
+            results_key = "movie_results" if media_type == "movie" else "tv_results"
             results = data.get(results_key, [])
             if results:
-                tmdb_id = results[0].get('id')
+                tmdb_id = results[0].get("id")
                 if cache is not None and tmdb_id:
                     cache[imdb_id] = tmdb_id
                 return tmdb_id
     except Exception as e:
         logger.debug(f"Failed to get TMDB ID for IMDB {imdb_id}: {e}")
     finally:
-        record_api_call('tmdb', outcome, time.time() - start)
+        record_api_call("tmdb", outcome, time.time() - start)
     return None

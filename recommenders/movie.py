@@ -7,43 +7,56 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 import math
 import traceback
-from typing import Dict, Set, Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 # Import shared utilities
 from utils import (
-    RED, GREEN, RESET,
-    TOP_CAST_COUNT,
+    COLLECTION_BONUS_BASE,
+    COLLECTION_BONUS_CAP,
+    COLLECTION_BONUS_LOG_FACTOR,
     DEFAULT_NEGATIVE_THRESHOLD,
-    COLLECTION_BONUS_BASE, COLLECTION_BONUS_LOG_FACTOR, COLLECTION_BONUS_CAP,
-    RATING_TIER_5_STAR,
-    RATING_TIER_4_STAR,
-    RATING_TIER_3_STAR,
-    RATING_MULTIPLIER_5_STAR,
-    RATING_MULTIPLIER_4_STAR,
-    RATING_MULTIPLIER_3_STAR,
+    GREEN,
     RATING_MULTIPLIER_2_STAR,
+    RATING_MULTIPLIER_3_STAR,
+    RATING_MULTIPLIER_4_STAR,
+    RATING_MULTIPLIER_5_STAR,
     RATING_MULTIPLIER_UNRATED,
-    get_plex_account_ids, fetch_plex_watch_history_movies, get_watched_movie_count,
-    fetch_tautulli_movie_history, merge_movie_history,
-    log_warning, log_error,
-    get_negative_multiplier,
-    calculate_recency_multiplier, calculate_rewatch_multiplier,
-    calculate_similarity_score, find_plex_movie,
-    show_progress,
-    extract_genres, extract_ids_from_guids, extract_rating,
+    RATING_TIER_3_STAR,
+    RATING_TIER_4_STAR,
+    RATING_TIER_5_STAR,
+    RED,
+    RESET,
+    TOP_CAST_COUNT,
     adapt_config_for_media_type,
-    format_media_output,
-    print_similarity_breakdown,
-    create_empty_counters, process_counters_from_cache,
+    calculate_recency_multiplier,
+    calculate_rewatch_multiplier,
+    calculate_similarity_score,
     compute_profile_hash,
+    create_empty_counters,
+    extract_genres,
+    extract_ids_from_guids,
+    extract_rating,
+    fetch_plex_watch_history_movies,
+    fetch_tautulli_movie_history,
+    find_plex_movie,
+    format_media_output,
+    get_negative_multiplier,
+    get_plex_account_ids,
     get_project_root,
-    setup_log_file,
-    teardown_log_file,
+    get_watched_movie_count,
+    log_error,
+    log_warning,
+    merge_movie_history,
+    print_similarity_breakdown,
+    process_counters_from_cache,
     run_recommender_main,
+    setup_log_file,
+    show_progress,
+    teardown_log_file,
 )
 
 # Module-level logger - configured by setup_logging() in main()
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Import base classes
 from recommenders.base import BaseCache, BaseRecommender
@@ -52,9 +65,9 @@ from recommenders.base import BaseCache, BaseRecommender
 class MovieCache(BaseCache):
     """Cache for movie metadata including TMDB data, genres, and keywords."""
 
-    media_type = 'movie'
-    media_key = 'movies'
-    cache_filename = 'all_movies_cache.json'
+    media_type = "movie"
+    media_key = "movies"
+    cache_filename = "all_movies_cache.json"
 
     def _process_item(self, movie, tmdb_api_key: Optional[str]) -> Optional[Dict]:
         """Process a single movie and return its info dict.
@@ -67,34 +80,36 @@ class MovieCache(BaseCache):
             Dict with movie metadata or None on error
         """
         # Get TMDB data using base class method
-        tmdb_data = self._get_tmdb_data(movie, tmdb_api_key) if tmdb_api_key else {
-            'tmdb_id': None, 'imdb_id': None, 'keywords': [], 'rating': None, 'vote_count': None
-        }
+        tmdb_data = (
+            self._get_tmdb_data(movie, tmdb_api_key)
+            if tmdb_api_key
+            else {"tmdb_id": None, "imdb_id": None, "keywords": [], "rating": None, "vote_count": None}
+        )
 
         # Get directors (movie-specific)
         directors = []
-        if hasattr(movie, 'directors'):
+        if hasattr(movie, "directors"):
             directors = [d.tag for d in movie.directors]
 
         # Extract ratings using shared utility
         audience_rating = extract_rating(movie)
 
         return {
-            'title': movie.title,
-            'year': getattr(movie, 'year', None),
-            'genres': [g.tag.lower() for g in movie.genres] if hasattr(movie, 'genres') else [],
-            'directors': directors,
-            'cast': [r.tag for r in movie.roles[:TOP_CAST_COUNT]] if hasattr(movie, 'roles') else [],
-            'summary': getattr(movie, 'summary', ''),
-            'language': self._get_language(movie),
-            'tmdb_keywords': tmdb_data['keywords'],
-            'tmdb_id': tmdb_data['tmdb_id'],
-            'imdb_id': tmdb_data['imdb_id'],
-            'rating': tmdb_data['rating'],
-            'vote_count': tmdb_data['vote_count'],
-            'collection_id': tmdb_data.get('collection_id'),
-            'collection_name': tmdb_data.get('collection_name'),
-            'ratings': {'audience_rating': audience_rating} if audience_rating > 0 else {}
+            "title": movie.title,
+            "year": getattr(movie, "year", None),
+            "genres": [g.tag.lower() for g in movie.genres] if hasattr(movie, "genres") else [],
+            "directors": directors,
+            "cast": [r.tag for r in movie.roles[:TOP_CAST_COUNT]] if hasattr(movie, "roles") else [],
+            "summary": getattr(movie, "summary", ""),
+            "language": self._get_language(movie),
+            "tmdb_keywords": tmdb_data["keywords"],
+            "tmdb_id": tmdb_data["tmdb_id"],
+            "imdb_id": tmdb_data["imdb_id"],
+            "rating": tmdb_data["rating"],
+            "vote_count": tmdb_data["vote_count"],
+            "collection_id": tmdb_data.get("collection_id"),
+            "collection_name": tmdb_data.get("collection_name"),
+            "ratings": {"audience_rating": audience_rating} if audience_rating > 0 else {},
         }
 
 
@@ -107,19 +122,19 @@ class PlexMovieRecommender(BaseRecommender):
     """
 
     # Required class attributes for BaseRecommender
-    media_type = 'movie'
-    media_key = 'movies'
-    library_config_key = 'movie_library'
-    default_library_name = 'Movies'
+    media_type = "movie"
+    media_key = "movies"
+    library_config_key = "movie_library"
+    default_library_name = "Movies"
 
     def _load_weights(self, weights_config: Dict) -> Dict:
         """Load movie-specific scoring weights from config."""
         return {
-            'genre': weights_config.get('genre', weights_config.get('genre_weight', 0.25)),
-            'actor': weights_config.get('actor', weights_config.get('actor_weight', 0.20)),
-            'director': weights_config.get('director', weights_config.get('director_weight', 0.05)),
-            'keyword': weights_config.get('keyword', weights_config.get('keyword_weight', 0.50)),
-            'language': weights_config.get('language', weights_config.get('language_weight', 0.0)),
+            "genre": weights_config.get("genre", weights_config.get("genre_weight", 0.25)),
+            "actor": weights_config.get("actor", weights_config.get("actor_weight", 0.20)),
+            "director": weights_config.get("director", weights_config.get("director_weight", 0.05)),
+            "keyword": weights_config.get("keyword", weights_config.get("keyword_weight", 0.50)),
+            "language": weights_config.get("language", weights_config.get("language_weight", 0.0)),
         }
 
     def __init__(self, config_path: str, single_user: str = None, library: Optional[Dict] = None):
@@ -139,17 +154,17 @@ class PlexMovieRecommender(BaseRecommender):
         self.synced_movie_ids = set()
         self.cached_unwatched_movies = []
         self.plex_watched_rating_keys = set()
-        self.show_director = self.config.get('general', {}).get('show_director', False)
+        self.show_director = self.config.get("general", {}).get("show_director", False)
 
         # Create movie cache
         self.movie_cache = MovieCache(self.cache_dir, recommender=self)
         self.movie_cache.update_cache(self.plex, self.library_title, self.tmdb_api_key)
 
         # Verify Plex user configuration
-        if self.users['plex_users']:
-            users_to_process = [self.single_user] if self.single_user else self.users['plex_users']
+        if self.users["plex_users"]:
+            users_to_process = [self.single_user] if self.single_user else self.users["plex_users"]
             print(f"{GREEN}Processing recommendations for Plex users: {users_to_process}{RESET}")
-    
+
         # Verify library exists
         if not self.plex.library.section(self.library_title):
             raise ValueError(f"Movie library '{self.library_title}' not found in Plex")
@@ -161,22 +176,16 @@ class PlexMovieRecommender(BaseRecommender):
         watched_cache = self._load_watched_cache()
 
         current_library_ids = self._get_library_movies_set()
-        
+
         # Clean up both watched movie tracking mechanisms
-        self.plex_watched_rating_keys = {
-            rk for rk in self.plex_watched_rating_keys 
-            if int(rk) in current_library_ids
-        }
-        self.watched_ids = {
-            movie_id for movie_id in self.watched_ids
-            if movie_id in current_library_ids
-        }
-                        
+        self.plex_watched_rating_keys = {rk for rk in self.plex_watched_rating_keys if int(rk) in current_library_ids}
+        self.watched_ids = {movie_id for movie_id in self.watched_ids if movie_id in current_library_ids}
+
         if self.plex_tmdb_cache is None:
             self.plex_tmdb_cache = {}
         if self.tmdb_keywords_cache is None:
             self.tmdb_keywords_cache = {}
-    
+
         current_watched_count = self._get_watched_count()
         cache_exists = os.path.exists(self.watched_cache_path)
 
@@ -185,7 +194,7 @@ class PlexMovieRecommender(BaseRecommender):
             # Clear existing data to force actual fetch (prevents early returns in fetch functions)
             self.watched_data_counters = None
             self.watched_ids = set()
-            if self.users['plex_users']:
+            if self.users["plex_users"]:
                 self.watched_data = self._get_plex_watched_data()
             else:
                 self.watched_data = self._get_managed_users_watched_data()
@@ -196,8 +205,8 @@ class PlexMovieRecommender(BaseRecommender):
             print(f"Watched count unchanged. Using cached data for {self.cached_watched_count} movies")
             self.watched_data = self.watched_data_counters
             # Ensure watched_ids are preserved (cache file uses 'watched_movie_ids' key)
-            if not self.watched_ids and 'watched_movie_ids' in watched_cache:
-                self.watched_ids = {int(id_) for id_ in watched_cache['watched_movie_ids'] if str(id_).isdigit()}
+            if not self.watched_ids and "watched_movie_ids" in watched_cache:
+                self.watched_ids = {int(id_) for id_ in watched_cache["watched_movie_ids"] if str(id_).isdigit()}
             logger.debug(f"Using cached data: {self.cached_watched_count} watched movies, {len(self.watched_ids)} IDs")
 
         # Enhance profile with Trakt watch history (if enabled)
@@ -213,7 +222,7 @@ class PlexMovieRecommender(BaseRecommender):
 
     def _get_watched_count(self) -> int:
         """Get count of watched movies from Plex (for cache invalidation)"""
-        users_to_check = [self.single_user] if self.single_user else self.users['plex_users']
+        users_to_check = [self.single_user] if self.single_user else self.users["plex_users"]
         return get_watched_movie_count(self.config, users_to_check)
 
     def _calculate_rating_multiplier(self, user_rating):
@@ -236,10 +245,10 @@ class PlexMovieRecommender(BaseRecommender):
         rating_int = int(round(user_rating))
 
         # Check if negative signals are enabled
-        ns_config = self.config.get('negative_signals', {})
-        bad_ratings_config = ns_config.get('bad_ratings', {})
-        ns_enabled = ns_config.get('enabled', True) and bad_ratings_config.get('enabled', True)
-        threshold = bad_ratings_config.get('threshold', DEFAULT_NEGATIVE_THRESHOLD)
+        ns_config = self.config.get("negative_signals", {})
+        bad_ratings_config = ns_config.get("bad_ratings", {})
+        ns_enabled = ns_config.get("enabled", True) and bad_ratings_config.get("enabled", True)
+        threshold = bad_ratings_config.get("threshold", DEFAULT_NEGATIVE_THRESHOLD)
 
         # Return negative multiplier for low ratings if enabled
         if ns_enabled and rating_int <= threshold:
@@ -257,11 +266,11 @@ class PlexMovieRecommender(BaseRecommender):
 
     def _get_plex_watched_data(self) -> Dict:
         """Get watched movie data from Plex's native history (using Plex API)"""
-        if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
+        if not self.single_user and hasattr(self, "watched_data_counters") and self.watched_data_counters:
             return self.watched_data_counters
 
         movies_section = self.plex.library.section(self.library_title)
-        counters = create_empty_counters('movie')
+        counters = create_empty_counters("movie")
         watched_ids = set()
         watched_movie_dates = {}  # Store watch timestamps for recency decay
         user_ratings = {}  # Store user ratings for each movie
@@ -269,11 +278,11 @@ class PlexMovieRecommender(BaseRecommender):
         not_found_count = 0
 
         # Get account IDs for users to process
-        users_to_match = [self.single_user] if self.single_user else self.users['plex_users']
+        users_to_match = [self.single_user] if self.single_user else self.users["plex_users"]
         account_ids = get_plex_account_ids(self.config, users_to_match)
 
         if not account_ids:
-            log_error(f"No valid users found!")
+            log_error("No valid users found!")
             return counters
 
         # Fetch watch history using the history API (properly per-user)
@@ -283,7 +292,7 @@ class PlexMovieRecommender(BaseRecommender):
         # Plex history. Covers users whose Plex-native history is thin (e.g.
         # shared/external users). Falls back to Plex-only if disabled,
         # unreachable, or no users could be mapped.
-        if self.config.get('tautulli', {}).get('enabled', False):
+        if self.config.get("tautulli", {}).get("enabled", False):
             tautulli_items = fetch_tautulli_movie_history(self.config, account_ids)
             if tautulli_items:
                 plex_unique = len({str(item.ratingKey) for item in history_items})
@@ -299,13 +308,13 @@ class PlexMovieRecommender(BaseRecommender):
             watched_ids.add(movie_id)
 
             # Get watch date
-            if hasattr(item, 'viewedAt') and item.viewedAt:
+            if hasattr(item, "viewedAt") and item.viewedAt:
                 viewed_at = int(item.viewedAt.timestamp())
                 if movie_id not in watched_movie_dates or viewed_at > int(watched_movie_dates.get(movie_id, 0)):
                     watched_movie_dates[movie_id] = str(viewed_at)
 
             # Get user rating if available
-            if hasattr(item, 'userRating') and item.userRating:
+            if hasattr(item, "userRating") and item.userRating:
                 user_rating = float(item.userRating)
                 if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
                     user_ratings[movie_id] = user_rating
@@ -314,7 +323,7 @@ class PlexMovieRecommender(BaseRecommender):
         try:
             for movie in movies_section.all():
                 movie_id = int(movie.ratingKey)
-                if movie_id in watched_ids and hasattr(movie, 'viewCount') and movie.viewCount:
+                if movie_id in watched_ids and hasattr(movie, "viewCount") and movie.viewCount:
                     watched_movie_views[movie_id] = int(movie.viewCount)
         except Exception as e:
             logger.debug(f"Error getting view counts for rewatch weighting: {e}")
@@ -325,18 +334,20 @@ class PlexMovieRecommender(BaseRecommender):
         self.watched_ids.update(watched_ids)
 
         # Process movie metadata from cache WITH recency decay AND user rating weighting
-        print(f"")
+        print("")
         print(f"Processing {len(watched_ids)} unique watched movies with recency decay and rating weighting:")
         negative_signal_count = 0
 
         for i, movie_id in enumerate(watched_ids, 1):
             show_progress("Processing", i, len(watched_ids))
 
-            movie_info = self.movie_cache.cache['movies'].get(str(movie_id))
+            movie_info = self.movie_cache.cache["movies"].get(str(movie_id))
             if movie_info:
                 # Calculate recency multiplier for this movie
                 viewed_at = watched_movie_dates.get(movie_id)
-                recency_multiplier = calculate_recency_multiplier(viewed_at, self.config.get('recency_decay', {})) if viewed_at else 1.0
+                recency_multiplier = (
+                    calculate_recency_multiplier(viewed_at, self.config.get("recency_decay", {})) if viewed_at else 1.0
+                )
 
                 # Calculate rating multiplier based on user's star rating (can be negative for disliked content)
                 rating_multiplier = self._calculate_rating_multiplier(user_ratings.get(movie_id))
@@ -350,15 +361,19 @@ class PlexMovieRecommender(BaseRecommender):
                 # Track negative signals for logging
                 if multiplier < 0:
                     negative_signal_count += 1
-                    logger.debug(f"Negative signal: {movie_info.get('title')} (rating: {user_ratings.get(movie_id)}, weight: {multiplier:.2f})")
+                    logger.debug(
+                        f"Negative signal: {movie_info.get('title')} (rating: {user_ratings.get(movie_id)}, weight: {multiplier:.2f})"
+                    )
 
                 # Process with weighted counters
-                ns_config = self.config.get('negative_signals', {})
-                cap_penalty = ns_config.get('bad_ratings', {}).get('cap_penalty', 0.5)
-                process_counters_from_cache(movie_info, counters, media_type='movie', weight=multiplier, cap_penalty=cap_penalty)
+                ns_config = self.config.get("negative_signals", {})
+                cap_penalty = ns_config.get("bad_ratings", {}).get("cap_penalty", 0.5)
+                process_counters_from_cache(
+                    movie_info, counters, media_type="movie", weight=multiplier, cap_penalty=cap_penalty
+                )
 
-                if tmdb_id := movie_info.get('tmdb_id'):
-                    counters['tmdb_ids'].add(tmdb_id)
+                if tmdb_id := movie_info.get("tmdb_id"):
+                    counters["tmdb_ids"].add(tmdb_id)
             else:
                 not_found_count += 1
 
@@ -384,11 +399,11 @@ class PlexMovieRecommender(BaseRecommender):
 
     def _find_plex_item(self, section, rec: Dict):
         """Find a Plex movie matching the recommendation using fuzzy matching."""
-        return find_plex_movie(section, rec['title'], rec.get('year'))
+        return find_plex_movie(section, rec["title"], rec.get("year"))
 
     def _get_watched_data(self) -> Dict:
         """Get watched movie data from Plex (implements abstract method from base)."""
-        if self.users['plex_users']:
+        if self.users["plex_users"]:
             return self._get_plex_watched_data()
         return self._get_managed_users_watched_data()
 
@@ -403,16 +418,16 @@ class PlexMovieRecommender(BaseRecommender):
         except Exception as e:
             log_error(f"Error getting library movies: {e}")
             return set()
-    
+
     def _get_library_movie_titles(self) -> Set[Tuple[str, Optional[int]]]:
         """Get set of (title, year) tuples for all movies in the library"""
         try:
             movies = self.plex.library.section(self.library_title)
-            return {(movie.title.lower(), getattr(movie, 'year', None)) for movie in movies.all()}
+            return {(movie.title.lower(), getattr(movie, "year", None)) for movie in movies.all()}
         except Exception as e:
             log_error(f"Error getting library movie titles: {e}")
             return set()
-    
+
     # _get_library_imdb_ids() inherited from BaseRecommender
 
     def get_movie_details(self, movie) -> Dict:
@@ -422,47 +437,45 @@ class PlexMovieRecommender(BaseRecommender):
 
             # Extract IDs using utility
             ids = extract_ids_from_guids(movie)
-            imdb_id = ids['imdb_id']
+            imdb_id = ids["imdb_id"]
             audience_rating = 0
             tmdb_keywords = []
             directors = []
-            
+
             # Extract rating using shared utility
             if self.show_rating:
                 audience_rating = extract_rating(movie)
-            
-            if hasattr(movie, 'directors') and movie.directors:
+
+            if hasattr(movie, "directors") and movie.directors:
                 directors = [d.tag for d in movie.directors]
-                            
+
             if self.use_tmdb_keywords and self.tmdb_api_key:
                 tmdb_id = self._get_plex_item_tmdb_id(movie)
                 if tmdb_id:
                     tmdb_keywords = list(self._get_tmdb_keywords_for_id(tmdb_id))
-            
+
             movie_info = {
-                'title': movie.title,
-                'year': getattr(movie, 'year', None),
-                'genres': extract_genres(movie),
-                'summary': getattr(movie, 'summary', ''),
-                'directors': directors,
-                'language': self.movie_cache._get_language(movie),
-                'imdb_id': imdb_id,
-                'ratings': {
-                    'audience_rating': audience_rating
-                } if audience_rating > 0 else {},
-                'cast': [],
-                'tmdb_keywords': tmdb_keywords
+                "title": movie.title,
+                "year": getattr(movie, "year", None),
+                "genres": extract_genres(movie),
+                "summary": getattr(movie, "summary", ""),
+                "directors": directors,
+                "language": self.movie_cache._get_language(movie),
+                "imdb_id": imdb_id,
+                "ratings": {"audience_rating": audience_rating} if audience_rating > 0 else {},
+                "cast": [],
+                "tmdb_keywords": tmdb_keywords,
             }
-            
-            if self.show_cast and hasattr(movie, 'roles'):
-                movie_info['cast'] = [r.tag for r in movie.roles[:TOP_CAST_COUNT]]
-                
+
+            if self.show_cast and hasattr(movie, "roles"):
+                movie_info["cast"] = [r.tag for r in movie.roles[:TOP_CAST_COUNT]]
+
             return movie_info
-                
+
         except Exception as e:
             log_warning(f"Error getting movie details for {movie.title}: {e}")
             return {}
-    
+
     # TMDB methods inherited from BaseRecommender:
     # - _get_plex_item_tmdb_id()
     # - _get_plex_item_imdb_id()
@@ -476,37 +489,37 @@ class PlexMovieRecommender(BaseRecommender):
         """Calculate similarity score using cached movie data and return score with breakdown"""
         # Build user profile from watched data
         user_profile = {
-            'genres': self.watched_data.get('genres', {}),
-            'directors': self.watched_data.get('directors', {}),
-            'actors': self.watched_data.get('actors', {}),
-            'languages': self.watched_data.get('languages', {}),
-            'keywords': self.watched_data.get('tmdb_keywords', {})
+            "genres": self.watched_data.get("genres", {}),
+            "directors": self.watched_data.get("directors", {}),
+            "actors": self.watched_data.get("actors", {}),
+            "languages": self.watched_data.get("languages", {}),
+            "keywords": self.watched_data.get("tmdb_keywords", {}),
         }
 
         # Build content info dict
         content_info = {
-            'genres': movie_info.get('genres', []),
-            'directors': movie_info.get('directors', []),
-            'cast': movie_info.get('cast', []),
-            'language': movie_info.get('language', 'N/A'),
-            'keywords': movie_info.get('tmdb_keywords', []),
-            'vote_count': movie_info.get('vote_count', 0),
-            'collection_id': movie_info.get('collection_id')
+            "genres": movie_info.get("genres", []),
+            "directors": movie_info.get("directors", []),
+            "cast": movie_info.get("cast", []),
+            "language": movie_info.get("language", "N/A"),
+            "keywords": movie_info.get("tmdb_keywords", []),
+            "vote_count": movie_info.get("vote_count", 0),
+            "collection_id": movie_info.get("collection_id"),
         }
 
         # Use shared scoring function
         score, breakdown = calculate_similarity_score(
             content_info=content_info,
             user_profile=user_profile,
-            media_type='movie',
+            media_type="movie",
             weights=self.weights,
             normalize_counters=self.normalize_counters,
-            use_fuzzy_keywords=self.use_tmdb_keywords
+            use_fuzzy_keywords=self.use_tmdb_keywords,
         )
 
         # Apply collection bonus for sequels/prequels
-        collection_id = movie_info.get('collection_id')
-        user_collections = self.watched_data.get('collections', {})
+        collection_id = movie_info.get("collection_id")
+        user_collections = self.watched_data.get("collections", {})
         if collection_id and collection_id in user_collections:
             # User has watched other movies in this collection - apply bonus
             collection_count = user_collections[collection_id]
@@ -514,14 +527,16 @@ class PlexMovieRecommender(BaseRecommender):
             bonus = COLLECTION_BONUS_BASE * (1 + math.log2(max(1, collection_count)) * COLLECTION_BONUS_LOG_FACTOR)
             bonus = min(bonus, COLLECTION_BONUS_CAP)
             score = min(1.0, score * (1 + bonus))
-            breakdown['collection_bonus'] = round(bonus, 3)
-            breakdown['details']['collection'] = f"{movie_info.get('collection_name', 'Unknown')} (watched: {collection_count:.1f}, bonus: {round(bonus * 100, 1)}%)"
+            breakdown["collection_bonus"] = round(bonus, 3)
+            breakdown["details"]["collection"] = (
+                f"{movie_info.get('collection_name', 'Unknown')} (watched: {collection_count:.1f}, bonus: {round(bonus * 100, 1)}%)"
+            )
 
         return score, breakdown
-    
+
     def _print_similarity_breakdown(self, movie_info: Dict, score: float, breakdown: Dict):
         """Print detailed breakdown of similarity score calculation"""
-        print_similarity_breakdown(movie_info, score, breakdown, 'movie')
+        print_similarity_breakdown(movie_info, score, breakdown, "movie")
 
     # get_recommendations() and manage_plex_labels() are inherited from BaseRecommender
 
@@ -529,19 +544,21 @@ class PlexMovieRecommender(BaseRecommender):
 # ------------------------------------------------------------------------
 # OUTPUT FORMATTING
 # ------------------------------------------------------------------------
-def format_movie_output(movie: Dict,
-                      show_summary: bool = False,
-                      index: Optional[int] = None,
-                      show_cast: bool = False,
-                      show_director: bool = False,
-                      show_language: bool = False,
-                      show_rating: bool = False,
-                      show_genres: bool = True,
-                      show_imdb_link: bool = False) -> str:
+def format_movie_output(
+    movie: Dict,
+    show_summary: bool = False,
+    index: Optional[int] = None,
+    show_cast: bool = False,
+    show_director: bool = False,
+    show_language: bool = False,
+    show_rating: bool = False,
+    show_genres: bool = True,
+    show_imdb_link: bool = False,
+) -> str:
     """Format movie for display - delegates to shared utility"""
     return format_media_output(
         media=movie,
-        media_type='movie',
+        media_type="movie",
         show_summary=show_summary,
         index=index,
         show_cast=show_cast,
@@ -549,7 +566,7 @@ def format_movie_output(movie: Dict,
         show_language=show_language,
         show_rating=show_rating,
         show_genres=show_genres,
-        show_imdb_link=show_imdb_link
+        show_imdb_link=show_imdb_link,
     )
 
 
@@ -558,45 +575,48 @@ def format_movie_output(movie: Dict,
 # ------------------------------------------------------------------------
 def adapt_root_config_to_legacy(root_config):
     """Convert root config.yml format to legacy MRFP format"""
-    return adapt_config_for_media_type(root_config, 'movies')
+    return adapt_config_for_media_type(root_config, "movies")
+
 
 # ------------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------------
 def process_recommendations(config, config_path, log_retention_days, single_user=None, library=None):
     original_stdout = sys.stdout
-    log_dir = os.path.join(get_project_root(), 'logs')
-    setup_log_file(log_dir, log_retention_days, single_user, 'recommendations')
+    log_dir = os.path.join(get_project_root(), "logs")
+    setup_log_file(log_dir, log_retention_days, single_user, "recommendations")
 
     try:
         # Create recommender with single user context
         recommender = PlexMovieRecommender(config_path, single_user=single_user, library=library)
-        
+
         # Check for debug mode
-        if config.get('general', {}).get('debug', False):
+        if config.get("general", {}).get("debug", False):
             recommender.debug = True
-        
+
         recommendations = recommender.get_recommendations()
-        
+
         print(f"\n{GREEN}=== Recommended Unwatched Movies in Your Library ==={RESET}")
-        plex_recs = recommendations.get('plex_recommendations', [])
+        plex_recs = recommendations.get("plex_recommendations", [])
         if plex_recs:
             for i, movie in enumerate(plex_recs, start=1):
-                print(format_movie_output(
-                    movie,
-                    show_summary=recommender.show_summary,
-                    index=i,
-                    show_cast=recommender.show_cast,
-                    show_director=recommender.show_director,
-                    show_language=recommender.show_language,
-                    show_rating=recommender.show_rating,
-                    show_genres=recommender.show_genres,
-                    show_imdb_link=recommender.show_imdb_link
-                ))
+                print(
+                    format_movie_output(
+                        movie,
+                        show_summary=recommender.show_summary,
+                        index=i,
+                        show_cast=recommender.show_cast,
+                        show_director=recommender.show_director,
+                        show_language=recommender.show_language,
+                        show_rating=recommender.show_rating,
+                        show_genres=recommender.show_genres,
+                        show_imdb_link=recommender.show_imdb_link,
+                    )
+                )
                 print()
             recommender.manage_plex_labels(plex_recs)
         else:
-            log_warning(f"No recommendations found in your Plex library matching your criteria.")
+            log_warning("No recommendations found in your Plex library matching your criteria.")
 
         recommender._save_cache()
 
@@ -606,25 +626,27 @@ def process_recommendations(config, config_path, log_retention_days, single_user
 
         # Check if this is a fatal error that should stop all processing
         error_msg = str(e).lower()
-        fatal_keywords = ['connection', 'plex server', 'unauthorized', 'authentication', 'config']
+        fatal_keywords = ["connection", "plex server", "unauthorized", "authentication", "config"]
         is_fatal = any(keyword in error_msg for keyword in fatal_keywords)
 
         if is_fatal:
-            log_error(f"Fatal error detected - stopping execution")
+            log_error("Fatal error detected - stopping execution")
             sys.exit(1)
 
     finally:
         teardown_log_file(original_stdout, log_retention_days)
 
+
 def main():
     """Entry point for movie recommendations."""
     run_recommender_main(
-        media_type='Movie',
-        description='Movie Recommendations for Plex',
+        media_type="Movie",
+        description="Movie Recommendations for Plex",
         adapt_config_func=adapt_root_config_to_legacy,
         process_func=process_recommendations,
-        media_type_key='movie'
+        media_type_key="movie",
     )
+
 
 if __name__ == "__main__":
     main()

@@ -1,9 +1,9 @@
 """Tests for utils/trakt_auth.py"""
 
 import os
+from unittest.mock import Mock, patch
 
 import pytest
-from unittest.mock import Mock, patch, mock_open
 import yaml
 
 
@@ -13,22 +13,23 @@ class TestTraktAuthLoadConfig:
     def test_loads_config_file(self, tmp_path, monkeypatch):
         """Test loads config from config/ directory."""
         # Create config directory and files
-        config_dir = tmp_path / 'config'
+        config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        config_path = config_dir / 'config.yml'
-        config_path.write_text('plex:\n  url: http://localhost\n')
+        config_path = config_dir / "config.yml"
+        config_path.write_text("plex:\n  url: http://localhost\n")
 
-        trakt_path = config_dir / 'trakt.yml'
-        trakt_path.write_text('enabled: true\nclient_id: test\n')
+        trakt_path = config_dir / "trakt.yml"
+        trakt_path.write_text("enabled: true\nclient_id: test\n")
 
         # Patch get_config_dir to return our temp directory
         from utils import trakt_auth
-        monkeypatch.setattr(trakt_auth, 'get_config_dir', lambda: str(config_dir))
+
+        monkeypatch.setattr(trakt_auth, "get_config_dir", lambda: str(config_dir))
 
         result = trakt_auth.load_config()
-        assert result['trakt']['enabled'] is True
-        assert result['trakt']['client_id'] == 'test'
+        assert result["trakt"]["enabled"] is True
+        assert result["trakt"]["client_id"] == "test"
 
 
 class TestTraktAuthSaveTokens:
@@ -37,39 +38,34 @@ class TestTraktAuthSaveTokens:
     def test_saves_tokens_to_config(self, tmp_path, monkeypatch):
         """Test saves tokens to config file."""
         # Create initial config
-        config_path = tmp_path / 'config.yml'
-        initial_config = {
-            'trakt': {
-                'enabled': True,
-                'client_id': 'test_id',
-                'client_secret': 'test_secret'
-            }
-        }
-        with open(config_path, 'w') as f:
+        config_path = tmp_path / "config.yml"
+        initial_config = {"trakt": {"enabled": True, "client_id": "test_id", "client_secret": "test_secret"}}
+        with open(config_path, "w") as f:
             yaml.dump(initial_config, f)
 
         # Patch the path resolution
         import utils.trakt_auth as trakt_auth_module
+
         original_func = trakt_auth_module.save_tokens
 
         def patched_save_tokens(access_token, refresh_token):
-            with open(config_path, 'r') as f:
+            with open(config_path, "r") as f:
                 config = yaml.safe_load(f)
-            config['trakt']['access_token'] = access_token
-            config['trakt']['refresh_token'] = refresh_token
-            with open(config_path, 'w') as f:
+            config["trakt"]["access_token"] = access_token
+            config["trakt"]["refresh_token"] = refresh_token
+            with open(config_path, "w") as f:
                 yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-        patched_save_tokens('new_access', 'new_refresh')
+        patched_save_tokens("new_access", "new_refresh")
 
         # Verify tokens saved
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             result = yaml.safe_load(f)
 
-        assert result['trakt']['access_token'] == 'new_access'
-        assert result['trakt']['refresh_token'] == 'new_refresh'
+        assert result["trakt"]["access_token"] == "new_access"
+        assert result["trakt"]["refresh_token"] == "new_refresh"
 
-    @pytest.mark.skipif(os.name == 'nt', reason="POSIX file permissions don't apply on Windows")
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions don't apply on Windows")
     def test_real_save_tokens_ends_up_owner_only(self, tmp_path, monkeypatch):
         """FIX 5: trakt.yml holds the Trakt access/refresh tokens in
         plaintext - a plain open(path, 'w') lands at the OS umask
@@ -78,17 +74,19 @@ class TestTraktAuthSaveTokens:
         re-implementation the other test in this class uses)."""
         import utils.trakt_auth as trakt_auth_module
 
-        config_dir = tmp_path / 'config'
+        config_dir = tmp_path / "config"
         config_dir.mkdir()
-        trakt_path = config_dir / 'trakt.yml'
+        trakt_path = config_dir / "trakt.yml"
         trakt_path.write_text(
-            "enabled: true\nclient_id: test\nclient_secret: shh\n", encoding='utf-8',
+            "enabled: true\nclient_id: test\nclient_secret: shh\n",
+            encoding="utf-8",
         )
-        monkeypatch.setattr(trakt_auth_module, 'get_config_dir', lambda: str(config_dir))
+        monkeypatch.setattr(trakt_auth_module, "get_config_dir", lambda: str(config_dir))
 
-        trakt_auth_module.save_tokens('new_access', 'new_refresh')
+        trakt_auth_module.save_tokens("new_access", "new_refresh")
 
         import stat
+
         mode = stat.S_IMODE(os.stat(str(trakt_path)).st_mode)
         assert mode == 0o600, f"trakt.yml was {oct(mode)}, expected 0o600"
 
@@ -96,84 +94,72 @@ class TestTraktAuthSaveTokens:
 class TestTraktAuthMain:
     """Tests for trakt_auth main function."""
 
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.load_config")
     def test_exits_when_config_not_found(self, mock_load):
         """Test exits with error when config not found."""
         from utils.trakt_auth import main
+
         mock_load.side_effect = FileNotFoundError()
 
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
 
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.load_config")
     def test_exits_when_trakt_disabled(self, mock_load):
         """Test exits when Trakt is disabled."""
         from utils.trakt_auth import main
-        mock_load.return_value = {'trakt': {'enabled': False}}
+
+        mock_load.return_value = {"trakt": {"enabled": False}}
 
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
 
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.load_config")
     def test_exits_when_missing_credentials(self, mock_load):
         """Test exits when client_id or secret missing."""
         from utils.trakt_auth import main
-        mock_load.return_value = {
-            'trakt': {
-                'enabled': True,
-                'client_id': None,
-                'client_secret': 'secret'
-            }
-        }
+
+        mock_load.return_value = {"trakt": {"enabled": True, "client_id": None, "client_secret": "secret"}}
 
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
 
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.load_config")
     def test_exits_when_already_authenticated(self, mock_load):
         """Test exits cleanly when already authenticated."""
         from utils.trakt_auth import main
+
         mock_load.return_value = {
-            'trakt': {
-                'enabled': True,
-                'client_id': 'id',
-                'client_secret': 'secret',
-                'access_token': 'existing_token'
-            }
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": "existing_token"}
         }
 
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
 
-    @patch('utils.trakt_auth.TraktClient')
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
     def test_starts_device_auth_flow(self, mock_load, mock_client_class):
         """Test starts device auth flow when not authenticated."""
         from utils.trakt_auth import main
 
         mock_load.return_value = {
-            'trakt': {
-                'enabled': True,
-                'client_id': 'id',
-                'client_secret': 'secret',
-                'access_token': None
-            }
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": None}
         }
 
         mock_client = Mock()
         mock_client.get_device_code.return_value = {
-            'device_code': 'abc123',
-            'user_code': 'XYZ789',
-            'verification_url': 'https://trakt.tv/activate',
-            'interval': 5,
-            'expires_in': 600
+            "device_code": "abc123",
+            "user_code": "XYZ789",
+            "verification_url": "https://trakt.tv/activate",
+            "interval": 5,
+            "expires_in": 600,
         }
         mock_client.poll_for_token.return_value = True
-        mock_client.get_username.return_value = 'testuser'
+        mock_client.get_username.return_value = "testuser"
         mock_client_class.return_value = mock_client
 
         # Should complete without exit
@@ -182,26 +168,21 @@ class TestTraktAuthMain:
         mock_client.get_device_code.assert_called_once()
         mock_client.poll_for_token.assert_called_once()
 
-    @patch('utils.trakt_auth.TraktClient')
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
     def test_handles_auth_failure(self, mock_load, mock_client_class):
         """Test handles authentication failure."""
         from utils.trakt_auth import main
 
         mock_load.return_value = {
-            'trakt': {
-                'enabled': True,
-                'client_id': 'id',
-                'client_secret': 'secret',
-                'access_token': None
-            }
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": None}
         }
 
         mock_client = Mock()
         mock_client.get_device_code.return_value = {
-            'device_code': 'abc',
-            'user_code': 'XYZ',
-            'verification_url': 'https://trakt.tv/activate'
+            "device_code": "abc",
+            "user_code": "XYZ",
+            "verification_url": "https://trakt.tv/activate",
         }
         mock_client.poll_for_token.return_value = False
         mock_client_class.return_value = mock_client
@@ -210,19 +191,14 @@ class TestTraktAuthMain:
             main()
         assert exc_info.value.code == 1
 
-    @patch('utils.trakt_auth.TraktClient')
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
     def test_handles_trakt_auth_error(self, mock_load, mock_client_class):
         """Test handles TraktAuthError exception."""
-        from utils.trakt_auth import main, TraktAuthError
+        from utils.trakt_auth import TraktAuthError, main
 
         mock_load.return_value = {
-            'trakt': {
-                'enabled': True,
-                'client_id': 'id',
-                'client_secret': 'secret',
-                'access_token': None
-            }
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": None}
         }
 
         mock_client = Mock()
@@ -233,19 +209,14 @@ class TestTraktAuthMain:
             main()
         assert exc_info.value.code == 1
 
-    @patch('utils.trakt_auth.TraktClient')
-    @patch('utils.trakt_auth.load_config')
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
     def test_handles_keyboard_interrupt(self, mock_load, mock_client_class):
         """Test handles KeyboardInterrupt gracefully."""
         from utils.trakt_auth import main
 
         mock_load.return_value = {
-            'trakt': {
-                'enabled': True,
-                'client_id': 'id',
-                'client_secret': 'secret',
-                'access_token': None
-            }
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": None}
         }
 
         mock_client = Mock()

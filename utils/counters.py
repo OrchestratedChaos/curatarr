@@ -6,12 +6,12 @@ Handles preference counting and profile building.
 from collections import Counter
 from typing import Dict
 
+from .config import DEFAULT_NEGATIVE_THRESHOLD, get_negative_multiplier, get_rating_multipliers
 from .display import log_warning
 from .scoring import calculate_recency_multiplier, calculate_rewatch_multiplier
-from .config import get_rating_multipliers, get_negative_multiplier, DEFAULT_NEGATIVE_THRESHOLD
 
 
-def create_empty_counters(media_type: str = 'movie') -> Dict:
+def create_empty_counters(media_type: str = "movie") -> Dict:
     """
     Create empty counter structure for tracking watched media preferences.
 
@@ -22,18 +22,18 @@ def create_empty_counters(media_type: str = 'movie') -> Dict:
         Dictionary with Counter objects for each category
     """
     counters = {
-        'genres': Counter(),
-        'actors': Counter(),
-        'languages': Counter(),
-        'tmdb_keywords': Counter(),
-        'tmdb_ids': set()
+        "genres": Counter(),
+        "actors": Counter(),
+        "languages": Counter(),
+        "tmdb_keywords": Counter(),
+        "tmdb_ids": set(),
     }
     # Movies use directors and collections, TV uses studios
-    if media_type == 'movie':
-        counters['directors'] = Counter()
-        counters['collections'] = Counter()  # Track TMDB collection IDs for sequel bonus
+    if media_type == "movie":
+        counters["directors"] = Counter()
+        counters["collections"] = Counter()  # Track TMDB collection IDs for sequel bonus
     else:
-        counters['studios'] = Counter()
+        counters["studios"] = Counter()
     return counters
 
 
@@ -75,10 +75,10 @@ def process_counters_from_cache(
     rating: float = None,
     recency_config: dict = None,
     rating_multipliers: dict = None,
-    media_type: str = 'movie',
+    media_type: str = "movie",
     negative_signals_config: dict = None,
     weight: float = None,
-    cap_penalty: float = 0.5
+    cap_penalty: float = 0.5,
 ) -> bool:
     """
     Update counters from cached media information.
@@ -124,10 +124,10 @@ def process_counters_from_cache(
 
                 # Check if this should be a negative signal
                 ns_config = negative_signals_config or {}
-                bad_ratings_config = ns_config.get('bad_ratings', {})
-                ns_enabled = ns_config.get('enabled', True) and bad_ratings_config.get('enabled', True)
-                threshold = bad_ratings_config.get('threshold', DEFAULT_NEGATIVE_THRESHOLD)
-                cap_penalty = bad_ratings_config.get('cap_penalty', 0.5)
+                bad_ratings_config = ns_config.get("bad_ratings", {})
+                ns_enabled = ns_config.get("enabled", True) and bad_ratings_config.get("enabled", True)
+                threshold = bad_ratings_config.get("threshold", DEFAULT_NEGATIVE_THRESHOLD)
+                cap_penalty = bad_ratings_config.get("cap_penalty", 0.5)
 
                 if ns_enabled and rating_int <= threshold:
                     # Use negative multiplier
@@ -142,52 +142,52 @@ def process_counters_from_cache(
             total_weight = recency_mult * rewatch_mult * rating_mult
 
         # Update genre counters
-        genres = media_info.get('genres', [])
+        genres = media_info.get("genres", [])
         for genre in genres:
             if genre:
-                _apply_capped_weight(counters['genres'], genre.lower(), total_weight, cap_penalty)
+                _apply_capped_weight(counters["genres"], genre.lower(), total_weight, cap_penalty)
 
         # Update actor counters
-        actors = media_info.get('actors', media_info.get('cast', []))
+        actors = media_info.get("actors", media_info.get("cast", []))
         for actor in actors:
             if actor:
-                _apply_capped_weight(counters['actors'], actor, total_weight, cap_penalty)
+                _apply_capped_weight(counters["actors"], actor, total_weight, cap_penalty)
 
         # Update director/studio counters
-        if media_type == 'movie':
-            directors = media_info.get('directors', [])
+        if media_type == "movie":
+            directors = media_info.get("directors", [])
             if isinstance(directors, str):
                 directors = [directors]
             for director in directors:
                 if director:
-                    _apply_capped_weight(counters['directors'], director, total_weight, cap_penalty)
+                    _apply_capped_weight(counters["directors"], director, total_weight, cap_penalty)
 
             # Track movie collections (for sequel bonus)
-            collection_id = media_info.get('collection_id')
-            if collection_id and 'collections' in counters:
-                _apply_capped_weight(counters['collections'], collection_id, total_weight, cap_penalty)
+            collection_id = media_info.get("collection_id")
+            if collection_id and "collections" in counters:
+                _apply_capped_weight(counters["collections"], collection_id, total_weight, cap_penalty)
         else:
-            studio = media_info.get('studio', '')
+            studio = media_info.get("studio", "")
             if studio:
-                if 'studios' not in counters:
-                    counters['studios'] = Counter()
-                _apply_capped_weight(counters['studios'], studio.lower(), total_weight, cap_penalty)
+                if "studios" not in counters:
+                    counters["studios"] = Counter()
+                _apply_capped_weight(counters["studios"], studio.lower(), total_weight, cap_penalty)
 
         # Update language counters
-        language = media_info.get('language', '')
-        if language and language != 'N/A':
-            _apply_capped_weight(counters['languages'], language.lower(), total_weight, cap_penalty)
+        language = media_info.get("language", "")
+        if language and language != "N/A":
+            _apply_capped_weight(counters["languages"], language.lower(), total_weight, cap_penalty)
 
         # Update keyword counters
-        keywords = media_info.get('tmdb_keywords', [])
+        keywords = media_info.get("tmdb_keywords", [])
         for kw in keywords:
             if kw:
-                _apply_capped_weight(counters['tmdb_keywords'], kw.lower(), total_weight, cap_penalty)
+                _apply_capped_weight(counters["tmdb_keywords"], kw.lower(), total_weight, cap_penalty)
 
         # Track TMDB ID (not affected by negative signals - we still want to exclude from recs)
-        tmdb_id = media_info.get('tmdb_id')
+        tmdb_id = media_info.get("tmdb_id")
         if tmdb_id:
-            counters['tmdb_ids'].add(tmdb_id)
+            counters["tmdb_ids"].add(tmdb_id)
 
     except Exception as e:
         log_warning(f"Error processing counters for {media_info.get('title')}: {e}")

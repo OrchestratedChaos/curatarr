@@ -3,10 +3,10 @@ Cache I/O utilities for Curatarr.
 Handles loading and saving of various cache files.
 """
 
-import os
-import json
 import copy
+import json
 import logging
+import os
 import tempfile
 from datetime import datetime
 from typing import Dict, Optional
@@ -24,11 +24,11 @@ def _atomic_write_json(cache_path: str, data: Dict, **json_kwargs) -> None:
     shared ./cache volume). Same pattern used by web/config_io.py's
     config writer.
     """
-    directory = os.path.dirname(cache_path) or '.'
+    directory = os.path.dirname(cache_path) or "."
     os.makedirs(directory, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix='.tmp-', suffix='.json', dir=directory)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", suffix=".json", dir=directory)
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, **json_kwargs)
         os.replace(tmp_path, cache_path)
     except Exception:
@@ -51,7 +51,7 @@ def save_json_cache(cache_path: str, data: Dict, cache_version: int = None) -> b
     """
     try:
         if cache_version is not None:
-            data['cache_version'] = cache_version
+            data["cache_version"] = cache_version
         _atomic_write_json(cache_path, data, indent=4, ensure_ascii=False)
         return True
     except Exception as e:
@@ -70,20 +70,20 @@ def load_json_cache(cache_path: str) -> Optional[Dict]:
         Dictionary from cache or None on failure
     """
     if not os.path.exists(cache_path):
-        record_cache_lookup('miss')
+        record_cache_lookup("miss")
         return None
     try:
-        with open(cache_path, 'r', encoding='utf-8') as f:
+        with open(cache_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        record_cache_lookup('hit')
+        record_cache_lookup("hit")
         return data
     except Exception as e:
         logging.warning(f"Error loading cache from {cache_path}: {e}")
-        record_cache_lookup('miss')
+        record_cache_lookup("miss")
         return None
 
 
-def load_media_cache(cache_path: str, media_key: str = 'movies') -> Dict:
+def load_media_cache(cache_path: str, media_key: str = "movies") -> Dict:
     """
     Load media cache from file with version checking.
 
@@ -94,27 +94,27 @@ def load_media_cache(cache_path: str, media_key: str = 'movies') -> Dict:
     Returns:
         Cache dictionary with media items, or empty structure if invalid/missing
     """
-    empty_cache = {media_key: {}, 'last_updated': None, 'library_count': 0, 'cache_version': CACHE_VERSION}
+    empty_cache = {media_key: {}, "last_updated": None, "library_count": 0, "cache_version": CACHE_VERSION}
 
     if not check_cache_version(cache_path, f"{media_key.title()} cache"):
-        record_cache_lookup('miss')
+        record_cache_lookup("miss")
         return empty_cache
 
     if os.path.exists(cache_path):
         try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
+            with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            record_cache_lookup('hit')
+            record_cache_lookup("hit")
             return data
         except Exception as e:
             log_warning(f"Error loading {media_key} cache: {e}")
-            record_cache_lookup('miss')
+            record_cache_lookup("miss")
             return empty_cache
-    record_cache_lookup('miss')
+    record_cache_lookup("miss")
     return empty_cache
 
 
-def save_media_cache(cache_path: str, cache_data: Dict, media_key: str = 'movies') -> bool:
+def save_media_cache(cache_path: str, cache_data: Dict, media_key: str = "movies") -> bool:
     """
     Save media cache to file.
 
@@ -142,7 +142,7 @@ def save_watched_cache(
     watched_ids: set,
     label_dates: Dict,
     watched_count: int,
-    media_type: str = 'movie'
+    media_type: str = "movie",
 ) -> bool:
     """
     Save watched data cache to file.
@@ -165,20 +165,20 @@ def save_watched_cache(
         watched_data_for_cache = copy.deepcopy(watched_data_counters)
 
         # Convert any set objects to lists for JSON serialization
-        if 'tmdb_ids' in watched_data_for_cache and isinstance(watched_data_for_cache['tmdb_ids'], set):
-            watched_data_for_cache['tmdb_ids'] = list(watched_data_for_cache['tmdb_ids'])
+        if "tmdb_ids" in watched_data_for_cache and isinstance(watched_data_for_cache["tmdb_ids"], set):
+            watched_data_for_cache["tmdb_ids"] = list(watched_data_for_cache["tmdb_ids"])
 
         # Build cache data structure
-        id_key = 'watched_movie_ids' if media_type == 'movie' else 'watched_show_ids'
+        id_key = "watched_movie_ids" if media_type == "movie" else "watched_show_ids"
         cache_data = {
-            'cache_version': CACHE_VERSION,
-            'watched_count': watched_count,
-            'watched_data_counters': watched_data_for_cache,
-            'plex_tmdb_cache': {str(k): v for k, v in plex_tmdb_cache.items()},
-            'tmdb_keywords_cache': {str(k): v for k, v in tmdb_keywords_cache.items()},
+            "cache_version": CACHE_VERSION,
+            "watched_count": watched_count,
+            "watched_data_counters": watched_data_for_cache,
+            "plex_tmdb_cache": {str(k): v for k, v in plex_tmdb_cache.items()},
+            "tmdb_keywords_cache": {str(k): v for k, v in tmdb_keywords_cache.items()},
             id_key: list(watched_ids),
-            'label_dates': label_dates,
-            'last_updated': datetime.now().isoformat()
+            "label_dates": label_dates,
+            "last_updated": datetime.now().isoformat(),
         }
 
         _atomic_write_json(cache_path, cache_data, indent=4, ensure_ascii=False)

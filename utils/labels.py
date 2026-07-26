@@ -10,7 +10,7 @@ from typing import Dict, List
 
 from .display import GREEN, RESET, log_info
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 
 def build_label_name(base_label: str, users: List[str], single_user: str = None, append_usernames: bool = True) -> str:
@@ -30,11 +30,11 @@ def build_label_name(base_label: str, users: List[str], single_user: str = None,
         return base_label
 
     if single_user:
-        user_suffix = re.sub(r'\W+', '_', single_user.strip())
+        user_suffix = re.sub(r"\W+", "_", single_user.strip())
         return f"{base_label}_{user_suffix}"
     elif users:
-        sanitized_users = [re.sub(r'\W+', '_', user.strip()) for user in users]
-        user_suffix = '_'.join(sanitized_users)
+        sanitized_users = [re.sub(r"\W+", "_", user.strip()) for user in users]
+        user_suffix = "_".join(sanitized_users)
         return f"{base_label}_{user_suffix}"
     return base_label
 
@@ -45,7 +45,7 @@ def categorize_labeled_items(
     excluded_genres: List[str],
     label_name: str,
     label_dates: Dict,
-    stale_days: int = 7
+    stale_days: int = 7,
 ) -> Dict[str, List]:
     """
     Categorize labeled items into watched, excluded, and fresh.
@@ -68,10 +68,10 @@ def categorize_labeled_items(
     labeled_items = list(labeled_items)
 
     result = {
-        'fresh': [],
-        'watched': [],
-        'stale': [],  # Always empty now - score-based eviction handles rotation
-        'excluded': []
+        "fresh": [],
+        "watched": [],
+        "stale": [],  # Always empty now - score-based eviction handles rotation
+        "excluded": [],
     }
 
     for item in labeled_items:
@@ -80,22 +80,22 @@ def categorize_labeled_items(
         label_key = f"{item_id}_{label_name}"
 
         # Check if item has excluded genres
-        item_genres = [g.tag.lower() for g in item.genres] if hasattr(item, 'genres') else []
+        item_genres = [g.tag.lower() for g in item.genres] if hasattr(item, "genres") else []
         if any(g in excluded_genres for g in item_genres):
-            result['excluded'].append(item)
+            result["excluded"].append(item)
             continue
 
         # Check if watched (by ID cache OR by Plex isPlayed flag)
-        is_played = hasattr(item, 'isPlayed') and item.isPlayed
+        is_played = hasattr(item, "isPlayed") and item.isPlayed
         if item_id in watched_ids or is_played:
-            result['watched'].append(item)
+            result["watched"].append(item)
             continue
 
         # Track label date if not already tracked (for reference, not staleness)
         label_date_str = label_dates.get(label_key)
 
         # Item is fresh - track date if not already tracked
-        result['fresh'].append(item)
+        result["fresh"].append(item)
         if not label_date_str:
             label_dates[label_key] = datetime.now().isoformat()
 

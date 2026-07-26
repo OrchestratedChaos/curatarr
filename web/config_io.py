@@ -34,26 +34,33 @@ _yaml.width = 4096  # don't hard-wrap long values (URLs, tokens)
 
 # Config keys the web UI never renders in HTML and never overwrites with
 # a blank submitted value (blank means "keep the existing secret").
-SECRET_KEYS = frozenset({
-    'token', 'api_key', 'client_secret', 'access_token', 'refresh_token', 'password',
-})
+SECRET_KEYS = frozenset(
+    {
+        "token",
+        "api_key",
+        "client_secret",
+        "access_token",
+        "refresh_token",
+        "password",
+    }
+)
 
 # Module file name -> which top-level config key it lives under once
 # loaded, mirroring utils.config._load_module_configs. 'config' is the
 # root file itself (plex/tmdb/tautulli/users/general live there
 # directly, not merged under a module key).
-MODULE_FILES = ('config', 'tuning', 'sonarr', 'radarr', 'trakt')
+MODULE_FILES = ("config", "tuning", "sonarr", "radarr", "trakt")
 
 
 def config_dir(project_root: str) -> str:
-    return os.path.join(project_root, 'config')
+    return os.path.join(project_root, "config")
 
 
 def module_path(project_root: str, name: str) -> str:
     """*name* is one of MODULE_FILES ('config', 'tuning', 'sonarr', ...)."""
     if name not in MODULE_FILES:
         raise ValueError(f"Unknown config module: {name}")
-    return os.path.join(config_dir(project_root), f'{name}.yml')
+    return os.path.join(config_dir(project_root), f"{name}.yml")
 
 
 def load_module(path: str) -> CommentedMap:
@@ -65,7 +72,7 @@ def load_module(path: str) -> CommentedMap:
     """
     if not os.path.isfile(path):
         return CommentedMap()
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, "r", encoding="utf-8") as f:
         data = _yaml.load(f)
     return data if data is not None else CommentedMap()
 
@@ -85,11 +92,11 @@ def save_module(path: str, data: CommentedMap) -> None:
     mkstemp, not something to keep relying on implicitly. Explicit here
     so it stays true even if the temp-file mechanism ever changes.
     """
-    directory = os.path.dirname(path) or '.'
+    directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix='.tmp-', suffix='.yml', dir=directory)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", suffix=".yml", dir=directory)
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             _yaml.dump(data, f)
         os.replace(tmp_path, path)
         harden_file_permissions(path)
@@ -147,16 +154,16 @@ def validate_merge(project_root: str, modules: Dict[str, CommentedMap]) -> Optio
     from utils import load_config as _load_config
 
     src_dir = config_dir(project_root)
-    with tempfile.TemporaryDirectory(prefix='curatarr-config-validate-') as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="curatarr-config-validate-") as tmp_dir:
         if os.path.isdir(src_dir):
             for name in os.listdir(src_dir):
                 src_path = os.path.join(src_dir, name)
                 if os.path.isfile(src_path):
                     shutil.copy2(src_path, os.path.join(tmp_dir, name))
         for name, data in modules.items():
-            save_module(os.path.join(tmp_dir, f'{name}.yml'), data)
+            save_module(os.path.join(tmp_dir, f"{name}.yml"), data)
         try:
-            _load_config(os.path.join(tmp_dir, 'config.yml'))
+            _load_config(os.path.join(tmp_dir, "config.yml"))
         except Exception as exc:
             return str(exc)
     return None
@@ -173,15 +180,15 @@ def merge_secret(existing: Optional[str], submitted: Optional[str]) -> str:
     a new one to change it" field instead of ever round-tripping a real
     secret through the browser.
     """
-    submitted = (submitted or '').strip()
+    submitted = (submitted or "").strip()
     if not submitted:
-        return existing or ''
+        return existing or ""
     return submitted
 
 
 def secret_status(value: Optional[str]) -> str:
     """'configured' / 'not set' - for display only, never the value itself."""
-    return 'configured' if (value or '').strip() else 'not set'
+    return "configured" if (value or "").strip() else "not set"
 
 
 def parse_csv_list(value: Optional[str]) -> list:
@@ -189,7 +196,7 @@ def parse_csv_list(value: Optional[str]) -> list:
     comma-separated list fields (plex_users, exclude_genres, etc.)."""
     if not value:
         return []
-    return [item.strip() for item in value.split(',') if item.strip()]
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def existing_library_secret(core: CommentedMap, library_id: Optional[str]) -> str:
@@ -205,21 +212,21 @@ def existing_library_secret(core: CommentedMap, library_id: Optional[str]) -> st
     be reordered/added/removed within the same submission.
     """
     if not library_id:
-        return ''
-    for entry in core.get('libraries') or []:
+        return ""
+    for entry in core.get("libraries") or []:
         entry = entry or {}
-        if entry.get('id') == library_id:
-            arr = entry.get('arr') or {}
-            instance = arr.get('instance') or {}
-            return instance.get('api_key', '') or ''
-    return ''
+        if entry.get("id") == library_id:
+            arr = entry.get("arr") or {}
+            instance = arr.get("instance") or {}
+            return instance.get("api_key", "") or ""
+    return ""
 
 
 def format_csv_list(value) -> str:
     """Inverse of parse_csv_list, for pre-filling a text input from a
     YAML list (or a legacy comma-string) on GET."""
     if not value:
-        return ''
+        return ""
     if isinstance(value, str):
         return value
-    return ', '.join(str(item) for item in value)
+    return ", ".join(str(item) for item in value)

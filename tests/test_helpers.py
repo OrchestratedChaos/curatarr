@@ -2,17 +2,22 @@
 Tests for utils/helpers.py - Miscellaneous helper functions.
 """
 
-import pytest
 import os
 import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
+
 from utils.config import MAX_LOG_FILE_BYTES
 from utils.helpers import (
-    normalize_title, map_path, cleanup_old_logs, compute_profile_hash,
-    get_project_root, migrate_legacy_cache_dir, no_window_kwargs,
     TITLE_SUFFIXES_TO_STRIP,
+    cleanup_old_logs,
+    compute_profile_hash,
+    get_project_root,
+    map_path,
+    migrate_legacy_cache_dir,
+    no_window_kwargs,
+    normalize_title,
 )
 
 
@@ -126,10 +131,7 @@ class TestMapPath:
 
     def test_multiple_mappings_first_match(self):
         """Test that first matching mapping is used."""
-        mappings = {
-            "/media": "/mnt/media",
-            "/media/movies": "/mnt/movies"
-        }
+        mappings = {"/media": "/mnt/media", "/media/movies": "/mnt/movies"}
         # The first matching prefix should be used
         result = map_path("/media/movies/file.mkv", mappings)
 
@@ -157,18 +159,18 @@ class TestTitleSuffixesConstant:
 
     def test_suffixes_include_common_variants(self):
         """Test that common suffixes are included."""
-        assert ' 4K' in TITLE_SUFFIXES_TO_STRIP
-        assert ' 4k' in TITLE_SUFFIXES_TO_STRIP
-        assert ' HD' in TITLE_SUFFIXES_TO_STRIP
-        assert ' Extended' in TITLE_SUFFIXES_TO_STRIP
+        assert " 4K" in TITLE_SUFFIXES_TO_STRIP
+        assert " 4k" in TITLE_SUFFIXES_TO_STRIP
+        assert " HD" in TITLE_SUFFIXES_TO_STRIP
+        assert " Extended" in TITLE_SUFFIXES_TO_STRIP
         assert " Director's Cut" in TITLE_SUFFIXES_TO_STRIP
-        assert ' IMAX' in TITLE_SUFFIXES_TO_STRIP
-        assert ' 3D' in TITLE_SUFFIXES_TO_STRIP
+        assert " IMAX" in TITLE_SUFFIXES_TO_STRIP
+        assert " 3D" in TITLE_SUFFIXES_TO_STRIP
 
     def test_suffixes_have_leading_space(self):
         """Test that all suffixes have leading space (for word boundary)."""
         for suffix in TITLE_SUFFIXES_TO_STRIP:
-            assert suffix.startswith(' '), f"Suffix '{suffix}' should start with space"
+            assert suffix.startswith(" "), f"Suffix '{suffix}' should start with space"
 
 
 class TestCleanupOldLogs:
@@ -179,7 +181,7 @@ class TestCleanupOldLogs:
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a log file
             log_path = os.path.join(tmpdir, "test.log")
-            with open(log_path, 'w') as f:
+            with open(log_path, "w") as f:
                 f.write("log content")
 
             cleanup_old_logs(tmpdir, retention_days=0)
@@ -191,7 +193,7 @@ class TestCleanupOldLogs:
         """Test that negative retention_days keeps all files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = os.path.join(tmpdir, "test.log")
-            with open(log_path, 'w') as f:
+            with open(log_path, "w") as f:
                 f.write("log content")
 
             cleanup_old_logs(tmpdir, retention_days=-1)
@@ -202,7 +204,7 @@ class TestCleanupOldLogs:
         """Test that old logs are removed."""
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = os.path.join(tmpdir, "old.log")
-            with open(log_path, 'w') as f:
+            with open(log_path, "w") as f:
                 f.write("old log")
 
             # Set file modification time to 10 days ago
@@ -218,7 +220,7 @@ class TestCleanupOldLogs:
         """Test that recent logs are kept."""
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = os.path.join(tmpdir, "recent.log")
-            with open(log_path, 'w') as f:
+            with open(log_path, "w") as f:
                 f.write("recent log")
 
             # File was just created, so it's recent
@@ -232,7 +234,7 @@ class TestCleanupOldLogs:
         """Test that non-.log files are ignored."""
         with tempfile.TemporaryDirectory() as tmpdir:
             txt_path = os.path.join(tmpdir, "file.txt")
-            with open(txt_path, 'w') as f:
+            with open(txt_path, "w") as f:
                 f.write("text content")
 
             # Set to old time
@@ -244,14 +246,14 @@ class TestCleanupOldLogs:
             # .txt file should still exist (not a .log file)
             assert os.path.exists(txt_path)
 
-    @patch('utils.helpers.os.remove')
+    @patch("utils.helpers.os.remove")
     def test_handles_file_remove_error(self, mock_remove):
         """Test that file removal errors are handled gracefully."""
         mock_remove.side_effect = PermissionError("Access denied")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = os.path.join(tmpdir, "old.log")
-            with open(log_path, 'w') as f:
+            with open(log_path, "w") as f:
                 f.write("old log")
 
             # Set file modification time to 10 days ago
@@ -275,9 +277,9 @@ class TestCleanupOldLogs:
             old_log = os.path.join(tmpdir, "old.log")
             new_log = os.path.join(tmpdir, "new.log")
 
-            with open(old_log, 'w') as f:
+            with open(old_log, "w") as f:
                 f.write("old")
-            with open(new_log, 'w') as f:
+            with open(new_log, "w") as f:
                 f.write("new")
 
             # Set old_log to 10 days ago
@@ -295,7 +297,7 @@ class TestCleanupOldLogs:
         catches what the mtime check structurally cannot."""
         with tempfile.TemporaryDirectory() as tmpdir:
             huge_log = os.path.join(tmpdir, "daily-run.log")
-            with open(huge_log, 'wb') as f:
+            with open(huge_log, "wb") as f:
                 f.write(b"x" * (MAX_LOG_FILE_BYTES + 1))
 
             # Freshly written - mtime is "now", nowhere near the
@@ -310,7 +312,7 @@ class TestCleanupOldLogs:
         rules still apply as normal)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             small_log = os.path.join(tmpdir, "daily-run.log")
-            with open(small_log, 'wb') as f:
+            with open(small_log, "wb") as f:
                 f.write(b"x" * 100)
 
             cleanup_old_logs(tmpdir, retention_days=7)
@@ -318,7 +320,7 @@ class TestCleanupOldLogs:
             assert os.path.exists(small_log)
             assert os.path.getsize(small_log) == 100
 
-    @patch('utils.helpers.os.path.getsize')
+    @patch("utils.helpers.os.path.getsize")
     def test_handles_size_check_error(self, mock_getsize):
         """Errors while checking/truncating for size are handled
         gracefully, matching the existing per-file error handling."""
@@ -326,7 +328,7 @@ class TestCleanupOldLogs:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = os.path.join(tmpdir, "test.log")
-            with open(log_path, 'w') as f:
+            with open(log_path, "w") as f:
                 f.write("log content")
 
             # Should not raise
@@ -343,25 +345,25 @@ class TestComputeProfileHash:
 
     def test_same_data_same_hash(self):
         """Test that identical data produces identical hash."""
-        profile1 = {'genres': {'action': 10, 'comedy': 5}}
-        profile2 = {'genres': {'action': 10, 'comedy': 5}}
+        profile1 = {"genres": {"action": 10, "comedy": 5}}
+        profile2 = {"genres": {"action": 10, "comedy": 5}}
         assert compute_profile_hash(profile1) == compute_profile_hash(profile2)
 
     def test_different_data_different_hash(self):
         """Test that different data produces different hash."""
-        profile1 = {'genres': {'action': 10}}
-        profile2 = {'genres': {'action': 11}}
+        profile1 = {"genres": {"action": 10}}
+        profile2 = {"genres": {"action": 11}}
         assert compute_profile_hash(profile1) != compute_profile_hash(profile2)
 
     def test_order_independent(self):
         """Test that key order doesn't affect hash."""
-        profile1 = {'genres': {'action': 10, 'comedy': 5}, 'actors': {'a': 1}}
-        profile2 = {'actors': {'a': 1}, 'genres': {'comedy': 5, 'action': 10}}
+        profile1 = {"genres": {"action": 10, "comedy": 5}, "actors": {"a": 1}}
+        profile2 = {"actors": {"a": 1}, "genres": {"comedy": 5, "action": 10}}
         assert compute_profile_hash(profile1) == compute_profile_hash(profile2)
 
     def test_returns_16_char_string(self):
         """Test that hash is 16 characters."""
-        profile = {'genres': {'action': 10}}
+        profile = {"genres": {"action": 10}}
         result = compute_profile_hash(profile)
         assert len(result) == 16
         assert isinstance(result, str)
@@ -385,19 +387,19 @@ class TestGetProjectRoot:
     def test_non_frozen_returns_repo_root(self):
         """Normal (non-frozen) run: unchanged behavior - parent of utils/."""
         root = get_project_root()
-        assert os.path.isdir(os.path.join(root, 'utils'))
-        assert os.path.isdir(os.path.join(root, 'web'))
+        assert os.path.isdir(os.path.join(root, "utils"))
+        assert os.path.isdir(os.path.join(root, "web"))
 
-    @patch('utils.helpers.sys.frozen', True, create=True)
+    @patch("utils.helpers.sys.frozen", True, create=True)
     def test_frozen_windows_uses_appdata(self, tmp_path, monkeypatch):
         """A frozen binary on Windows uses %APPDATA%\\curatarr."""
-        monkeypatch.setattr(os, 'name', 'nt')
-        monkeypatch.setenv('APPDATA', str(tmp_path))
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setenv("APPDATA", str(tmp_path))
         root = get_project_root()
-        assert root == os.path.join(str(tmp_path), 'curatarr')
+        assert root == os.path.join(str(tmp_path), "curatarr")
         assert os.path.isdir(root)
 
-    @patch('utils.helpers.sys.frozen', True, create=True)
+    @patch("utils.helpers.sys.frozen", True, create=True)
     def test_frozen_windows_falls_back_to_home_without_appdata(self, tmp_path, monkeypatch):
         """No %APPDATA% set (unusual, but shouldn't crash): fall back to ~\\curatarr.
 
@@ -409,14 +411,14 @@ class TestGetProjectRoot:
         real Windows, only on POSIX. Patching expanduser exercises the
         branch logic under test on every platform, which is the point.
         """
-        monkeypatch.setattr(os, 'name', 'nt')
-        monkeypatch.delenv('APPDATA', raising=False)
-        monkeypatch.setattr(os.path, 'expanduser', lambda p: str(tmp_path))
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.delenv("APPDATA", raising=False)
+        monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path))
         root = get_project_root()
-        assert root == os.path.join(str(tmp_path), 'curatarr')
+        assert root == os.path.join(str(tmp_path), "curatarr")
         assert os.path.isdir(root)
 
-    @patch('utils.helpers.sys.frozen', True, create=True)
+    @patch("utils.helpers.sys.frozen", True, create=True)
     def test_frozen_posix_uses_dot_curatarr_in_home(self, tmp_path, monkeypatch):
         """A frozen binary on macOS/Linux uses ~/.curatarr.
 
@@ -424,63 +426,63 @@ class TestGetProjectRoot:
         test_frozen_windows_falls_back_to_home_without_appdata above
         for why) rather than the HOME env var.
         """
-        monkeypatch.setattr(os, 'name', 'posix')
-        monkeypatch.setattr(os.path, 'expanduser', lambda p: str(tmp_path))
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path))
         root = get_project_root()
-        assert root == os.path.join(str(tmp_path), '.curatarr')
+        assert root == os.path.join(str(tmp_path), ".curatarr")
         assert os.path.isdir(root)
 
-    @patch('utils.helpers.sys.frozen', True, create=True)
+    @patch("utils.helpers.sys.frozen", True, create=True)
     def test_frozen_reuses_existing_dir(self, tmp_path, monkeypatch):
         """Second run against an already-populated data dir doesn't error."""
-        monkeypatch.setattr(os, 'name', 'posix')
-        monkeypatch.setattr(os.path, 'expanduser', lambda p: str(tmp_path))
-        existing = os.path.join(str(tmp_path), '.curatarr')
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path))
+        existing = os.path.join(str(tmp_path), ".curatarr")
         os.makedirs(existing)
-        with open(os.path.join(existing, 'marker.txt'), 'w') as f:
-            f.write('keep me')
+        with open(os.path.join(existing, "marker.txt"), "w") as f:
+            f.write("keep me")
         root = get_project_root()
         assert root == existing
-        assert os.path.isfile(os.path.join(existing, 'marker.txt'))
+        assert os.path.isfile(os.path.join(existing, "marker.txt"))
 
     def test_config_dir_env_override_wins_over_source_checkout(self, tmp_path, monkeypatch):
         """CURATARR_CONFIG_DIR (see Dockerfile/docs/DOCKER.md) takes
         priority over the normal non-frozen repo-root behavior."""
-        override = os.path.join(str(tmp_path), 'data')
-        monkeypatch.setenv('CURATARR_CONFIG_DIR', override)
+        override = os.path.join(str(tmp_path), "data")
+        monkeypatch.setenv("CURATARR_CONFIG_DIR", override)
         root = get_project_root()
         assert root == override
         assert os.path.isdir(root)
 
-    @patch('utils.helpers.sys.frozen', True, create=True)
+    @patch("utils.helpers.sys.frozen", True, create=True)
     def test_config_dir_env_override_wins_over_frozen_binary_dir(self, tmp_path, monkeypatch):
         """CURATARR_CONFIG_DIR also wins over the frozen-binary per-user
         data dir - it's the highest-priority override either way."""
-        override = os.path.join(str(tmp_path), 'data')
-        monkeypatch.setenv('CURATARR_CONFIG_DIR', override)
-        monkeypatch.setattr(os, 'name', 'posix')
-        monkeypatch.setenv('HOME', str(tmp_path))
+        override = os.path.join(str(tmp_path), "data")
+        monkeypatch.setenv("CURATARR_CONFIG_DIR", override)
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setenv("HOME", str(tmp_path))
         root = get_project_root()
         assert root == override
-        assert root != os.path.join(str(tmp_path), '.curatarr')
+        assert root != os.path.join(str(tmp_path), ".curatarr")
 
     def test_config_dir_env_override_reuses_existing_dir(self, tmp_path, monkeypatch):
-        override = os.path.join(str(tmp_path), 'data')
+        override = os.path.join(str(tmp_path), "data")
         os.makedirs(override)
-        with open(os.path.join(override, 'marker.txt'), 'w') as f:
-            f.write('keep me')
-        monkeypatch.setenv('CURATARR_CONFIG_DIR', override)
+        with open(os.path.join(override, "marker.txt"), "w") as f:
+            f.write("keep me")
+        monkeypatch.setenv("CURATARR_CONFIG_DIR", override)
         root = get_project_root()
         assert root == override
-        assert os.path.isfile(os.path.join(override, 'marker.txt'))
+        assert os.path.isfile(os.path.join(override, "marker.txt"))
 
     def test_config_dir_env_unset_is_unaffected(self, monkeypatch):
         """Unset (the default for every existing install) falls through
         to the normal repo-root behavior, unchanged."""
-        monkeypatch.delenv('CURATARR_CONFIG_DIR', raising=False)
+        monkeypatch.delenv("CURATARR_CONFIG_DIR", raising=False)
         root = get_project_root()
-        assert os.path.isdir(os.path.join(root, 'utils'))
-        assert os.path.isdir(os.path.join(root, 'web'))
+        assert os.path.isdir(os.path.join(root, "utils"))
+        assert os.path.isdir(os.path.join(root, "web"))
 
 
 class TestMigrateLegacyCacheDir:
@@ -494,7 +496,7 @@ class TestMigrateLegacyCacheDir:
         new_dir = tmp_path / "new" / "cache"
         legacy_dir.mkdir(parents=True)
         (legacy_dir / "all_movies_cache.json").write_text('{"movies": {}}')
-        (legacy_dir / "watched_cache_plex_admin.json").write_text('{}')
+        (legacy_dir / "watched_cache_plex_admin.json").write_text("{}")
 
         migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
 
@@ -546,15 +548,15 @@ class TestMigrateLegacyCacheDir:
         new_dir = tmp_path / "new"
         legacy_dir.mkdir()
         (legacy_dir / "subdir").mkdir()
-        (legacy_dir / "subdir" / "nested.json").write_text('{}')
+        (legacy_dir / "subdir" / "nested.json").write_text("{}")
 
         migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
 
         # Only flat files are migrated - a subdirectory is left alone.
         assert (legacy_dir / "subdir" / "nested.json").exists()
 
-    @patch('utils.helpers.log_warning')
-    @patch('utils.helpers.shutil.move')
+    @patch("utils.helpers.log_warning")
+    @patch("utils.helpers.shutil.move")
     def test_move_failure_logs_warning_and_does_not_raise(self, mock_move, mock_warn, tmp_path):
         legacy_dir = tmp_path / "legacy"
         new_dir = tmp_path / "new"
@@ -567,7 +569,7 @@ class TestMigrateLegacyCacheDir:
 
         mock_warn.assert_called_once()
 
-    @patch('utils.helpers.log_info')
+    @patch("utils.helpers.log_info")
     def test_logs_migrated_filenames_at_info(self, mock_info, tmp_path):
         legacy_dir = tmp_path / "legacy"
         new_dir = tmp_path / "new"
@@ -594,9 +596,9 @@ class TestNoWindowKwargs:
     branches without needing an actual Windows interpreter."""
 
     def test_windows_returns_create_no_window_flag(self, monkeypatch):
-        monkeypatch.setattr(os, 'name', 'nt')
-        assert no_window_kwargs() == {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+        monkeypatch.setattr(os, "name", "nt")
+        assert no_window_kwargs() == {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
     def test_posix_returns_empty_dict(self, monkeypatch):
-        monkeypatch.setattr(os, 'name', 'posix')
+        monkeypatch.setattr(os, "name", "posix")
         assert no_window_kwargs() == {}

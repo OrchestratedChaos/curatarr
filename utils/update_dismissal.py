@@ -43,7 +43,7 @@ from typing import Optional
 
 from .helpers import get_project_root
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # How long dismissing a specific version snoozes it for. Deliberately
 # much shorter than UPDATE_CHECK_INTERVAL_HOURS-driven version
@@ -53,14 +53,14 @@ logger = logging.getLogger('curatarr')
 DISMISS_SNOOZE_DAYS = 7
 DISMISS_SNOOZE_SECONDS = DISMISS_SNOOZE_DAYS * 24 * 60 * 60
 
-_DISMISSAL_FILENAME = 'dismissed_update.json'
+_DISMISSAL_FILENAME = "dismissed_update.json"
 
 
 def _dismissal_path() -> str:
     # Same directory/convention as utils.update_check._cache_path() -
     # project_root/cache/, gitignored, never directly in project_root
     # itself (which for a source install IS the git checkout).
-    cache_dir = os.path.join(get_project_root(), 'cache')
+    cache_dir = os.path.join(get_project_root(), "cache")
     try:
         os.makedirs(cache_dir, exist_ok=True)
     except Exception as e:
@@ -85,9 +85,9 @@ def record_dismissal(version: str, now: Optional[float] = None) -> None:
         return
     path = _dismissal_path()
     try:
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(
-                {'version': version, 'dismissed_at': now if now is not None else time.time()},
+                {"version": version, "dismissed_at": now if now is not None else time.time()},
                 f,
             )
     except Exception as e:
@@ -99,7 +99,7 @@ def _read_dismissal() -> Optional[dict]:
     if not os.path.isfile(path):
         return None
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -124,9 +124,9 @@ def is_dismissed(version: str, now: Optional[float] = None) -> bool:
     if not version:
         return False
     state = _read_dismissal()
-    if not state or state.get('version') != version:
+    if not state or state.get("version") != version:
         return False
-    dismissed_at = state.get('dismissed_at')
+    dismissed_at = state.get("dismissed_at")
     if not isinstance(dismissed_at, (int, float)):
         return False
     current_time = now if now is not None else time.time()

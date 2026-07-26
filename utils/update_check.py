@@ -44,7 +44,7 @@ import requests
 from .config import __version__
 from .helpers import get_project_root
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # api.github.com - JSON, used for the actual version lookup. Overridable
 # via CURATARR_RELEASES_API_OVERRIDE for testing/staging (e.g. this
@@ -55,7 +55,7 @@ logger = logging.getLogger('curatarr')
 # redirecting WHERE the version number comes from doesn't change what
 # gets trusted with it.
 GITHUB_RELEASES_API = (
-    os.environ.get('CURATARR_RELEASES_API_OVERRIDE')
+    os.environ.get("CURATARR_RELEASES_API_OVERRIDE")
     or "https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest"
 )
 # github.com - human-facing, used for CLI/web "go download it" links.
@@ -65,7 +65,7 @@ REQUEST_TIMEOUT_SECONDS = 4
 UPDATE_CHECK_INTERVAL_HOURS = 12
 
 _CACHE_FILENAME = "update_check_cache.json"
-_VALID_UPDATE_MODES = ('notify', 'force', 'off')
+_VALID_UPDATE_MODES = ("notify", "force", "off")
 
 
 def _cache_path() -> str:
@@ -75,7 +75,7 @@ def _cache_path() -> str:
     # project_root itself, which for a source install IS the git
     # checkout and would otherwise get a stray untracked file dropped
     # into the working tree on every run.
-    cache_dir = os.path.join(get_project_root(), 'cache')
+    cache_dir = os.path.join(get_project_root(), "cache")
     try:
         os.makedirs(cache_dir, exist_ok=True)
     except Exception as e:
@@ -108,7 +108,7 @@ def parse_version(version: Optional[str]) -> Optional[Tuple[int, int, int]]:
     """
     if not version:
         return None
-    match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)$', version.strip())
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", version.strip())
     if not match:
         return None
     return tuple(int(part) for part in match.groups())
@@ -119,7 +119,7 @@ def _read_cache() -> Optional[dict]:
     if not os.path.isfile(path):
         return None
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -128,8 +128,8 @@ def _read_cache() -> Optional[dict]:
 def _write_cache(latest: Optional[str]) -> None:
     path = _cache_path()
     try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump({'latest': latest, 'checked_at': time.time()}, f)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"latest": latest, "checked_at": time.time()}, f)
     except Exception as e:
         # Never fatal - worst case we just re-check next run instead of
         # respecting the cache interval.
@@ -158,10 +158,10 @@ def _fetch_latest_version() -> Optional[str]:
         response = requests.get(
             GITHUB_RELEASES_API,
             timeout=REQUEST_TIMEOUT_SECONDS,
-            headers={'Accept': 'application/vnd.github+json'},
+            headers={"Accept": "application/vnd.github+json"},
         )
         response.raise_for_status()
-        tag = (response.json() or {}).get('tag_name')
+        tag = (response.json() or {}).get("tag_name")
         parsed = parse_version(tag)
         if not parsed:
             return None
@@ -171,7 +171,7 @@ def _fetch_latest_version() -> Optional[str]:
         return None
 
 
-def get_latest_version(update_mode: str = 'notify', force_refresh: bool = False) -> Optional[str]:
+def get_latest_version(update_mode: str = "notify", force_refresh: bool = False) -> Optional[str]:
     """
     Return the latest published release version (e.g. "2.9.0"), or None
     if unknown/unreachable/disabled/not-yet-due-for-a-recheck's-cache-
@@ -195,19 +195,17 @@ def get_latest_version(update_mode: str = 'notify', force_refresh: bool = False)
     """
     if not force_refresh:
         cache = _read_cache()
-        if cache and isinstance(cache.get('checked_at'), (int, float)):
-            age_hours = (time.time() - cache['checked_at']) / 3600
+        if cache and isinstance(cache.get("checked_at"), (int, float)):
+            age_hours = (time.time() - cache["checked_at"]) / 3600
             if age_hours < UPDATE_CHECK_INTERVAL_HOURS:
-                return cache.get('latest')
+                return cache.get("latest")
 
     latest = _fetch_latest_version()
     _write_cache(latest)
     return latest
 
 
-def update_available(
-    update_mode: str = 'notify', force_refresh: bool = False
-) -> Tuple[Optional[str], str, bool]:
+def update_available(update_mode: str = "notify", force_refresh: bool = False) -> Tuple[Optional[str], str, bool]:
     """
     Resolve whether a newer release is available.
 

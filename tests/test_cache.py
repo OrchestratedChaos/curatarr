@@ -2,18 +2,12 @@
 Tests for utils/cache.py - Cache I/O functions.
 """
 
-import pytest
-import os
 import json
+import os
 import tempfile
 from unittest.mock import patch
-from utils.cache import (
-    save_json_cache,
-    load_json_cache,
-    load_media_cache,
-    save_media_cache,
-    save_watched_cache
-)
+
+from utils.cache import load_json_cache, load_media_cache, save_json_cache, save_media_cache, save_watched_cache
 from utils.config import CACHE_VERSION
 
 
@@ -22,7 +16,7 @@ class TestSaveJsonCache:
 
     def test_save_basic_dict(self):
         """Test saving a basic dictionary."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
@@ -32,7 +26,7 @@ class TestSaveJsonCache:
             assert result is True
             assert os.path.exists(cache_path)
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
             assert loaded["key"] == "value"
             assert loaded["number"] == 42
@@ -41,14 +35,14 @@ class TestSaveJsonCache:
 
     def test_save_with_cache_version(self):
         """Test saving with cache version."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
             data = {"key": "value"}
             save_json_cache(cache_path, data, cache_version=5)
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
             assert loaded["cache_version"] == 5
         finally:
@@ -56,7 +50,7 @@ class TestSaveJsonCache:
 
     def test_save_unicode_content(self):
         """Test saving unicode content."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
@@ -65,7 +59,7 @@ class TestSaveJsonCache:
 
             assert result is True
 
-            with open(cache_path, 'r', encoding='utf-8') as f:
+            with open(cache_path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
             assert loaded["title"] == "日本語タイトル"
             assert loaded["emoji"] == "🎬"
@@ -83,7 +77,7 @@ class TestLoadJsonCache:
 
     def test_load_existing_file(self):
         """Test loading an existing cache file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"key": "value", "number": 42}, f)
             cache_path = f.name
 
@@ -103,7 +97,7 @@ class TestLoadJsonCache:
 
     def test_load_invalid_json(self):
         """Test loading invalid JSON returns None."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write("not valid json {{{")
             cache_path = f.name
 
@@ -119,18 +113,18 @@ class TestLoadMediaCache:
 
     def test_load_valid_cache(self):
         """Test loading a valid media cache."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_data = {
                 "movies": {"123": {"title": "Test Movie"}},
                 "last_updated": "2024-01-01",
                 "library_count": 100,
-                "cache_version": CACHE_VERSION
+                "cache_version": CACHE_VERSION,
             }
             json.dump(cache_data, f)
             cache_path = f.name
 
         try:
-            result = load_media_cache(cache_path, media_key='movies')
+            result = load_media_cache(cache_path, media_key="movies")
 
             assert "movies" in result
             assert result["movies"]["123"]["title"] == "Test Movie"
@@ -139,7 +133,7 @@ class TestLoadMediaCache:
 
     def test_load_missing_file_returns_empty(self):
         """Test that missing file returns empty cache structure."""
-        result = load_media_cache("/nonexistent/cache.json", media_key='movies')
+        result = load_media_cache("/nonexistent/cache.json", media_key="movies")
 
         assert result["movies"] == {}
         assert result["last_updated"] is None
@@ -148,18 +142,18 @@ class TestLoadMediaCache:
 
     def test_load_tv_cache(self):
         """Test loading TV show cache."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_data = {
                 "shows": {"456": {"title": "Test Show"}},
                 "last_updated": "2024-01-01",
                 "library_count": 50,
-                "cache_version": CACHE_VERSION
+                "cache_version": CACHE_VERSION,
             }
             json.dump(cache_data, f)
             cache_path = f.name
 
         try:
-            result = load_media_cache(cache_path, media_key='shows')
+            result = load_media_cache(cache_path, media_key="shows")
 
             assert "shows" in result
             assert result["shows"]["456"]["title"] == "Test Show"
@@ -168,12 +162,12 @@ class TestLoadMediaCache:
 
     def test_load_corrupted_cache_returns_empty(self):
         """Test loading corrupted cache file returns empty cache."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write("this is not valid json {{{")
             cache_path = f.name
 
         try:
-            result = load_media_cache(cache_path, media_key='movies')
+            result = load_media_cache(cache_path, media_key="movies")
 
             # Should return empty cache structure
             assert result["movies"] == {}
@@ -187,7 +181,7 @@ class TestSaveMediaCache:
 
     def test_save_movie_cache(self):
         """Test saving movie cache."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
@@ -195,15 +189,15 @@ class TestSaveMediaCache:
                 "movies": {"123": {"title": "Test Movie"}},
                 "last_updated": "2024-01-01",
                 "library_count": 100,
-                "cache_version": CACHE_VERSION
+                "cache_version": CACHE_VERSION,
             }
 
-            result = save_media_cache(cache_path, cache_data, media_key='movies')
+            result = save_media_cache(cache_path, cache_data, media_key="movies")
 
             assert result is True
             assert os.path.exists(cache_path)
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
             assert loaded["movies"]["123"]["title"] == "Test Movie"
         finally:
@@ -211,7 +205,7 @@ class TestSaveMediaCache:
 
     def test_save_preserves_structure(self):
         """Test that save preserves the entire structure."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
@@ -220,12 +214,12 @@ class TestSaveMediaCache:
                 "last_updated": "2024-06-15T10:30:00",
                 "library_count": 250,
                 "cache_version": CACHE_VERSION,
-                "extra_field": "preserved"
+                "extra_field": "preserved",
             }
 
             save_media_cache(cache_path, cache_data)
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
 
             assert loaded["extra_field"] == "preserved"
@@ -245,13 +239,13 @@ class TestLoadMediaCacheErrorHandling:
 
     def test_load_corrupted_json_returns_empty(self):
         """Test that corrupted JSON returns empty cache structure."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             # Write valid version header but corrupted content
             f.write('{"cache_version": ' + str(CACHE_VERSION) + ', "movies": {invalid}')
             cache_path = f.name
 
         try:
-            result = load_media_cache(cache_path, media_key='movies')
+            result = load_media_cache(cache_path, media_key="movies")
             # Should return empty structure on error
             assert result["movies"] == {}
             assert result["cache_version"] == CACHE_VERSION
@@ -265,19 +259,15 @@ class TestSaveWatchedCache:
 
     def test_save_movie_watched_cache(self):
         """Test saving movie watched cache."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
-            watched_data = {
-                'genres': {'action': 5, 'comedy': 3},
-                'actors': {'Actor A': 2},
-                'directors': {'Dir X': 1}
-            }
+            watched_data = {"genres": {"action": 5, "comedy": 3}, "actors": {"Actor A": 2}, "directors": {"Dir X": 1}}
             plex_tmdb = {123: 456, 789: 101}
-            keywords = {'456': ['action', 'hero']}
+            keywords = {"456": ["action", "hero"]}
             watched_ids = {123, 789}
-            label_dates = {'123_Recommended': '2024-01-01'}
+            label_dates = {"123_Recommended": "2024-01-01"}
 
             result = save_watched_cache(
                 cache_path,
@@ -287,124 +277,94 @@ class TestSaveWatchedCache:
                 watched_ids,
                 label_dates,
                 watched_count=2,
-                media_type='movie'
+                media_type="movie",
             )
 
             assert result is True
             assert os.path.exists(cache_path)
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
 
-            assert loaded['cache_version'] == CACHE_VERSION
-            assert loaded['watched_count'] == 2
-            assert loaded['watched_data_counters']['genres']['action'] == 5
-            assert 'watched_movie_ids' in loaded
-            assert len(loaded['watched_movie_ids']) == 2
-            assert loaded['label_dates'] == label_dates
+            assert loaded["cache_version"] == CACHE_VERSION
+            assert loaded["watched_count"] == 2
+            assert loaded["watched_data_counters"]["genres"]["action"] == 5
+            assert "watched_movie_ids" in loaded
+            assert len(loaded["watched_movie_ids"]) == 2
+            assert loaded["label_dates"] == label_dates
         finally:
             os.unlink(cache_path)
 
     def test_save_tv_watched_cache(self):
         """Test saving TV watched cache uses show IDs key."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
             result = save_watched_cache(
-                cache_path,
-                {'genres': {'drama': 3}},
-                {},
-                {},
-                {111, 222},
-                {},
-                watched_count=2,
-                media_type='tv'
+                cache_path, {"genres": {"drama": 3}}, {}, {}, {111, 222}, {}, watched_count=2, media_type="tv"
             )
 
             assert result is True
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
 
-            assert 'watched_show_ids' in loaded
-            assert 'watched_movie_ids' not in loaded
+            assert "watched_show_ids" in loaded
+            assert "watched_movie_ids" not in loaded
         finally:
             os.unlink(cache_path)
 
     def test_save_converts_tmdb_ids_set_to_list(self):
         """Test that tmdb_ids set is converted to list."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
             watched_data = {
-                'genres': {},
-                'tmdb_ids': {100, 200, 300}  # Set that needs conversion
+                "genres": {},
+                "tmdb_ids": {100, 200, 300},  # Set that needs conversion
             }
 
             result = save_watched_cache(
-                cache_path,
-                watched_data,
-                {},
-                {},
-                set(),
-                {},
-                watched_count=0,
-                media_type='movie'
+                cache_path, watched_data, {}, {}, set(), {}, watched_count=0, media_type="movie"
             )
 
             assert result is True
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
 
             # Should be a list, not a set (sets aren't JSON serializable)
-            assert isinstance(loaded['watched_data_counters']['tmdb_ids'], list)
+            assert isinstance(loaded["watched_data_counters"]["tmdb_ids"], list)
         finally:
             os.unlink(cache_path)
 
     def test_save_invalid_path_returns_false(self):
         """Test that invalid path returns False."""
         result = save_watched_cache(
-            "/nonexistent/path/cache.json",
-            {},
-            {},
-            {},
-            set(),
-            {},
-            watched_count=0,
-            media_type='movie'
+            "/nonexistent/path/cache.json", {}, {}, {}, set(), {}, watched_count=0, media_type="movie"
         )
         assert result is False
 
     def test_save_converts_plex_tmdb_keys_to_string(self):
         """Test that plex_tmdb_cache keys are converted to strings."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
 
         try:
             plex_tmdb = {123: 456, 789: 101}  # Integer keys
 
-            result = save_watched_cache(
-                cache_path,
-                {},
-                plex_tmdb,
-                {},
-                set(),
-                {},
-                watched_count=0,
-                media_type='movie'
-            )
+            result = save_watched_cache(cache_path, {}, plex_tmdb, {}, set(), {}, watched_count=0, media_type="movie")
 
             assert result is True
 
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 loaded = json.load(f)
 
             # Keys should be strings in JSON
-            assert '123' in loaded['plex_tmdb_cache']
-            assert '789' in loaded['plex_tmdb_cache']
+            assert "123" in loaded["plex_tmdb_cache"]
+            assert "789" in loaded["plex_tmdb_cache"]
         finally:
             os.unlink(cache_path)
 
@@ -418,16 +378,16 @@ class TestAtomicCacheWrite:
     def test_save_json_cache_failure_leaves_original_intact(self):
         """A write that fails partway through must not touch the
         original file's content."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
             f.write('{"original": "data"}')
 
         try:
-            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
+            with patch("utils.cache.json.dump", side_effect=ValueError("boom")):
                 result = save_json_cache(cache_path, {"new": "data"})
 
             assert result is False
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 content = f.read()
             assert content == '{"original": "data"}'
         finally:
@@ -438,10 +398,10 @@ class TestAtomicCacheWrite:
         leaving an orphaned .tmp- file in the cache directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_path = os.path.join(tmpdir, "cache.json")
-            with open(cache_path, 'w') as f:
+            with open(cache_path, "w") as f:
                 f.write('{"original": "data"}')
 
-            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
+            with patch("utils.cache.json.dump", side_effect=ValueError("boom")):
                 result = save_json_cache(cache_path, {"new": "data"})
 
             assert result is False
@@ -461,16 +421,16 @@ class TestAtomicCacheWrite:
     def test_save_media_cache_failure_leaves_original_intact(self):
         """A failed media cache write must not corrupt the existing
         cache file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
             f.write('{"original": "data"}')
 
         try:
-            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
-                result = save_media_cache(cache_path, {"movies": {}}, media_key='movies')
+            with patch("utils.cache.json.dump", side_effect=ValueError("boom")):
+                result = save_media_cache(cache_path, {"movies": {}}, media_key="movies")
 
             assert result is False
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 content = f.read()
             assert content == '{"original": "data"}'
         finally:
@@ -480,25 +440,16 @@ class TestAtomicCacheWrite:
         """A failed watched cache write must not corrupt the existing
         cache file - this is the cache docker-compose's `curatarr` and
         `curatarr-recommend` services could otherwise race on."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             cache_path = f.name
             f.write('{"original": "data"}')
 
         try:
-            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
-                result = save_watched_cache(
-                    cache_path,
-                    {},
-                    {},
-                    {},
-                    set(),
-                    {},
-                    watched_count=0,
-                    media_type='movie'
-                )
+            with patch("utils.cache.json.dump", side_effect=ValueError("boom")):
+                result = save_watched_cache(cache_path, {}, {}, {}, set(), {}, watched_count=0, media_type="movie")
 
             assert result is False
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 content = f.read()
             assert content == '{"original": "data"}'
         finally:

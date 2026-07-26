@@ -112,7 +112,7 @@ from .config import __version__
 from .metrics import record_self_update_attempt
 from .update_check import GITHUB_RELEASES_PAGE, parse_version, update_available
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # =============================================================================
 # Errors - every failure mode below is one of these. Callers (curatarr_app.py's
@@ -120,6 +120,7 @@ logger = logging.getLogger('curatarr')
 # all of them identically: log it, swap nothing, keep/relaunch whatever
 # binary is currently on disk. See module docstring.
 # =============================================================================
+
 
 class SelfUpdateError(Exception):
     """Base class for every self-update failure."""
@@ -177,9 +178,9 @@ class VersionReadbackError(SelfUpdateError):
 
 # Filenames exactly as published by .github/workflows/release.yml - see
 # docs/BINARIES.md's asset table.
-ASSET_WINDOWS_X86_64 = 'curatarr-windows-x86_64.exe'
-ASSET_LINUX_X86_64 = 'curatarr-linux-x86_64'
-ASSET_LINUX_ARM64 = 'curatarr-linux-arm64'
+ASSET_WINDOWS_X86_64 = "curatarr-windows-x86_64.exe"
+ASSET_LINUX_X86_64 = "curatarr-linux-x86_64"
+ASSET_LINUX_ARM64 = "curatarr-linux-arm64"
 # Canonical name as of the release that dropped Intel macOS support
 # (cryptography 49.0.0 removed x86_64 macOS wheels entirely, and
 # GitHub's last Intel macOS runner is retired) - macOS binaries are now
@@ -190,10 +191,10 @@ ASSET_LINUX_ARM64 = 'curatarr-linux-arm64'
 # - that duplicate has since been dropped, and this function has never
 # had a fallback to it: it only ever runs INSIDE the binary requesting
 # its OWN next asset, so it always requests the canonical name.
-ASSET_MACOS_ARM64 = 'curatarr-macos-arm64'
+ASSET_MACOS_ARM64 = "curatarr-macos-arm64"
 
-_X86_64_MACHINE_NAMES = ('x86_64', 'amd64')
-_ARM64_MACHINE_NAMES = ('aarch64', 'arm64')
+_X86_64_MACHINE_NAMES = ("x86_64", "amd64")
+_ARM64_MACHINE_NAMES = ("aarch64", "arm64")
 
 
 def select_asset_name(sys_platform: Optional[str] = None, machine: Optional[str] = None) -> str:
@@ -214,9 +215,9 @@ def select_asset_name(sys_platform: Optional[str] = None, machine: Optional[str]
     """
     sys_platform = sys.platform if sys_platform is None else sys_platform
     machine = platform.machine() if machine is None else machine
-    machine_l = (machine or '').lower()
+    machine_l = (machine or "").lower()
 
-    if sys_platform == 'win32':
+    if sys_platform == "win32":
         if machine_l in _X86_64_MACHINE_NAMES:
             return ASSET_WINDOWS_X86_64
         raise UnsupportedPlatformError(
@@ -224,7 +225,7 @@ def select_asset_name(sys_platform: Optional[str] = None, machine: Optional[str]
             f"built. Download manually: {GITHUB_RELEASES_PAGE}"
         )
 
-    if sys_platform == 'darwin':
+    if sys_platform == "darwin":
         # Only an arm64 binary is published as of the release that
         # dropped Intel macOS support (see ASSET_MACOS_ARM64's own
         # comment) - no architecture branch here, same as before, but
@@ -232,7 +233,7 @@ def select_asset_name(sys_platform: Optional[str] = None, machine: Optional[str]
         # build covers both architectures.
         return ASSET_MACOS_ARM64
 
-    if sys_platform.startswith('linux'):
+    if sys_platform.startswith("linux"):
         if machine_l in _X86_64_MACHINE_NAMES:
             return ASSET_LINUX_X86_64
         if machine_l in _ARM64_MACHINE_NAMES:
@@ -243,8 +244,7 @@ def select_asset_name(sys_platform: Optional[str] = None, machine: Optional[str]
         )
 
     raise UnsupportedPlatformError(
-        f"No self-update binary published for platform {sys_platform!r}. "
-        f"Download manually: {GITHUB_RELEASES_PAGE}"
+        f"No self-update binary published for platform {sys_platform!r}. Download manually: {GITHUB_RELEASES_PAGE}"
     )
 
 
@@ -257,14 +257,14 @@ def select_asset_name(sys_platform: Optional[str] = None, machine: Optional[str]
 # signed file - never the raw file bytes directly.
 # =============================================================================
 
-SIGNATURE_NAMESPACE = 'file'  # matches `ssh-keygen -Y sign -n file` (scripts/sign-release-checksums.sh)
+SIGNATURE_NAMESPACE = "file"  # matches `ssh-keygen -Y sign -n file` (scripts/sign-release-checksums.sh)
 
-_SSHSIG_MAGIC = b'SSHSIG'
+_SSHSIG_MAGIC = b"SSHSIG"
 _SSHSIG_VERSION = 1
-_SSHSIG_ARMOR_BEGIN = '-----BEGIN SSH SIGNATURE-----'
-_SSHSIG_ARMOR_END = '-----END SSH SIGNATURE-----'
-_SUPPORTED_HASH_ALGORITHMS = ('sha256', 'sha512')
-_SUPPORTED_SIGNATURE_ALGORITHM = b'ssh-ed25519'
+_SSHSIG_ARMOR_BEGIN = "-----BEGIN SSH SIGNATURE-----"
+_SSHSIG_ARMOR_END = "-----END SSH SIGNATURE-----"
+_SUPPORTED_HASH_ALGORITHMS = ("sha256", "sha512")
+_SUPPORTED_SIGNATURE_ALGORITHM = b"ssh-ed25519"
 
 
 class _ParsedSshsig(NamedTuple):
@@ -278,18 +278,18 @@ class _ParsedSshsig(NamedTuple):
 def _read_uint32(buf: bytes, offset: int) -> tuple:
     if offset + 4 > len(buf):
         raise SignatureVerificationError("Truncated SSH signature (expected a length prefix)")
-    return struct.unpack('>I', buf[offset:offset + 4])[0], offset + 4
+    return struct.unpack(">I", buf[offset : offset + 4])[0], offset + 4
 
 
 def _read_string(buf: bytes, offset: int) -> tuple:
     length, offset = _read_uint32(buf, offset)
     if length < 0 or offset + length > len(buf):
         raise SignatureVerificationError("Truncated SSH signature (expected a length-prefixed field)")
-    return buf[offset:offset + length], offset + length
+    return buf[offset : offset + length], offset + length
 
 
 def _pack_string(data: bytes) -> bytes:
-    return struct.pack('>I', len(data)) + data
+    return struct.pack(">I", len(data)) + data
 
 
 def _decode_armor(armored_signature: str) -> bytes:
@@ -298,7 +298,7 @@ def _decode_armor(armored_signature: str) -> bytes:
     bare exception) on anything malformed - a caller catching only this
     module's own exception types must never see a raw ValueError/
     binascii.Error escape from here."""
-    text = (armored_signature or '').strip()
+    text = (armored_signature or "").strip()
     if _SSHSIG_ARMOR_BEGIN not in text or _SSHSIG_ARMOR_END not in text:
         raise SignatureVerificationError("Not a valid SSH SIGNATURE block (missing PEM-style armor)")
 
@@ -315,14 +315,14 @@ def _decode_armor(armored_signature: str) -> bytes:
             body_lines.append(stripped)
 
     try:
-        return base64.b64decode(''.join(body_lines))
+        return base64.b64decode("".join(body_lines))
     except (binascii.Error, ValueError) as e:
         raise SignatureVerificationError(f"Malformed base64 in SSH signature: {e}") from e
 
 
 def _parse_sshsig_blob(blob: bytes) -> _ParsedSshsig:
     offset = 0
-    magic = blob[offset:offset + 6]
+    magic = blob[offset : offset + 6]
     offset += 6
     if magic != _SSHSIG_MAGIC:
         raise SignatureVerificationError("Bad SSH signature: missing SSHSIG magic preamble")
@@ -342,8 +342,8 @@ def _parse_sshsig_blob(blob: bytes) -> _ParsedSshsig:
 
     return _ParsedSshsig(
         public_key_blob=public_key_blob,
-        namespace=namespace_raw.decode('utf-8', 'replace'),
-        hash_algorithm=hash_algorithm_raw.decode('ascii', 'replace'),
+        namespace=namespace_raw.decode("utf-8", "replace"),
+        hash_algorithm=hash_algorithm_raw.decode("ascii", "replace"),
         signature_algorithm=sig_algorithm,
         signature_raw=signature_raw,
     )
@@ -355,7 +355,7 @@ def _encode_ed25519_public_key_blob(public_key: Ed25519PublicKey) -> bytes:
     something this module itself decoded from PINNED_SIGNING_PUBLIC_KEY_B64,
     never from the signature file being verified."""
     raw = public_key.public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
-    return _pack_string(b'ssh-ed25519') + _pack_string(raw)
+    return _pack_string(b"ssh-ed25519") + _pack_string(raw)
 
 
 def verify_sshsig(
@@ -418,18 +418,16 @@ def verify_sshsig(
     digest = hashlib.new(parsed.hash_algorithm, message).digest()
     to_be_signed = (
         _SSHSIG_MAGIC
-        + _pack_string(namespace.encode('utf-8'))
-        + _pack_string(b'')  # reserved
-        + _pack_string(parsed.hash_algorithm.encode('ascii'))
+        + _pack_string(namespace.encode("utf-8"))
+        + _pack_string(b"")  # reserved
+        + _pack_string(parsed.hash_algorithm.encode("ascii"))
         + _pack_string(digest)
     )
 
     try:
         public_key.verify(parsed.signature_raw, to_be_signed)
     except InvalidSignature as e:
-        raise SignatureVerificationError(
-            "SSH signature does not verify against the pinned release-signing key"
-        ) from e
+        raise SignatureVerificationError("SSH signature does not verify against the pinned release-signing key") from e
 
 
 # =============================================================================
@@ -442,10 +440,8 @@ def verify_sshsig(
 # scripts/sign-release-checksums.sh and RELEASING.md.
 # =============================================================================
 
-PINNED_SIGNING_PUBLIC_KEY_B64 = (
-    'AAAAC3NzaC1lZDI1NTE5AAAAIINUnyyTuXRhMU7XEpgBwm3dKrkv0D3U7mz+21piPb8q'
-)
-PINNED_SIGNING_KEY_FINGERPRINT = 'SHA256:yrqOXw6sWZGPKON9mJJvjhsBKTgMzsn3VTGdNL5mxKU'
+PINNED_SIGNING_PUBLIC_KEY_B64 = "AAAAC3NzaC1lZDI1NTE5AAAAIINUnyyTuXRhMU7XEpgBwm3dKrkv0D3U7mz+21piPb8q"
+PINNED_SIGNING_KEY_FINGERPRINT = "SHA256:yrqOXw6sWZGPKON9mJJvjhsBKTgMzsn3VTGdNL5mxKU"
 
 
 def compute_key_fingerprint(public_key_blob: bytes) -> str:
@@ -454,7 +450,7 @@ def compute_key_fingerprint(public_key_blob: bytes) -> str:
     base64-encoded, unpadded, "SHA256:" prefixed) - verified against a
     real `ssh-keygen -lf` output while this module was written."""
     digest = hashlib.sha256(public_key_blob).digest()
-    return 'SHA256:' + base64.b64encode(digest).decode('ascii').rstrip('=')
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
 
 
 def _pinned_public_key_blob() -> bytes:
@@ -499,14 +495,14 @@ def verify_pinned_signature(message: bytes, armored_signature: str) -> None:
 # SHA256SUMS.txt parsing + local hashing
 # =============================================================================
 
-SUMS_FILENAME = 'SHA256SUMS.txt'
-SUMS_SIG_FILENAME = 'SHA256SUMS.txt.sig'
+SUMS_FILENAME = "SHA256SUMS.txt"
+SUMS_SIG_FILENAME = "SHA256SUMS.txt.sig"
 
 # Matches both GNU coreutils' `sha256sum` output ("<hex>  <name>" or
 # "<hex> *<name>" for binary mode) and `shasum -a 256`'s identical
 # format - see scripts/release.sh / .github/workflows/release.yml, both
 # of which use one or the other depending on OS.
-_SUMS_LINE_RE = re.compile(r'^([0-9a-fA-F]{64})\s+[* ]?(.+)$')
+_SUMS_LINE_RE = re.compile(r"^([0-9a-fA-F]{64})\s+[* ]?(.+)$")
 
 # Matches the `# curatarr-version: X.Y.Z` comment line
 # .github/workflows/release.yml's finalize-checksums job writes into
@@ -515,7 +511,7 @@ _SUMS_LINE_RE = re.compile(r'^([0-9a-fA-F]{64})\s+[* ]?(.+)$')
 # asset's hash). Present on every release from v2.9.0 onward; absent on
 # anything published before that - see download_and_verify_update's
 # docstring for how an absent line is handled.
-_VERSION_LINE_RE = re.compile(r'^#\s*curatarr-version:\s*(\S+)\s*$', re.IGNORECASE)
+_VERSION_LINE_RE = re.compile(r"^#\s*curatarr-version:\s*(\S+)\s*$", re.IGNORECASE)
 
 
 def parse_sha256sums_version(text: str) -> Optional[str]:
@@ -544,7 +540,7 @@ def parse_sha256sums(text: str) -> Dict[str, str]:
     sums: Dict[str, str] = {}
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith('#'):
+        if not line or line.startswith("#"):
             continue
         match = _SUMS_LINE_RE.match(line)
         if not match:
@@ -558,14 +554,15 @@ def sha256_file(path: str, chunk_size: int = 1 << 20) -> str:
     """Streaming SHA256 of a local file - never loads the whole file
     into memory (these are onefile binaries, tens of MB each)."""
     hasher = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(chunk_size), b''):
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
 
 
-def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asset_name: str,
-                             target_version: Optional[str] = None) -> str:
+def verify_downloaded_asset(
+    asset_path: str, sums_path: str, sig_path: str, asset_name: str, target_version: Optional[str] = None
+) -> str:
     """
     The full authenticity chain (module docstring steps 3-4) applied to
     one already-downloaded asset. Raises SignatureVerificationError or
@@ -609,9 +606,9 @@ def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asse
         # harmless from here on, since parse_sha256sums()/
         # parse_sha256sums_version() both use str.strip()/splitlines(),
         # which already treat \r\n, \r, and \n as equivalent.
-        with open(sums_path, 'rb') as f:
+        with open(sums_path, "rb") as f:
             sums_bytes = f.read()
-        with open(sig_path, 'rb') as f:
+        with open(sig_path, "rb") as f:
             sig_bytes = f.read()
     except OSError as e:
         # Missing/unreadable either file (e.g. the .sig never got
@@ -624,7 +621,7 @@ def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asse
     # strips whitespace per line regardless, so decoding this one to text
     # (unlike sums_bytes above) has no bytes-vs-signature implication; it's
     # only ever parsed, never itself hashed or compared byte-for-byte.
-    sig_text = sig_bytes.decode('utf-8')
+    sig_text = sig_bytes.decode("utf-8")
 
     # Authenticity FIRST: SHA256SUMS.txt was just downloaded over
     # anonymous HTTPS and is no more trustworthy than the asset itself
@@ -638,7 +635,7 @@ def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asse
     # this content that could differ from what was actually signed.
     verify_pinned_signature(sums_bytes, sig_text)
 
-    sums_text = sums_bytes.decode('utf-8')
+    sums_text = sums_bytes.decode("utf-8")
     sums = parse_sha256sums(sums_text)
     expected = sums.get(asset_name)
     if not expected:
@@ -681,8 +678,8 @@ def verify_downloaded_asset(asset_path: str, sums_path: str, sig_path: str, asse
 # (see the v2.8.29 PR description) to point a real built binary at a
 # local HTTP server instead of github.com.
 GITHUB_RELEASES_DOWNLOAD_BASE = (
-    os.environ.get('CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE')
-    or 'https://github.com/OrchestratedChaos/curatarr/releases/download'
+    os.environ.get("CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE")
+    or "https://github.com/OrchestratedChaos/curatarr/releases/download"
 )
 DOWNLOAD_TIMEOUT_SECONDS = 30
 DOWNLOAD_CHUNK_SIZE = 1 << 20
@@ -699,7 +696,7 @@ def determine_update_target(force_refresh: bool = True) -> str:
     treated as "yes there's an update" (same contract as
     utils.update_check.update_available itself).
     """
-    latest, current, is_newer = update_available(update_mode='notify', force_refresh=force_refresh)
+    latest, current, is_newer = update_available(update_mode="notify", force_refresh=force_refresh)
     if not is_newer:
         raise NoUpdateAvailableError(
             f"No newer verified release available (current v{current}, latest known v{latest or 'unknown'})"
@@ -731,7 +728,7 @@ def _download_to_file(url: str, dest_path: str, timeout: float = DOWNLOAD_TIMEOU
     try:
         with requests.get(url, timeout=timeout, stream=True) as response:
             response.raise_for_status()
-            with open(dest_path, 'wb') as f:
+            with open(dest_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
                     if chunk:
                         f.write(chunk)
@@ -743,6 +740,7 @@ def _download_to_file(url: str, dest_path: str, timeout: float = DOWNLOAD_TIMEOU
 # Atomic, per-OS binary swap (section C.4) + relaunch (section C.5)
 # =============================================================================
 
+
 def current_binary_path() -> str:
     """The running executable's own path - only meaningful when frozen
     (sys.executable IS the packaged exe itself, not a python.exe)."""
@@ -750,7 +748,7 @@ def current_binary_path() -> str:
 
 
 def _old_sidecar_path(path: str) -> str:
-    return path + '.old'
+    return path + ".old"
 
 
 def cleanup_stale_old_binary(current_path: Optional[str] = None) -> None:
@@ -836,9 +834,7 @@ def _swap_posix(current_path: str, new_binary_path: str) -> None:
                 f"Could not move verified binary into place ({e}), AND rollback failed "
                 f"({rollback_error}) - the original binary may still be recoverable at {old_path}"
             ) from e
-        raise SwapError(
-            f"Could not move verified binary into place ({e}) - rolled back to the original binary"
-        ) from e
+        raise SwapError(f"Could not move verified binary into place ({e}) - rolled back to the original binary") from e
 
 
 def _swap_windows(current_path: str, new_binary_path: str) -> None:
@@ -888,9 +884,7 @@ def _swap_windows(current_path: str, new_binary_path: str) -> None:
                 f"Could not move verified binary into place ({e}), AND rollback failed "
                 f"({rollback_error}) - the original binary may still be recoverable at {old_path}"
             ) from e
-        raise SwapError(
-            f"Could not move verified binary into place ({e}) - rolled back to the original binary"
-        ) from e
+        raise SwapError(f"Could not move verified binary into place ({e}) - rolled back to the original binary") from e
 
 
 def swap_binary(current_path: str, new_binary_path: str) -> None:
@@ -906,7 +900,7 @@ def swap_binary(current_path: str, new_binary_path: str) -> None:
     failure; callers never catch this to retry with something
     unverified, only to abort and keep running the current binary."""
     _preserve_permissions(current_path, new_binary_path)
-    if os.name == 'nt':
+    if os.name == "nt":
         _swap_windows(current_path, new_binary_path)
     else:
         _swap_posix(current_path, new_binary_path)
@@ -958,8 +952,8 @@ def swap_binary(current_path: str, new_binary_path: str) -> None:
 # below, not just the specific ones observed, since PyInstaller can add
 # more across versions and none of them have any legitimate reason to
 # be inherited by an unrelated, independent process either way.
-_PYINSTALLER_CHILD_ENV_VAR_PREFIXES = ('_PYI_', '_PYINSTALLER_')
-_PYINSTALLER_CHILD_ENV_VARS_TO_STRIP = ('_MEIPASS2',)
+_PYINSTALLER_CHILD_ENV_VAR_PREFIXES = ("_PYI_", "_PYINSTALLER_")
+_PYINSTALLER_CHILD_ENV_VARS_TO_STRIP = ("_MEIPASS2",)
 
 
 def sanitize_frozen_relaunch_env(env: dict) -> dict:
@@ -968,15 +962,16 @@ def sanitize_frozen_relaunch_env(env: dict) -> dict:
     comment above. Safe to call on a non-frozen/non-Windows env too
     (no-op if the vars aren't present)."""
     return {
-        k: v for k, v in env.items()
-        if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP
-        and not k.startswith(_PYINSTALLER_CHILD_ENV_VAR_PREFIXES)
+        k: v
+        for k, v in env.items()
+        if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP and not k.startswith(_PYINSTALLER_CHILD_ENV_VAR_PREFIXES)
     }
 
 
 # =============================================================================
 # Orchestration
 # =============================================================================
+
 
 class VerifiedUpdate(NamedTuple):
     """A downloaded, signature+hash-verified (but not yet applied)
@@ -999,6 +994,7 @@ class VerifiedUpdate(NamedTuple):
     perform_self_update and utils/self_update_handoff.py), without
     re-deriving or re-trusting anything new.
     """
+
     version: str
     asset_path: str
     asset_name: str
@@ -1021,10 +1017,10 @@ def download_and_verify_update(force_refresh: bool = True) -> VerifiedUpdate:
     this - see recommenders/external.py's main()/_main_impl() split for
     the identical reasoning.
     """
-    outcome = 'failure'
+    outcome = "failure"
     try:
         verified = _download_and_verify_update_impl(force_refresh=force_refresh)
-        outcome = 'success'
+        outcome = "success"
         return verified
     finally:
         record_self_update_attempt(outcome)
@@ -1056,7 +1052,7 @@ def _download_and_verify_update_impl(force_refresh: bool = True) -> VerifiedUpda
     function returning, so they stay in an ordinary auto-cleaned temp
     directory.
     """
-    if not getattr(sys, 'frozen', False):
+    if not getattr(sys, "frozen", False):
         raise NotFrozenError(
             "Self-update only applies to a packaged binary (sys.frozen) - source "
             "installs use run.sh/run.ps1's own signed-tag auto-updater instead."
@@ -1068,21 +1064,18 @@ def _download_and_verify_update_impl(force_refresh: bool = True) -> VerifiedUpda
     current_path = current_binary_path()
     asset_dir = os.path.dirname(current_path)
 
-    with tempfile.TemporaryDirectory(prefix='curatarr-self-update-') as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="curatarr-self-update-") as tmp_dir:
         sums_path = os.path.join(tmp_dir, SUMS_FILENAME)
         sig_path = os.path.join(tmp_dir, SUMS_SIG_FILENAME)
         _download_to_file(release_asset_url(target_version, SUMS_FILENAME), sums_path)
         _download_to_file(release_asset_url(target_version, SUMS_SIG_FILENAME), sig_path)
 
         try:
-            asset_fd, asset_path = tempfile.mkstemp(
-                dir=asset_dir, prefix='.curatarr-update-', suffix='.tmp'
-            )
+            asset_fd, asset_path = tempfile.mkstemp(dir=asset_dir, prefix=".curatarr-update-", suffix=".tmp")
             os.close(asset_fd)
         except OSError as e:
             raise SwapError(
-                f"Cannot write a temp file in {asset_dir} (the folder containing the "
-                f"running binary): {e}"
+                f"Cannot write a temp file in {asset_dir} (the folder containing the running binary): {e}"
             ) from e
 
         try:
@@ -1099,7 +1092,10 @@ def _download_and_verify_update_impl(force_refresh: bool = True) -> VerifiedUpda
             raise
 
     return VerifiedUpdate(
-        version=target_version, asset_path=asset_path, asset_name=asset_name, asset_sha256=asset_sha256,
+        version=target_version,
+        asset_path=asset_path,
+        asset_name=asset_name,
+        asset_sha256=asset_sha256,
     )
 
 
@@ -1154,15 +1150,17 @@ def _verify_swapped_binary_or_restore(current_path: str, expected_version: str) 
         # this same module already had to fix for the web relaunch path
         # (see the big comment above sanitize_frozen_relaunch_env).
         result = subprocess.run(
-            [current_path, '--version'],
-            capture_output=True, text=True, timeout=VERSION_READBACK_TIMEOUT_SECONDS,
+            [current_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=VERSION_READBACK_TIMEOUT_SECONDS,
             env=sanitize_frozen_relaunch_env(dict(os.environ)),
         )
     except (OSError, subprocess.SubprocessError) as e:
         _restore_and_raise(f"Could not run the newly-swapped binary to confirm its version: {e}")
         return
 
-    reported = (result.stdout or '').strip()
+    reported = (result.stdout or "").strip()
     if result.returncode != 0 or reported != expected_version:
         _restore_and_raise(
             f"Newly-swapped binary did not confirm v{expected_version} "
@@ -1219,8 +1217,7 @@ def perform_self_update(force_refresh: bool = True) -> str:
         current_tuple = parse_version(__version__)
         if not target_tuple or not current_tuple or target_tuple <= current_tuple:
             raise NoUpdateAvailableError(
-                f"Refusing to install v{verified.version}: not strictly newer than "
-                f"the running v{__version__}"
+                f"Refusing to install v{verified.version}: not strictly newer than the running v{__version__}"
             )
 
         # TOCTOU close: re-hash the already-verified asset one more

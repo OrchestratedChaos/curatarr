@@ -4,11 +4,11 @@ Handles adding movie recommendations to Radarr.
 """
 
 import logging
-from typing import Dict, Optional, Any, List
+from typing import Any, Dict, List, Optional
 
 from .api_client import BaseAPIClient
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Backwards compatibility exports (now defined on class)
 RADARR_RATE_LIMIT_DELAY = 0.1
@@ -17,6 +17,7 @@ RADARR_REQUEST_TIMEOUT = 30
 
 class RadarrAPIError(Exception):
     """Raised when Radarr API request fails."""
+
     pass
 
 
@@ -41,20 +42,17 @@ class RadarrClient(BaseAPIClient):
             api_key: Radarr API key
         """
         super().__init__()
-        self.url = url.rstrip('/')
+        self.url = url.rstrip("/")
         self.api_key = api_key
         self._existing_movies: Optional[Dict[str, int]] = None
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests."""
-        return {
-            "Content-Type": "application/json",
-            "X-Api-Key": self.api_key
-        }
+        return {"Content-Type": "application/json", "X-Api-Key": self.api_key}
 
-    def _make_request(self, method: str, endpoint: str,
-                      data: Optional[Dict] = None,
-                      params: Optional[Dict] = None) -> Any:
+    def _make_request(
+        self, method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None
+    ) -> Any:
         """Make an API request to Radarr."""
         url = f"{self.url}/api/v3/{endpoint}"
         return self._make_request_to_url(method, url, data, params)
@@ -95,9 +93,9 @@ class RadarrClient(BaseAPIClient):
             movies = self.get_movies()
             self._existing_movies = {}
             for m in movies:
-                tmdb_id = m.get('tmdbId')
+                tmdb_id = m.get("tmdbId")
                 if tmdb_id:
-                    self._existing_movies[tmdb_id] = m['id']
+                    self._existing_movies[tmdb_id] = m["id"]
         return self._existing_movies
 
     def movie_exists(self, tmdb_id: int) -> bool:
@@ -149,8 +147,8 @@ class RadarrClient(BaseAPIClient):
         """
         profiles = self.get_quality_profiles()
         for profile in profiles:
-            if profile['name'].lower() == profile_name.lower():
-                return profile['id']
+            if profile["name"].lower() == profile_name.lower():
+                return profile["id"]
         return None
 
     def get_root_folders(self) -> List[Dict]:
@@ -174,8 +172,8 @@ class RadarrClient(BaseAPIClient):
         """
         folders = self.get_root_folders()
         for folder in folders:
-            if folder['path'] == folder_path:
-                return folder['path']
+            if folder["path"] == folder_path:
+                return folder["path"]
         return None
 
     def get_tags(self) -> List[Dict]:
@@ -199,12 +197,12 @@ class RadarrClient(BaseAPIClient):
         """
         tags = self.get_tags()
         for tag in tags:
-            if tag['label'].lower() == tag_label.lower():
-                return tag['id']
+            if tag["label"].lower() == tag_label.lower():
+                return tag["id"]
 
         # Create new tag
         result = self._make_request("POST", "tag", data={"label": tag_label})
-        return result['id']
+        return result["id"]
 
     def add_movie(
         self,
@@ -215,7 +213,7 @@ class RadarrClient(BaseAPIClient):
         monitored: bool = False,
         minimum_availability: str = "released",
         tag_ids: Optional[List[int]] = None,
-        search_for_movie: bool = False
+        search_for_movie: bool = False,
     ) -> Dict:
         """
         Add a movie to Radarr.
@@ -238,9 +236,7 @@ class RadarrClient(BaseAPIClient):
             RadarrAPIError: If add fails
         """
         # Build add options
-        add_options = {
-            "searchForMovie": search_for_movie
-        }
+        add_options = {"searchForMovie": search_for_movie}
 
         data = {
             "tmdbId": tmdb_id,
@@ -250,7 +246,7 @@ class RadarrClient(BaseAPIClient):
             "monitored": monitored,
             "minimumAvailability": minimum_availability,
             "addOptions": add_options,
-            "tags": tag_ids or []
+            "tags": tag_ids or [],
         }
 
         return self._make_request("POST", "movie", data=data)
@@ -272,7 +268,7 @@ def create_radarr_client_from(url: Optional[str], api_key: Optional[str]) -> Opt
         RadarrClient if url/api_key are present and api_key isn't the
         placeholder, None otherwise
     """
-    if not url or not api_key or api_key == 'YOUR_RADARR_API_KEY':
+    if not url or not api_key or api_key == "YOUR_RADARR_API_KEY":
         return None
 
     return RadarrClient(url, api_key)
@@ -288,11 +284,11 @@ def create_radarr_client(config: Dict) -> Optional[RadarrClient]:
     Returns:
         RadarrClient if configured and enabled, None otherwise
     """
-    radarr_config = config.get('radarr', {})
+    radarr_config = config.get("radarr", {})
 
-    if not radarr_config.get('enabled', False):
+    if not radarr_config.get("enabled", False):
         return None
 
-    return create_radarr_client_from(radarr_config.get('url'), radarr_config.get('api_key'))
+    return create_radarr_client_from(radarr_config.get("url"), radarr_config.get("api_key"))
 
     return RadarrClient(url, api_key)

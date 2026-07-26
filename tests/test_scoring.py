@@ -3,16 +3,15 @@ Tests for utils/scoring.py - Scoring and similarity functions.
 """
 
 import pytest
-import math
+
 from utils.scoring import (
-    normalize_genre,
-    fuzzy_keyword_match,
+    _redistribute_weights,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
+    fuzzy_keyword_match,
+    normalize_genre,
     select_tiered_recommendations,
-    _redistribute_weights,
-    GENRE_NORMALIZATION
 )
 
 
@@ -121,55 +120,62 @@ class TestCalculateRecencyMultiplier:
     def test_disabled_returns_one(self):
         """Test that disabled recency returns 1.0."""
         from datetime import datetime, timezone
+
         viewed_at = datetime.now(timezone.utc).timestamp()
-        result = calculate_recency_multiplier(viewed_at, {'enabled': False})
+        result = calculate_recency_multiplier(viewed_at, {"enabled": False})
         assert result == 1.0
 
     def test_recent_0_30_days(self):
         """Test multiplier for 0-30 day old views."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         viewed_at = (datetime.now(timezone.utc) - timedelta(days=15)).timestamp()
-        config = {'enabled': True, 'days_0_30': 1.0}
+        config = {"enabled": True, "days_0_30": 1.0}
         result = calculate_recency_multiplier(viewed_at, config)
         assert result == 1.0
 
     def test_31_90_days(self):
         """Test multiplier for 31-90 day old views."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         viewed_at = (datetime.now(timezone.utc) - timedelta(days=60)).timestamp()
-        config = {'enabled': True, 'days_31_90': 0.75}
+        config = {"enabled": True, "days_31_90": 0.75}
         result = calculate_recency_multiplier(viewed_at, config)
         assert result == 0.75
 
     def test_91_180_days(self):
         """Test multiplier for 91-180 day old views."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         viewed_at = (datetime.now(timezone.utc) - timedelta(days=120)).timestamp()
-        config = {'enabled': True, 'days_91_180': 0.50}
+        config = {"enabled": True, "days_91_180": 0.50}
         result = calculate_recency_multiplier(viewed_at, config)
         assert result == 0.50
 
     def test_181_365_days(self):
         """Test multiplier for 181-365 day old views."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         viewed_at = (datetime.now(timezone.utc) - timedelta(days=300)).timestamp()
-        config = {'enabled': True, 'days_181_365': 0.25}
+        config = {"enabled": True, "days_181_365": 0.25}
         result = calculate_recency_multiplier(viewed_at, config)
         assert result == 0.25
 
     def test_over_365_days(self):
         """Test multiplier for views older than 365 days."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         viewed_at = (datetime.now(timezone.utc) - timedelta(days=400)).timestamp()
-        config = {'enabled': True, 'days_365_plus': 0.10}
+        config = {"enabled": True, "days_365_plus": 0.10}
         result = calculate_recency_multiplier(viewed_at, config)
         assert result == 0.10
 
     def test_default_enabled_true(self):
         """Test that enabled defaults to True when not specified."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         viewed_at = (datetime.now(timezone.utc) - timedelta(days=15)).timestamp()
-        config = {'days_0_30': 0.9}  # No 'enabled' key
+        config = {"days_0_30": 0.9}  # No 'enabled' key
         result = calculate_recency_multiplier(viewed_at, config)
         assert result == 0.9
 
@@ -179,53 +185,44 @@ class TestRedistributeWeights:
 
     def test_no_redistribution_when_all_data(self):
         """Test that weights are not redistributed when all data present."""
-        weights = {'genre': 0.25, 'director': 0.15, 'actor': 0.20, 'keyword': 0.40}
-        profile = {
-            'genres': {'action': 1},
-            'directors': {'Dir X': 1},
-            'actors': {'Actor A': 1},
-            'keywords': {'kw1': 1}
-        }
-        result = _redistribute_weights(weights, profile, 'movie')
+        weights = {"genre": 0.25, "director": 0.15, "actor": 0.20, "keyword": 0.40}
+        profile = {"genres": {"action": 1}, "directors": {"Dir X": 1}, "actors": {"Actor A": 1}, "keywords": {"kw1": 1}}
+        result = _redistribute_weights(weights, profile, "movie")
         # Weights should be close to original (some redistribution due to language=0)
-        assert result['genre'] > 0
-        assert result['director'] > 0
-        assert result['actor'] > 0
-        assert result['keyword'] > 0
+        assert result["genre"] > 0
+        assert result["director"] > 0
+        assert result["actor"] > 0
+        assert result["keyword"] > 0
 
     def test_redistribution_when_missing_keywords(self):
         """Test weight redistribution when keywords are missing."""
-        weights = {'genre': 0.25, 'actor': 0.25, 'keyword': 0.50}
+        weights = {"genre": 0.25, "actor": 0.25, "keyword": 0.50}
         profile = {
-            'genres': {'action': 1},
-            'actors': {'Actor A': 1},
+            "genres": {"action": 1},
+            "actors": {"Actor A": 1},
             # No keywords
         }
-        result = _redistribute_weights(weights, profile, 'movie')
+        result = _redistribute_weights(weights, profile, "movie")
         # Keyword weight should be 0, others should be higher
-        assert result['keyword'] == 0
-        assert result['genre'] > 0.25
-        assert result['actor'] > 0.25
+        assert result["keyword"] == 0
+        assert result["genre"] > 0.25
+        assert result["actor"] > 0.25
 
     def test_returns_original_when_no_data(self):
         """Test returns original weights when no profile data."""
-        weights = {'genre': 0.25, 'actor': 0.25, 'keyword': 0.50}
+        weights = {"genre": 0.25, "actor": 0.25, "keyword": 0.50}
         profile = {}  # Empty profile
-        result = _redistribute_weights(weights, profile, 'movie')
+        result = _redistribute_weights(weights, profile, "movie")
         assert result == weights
 
     def test_tv_uses_studio_not_director(self):
         """Test that TV mode uses studio instead of director."""
-        weights = {'genre': 0.25, 'studio': 0.15, 'director': 0.15, 'actor': 0.20, 'keyword': 0.25}
-        profile = {
-            'genres': {'drama': 1},
-            'studios': {'HBO': 1},
-            'actors': {'Actor A': 1}
-        }
-        result = _redistribute_weights(weights, profile, 'tv')
+        weights = {"genre": 0.25, "studio": 0.15, "director": 0.15, "actor": 0.20, "keyword": 0.25}
+        profile = {"genres": {"drama": 1}, "studios": {"HBO": 1}, "actors": {"Actor A": 1}}
+        result = _redistribute_weights(weights, profile, "tv")
         # Studio should have weight, director should be 0 for TV
-        assert result['studio'] > 0
-        assert result['director'] == 0
+        assert result["studio"] > 0
+        assert result["director"] == 0
 
 
 class TestCalculateRewatchMultiplier:
@@ -276,10 +273,7 @@ class TestCalculateSimilarityScore:
 
     def test_empty_user_profile(self):
         """Test with empty user profile."""
-        score, breakdown = calculate_similarity_score(
-            {"genres": ["action"]},
-            {}
-        )
+        score, breakdown = calculate_similarity_score({"genres": ["action"]}, {})
         assert score == 0.0
 
     def test_genre_match(self):
@@ -290,7 +284,7 @@ class TestCalculateSimilarityScore:
         score, breakdown = calculate_similarity_score(content, profile)
 
         assert score > 0
-        assert breakdown['genre_score'] > 0
+        assert breakdown["genre_score"] > 0
 
     def test_keyword_match(self):
         """Test keyword matching."""
@@ -300,7 +294,7 @@ class TestCalculateSimilarityScore:
         score, breakdown = calculate_similarity_score(content, profile)
 
         assert score > 0
-        assert breakdown['keyword_score'] > 0
+        assert breakdown["keyword_score"] > 0
 
     def test_actor_match(self):
         """Test actor matching."""
@@ -310,31 +304,27 @@ class TestCalculateSimilarityScore:
         score, breakdown = calculate_similarity_score(content, profile)
 
         assert score > 0
-        assert breakdown['actor_score'] > 0
+        assert breakdown["actor_score"] > 0
 
     def test_director_match_movie(self):
         """Test director matching for movies."""
         content = {"directors": ["Director X"]}
         profile = {"directors": {"Director X": 5}}
 
-        score, breakdown = calculate_similarity_score(
-            content, profile, media_type='movie'
-        )
+        score, breakdown = calculate_similarity_score(content, profile, media_type="movie")
 
         assert score > 0
-        assert breakdown['director_score'] > 0
+        assert breakdown["director_score"] > 0
 
     def test_studio_match_tv(self):
         """Test studio matching for TV shows."""
         content = {"studio": "HBO"}
         profile = {"studios": {"hbo": 5}}
 
-        score, breakdown = calculate_similarity_score(
-            content, profile, media_type='tv'
-        )
+        score, breakdown = calculate_similarity_score(content, profile, media_type="tv")
 
         assert score > 0
-        assert breakdown['studio_score'] > 0
+        assert breakdown["studio_score"] > 0
 
     def test_case_insensitive_matching(self):
         """Test that matching is case-insensitive."""
@@ -344,7 +334,7 @@ class TestCalculateSimilarityScore:
         score, breakdown = calculate_similarity_score(content, profile)
 
         assert score > 0
-        assert breakdown['genre_score'] > 0
+        assert breakdown["genre_score"] > 0
 
     def test_score_capped_at_one(self):
         """Test that score is capped at 1.0 (100%)."""
@@ -353,13 +343,13 @@ class TestCalculateSimilarityScore:
             "genres": ["action", "comedy", "drama", "thriller"],
             "cast": ["A", "B", "C", "D", "E"],
             "keywords": ["kw1", "kw2", "kw3", "kw4", "kw5"],
-            "directors": ["Dir1"]
+            "directors": ["Dir1"],
         }
         profile = {
             "genres": {"action": 100, "comedy": 100, "drama": 100, "thriller": 100},
             "actors": {"A": 100, "B": 100, "C": 100, "D": 100, "E": 100},
             "tmdb_keywords": {"kw1": 100, "kw2": 100, "kw3": 100, "kw4": 100, "kw5": 100},
-            "directors": {"Dir1": 100}
+            "directors": {"Dir1": 100},
         }
 
         score, breakdown = calculate_similarity_score(content, profile)
@@ -368,17 +358,14 @@ class TestCalculateSimilarityScore:
 
     def test_breakdown_structure(self):
         """Test that breakdown has expected structure."""
-        score, breakdown = calculate_similarity_score(
-            {"genres": ["action"]},
-            {"genres": {"action": 5}}
-        )
+        score, breakdown = calculate_similarity_score({"genres": ["action"]}, {"genres": {"action": 5}})
 
-        assert 'genre_score' in breakdown
-        assert 'director_score' in breakdown
-        assert 'actor_score' in breakdown
-        assert 'keyword_score' in breakdown
-        assert 'language_score' in breakdown
-        assert 'details' in breakdown
+        assert "genre_score" in breakdown
+        assert "director_score" in breakdown
+        assert "actor_score" in breakdown
+        assert "keyword_score" in breakdown
+        assert "language_score" in breakdown
+        assert "details" in breakdown
 
     def test_language_match(self):
         """Test language matching."""
@@ -388,7 +375,7 @@ class TestCalculateSimilarityScore:
         score, breakdown = calculate_similarity_score(content, profile)
 
         assert score > 0
-        assert breakdown['language_score'] >= 0
+        assert breakdown["language_score"] >= 0
 
     def test_language_na_ignored(self):
         """Test that N/A language is ignored."""
@@ -397,80 +384,68 @@ class TestCalculateSimilarityScore:
 
         score, breakdown = calculate_similarity_score(content, profile)
 
-        assert breakdown['language_score'] == 0
+        assert breakdown["language_score"] == 0
 
     def test_normalize_counters_false(self):
         """Test with normalize_counters=False."""
         content = {"genres": ["action"]}
         profile = {"genres": {"action": 5}}
 
-        score, breakdown = calculate_similarity_score(
-            content, profile, normalize_counters=False
-        )
+        score, breakdown = calculate_similarity_score(content, profile, normalize_counters=False)
 
         assert score > 0
-        assert breakdown['genre_score'] > 0
+        assert breakdown["genre_score"] > 0
 
     def test_fuzzy_keywords_disabled(self):
         """Test with fuzzy keywords disabled."""
         content = {"keywords": ["superhero movie"]}
         profile = {"keywords": {"superhero": 5}}
 
-        score, breakdown = calculate_similarity_score(
-            content, profile, use_fuzzy_keywords=False
-        )
+        score, breakdown = calculate_similarity_score(content, profile, use_fuzzy_keywords=False)
 
         # Without fuzzy matching, "superhero movie" won't match "superhero"
-        assert breakdown['keyword_score'] == 0
+        assert breakdown["keyword_score"] == 0
 
     def test_studio_as_list_tv(self):
         """Test studio matching when studio is a list (TV)."""
         content = {"studios": ["HBO", "Netflix"]}
         profile = {"studios": {"hbo": 5, "netflix": 3}}
 
-        score, breakdown = calculate_similarity_score(
-            content, profile, media_type='tv'
-        )
+        score, breakdown = calculate_similarity_score(content, profile, media_type="tv")
 
         assert score > 0
-        assert breakdown['studio_score'] > 0
+        assert breakdown["studio_score"] > 0
 
     def test_studio_na_ignored(self):
         """Test that N/A studio is ignored."""
         content = {"studio": "N/A"}
         profile = {"studios": {"hbo": 5}}
 
-        score, breakdown = calculate_similarity_score(
-            content, profile, media_type='tv'
-        )
+        score, breakdown = calculate_similarity_score(content, profile, media_type="tv")
 
-        assert breakdown['studio_score'] == 0
+        assert breakdown["studio_score"] == 0
 
     def test_custom_weights(self):
         """Test with custom weights."""
         content = {"genres": ["action"]}
         profile = {"genres": {"action": 5}}
 
-        custom_weights = {'genre': 0.80, 'actor': 0.10, 'keyword': 0.10}
-        score, breakdown = calculate_similarity_score(
-            content, profile, weights=custom_weights
-        )
+        custom_weights = {"genre": 0.80, "actor": 0.10, "keyword": 0.10}
+        score, breakdown = calculate_similarity_score(content, profile, weights=custom_weights)
 
         assert score > 0
         # Genre should dominate due to high weight
-        assert breakdown['genre_score'] > 0
+        assert breakdown["genre_score"] > 0
 
     def test_director_case_insensitive(self):
         """Test director matching is case-insensitive."""
         content = {"directors": ["christopher nolan"]}
         profile = {"directors": {"Christopher Nolan": 5}}
 
-        score, breakdown = calculate_similarity_score(
-            content, profile, media_type='movie'
-        )
+        score, breakdown = calculate_similarity_score(content, profile, media_type="movie")
 
         assert score > 0
-        assert breakdown['director_score'] > 0
+        assert breakdown["director_score"] > 0
 
     def test_actor_case_insensitive(self):
         """Test actor matching is case-insensitive."""
@@ -480,7 +455,7 @@ class TestCalculateSimilarityScore:
         score, breakdown = calculate_similarity_score(content, profile)
 
         assert score > 0
-        assert breakdown['actor_score'] > 0
+        assert breakdown["actor_score"] > 0
 
     def test_genre_normalization_in_score(self):
         """Test that genre normalization is applied during scoring."""
@@ -490,7 +465,7 @@ class TestCalculateSimilarityScore:
         score, breakdown = calculate_similarity_score(content, profile)
 
         assert score > 0
-        assert breakdown['genre_score'] > 0
+        assert breakdown["genre_score"] > 0
 
     def test_multiple_genres_cumulative(self):
         """Test that multiple matching genres contribute cumulatively."""
@@ -509,14 +484,14 @@ class TestCalculateSimilarityScore:
         content = {"genres": ["action"]}
         profile = {
             "genres": {"action": 5},
-            "keywords": {"superhero": 10}  # Profile has keywords but content doesn't
+            "keywords": {"superhero": 10},  # Profile has keywords but content doesn't
         }
 
         score, breakdown = calculate_similarity_score(content, profile)
 
         # Should still get a score from genres
         assert score > 0
-        assert breakdown['genre_score'] > 0
+        assert breakdown["genre_score"] > 0
 
 
 class TestNegativeSignalsScoring:
@@ -533,7 +508,7 @@ class TestNegativeSignalsScoring:
 
         assert score_negative < score_positive
         # Check breakdown shows negative
-        assert any("NEGATIVE" in str(d) for d in breakdown['details']['genres'])
+        assert any("NEGATIVE" in str(d) for d in breakdown["details"]["genres"])
 
     def test_negative_actor_reduces_score(self):
         """Test that negative actor preference reduces score."""
@@ -563,8 +538,8 @@ class TestNegativeSignalsScoring:
         profile_positive = {"directors": {"Director X": 5, "Director Y": 3}}
         profile_with_negative = {"directors": {"Director X": 5, "Director Y": -2}}
 
-        score_positive, _ = calculate_similarity_score(content, profile_positive, media_type='movie')
-        score_negative, _ = calculate_similarity_score(content, profile_with_negative, media_type='movie')
+        score_positive, _ = calculate_similarity_score(content, profile_positive, media_type="movie")
+        score_negative, _ = calculate_similarity_score(content, profile_with_negative, media_type="movie")
 
         assert score_negative < score_positive
 
@@ -574,26 +549,23 @@ class TestNegativeSignalsScoring:
         profile_positive = {"studios": {"hbo": 5}}
         profile_with_negative = {"studios": {"hbo": -3}}
 
-        score_positive, _ = calculate_similarity_score(content, profile_positive, media_type='tv')
-        score_negative, breakdown = calculate_similarity_score(content, profile_with_negative, media_type='tv')
+        score_positive, _ = calculate_similarity_score(content, profile_positive, media_type="tv")
+        score_negative, breakdown = calculate_similarity_score(content, profile_with_negative, media_type="tv")
 
         assert score_negative < score_positive
-        assert "NEGATIVE" in str(breakdown['details']['studio'])
+        assert "NEGATIVE" in str(breakdown["details"]["studio"])
 
     def test_score_not_negative(self):
         """Test that score doesn't go below 0 even with all negative signals."""
         content = {"genres": ["action", "comedy"], "cast": ["Actor A"]}
-        profile = {
-            "genres": {"action": -5, "comedy": -5},
-            "actors": {"Actor A": -10}
-        }
+        profile = {"genres": {"action": -5, "comedy": -5}, "actors": {"Actor A": -10}}
 
         score, breakdown = calculate_similarity_score(content, profile)
 
         # Score should be non-negative
         assert score >= 0
-        assert breakdown['genre_score'] >= 0
-        assert breakdown['actor_score'] >= 0
+        assert breakdown["genre_score"] >= 0
+        assert breakdown["actor_score"] >= 0
 
     def test_max_positive_ignores_negatives(self):
         """Test that max_positive calculation ignores negative values."""
@@ -605,16 +577,16 @@ class TestNegativeSignalsScoring:
 
         # Should score based on action:10, not affected by horror:-100
         assert score > 0
-        assert breakdown['genre_score'] > 0
+        assert breakdown["genre_score"] > 0
 
     def test_mixed_positive_negative_genres(self):
         """Test content with mix of positive and negative genre matches."""
         content = {"genres": ["action", "horror", "comedy"]}
         profile = {
             "genres": {
-                "action": 10,   # User loves action
-                "horror": -5,   # User dislikes horror
-                "comedy": 3     # User likes comedy
+                "action": 10,  # User loves action
+                "horror": -5,  # User dislikes horror
+                "comedy": 3,  # User likes comedy
             }
         }
 
@@ -635,7 +607,7 @@ class TestNegativeSignalsScoring:
         score, breakdown = calculate_similarity_score(content, profile)
 
         # Check that breakdown details show the negative signal
-        genre_details = breakdown['details']['genres']
+        genre_details = breakdown["details"]["genres"]
         assert len(genre_details) > 0
         assert "NEGATIVE" in genre_details[0]
         assert "penalty" in genre_details[0]
@@ -651,55 +623,55 @@ class TestSelectTieredRecommendations:
 
     def test_returns_correct_count(self):
         """Test that function returns requested number of items."""
-        items = [{'similarity_score': 0.9 - i*0.05} for i in range(50)]
+        items = [{"similarity_score": 0.9 - i * 0.05} for i in range(50)]
         result = select_tiered_recommendations(items, 10)
         assert len(result) == 10
 
     def test_fewer_items_than_limit(self):
         """Test when fewer items available than requested."""
-        items = [{'similarity_score': 0.9 - i*0.1} for i in range(5)]
+        items = [{"similarity_score": 0.9 - i * 0.1} for i in range(5)]
         result = select_tiered_recommendations(items, 10)
         assert len(result) == 5
 
     def test_includes_high_score_items(self):
         """Test that highest scored items are included (safe picks)."""
-        items = [{'similarity_score': 0.9 - i*0.01, 'title': f'Item{i}'} for i in range(100)]
+        items = [{"similarity_score": 0.9 - i * 0.01, "title": f"Item{i}"} for i in range(100)]
         result = select_tiered_recommendations(items, 10)
 
         # Top item should be in result
-        titles = [r['title'] for r in result]
-        assert 'Item0' in titles
+        titles = [r["title"] for r in result]
+        assert "Item0" in titles
 
     def test_includes_variety(self):
         """Test that result includes items from different tiers."""
-        items = [{'similarity_score': 1.0 - i*0.01, 'title': f'Item{i}'} for i in range(100)]
+        items = [{"similarity_score": 1.0 - i * 0.01, "title": f"Item{i}"} for i in range(100)]
         result = select_tiered_recommendations(items, 10)
 
         # Check we have items from different score ranges
-        scores = [r['similarity_score'] for r in result]
+        scores = [r["similarity_score"] for r in result]
         score_range = max(scores) - min(scores)
         # Should have some variety (not all from top tier)
         assert score_range > 0.1
 
     def test_result_sorted_by_score(self):
         """Test that final result is sorted by score."""
-        items = [{'similarity_score': 0.9 - i*0.01} for i in range(100)]
+        items = [{"similarity_score": 0.9 - i * 0.01} for i in range(100)]
         result = select_tiered_recommendations(items, 10)
 
         # Result should be sorted descending
-        scores = [r['similarity_score'] for r in result]
+        scores = [r["similarity_score"] for r in result]
         assert scores == sorted(scores, reverse=True)
 
     def test_custom_tier_percentages(self):
         """Test with custom tier percentages."""
-        items = [{'similarity_score': 0.9 - i*0.01} for i in range(100)]
+        items = [{"similarity_score": 0.9 - i * 0.01} for i in range(100)]
         # All safe picks
         result = select_tiered_recommendations(items, 10, safe_percent=1.0, diverse_percent=0.0, wildcard_percent=0.0)
         assert len(result) == 10
 
     def test_works_with_score_key(self):
         """Test with 'score' key instead of 'similarity_score'."""
-        items = [{'score': 0.9 - i*0.01, 'title': f'Item{i}'} for i in range(50)]
+        items = [{"score": 0.9 - i * 0.01, "title": f"Item{i}"} for i in range(50)]
         result = select_tiered_recommendations(items, 10)
         assert len(result) == 10
 
@@ -709,28 +681,28 @@ class TestPopularityDampening:
 
     def test_no_dampening_below_threshold(self):
         """Test that content below threshold gets no dampening."""
-        content = {'genres': ['action'], 'vote_count': 10000}
-        profile = {'genres': {'action': 10}}
+        content = {"genres": ["action"], "vote_count": 10000}
+        profile = {"genres": {"action": 10}}
         score, breakdown = calculate_similarity_score(
             content, profile, use_popularity_dampening=True, popularity_threshold=50000
         )
-        assert 'popularity_dampening' not in breakdown
+        assert "popularity_dampening" not in breakdown
 
     def test_dampening_above_threshold(self):
         """Test that very popular content gets dampened."""
-        content = {'genres': ['action'], 'vote_count': 500000}
-        profile = {'genres': {'action': 10}}
+        content = {"genres": ["action"], "vote_count": 500000}
+        profile = {"genres": {"action": 10}}
         score, breakdown = calculate_similarity_score(
             content, profile, use_popularity_dampening=True, popularity_threshold=50000
         )
-        assert 'popularity_dampening' in breakdown
-        assert breakdown['popularity_dampening'] < 1.0
+        assert "popularity_dampening" in breakdown
+        assert breakdown["popularity_dampening"] < 1.0
 
     def test_dampening_reduces_score(self):
         """Test that dampening reduces final score."""
-        content_popular = {'genres': ['action'], 'vote_count': 500000}
-        content_normal = {'genres': ['action'], 'vote_count': 10000}
-        profile = {'genres': {'action': 10}}
+        content_popular = {"genres": ["action"], "vote_count": 500000}
+        content_normal = {"genres": ["action"], "vote_count": 10000}
+        profile = {"genres": {"action": 10}}
 
         score_popular, _ = calculate_similarity_score(
             content_popular, profile, use_popularity_dampening=True, popularity_threshold=50000
@@ -742,18 +714,16 @@ class TestPopularityDampening:
 
     def test_dampening_disabled(self):
         """Test that dampening can be disabled."""
-        content = {'genres': ['action'], 'vote_count': 5000000}
-        profile = {'genres': {'action': 10}}
-        score, breakdown = calculate_similarity_score(
-            content, profile, use_popularity_dampening=False
-        )
-        assert 'popularity_dampening' not in breakdown
+        content = {"genres": ["action"], "vote_count": 5000000}
+        profile = {"genres": {"action": 10}}
+        score, breakdown = calculate_similarity_score(content, profile, use_popularity_dampening=False)
+        assert "popularity_dampening" not in breakdown
 
     def test_dampening_capped_at_90_percent(self):
         """Test that dampening doesn't exceed 10% penalty."""
-        content = {'genres': ['action'], 'vote_count': 50000000}  # Very high
-        profile = {'genres': {'action': 10}}
+        content = {"genres": ["action"], "vote_count": 50000000}  # Very high
+        profile = {"genres": {"action": 10}}
         score, breakdown = calculate_similarity_score(
             content, profile, use_popularity_dampening=True, popularity_threshold=50000
         )
-        assert breakdown.get('popularity_dampening', 1.0) >= 0.90
+        assert breakdown.get("popularity_dampening", 1.0) >= 0.90

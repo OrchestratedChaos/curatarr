@@ -94,6 +94,21 @@ regexes = [
   '''(?i)\bplaceholder\b''',
   '''x{16,}''',
   '''0{16,}''',
+
+  # -- Synthetic test fixtures (audit remediation, 2.10.14 reformat) ------
+  # These four literal values are known-fake, hardcoded fixtures used by
+  # this app's own secret-redaction tests (tests/test_web_config_connections.py,
+  # tests/test_web_config_test_connection.py, tests/test_web_status.py,
+  # tests/test_web_routes.py) to assert that real secrets never leak into
+  # responses/logs. They are not real credentials and predate the
+  # secret-scan rollout; kept verbatim (not renamed) because the tests
+  # depend on their secret-like shape. Word-boundary anchored so this
+  # cannot shadow a longer/different real secret that merely shares a
+  # prefix.
+  '''\bsonarr-key-123\b''',
+  '''\bradarr-key-123\b''',
+  '''\babcdef1234567890\b''',
+  '''\babcdef123456\b''',
 ]
 paths = [
   '''(^|/)\.git/''',

@@ -36,9 +36,9 @@ from utils.helpers import no_window_kwargs
 
 from .security import redact
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
-ENGINES = ('full', 'movie', 'tv', 'external')
+ENGINES = ("full", "movie", "tv", "external")
 
 # Sentinel pushed onto subscriber queues when a job finishes, so SSE
 # consumers know to stop waiting for more output.
@@ -60,7 +60,7 @@ SUBSCRIBER_QUEUE_MAXSIZE = 2000
 # has no in-memory record of. The in-process JobManager._lock/_current
 # state is authoritative for this process; the lockfile is the
 # cross-process backstop.
-LOCK_FILENAME = 'webui_job.lock'
+LOCK_FILENAME = "webui_job.lock"
 
 
 class JobError(Exception):
@@ -94,11 +94,13 @@ def _pid_alive(pid: int) -> bool:
     """Best-effort liveness probe for a PID recorded in the lockfile."""
     if pid <= 0:
         return False
-    if os.name == 'nt':
+    if os.name == "nt":
         try:
             result = subprocess.run(
-                ['tasklist', '/FI', f'PID eq {pid}'],
-                capture_output=True, text=True, timeout=3,
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
                 **no_window_kwargs(),
             )
             return str(pid) in result.stdout
@@ -137,8 +139,8 @@ class Job:
     @property
     def state(self) -> str:
         if self.returncode is None:
-            return 'running'
-        return 'succeeded' if self.returncode == 0 else 'failed'
+            return "running"
+        return "succeeded" if self.returncode == 0 else "failed"
 
     def _append_line(self, line: str) -> None:
         with self._data_lock:
@@ -177,13 +179,13 @@ class Job:
 
     def to_dict(self) -> Dict:
         return {
-            'engine': self.engine,
-            'user': self.user,
-            'state': self.state,
-            'started_at': self.started_at,
-            'finished_at': self.finished_at,
-            'returncode': self.returncode,
-            'log_file': os.path.basename(self.log_path),
+            "engine": self.engine,
+            "user": self.user,
+            "state": self.state,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "returncode": self.returncode,
+            "log_file": os.path.basename(self.log_path),
         }
 
 
@@ -205,7 +207,7 @@ class JobManager:
 
     def is_running(self) -> bool:
         job = self._current
-        return job is not None and job.state == 'running'
+        return job is not None and job.state == "running"
 
     def _lock_path(self) -> str:
         return os.path.join(self.logs_dir, LOCK_FILENAME)
@@ -213,7 +215,7 @@ class JobManager:
     def _write_lock(self, pid: int) -> None:
         try:
             os.makedirs(self.logs_dir, exist_ok=True)
-            with open(self._lock_path(), 'w', encoding='utf-8') as f:
+            with open(self._lock_path(), "w", encoding="utf-8") as f:
                 f.write(str(pid))
         except OSError:
             pass  # best-effort - in-process state is still authoritative here
@@ -230,7 +232,7 @@ class JobManager:
         no in-memory record of (its own server process was restarted
         without a clean shutdown) but that's still actually executing."""
         try:
-            with open(self._lock_path(), 'r', encoding='utf-8') as f:
+            with open(self._lock_path(), "r", encoding="utf-8") as f:
                 pid = int(f.read().strip())
         except (OSError, ValueError):
             return False
@@ -245,18 +247,16 @@ class JobManager:
         """Validate and launch a run. Raises JobError/JobAlreadyRunningError."""
         if engine not in ENGINES:
             raise JobError(f"Unknown engine: {engine}")
-        if user != 'all' and user not in allowed_users:
+        if user != "all" and user not in allowed_users:
             raise JobError(f"Unknown user: {user}")
-        if engine in ('full', 'external') and user != 'all':
+        if engine in ("full", "external") and user != "all":
             raise JobError(f"The '{engine}' engine does not support a single-user run")
 
         with self._lock:
             if self.is_running():
                 raise JobAlreadyRunningError("A run is already in progress")
             if self._foreign_run_in_progress():
-                raise JobAlreadyRunningError(
-                    "A run started by a previous server process is still in progress"
-                )
+                raise JobAlreadyRunningError("A run started by a previous server process is still in progress")
 
             cmd, env, log_name = self._build_command(engine, user)
             os.makedirs(self.logs_dir, exist_ok=True)
@@ -267,18 +267,18 @@ class JobManager:
                 cwd=self.project_root,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                encoding='utf-8',
-                errors='replace',
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 env=env,
             )
-            if os.name != 'nt':
+            if os.name != "nt":
                 # Own session/process group so a server shutdown (see
                 # JobManager.terminate_running) can kill the whole tree
                 # in one shot - matters for the 'full' engine, whose
                 # run.sh itself spawns movie.py/tv.py/external.py as
                 # further children, not just the immediate bash process.
-                popen_kwargs['start_new_session'] = True
+                popen_kwargs["start_new_session"] = True
             else:
                 # Suppress the child's own console window - matters for
                 # the windowed (console=False, see curatarr.spec) build:
@@ -289,7 +289,7 @@ class JobManager:
                 # piped back to this process. getattr(...) default keeps
                 # this importable/testable on non-Windows (the attribute
                 # only exists in the subprocess module on win32).
-                popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             try:
                 process = subprocess.Popen(cmd, **popen_kwargs)
             except OSError as exc:
@@ -321,42 +321,41 @@ class JobManager:
         dispatcher and this module's docstring.
         """
         env = dict(os.environ)
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        frozen = getattr(sys, 'frozen', False)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        frozen = getattr(sys, "frozen", False)
 
-        if engine == 'full':
+        if engine == "full":
             if frozen:
-                cmd = [sys.executable, '--run-recommender', 'full']
-            elif os.name == 'nt':
-                cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File',
-                       os.path.join(self.project_root, 'run.ps1')]
+                cmd = [sys.executable, "--run-recommender", "full"]
+            elif os.name == "nt":
+                cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", os.path.join(self.project_root, "run.ps1")]
             else:
-                cmd = ['bash', os.path.join(self.project_root, 'run.sh')]
+                cmd = ["bash", os.path.join(self.project_root, "run.sh")]
             # Skip the interactive setup wizard / auto-update git-checkout
             # dance for UI-triggered runs - config is assumed already
             # set up, same bypass run.sh already supports for Docker.
-            env['RUNNING_IN_DOCKER'] = 'true'
-            target = 'all'
-        elif engine in ('movie', 'tv'):
+            env["RUNNING_IN_DOCKER"] = "true"
+            target = "all"
+        elif engine in ("movie", "tv"):
             if frozen:
-                cmd = [sys.executable, '--run-recommender', engine]
+                cmd = [sys.executable, "--run-recommender", engine]
             else:
-                script = os.path.join(self.project_root, 'recommenders', f'{engine}.py')
+                script = os.path.join(self.project_root, "recommenders", f"{engine}.py")
                 cmd = [sys.executable, script]
-            if user != 'all':
+            if user != "all":
                 cmd.append(user)
             target = user
-        elif engine == 'external':
+        elif engine == "external":
             if frozen:
-                cmd = [sys.executable, '--run-recommender', 'external']
+                cmd = [sys.executable, "--run-recommender", "external"]
             else:
-                script = os.path.join(self.project_root, 'recommenders', 'external.py')
+                script = os.path.join(self.project_root, "recommenders", "external.py")
                 cmd = [sys.executable, script]
-            target = 'all'
+            target = "all"
         else:  # pragma: no cover - guarded by start()'s validation above
             raise JobError(f"Unknown engine: {engine}")
 
-        log_name = f'webui_{engine}_{target}_{ts}.log'
+        log_name = f"webui_{engine}_{target}_{ts}.log"
         return cmd, env, log_name
 
     def _pump(self, job: Job) -> None:
@@ -377,7 +376,7 @@ class JobManager:
         log_file = None
         returncode: Optional[int] = None
         try:
-            log_file = open(job.log_path, 'w', encoding='utf-8')
+            log_file = open(job.log_path, "w", encoding="utf-8")
             assert job.process is not None and job.process.stdout is not None
             for line in job.process.stdout:
                 # Redact at write time, not just when the web UI later
@@ -390,13 +389,13 @@ class JobManager:
                 line = redact(line)
                 log_file.write(line)
                 log_file.flush()
-                job._append_line(line.rstrip('\n'))
+                job._append_line(line.rstrip("\n"))
             returncode = job.process.wait()
         except Exception as exc:
             # Subprocess plumbing failure (e.g. couldn't open the log
             # file, couldn't read the pipe), not a recommender-level
             # error - surface it in the live output.
-            job._append_line(f'[web UI] job runner error: {exc}')
+            job._append_line(f"[web UI] job runner error: {exc}")
         finally:
             if log_file is not None:
                 try:
@@ -430,7 +429,7 @@ class JobManager:
         if job.process.poll() is not None:
             return
         try:
-            if os.name == 'nt':
+            if os.name == "nt":
                 job.process.terminate()
             else:
                 os.killpg(os.getpgid(job.process.pid), signal.SIGTERM)

@@ -4,11 +4,11 @@ Handles exporting recommendations to MDBList.
 """
 
 import logging
-from typing import Dict, Optional, Any, List
+from typing import Any, Dict, List, Optional
 
 from .api_client import BaseAPIClient
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Backwards compatibility exports (now defined on class)
 MDBLIST_RATE_LIMIT_DELAY = 0.1
@@ -20,6 +20,7 @@ MDBLIST_API_BASE = "https://api.mdblist.com"
 
 class MDBListAPIError(Exception):
     """Raised when MDBList API request fails."""
+
     pass
 
 
@@ -50,16 +51,16 @@ class MDBListClient(BaseAPIClient):
         """MDBList doesn't require auth headers (uses query param)."""
         return {}
 
-    def _make_request(self, method: str, endpoint: str,
-                      data: Optional[Dict] = None,
-                      params: Optional[Dict] = None) -> Any:
+    def _make_request(
+        self, method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None
+    ) -> Any:
         """Make an API request to MDBList with API key in query params."""
         url = f"{MDBLIST_API_BASE}/{endpoint}"
 
         # Add API key to params
         if params is None:
             params = {}
-        params['apikey'] = self.api_key
+        params["apikey"] = self.api_key
 
         return self._make_request_to_url(method, url, data, params)
 
@@ -103,7 +104,7 @@ class MDBListClient(BaseAPIClient):
         """
         lists = self.get_lists()
         for lst in lists:
-            if lst.get('name', '').lower() == name.lower():
+            if lst.get("name", "").lower() == name.lower():
                 return lst
         return None
 
@@ -140,8 +141,7 @@ class MDBListClient(BaseAPIClient):
             return existing
         return self.create_list(name)
 
-    def add_items(self, list_id: int, movies: Optional[List[int]] = None,
-                  shows: Optional[List[int]] = None) -> Dict:
+    def add_items(self, list_id: int, movies: Optional[List[int]] = None, shows: Optional[List[int]] = None) -> Dict:
         """
         Add items to a list.
 
@@ -158,9 +158,9 @@ class MDBListClient(BaseAPIClient):
         """
         data = {}
         if movies:
-            data['movies'] = [{"tmdb": tmdb_id} for tmdb_id in movies]
+            data["movies"] = [{"tmdb": tmdb_id} for tmdb_id in movies]
         if shows:
-            data['shows'] = [{"tmdb": tmdb_id} for tmdb_id in shows]
+            data["shows"] = [{"tmdb": tmdb_id} for tmdb_id in shows]
 
         if not data:
             return {"added": 0, "existing": 0, "not_found": 0}
@@ -186,19 +186,19 @@ class MDBListClient(BaseAPIClient):
         movies = []
         shows = []
         for item in items:
-            if item.get('mediatype') == 'movie':
-                if item.get('imdb_id'):
-                    movies.append({"imdb": item['imdb_id']})
+            if item.get("mediatype") == "movie":
+                if item.get("imdb_id"):
+                    movies.append({"imdb": item["imdb_id"]})
             else:
-                if item.get('imdb_id'):
-                    shows.append({"imdb": item['imdb_id']})
+                if item.get("imdb_id"):
+                    shows.append({"imdb": item["imdb_id"]})
 
         if movies or shows:
             data = {}
             if movies:
-                data['movies'] = movies
+                data["movies"] = movies
             if shows:
-                data['shows'] = shows
+                data["shows"] = shows
             self._make_request("POST", f"lists/{list_id}/items/remove", data=data)
 
         return True
@@ -214,14 +214,14 @@ def create_mdblist_client(config: Dict) -> Optional[MDBListClient]:
     Returns:
         MDBListClient if configured and enabled, None otherwise
     """
-    mdblist_config = config.get('mdblist', {})
+    mdblist_config = config.get("mdblist", {})
 
-    if not mdblist_config.get('enabled', False):
+    if not mdblist_config.get("enabled", False):
         return None
 
-    api_key = mdblist_config.get('api_key')
+    api_key = mdblist_config.get("api_key")
 
-    if not api_key or api_key == 'YOUR_MDBLIST_API_KEY':
+    if not api_key or api_key == "YOUR_MDBLIST_API_KEY":
         return None
 
     return MDBListClient(api_key)

@@ -16,9 +16,13 @@ from plexapi.myplex import MyPlexAccount
 
 from .config import __version__, get_libraries_for_media_type, get_update_mode
 from .display import (
-    CYAN, GREEN, RESET, YELLOW,
+    CYAN,
+    GREEN,
+    RESET,
+    YELLOW,
     TeeLogger,
-    log_error, log_warning,
+    log_error,
+    log_warning,
     setup_logging,
 )
 from .helpers import cleanup_old_logs, get_project_root
@@ -46,29 +50,29 @@ def get_users_from_config(config: Dict) -> List[str]:
     all_users = []
 
     # Check users.list first (new config format)
-    users_config = config.get('users', {})
-    user_list = users_config.get('list', '')
+    users_config = config.get("users", {})
+    user_list = users_config.get("list", "")
     if user_list:
         if isinstance(user_list, str):
-            all_users = [u.strip() for u in user_list.split(',') if u.strip()]
+            all_users = [u.strip() for u in user_list.split(",") if u.strip()]
         elif isinstance(user_list, list):
             all_users = user_list
 
     # Fall back to plex_users.users (legacy format)
     if not all_users:
-        plex_config = config.get('plex_users', {})
-        plex_users = plex_config.get('users')
-        if plex_users and str(plex_users).lower() != 'none':
+        plex_config = config.get("plex_users", {})
+        plex_users = plex_config.get("users")
+        if plex_users and str(plex_users).lower() != "none":
             if isinstance(plex_users, str):
-                all_users = [u.strip() for u in plex_users.split(',') if u.strip()]
+                all_users = [u.strip() for u in plex_users.split(",") if u.strip()]
             elif isinstance(plex_users, list):
                 all_users = plex_users
 
     # Fall back to plex.managed_users (oldest format)
     if not all_users:
-        managed_users = config.get('plex', {}).get('managed_users', '')
+        managed_users = config.get("plex", {}).get("managed_users", "")
         if managed_users:
-            all_users = [u.strip() for u in managed_users.split(',') if u.strip()]
+            all_users = [u.strip() for u in managed_users.split(",") if u.strip()]
 
     return all_users
 
@@ -84,7 +88,7 @@ def resolve_admin_username(user: str, plex_token: str) -> str:
     Returns:
         Resolved username (original if not admin or resolution fails)
     """
-    if user.lower() not in ['admin', 'administrator']:
+    if user.lower() not in ["admin", "administrator"]:
         return user
 
     try:
@@ -110,17 +114,17 @@ def update_config_for_user(config: Dict, resolved_user: str) -> Dict:
     """
     user_config = copy.deepcopy(config)
 
-    if 'managed_users' in user_config.get('plex', {}):
-        user_config['plex']['managed_users'] = resolved_user
-    elif 'users' in user_config.get('plex_users', {}):
-        user_config['plex_users']['users'] = [resolved_user]
+    if "managed_users" in user_config.get("plex", {}):
+        user_config["plex"]["managed_users"] = resolved_user
+    elif "users" in user_config.get("plex_users", {}):
+        user_config["plex_users"]["users"] = [resolved_user]
 
     return user_config
 
 
-def setup_log_file(log_dir: str, log_retention_days: int,
-                   single_user: Optional[str] = None,
-                   media_type: str = 'recommendations') -> bool:
+def setup_log_file(
+    log_dir: str, log_retention_days: int, single_user: Optional[str] = None, media_type: str = "recommendations"
+) -> bool:
     """
     Set up log file with TeeLogger for capturing output.
 
@@ -203,7 +207,7 @@ def print_update_notice(update_mode: str) -> None:
     if is_dismissed(latest):
         return
 
-    if os.environ.get('RUNNING_IN_DOCKER') == 'true':
+    if os.environ.get("RUNNING_IN_DOCKER") == "true":
         # Container image - there's no on-disk .git to check out
         # against and no frozen binary to swap; the run.sh/run.ps1 and
         # curatarr --self-update paths below are both gated off in
@@ -215,7 +219,7 @@ def print_update_notice(update_mode: str) -> None:
             f"{YELLOW}Update available: v{latest} (you have v{current}) - "
             f"pull the new image: docker pull ghcr.io/orchestratedchaos/curatarr:v{latest}{RESET}"
         )
-    elif getattr(sys, 'frozen', False):
+    elif getattr(sys, "frozen", False):
         # Binary install - self-update in place (verified download/
         # swap - see utils/self_update.py), or download manually.
         print(
@@ -248,7 +252,7 @@ def run_recommender_main(
     description: str,
     adapt_config_func: Callable[[Dict], Dict],
     process_func: Callable[[Dict, str, int, Optional[str], Optional[Dict]], None],
-    media_type_key: str = 'movie'
+    media_type_key: str = "movie",
 ):
     """
     Common main entry point for recommenders.
@@ -269,15 +273,16 @@ def run_recommender_main(
             (see utils.config.get_libraries_for_media_type)
     """
     # Ensure UTF-8 output
-    if sys.stdout.encoding.lower() != 'utf-8':
-        sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
+    if sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1)
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('username', nargs='?', help='Process recommendations for only this user')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
-    parser.add_argument('--library', dest='library_id', default=None,
-                         help='Process recommendations for only this library id')
+    parser.add_argument("username", nargs="?", help="Process recommendations for only this user")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument(
+        "--library", dest="library_id", default=None, help="Process recommendations for only this library id"
+    )
     args = parser.parse_args()
 
     start_time = datetime.now()
@@ -286,7 +291,7 @@ def run_recommender_main(
 
     # Load config from project root
     project_root = get_project_root()
-    config_path = os.path.join(project_root, 'config/config.yml')
+    config_path = os.path.join(project_root, "config/config.yml")
 
     # curatarr_recommender_runs_total/curatarr_recommender_run_duration_seconds
     # (see utils/metrics.py) - covers the WHOLE run, including a config
@@ -297,19 +302,19 @@ def run_recommender_main(
     # exactly once regardless of how this function exits (normal
     # completion, sys.exit(), or an unhandled exception).
     run_start = time.monotonic()
-    outcome = 'failure'
+    outcome = "failure"
     try:
         try:
-            with open(config_path, 'r') as f:
+            with open(config_path, "r") as f:
                 root_config = yaml.safe_load(f)
 
             # Detect Plex account renames (keyed by stable id) and migrate any
             # affected preferences/cache files/collections before this run
             # processes users. Best-effort - never blocks a normal run.
-            cache_dir = os.path.join(project_root, 'cache')
+            cache_dir = os.path.join(project_root, "cache")
             renamed_users = migrate_renamed_plex_users(root_config, config_path, cache_dir)
             if renamed_users:
-                with open(config_path, 'r') as f:
+                with open(config_path, "r") as f:
                     root_config = yaml.safe_load(f)
 
             base_config = adapt_config_func(root_config)
@@ -322,8 +327,8 @@ def run_recommender_main(
         logger = setup_logging(debug=args.debug, config=root_config)
         logger.debug("Debug logging enabled")
 
-        general = base_config.get('general', {})
-        log_retention_days = general.get('log_retention_days', 7)
+        general = base_config.get("general", {})
+        log_retention_days = general.get("log_retention_days", 7)
 
         # Advisory update notice - printed right after the version banner
         # above in the overall output; see print_update_notice() docstring
@@ -351,7 +356,7 @@ def run_recommender_main(
         libraries = get_libraries_for_media_type(base_config, media_type_key)
 
         if args.library_id:
-            libraries = [lib for lib in libraries if lib.get('id') == args.library_id]
+            libraries = [lib for lib in libraries if lib.get("id") == args.library_id]
             if not libraries:
                 log_error(f"Library '{args.library_id}' not found for media type '{media_type_key}'")
                 sys.exit(1)
@@ -359,7 +364,7 @@ def run_recommender_main(
         multi_library = len(libraries) > 1
 
         # Process each library x user
-        plex_token = base_config.get('plex', {}).get('token', '')
+        plex_token = base_config.get("plex", {}).get("token", "")
         for library in libraries:
             if multi_library:
                 print(f"\n{CYAN}=== Library: {library['name']} ==={RESET}")
@@ -377,7 +382,7 @@ def run_recommender_main(
                 print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
                 print("-" * 50)
 
-        outcome = 'success'
+        outcome = "success"
     except SystemExit:
         raise
     except Exception:

@@ -4,9 +4,9 @@ Generate external recommendations - content NOT in your Plex library
 Creates per-user markdown watchlists that update daily and auto-remove acquired items
 """
 
+import logging
 import os
 import sys
-import logging
 
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,99 +14,139 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 import re
 import time
-import requests
 import traceback
-import urllib3
-from datetime import datetime
 from collections import Counter
-from typing import Dict, List, Set, Optional, Tuple, Any
-from plexapi.server import PlexServer
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+import requests
+import urllib3
 from plexapi.myplex import MyPlexAccount
+from plexapi.server import PlexServer
 
 # Module-level logger
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Import shared utilities - same as internal recommenders
-from utils import (
-    GREEN, YELLOW, CYAN, RESET,
-    RATING_MULTIPLIERS,
-    TMDB_REQUEST_TIMEOUT, TMDB_TV_MOVIE_GENRE_ID, TMDB_ANIMATION_GENRE_ID,
-    MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV,
-    get_plex_account_ids, get_tmdb_config, get_tmdb_keywords,
-    fetch_watch_history_with_tmdb,
-    log_warning, log_error, load_config, clickable_link,
-    calculate_rewatch_multiplier, calculate_recency_multiplier,
-    calculate_similarity_score, normalize_genre, normalize_user_profile,
-    get_tmdb_id_from_imdb,
-    load_trakt_enhance_cache, save_trakt_enhance_cache,
-    get_trakt_discovery_candidates,
-    enhance_profile_with_trakt,
-    fetch_tmdb_details_for_profile,
-    get_project_root,
-    get_authenticated_trakt_client,
-    get_libraries_for_media_type,
-    smart_open_html,
-    record_recommender_run,
-    record_unhandled_error,
+# Import export functions
+from recommenders.external_exports import (
+    export_to_mdblist,
+    export_to_radarr,
+    export_to_simkl,
+    export_to_sonarr,
+    export_to_trakt,
+    get_imdb_id,
+    sync_watch_history_to_trakt,
 )
 
 # Import output generation
-from recommenders.external_output import generate_markdown, generate_combined_html, SERVICE_DISPLAY_NAMES
-
-# Import export functions
-from recommenders.external_exports import (
-    export_to_trakt,
-    export_to_sonarr,
-    export_to_radarr,
-    export_to_mdblist,
-    export_to_simkl,
-    sync_watch_history_to_trakt,
-    get_imdb_id,
+from recommenders.external_output import SERVICE_DISPLAY_NAMES, generate_combined_html, generate_markdown
+from utils import (
+    CYAN,
+    GREEN,
+    MEDIA_TYPE_MOVIE,
+    MEDIA_TYPE_TV,
+    RATING_MULTIPLIERS,
+    RESET,
+    TMDB_ANIMATION_GENRE_ID,
+    TMDB_REQUEST_TIMEOUT,
+    TMDB_TV_MOVIE_GENRE_ID,
+    YELLOW,
+    calculate_recency_multiplier,
+    calculate_rewatch_multiplier,
+    calculate_similarity_score,
+    clickable_link,
+    enhance_profile_with_trakt,
+    fetch_tmdb_details_for_profile,
+    fetch_watch_history_with_tmdb,
+    get_authenticated_trakt_client,
+    get_libraries_for_media_type,
+    get_plex_account_ids,
+    get_project_root,
+    get_tmdb_config,
+    get_tmdb_id_from_imdb,
+    get_tmdb_keywords,
+    get_trakt_discovery_candidates,
+    load_config,
+    log_error,
+    log_warning,
+    normalize_genre,
+    normalize_user_profile,
+    record_recommender_run,
+    record_unhandled_error,
+    smart_open_html,
 )
 
 # TMDB Genre ID mappings
 TMDB_MOVIE_GENRES = {
-    28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy', 80: 'Crime',
-    99: 'Documentary', 18: 'Drama', 10751: 'Family', 14: 'Fantasy', 36: 'History',
-    27: 'Horror', 10402: 'Music', 9648: 'Mystery', 10749: 'Romance', 878: 'Science Fiction',
-    10770: 'TV Movie', 53: 'Thriller', 10752: 'War', 37: 'Western'
+    28: "Action",
+    12: "Adventure",
+    16: "Animation",
+    35: "Comedy",
+    80: "Crime",
+    99: "Documentary",
+    18: "Drama",
+    10751: "Family",
+    14: "Fantasy",
+    36: "History",
+    27: "Horror",
+    10402: "Music",
+    9648: "Mystery",
+    10749: "Romance",
+    878: "Science Fiction",
+    10770: "TV Movie",
+    53: "Thriller",
+    10752: "War",
+    37: "Western",
 }
 
 TMDB_TV_GENRES = {
-    10759: 'Action & Adventure', 16: 'Animation', 35: 'Comedy', 80: 'Crime', 99: 'Documentary',
-    18: 'Drama', 10751: 'Family', 10762: 'Kids', 9648: 'Mystery', 10763: 'News',
-    10764: 'Reality', 10765: 'Sci-Fi & Fantasy', 10766: 'Soap', 10767: 'Talk',
-    10768: 'War & Politics', 37: 'Western'
+    10759: "Action & Adventure",
+    16: "Animation",
+    35: "Comedy",
+    80: "Crime",
+    99: "Documentary",
+    18: "Drama",
+    10751: "Family",
+    10762: "Kids",
+    9648: "Mystery",
+    10763: "News",
+    10764: "Reality",
+    10765: "Sci-Fi & Fantasy",
+    10766: "Soap",
+    10767: "Talk",
+    10768: "War & Politics",
+    37: "Western",
 }
 
 # TMDB Watch Provider ID mappings (US region) - subscription streaming
 TMDB_STREAMING_PROVIDERS = {
-    8: 'netflix',
-    15: 'hulu',
-    337: 'disney_plus',
-    9: 'amazon_prime',
-    531: 'paramount_plus',
-    350: 'apple_tv_plus',
-    384: 'max',
-    387: 'peacock',
-    1899: 'max',  # HBO Max (legacy ID)
-    203: 'crunchyroll',
-    283: 'crackle',
-    613: 'tubi',
-    207: 'mubi',
-    619: 'shudder'
+    8: "netflix",
+    15: "hulu",
+    337: "disney_plus",
+    9: "amazon_prime",
+    531: "paramount_plus",
+    350: "apple_tv_plus",
+    384: "max",
+    387: "peacock",
+    1899: "max",  # HBO Max (legacy ID)
+    203: "crunchyroll",
+    283: "crackle",
+    613: "tubi",
+    207: "mubi",
+    619: "shudder",
 }
 
 # TMDB Watch Provider ID mappings - rental/purchase services
 TMDB_RENTAL_PROVIDERS = {
-    2: 'Apple TV',
-    3: 'Google Play',
-    7: 'Vudu',
-    10: 'Amazon',
-    68: 'Microsoft',
-    192: 'YouTube',
-    358: 'DIRECTV',
-    486: 'Spectrum',
+    2: "Apple TV",
+    3: "Google Play",
+    7: "Vudu",
+    10: "Amazon",
+    68: "Microsoft",
+    192: "YouTube",
+    358: "DIRECTV",
+    486: "Spectrum",
 }
 
 # Backwards compatibility alias
@@ -117,37 +157,37 @@ TMDB_MOVIE_GENRE_IDS = {v.lower(): k for k, v in TMDB_MOVIE_GENRES.items()}
 TMDB_TV_GENRE_IDS = {v.lower(): k for k, v in TMDB_TV_GENRES.items()}
 
 # Discovery thresholds - cast a wide net to find candidates
-DISCOVER_MIN_RATING = 5.5       # Cast wider net, quality filtering happens during scoring
-DISCOVER_MIN_VOTES = 50         # Lower barrier for candidates, OUTPUT_MIN_VOTES filters final list
-MAX_CANDIDATES = 1500           # Larger pool for users with big libraries
-DISCOVER_RESULTS_PER_GENRE = 60     # Top N results per genre search (more to offset library filtering)
-DISCOVER_TOP_KEYWORDS = 10          # Number of top keywords to search
-DISCOVER_RESULTS_PER_KEYWORD = 25   # Top N results per keyword search
+DISCOVER_MIN_RATING = 5.5  # Cast wider net, quality filtering happens during scoring
+DISCOVER_MIN_VOTES = 50  # Lower barrier for candidates, OUTPUT_MIN_VOTES filters final list
+MAX_CANDIDATES = 1500  # Larger pool for users with big libraries
+DISCOVER_RESULTS_PER_GENRE = 60  # Top N results per genre search (more to offset library filtering)
+DISCOVER_TOP_KEYWORDS = 10  # Number of top keywords to search
+DISCOVER_RESULTS_PER_KEYWORD = 25  # Top N results per keyword search
 
 # Output thresholds - match score is king, rating is just tiebreaker
-OUTPUT_MIN_SCORE = 0.65         # 65%+ match required - this is what matters
-OUTPUT_MIN_VOTES = 50           # Filters garbage TMDB entries, profile score is quality signal
+OUTPUT_MIN_SCORE = 0.65  # 65%+ match required - this is what matters
+OUTPUT_MIN_VOTES = 50  # Filters garbage TMDB entries, profile score is quality signal
 
 # Iterative discovery settings
-MAX_DISCOVERY_ITERATIONS = 8    # How many discovery passes before giving up
-THRESHOLD_FLOOR = 0.35          # Minimum threshold for last-ditch iteration
-THIN_PROFILE_THRESHOLD = 40     # Less than 40 items = use reduced iterations
+MAX_DISCOVERY_ITERATIONS = 8  # How many discovery passes before giving up
+THRESHOLD_FLOOR = 0.35  # Minimum threshold for last-ditch iteration
+THIN_PROFILE_THRESHOLD = 40  # Less than 40 items = use reduced iterations
 
 # Legacy aliases for cache filtering (votes only, no rating gate)
-MIN_RATING = 0.0                # Don't filter by rating in cache
+MIN_RATING = 0.0  # Don't filter by rating in cache
 MIN_VOTE_COUNT = OUTPUT_MIN_VOTES
-SCORE_CHANGE_THRESHOLD = 0.01   # Minimum score change to log during updates
+SCORE_CHANGE_THRESHOLD = 0.01  # Minimum score change to log during updates
 PROGRESS_UPDATE_FREQUENCY = 50  # Show progress every N items
 
 # Default weights (specificity-first approach - same as internal recommenders)
 # Director/language reduced - most people don't care about director, language data unreliable
 DEFAULT_WEIGHTS = {
-    'genre': 0.25,
-    'director': 0.05,  # movies - low weight
-    'studio': 0.10,    # TV shows
-    'actor': 0.20,
-    'keyword': 0.50,   # Primary driver - most specific signal
-    'language': 0.0    # Disabled - data unreliable
+    "genre": 0.25,
+    "director": 0.05,  # movies - low weight
+    "studio": 0.10,  # TV shows
+    "actor": 0.20,
+    "keyword": 0.50,  # Primary driver - most specific signal
+    "language": 0.0,  # Disabled - data unreliable
 }
 
 # Watch provider cache (streaming availability changes infrequently)
@@ -162,12 +202,12 @@ def discover_candidates_by_profile(
     tmdb_api_key: str,
     user_profile: Dict,
     library_data: Dict,
-    media_type: str = 'movie',
+    media_type: str = "movie",
     max_candidates: int = 500,
     iteration: int = 0,
     exclude_ids: Optional[Set[int]] = None,
     top_scored_items: Optional[List[Dict]] = None,
-    language_filter: Optional[str] = None
+    language_filter: Optional[str] = None,
 ) -> Dict[int, Dict]:
     """
     Discover candidates using TMDB Discover API based on user profile.
@@ -193,20 +233,20 @@ def discover_candidates_by_profile(
     keyword_end = keyword_start + 10
 
     if iteration == 0:
-        print(f"  Discovering candidates via TMDB Discover API...")
+        print("  Discovering candidates via TMDB Discover API...")
     else:
         print(f"  Discovery iteration {iteration + 1}: expanding search...")
 
     candidates = {}  # tmdb_id -> basic info
-    media = 'movie' if media_type == 'movie' else 'tv'
+    media = "movie" if media_type == "movie" else "tv"
 
     # Get genres for this iteration's range
-    all_genres = list(user_profile['genres'].most_common(20))
+    all_genres = list(user_profile["genres"].most_common(20))
     top_genres = all_genres[genre_start:genre_end]
-    genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == 'movie' else TMDB_TV_GENRE_IDS
+    genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == "movie" else TMDB_TV_GENRE_IDS
 
     # Get keywords for this iteration's range
-    all_keywords = list(user_profile['keywords'].most_common(40))
+    all_keywords = list(user_profile["keywords"].most_common(40))
     top_keywords = all_keywords[keyword_start:keyword_end]
 
     # Search by genres for this iteration
@@ -225,23 +265,23 @@ def discover_candidates_by_profile(
             # Use Discover API with quality filters
             url = f"https://api.themoviedb.org/3/discover/{media}"
             params = {
-                'api_key': tmdb_api_key,
-                'with_genres': genre_id,
-                'vote_average.gte': DISCOVER_MIN_RATING,
-                'vote_count.gte': DISCOVER_MIN_VOTES,
-                'sort_by': 'vote_average.desc',
-                'page': page
+                "api_key": tmdb_api_key,
+                "with_genres": genre_id,
+                "vote_average.gte": DISCOVER_MIN_RATING,
+                "vote_count.gte": DISCOVER_MIN_VOTES,
+                "sort_by": "vote_average.desc",
+                "page": page,
             }
             if language_filter:
-                params['with_original_language'] = language_filter
+                params["with_original_language"] = language_filter
             response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
             if response.status_code == 200:
-                results = response.json().get('results', [])
+                results = response.json().get("results", [])
                 for item in results[:DISCOVER_RESULTS_PER_GENRE]:
-                    tmdb_id = item['id']
-                    title = item.get('title') or item.get('name')
-                    year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
+                    tmdb_id = item["id"]
+                    title = item.get("title") or item.get("name")
+                    year = (item.get("release_date") or item.get("first_air_date", ""))[:4]
 
                     # Skip if already seen, in library, or excluded
                     if tmdb_id in candidates or tmdb_id in exclude_ids:
@@ -250,11 +290,11 @@ def discover_candidates_by_profile(
                         continue
 
                     candidates[tmdb_id] = {
-                        'tmdb_id': tmdb_id,
-                        'title': title,
-                        'year': year,
-                        'rating': item.get('vote_average', 0),
-                        'vote_count': item.get('vote_count', 0)
+                        "tmdb_id": tmdb_id,
+                        "title": title,
+                        "year": year,
+                        "rating": item.get("vote_average", 0),
+                        "vote_count": item.get("vote_count", 0),
                     }
 
         except (requests.RequestException, KeyError) as e:
@@ -275,13 +315,15 @@ def discover_candidates_by_profile(
             else:
                 # Search for keyword ID
                 url = "https://api.themoviedb.org/3/search/keyword"
-                response = requests.get(url, params={'api_key': tmdb_api_key, 'query': keyword}, timeout=TMDB_REQUEST_TIMEOUT)
+                response = requests.get(
+                    url, params={"api_key": tmdb_api_key, "query": keyword}, timeout=TMDB_REQUEST_TIMEOUT
+                )
 
                 kw_id = None
                 if response.status_code == 200:
-                    kw_results = response.json().get('results', [])
+                    kw_results = response.json().get("results", [])
                     if kw_results:
-                        kw_id = kw_results[0]['id']
+                        kw_id = kw_results[0]["id"]
                 # Cache result (including None for not found)
                 _keyword_id_cache[keyword_lower] = kw_id
 
@@ -289,23 +331,23 @@ def discover_candidates_by_profile(
                 # Discover by keyword
                 url = f"https://api.themoviedb.org/3/discover/{media}"
                 params = {
-                    'api_key': tmdb_api_key,
-                    'with_keywords': kw_id,
-                    'vote_average.gte': DISCOVER_MIN_RATING,
-                    'vote_count.gte': DISCOVER_MIN_VOTES,
-                    'sort_by': 'vote_average.desc',
-                    'page': page
+                    "api_key": tmdb_api_key,
+                    "with_keywords": kw_id,
+                    "vote_average.gte": DISCOVER_MIN_RATING,
+                    "vote_count.gte": DISCOVER_MIN_VOTES,
+                    "sort_by": "vote_average.desc",
+                    "page": page,
                 }
                 if language_filter:
-                    params['with_original_language'] = language_filter
+                    params["with_original_language"] = language_filter
                 response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
                 if response.status_code == 200:
-                    results = response.json().get('results', [])
+                    results = response.json().get("results", [])
                     for item in results[:DISCOVER_RESULTS_PER_KEYWORD]:
-                        tmdb_id = item['id']
-                        title = item.get('title') or item.get('name')
-                        year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
+                        tmdb_id = item["id"]
+                        title = item.get("title") or item.get("name")
+                        year = (item.get("release_date") or item.get("first_air_date", ""))[:4]
 
                         if tmdb_id in candidates or tmdb_id in exclude_ids:
                             continue
@@ -313,11 +355,11 @@ def discover_candidates_by_profile(
                             continue
 
                         candidates[tmdb_id] = {
-                            'tmdb_id': tmdb_id,
-                            'title': title,
-                            'year': year,
-                            'rating': item.get('vote_average', 0),
-                            'vote_count': item.get('vote_count', 0)
+                            "tmdb_id": tmdb_id,
+                            "title": title,
+                            "year": year,
+                            "rating": item.get("vote_average", 0),
+                            "vote_count": item.get("vote_count", 0),
                         }
 
         except (requests.RequestException, KeyError) as e:
@@ -330,24 +372,22 @@ def discover_candidates_by_profile(
     if iteration >= 2 and top_scored_items:
         for item in top_scored_items[:5]:  # Top 5 high-scorers
             similar = fetch_similar_from_tmdb(
-                tmdb_api_key,
-                item['tmdb_id'],
-                media_type,
-                library_data,
-                exclude_ids.union(set(candidates.keys()))
+                tmdb_api_key, item["tmdb_id"], media_type, library_data, exclude_ids.union(set(candidates.keys()))
             )
             for sim_id, sim_item in similar.items():
                 if sim_id not in candidates and sim_id not in exclude_ids:
                     candidates[sim_id] = sim_item
                     similar_count += 1
 
-    print(f"    Iteration {iteration + 1}: {genre_count} from genres, {keyword_count} from keywords, {similar_count} from similar")
+    print(
+        f"    Iteration {iteration + 1}: {genre_count} from genres, {keyword_count} from keywords, {similar_count} from similar"
+    )
     return candidates
 
 
 def is_thin_profile(user_profile: Dict) -> bool:
     """Check if profile has too few items for reliable matching."""
-    total_items = sum(user_profile.get('genres', Counter()).values())
+    total_items = sum(user_profile.get("genres", Counter()).values())
     return total_items < THIN_PROFILE_THRESHOLD
 
 
@@ -355,9 +395,9 @@ def discover_popular_by_genre(
     tmdb_api_key: str,
     top_genres: List[str],
     library_data: Dict,
-    media_type: str = 'movie',
+    media_type: str = "movie",
     limit: int = 50,
-    language_filter: Optional[str] = None
+    language_filter: Optional[str] = None,
 ) -> List[Dict]:
     """
     Fallback discovery for thin profiles - fetch popular content by genre.
@@ -374,8 +414,8 @@ def discover_popular_by_genre(
     Returns:
         List of recommendation dicts
     """
-    media = 'movie' if media_type == 'movie' else 'tv'
-    genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == 'movie' else TMDB_TV_GENRE_IDS
+    media = "movie" if media_type == "movie" else "tv"
+    genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == "movie" else TMDB_TV_GENRE_IDS
     library_ids = set(library_data.keys()) if library_data else set()
 
     recommendations = []
@@ -394,40 +434,42 @@ def discover_popular_by_genre(
             # Use TMDB Discover sorted by vote_average (quality) with minimum votes
             url = f"https://api.themoviedb.org/3/discover/{media}"
             params = {
-                'api_key': tmdb_api_key,
-                'with_genres': genre_id,
-                'sort_by': 'vote_average.desc',
-                'vote_count.gte': 500,  # Ensure popular, well-rated
-                'vote_average.gte': 7.0,
-                'page': 1
+                "api_key": tmdb_api_key,
+                "with_genres": genre_id,
+                "sort_by": "vote_average.desc",
+                "vote_count.gte": 500,  # Ensure popular, well-rated
+                "vote_average.gte": 7.0,
+                "page": 1,
             }
             if language_filter:
-                params['with_original_language'] = language_filter
+                params["with_original_language"] = language_filter
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
 
-            for item in data.get('results', []):
-                tmdb_id = item.get('id')
+            for item in data.get("results", []):
+                tmdb_id = item.get("id")
                 if not tmdb_id or tmdb_id in seen_ids or tmdb_id in library_ids:
                     continue
 
                 seen_ids.add(tmdb_id)
-                title = item.get('title') if media_type == 'movie' else item.get('name')
-                year_str = item.get('release_date' if media_type == 'movie' else 'first_air_date', '')
+                title = item.get("title") if media_type == "movie" else item.get("name")
+                year_str = item.get("release_date" if media_type == "movie" else "first_air_date", "")
                 year = int(year_str[:4]) if year_str and len(year_str) >= 4 else 0
 
-                recommendations.append({
-                    'tmdb_id': tmdb_id,
-                    'title': title,
-                    'year': year,
-                    'rating': item.get('vote_average', 0),
-                    'vote_count': item.get('vote_count', 0),
-                    'score': 0.5,  # Neutral score for popularity-based recs
-                    'overview': item.get('overview', ''),
-                    'genres': [genre_name],
-                    'genre_ids': item.get('genre_ids', [])
-                })
+                recommendations.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "title": title,
+                        "year": year,
+                        "rating": item.get("vote_average", 0),
+                        "vote_count": item.get("vote_count", 0),
+                        "score": 0.5,  # Neutral score for popularity-based recs
+                        "overview": item.get("overview", ""),
+                        "genres": [genre_name],
+                        "genre_ids": item.get("genre_ids", []),
+                    }
+                )
 
                 if len(recommendations) >= limit:
                     break
@@ -441,7 +483,7 @@ def discover_popular_by_genre(
     return recommendations[:limit]
 
 
-def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 'movie') -> Optional[Dict]:
+def load_user_profile_from_cache(config: Dict, username: str, media_type: str = "movie") -> Optional[Dict]:
     """
     Load user profile from the watched cache (pre-computed by internal recommenders).
     This is MUCH faster than rebuilding from API calls.
@@ -450,10 +492,10 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
         dict: Weighted counters for genres, actors, directors/studios, keywords, languages
         None: If cache not found or invalid
     """
-    cache_dir = config.get('cache_dir', 'cache')
+    cache_dir = config.get("cache_dir", "cache")
 
     # Cache file naming matches internal recommenders
-    if media_type == 'movie':
+    if media_type == "movie":
         cache_file = os.path.join(cache_dir, f"watched_cache_plex_{username}.json")
     else:
         cache_file = os.path.join(cache_dir, f"tv_watched_cache_plex_{username}.json")
@@ -463,10 +505,10 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
         return None
 
     try:
-        with open(cache_file, 'r') as f:
+        with open(cache_file, "r") as f:
             cache_data = json.load(f)
 
-        wdc = cache_data.get('watched_data_counters', {})
+        wdc = cache_data.get("watched_data_counters", {})
         if not wdc:
             print(f"  Empty watched_data_counters in cache for {username}")
             return None
@@ -474,17 +516,19 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
         # Convert to Counter format expected by scoring
         # Note: cache uses 'tmdb_keywords' for keywords
         profile = {
-            'genres': Counter(wdc.get('genres', {})),
-            'directors': Counter(wdc.get('directors', {})),
-            'studios': Counter(wdc.get('studios', {})),
-            'actors': Counter(wdc.get('actors', {})),
-            'keywords': Counter(wdc.get('tmdb_keywords', {})),
-            'languages': Counter(wdc.get('languages', {})),
-            'tmdb_ids': set(wdc.get('tmdb_ids', []))
+            "genres": Counter(wdc.get("genres", {})),
+            "directors": Counter(wdc.get("directors", {})),
+            "studios": Counter(wdc.get("studios", {})),
+            "actors": Counter(wdc.get("actors", {})),
+            "keywords": Counter(wdc.get("tmdb_keywords", {})),
+            "languages": Counter(wdc.get("languages", {})),
+            "tmdb_ids": set(wdc.get("tmdb_ids", [])),
         }
 
-        watched_count = cache_data.get('watched_count', len(profile['genres']))
-        print(f"  {GREEN}Loaded {media_type} profile from cache: {watched_count} watched, {len(profile['keywords'])} keywords{RESET}")
+        watched_count = cache_data.get("watched_count", len(profile["genres"]))
+        print(
+            f"  {GREEN}Loaded {media_type} profile from cache: {watched_count} watched, {len(profile['keywords'])} keywords{RESET}"
+        )
 
         return profile
 
@@ -493,7 +537,7 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
         return None
 
 
-def build_user_profile(plex: Any, config: Dict, username: str, media_type: str = 'movie') -> Dict:
+def build_user_profile(plex: Any, config: Dict, username: str, media_type: str = "movie") -> Dict:
     """
     Build weighted user profile from ALL watch history.
     Uses same weighting as internal recommenders: ratings + rewatches + recency.
@@ -503,36 +547,36 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
     Returns:
         dict: Weighted counters for genres, actors, directors/studios, keywords, languages
     """
-    library_name = config['plex'].get('movie_library' if media_type == 'movie' else 'tv_library')
+    library_name = config["plex"].get("movie_library" if media_type == "movie" else "tv_library")
     library = plex.library.section(library_name)
     all_items = library.all()
     total_items = len(all_items)
     print(f"Building {media_type} profile for {username} ({total_items} items to scan)...")
 
     # Get recency config
-    recency_config = config.get('recency_decay', {})
-    recency_enabled = recency_config.get('enabled', True)
+    recency_config = config.get("recency_decay", {})
+    recency_enabled = recency_config.get("enabled", True)
 
     counters = {
-        'genres': Counter(),
-        'directors': Counter(),  # movies
-        'studios': Counter(),    # TV shows
-        'actors': Counter(),
-        'keywords': Counter(),
-        'languages': Counter(),
-        'tmdb_ids': set()
+        "genres": Counter(),
+        "directors": Counter(),  # movies
+        "studios": Counter(),  # TV shows
+        "actors": Counter(),
+        "keywords": Counter(),
+        "languages": Counter(),
+        "tmdb_ids": set(),
     }
 
     # Get account for user checking
-    account = MyPlexAccount(token=config['plex']['token'])
-    tmdb_api_key = get_tmdb_config(config)['api_key']
+    account = MyPlexAccount(token=config["plex"]["token"])
+    tmdb_api_key = get_tmdb_config(config)["api_key"]
 
     watched_count = 0
 
     for i, item in enumerate(all_items, 1):
         # Show progress periodically or at the end
         if i % PROGRESS_UPDATE_FREQUENCY == 0 or i == total_items:
-            print(f"\r  Scanning library: {i}/{total_items} ({int(i/total_items*100)}%)", end="", flush=True)
+            print(f"\r  Scanning library: {i}/{total_items} ({int(i / total_items * 100)}%)", end="", flush=True)
 
         if not item.isWatched:
             continue
@@ -540,26 +584,26 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
         watched_count += 1
 
         # Get view count for rewatch multiplier
-        view_count = getattr(item, 'viewCount', 1) or 1
+        view_count = getattr(item, "viewCount", 1) or 1
         rewatch_mult = calculate_rewatch_multiplier(view_count)
 
         # Get last viewed date for recency multiplier
         recency_mult = 1.0
-        if recency_enabled and hasattr(item, 'lastViewedAt') and item.lastViewedAt:
+        if recency_enabled and hasattr(item, "lastViewedAt") and item.lastViewedAt:
             # Plex returns datetime object, convert to timestamp for calculate_recency_multiplier
             last_viewed = item.lastViewedAt
-            if hasattr(last_viewed, 'timestamp'):
+            if hasattr(last_viewed, "timestamp"):
                 last_viewed = int(last_viewed.timestamp())
             recency_mult = calculate_recency_multiplier(last_viewed, recency_config)
 
         # Get user rating (convert 1-10 to multiplier)
-        user_rating = getattr(item, 'userRating', None)
+        user_rating = getattr(item, "userRating", None)
         if user_rating:
             rating_int = max(0, min(10, int(round(user_rating))))
             rating_mult = RATING_MULTIPLIERS.get(rating_int, 1.0)
         else:
             # Use audience rating as fallback, but with less weight
-            audience_rating = getattr(item, 'audienceRating', 5.0) or 5.0
+            audience_rating = getattr(item, "audienceRating", 5.0) or 5.0
             rating_int = max(0, min(10, int(round(audience_rating))))
             rating_mult = RATING_MULTIPLIERS.get(rating_int, 1.0) * 0.5  # Half weight for audience rating
 
@@ -568,26 +612,26 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
 
         # Extract attributes from Plex item
         for genre in item.genres:
-            counters['genres'][genre.tag] += multiplier
+            counters["genres"][genre.tag] += multiplier
 
-        if media_type == 'movie':
-            for director in getattr(item, 'directors', []):
-                counters['directors'][director.tag] += multiplier
+        if media_type == "movie":
+            for director in getattr(item, "directors", []):
+                counters["directors"][director.tag] += multiplier
         else:
-            if hasattr(item, 'studio') and item.studio:
-                counters['studios'][item.studio.lower()] += multiplier
+            if hasattr(item, "studio") and item.studio:
+                counters["studios"][item.studio.lower()] += multiplier
 
         # Top 3 actors
-        for actor in list(getattr(item, 'roles', []))[:3]:
-            counters['actors'][actor.tag] += multiplier
+        for actor in list(getattr(item, "roles", []))[:3]:
+            counters["actors"][actor.tag] += multiplier
 
         # Get TMDB keywords (need to fetch from TMDB)
         tmdb_id = None
         for guid in item.guids:
-            if 'tmdb://' in guid.id:
+            if "tmdb://" in guid.id:
                 try:
-                    tmdb_id = int(guid.id.split('tmdb://')[1])
-                    counters['tmdb_ids'].add(tmdb_id)
+                    tmdb_id = int(guid.id.split("tmdb://")[1])
+                    counters["tmdb_ids"].add(tmdb_id)
                     break
                 except (ValueError, IndexError) as e:
                     logger.debug(f"Error parsing TMDB ID from guid {guid.id}: {e}")
@@ -595,7 +639,7 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
         if tmdb_id:
             keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type)
             for keyword in keywords:
-                counters['keywords'][keyword] += multiplier
+                counters["keywords"][keyword] += multiplier
 
     print()  # Newline after progress indicator
     print(f"  Found {watched_count} watched {media_type}s")
@@ -604,7 +648,7 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
     return counters
 
 
-def get_library_items(plex: Any, library_name: str, media_type: str = 'movie') -> Dict[str, Set]:
+def get_library_items(plex: Any, library_name: str, media_type: str = "movie") -> Dict[str, Set]:
     """Get all items currently in Plex library - returns dict with tmdb_ids, tvdb_ids, and titles"""
     try:
         library = plex.library.section(library_name)
@@ -618,30 +662,30 @@ def get_library_items(plex: Any, library_name: str, media_type: str = 'movie') -
         for item in items:
             # Add title for fallback matching
             title_lower = item.title.lower().strip()
-            year = getattr(item, 'year', None)
+            year = getattr(item, "year", None)
             titles.add((title_lower, year))
 
             for guid in item.guids:
-                if 'tmdb://' in guid.id:
+                if "tmdb://" in guid.id:
                     try:
-                        tmdb_id = guid.id.split('tmdb://')[1]
+                        tmdb_id = guid.id.split("tmdb://")[1]
                         tmdb_ids.add(int(tmdb_id))
                     except (ValueError, IndexError) as e:
                         logger.debug(f"Error parsing TMDB ID from guid {guid.id}: {e}")
-                elif 'tvdb://' in guid.id:
+                elif "tvdb://" in guid.id:
                     try:
-                        tvdb_id = guid.id.split('tvdb://')[1]
+                        tvdb_id = guid.id.split("tvdb://")[1]
                         tvdb_ids.add(int(tvdb_id))
                     except (ValueError, IndexError) as e:
                         logger.debug(f"Error parsing TVDB ID from guid {guid.id}: {e}")
 
-        return {'tmdb_ids': tmdb_ids, 'tvdb_ids': tvdb_ids, 'titles': titles}
+        return {"tmdb_ids": tmdb_ids, "tvdb_ids": tvdb_ids, "titles": titles}
     except Exception as e:
         log_warning(f"Warning: Could not fetch {library_name} library: {e}")
-        return {'tmdb_ids': set(), 'tvdb_ids': set(), 'titles': set()}
+        return {"tmdb_ids": set(), "tvdb_ids": set(), "titles": set()}
 
 
-def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> Dict[str, List[str]]:
+def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = "movie") -> Dict[str, List[str]]:
     """
     Get watch providers for a TMDB item (US region).
     Results are cached for 7 days since streaming availability changes infrequently.
@@ -651,7 +695,7 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
         - rent: rental providers (iTunes, Amazon, etc.)
         - buy: purchase providers
     """
-    empty_result = {'streaming': [], 'rent': [], 'buy': []}
+    empty_result = {"streaming": [], "rent": [], "buy": []}
 
     # Check cache first
     cache_key = (tmdb_id, media_type)
@@ -662,20 +706,20 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
 
     try:
         url = f"https://api.themoviedb.org/3/{'movie' if media_type == 'movie' else 'tv'}/{tmdb_id}/watch/providers"
-        params = {'api_key': tmdb_api_key}
+        params = {"api_key": tmdb_api_key}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code != 200:
             return empty_result
 
         data = response.json()
-        us_providers = data.get('results', {}).get('US', {})
+        us_providers = data.get("results", {}).get("US", {})
 
         def extract_providers(provider_list, provider_map):
             """Extract provider names from TMDB provider list."""
             services = []
             for provider in provider_list:
-                provider_id = provider.get('provider_id')
+                provider_id = provider.get("provider_id")
                 if provider_id in provider_map:
                     service_name = provider_map[provider_id]
                     if service_name not in services:
@@ -683,9 +727,9 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movi
             return services
 
         result = {
-            'streaming': extract_providers(us_providers.get('flatrate', []), TMDB_STREAMING_PROVIDERS),
-            'rent': extract_providers(us_providers.get('rent', []), TMDB_RENTAL_PROVIDERS),
-            'buy': extract_providers(us_providers.get('buy', []), TMDB_RENTAL_PROVIDERS),
+            "streaming": extract_providers(us_providers.get("flatrate", []), TMDB_STREAMING_PROVIDERS),
+            "rent": extract_providers(us_providers.get("rent", []), TMDB_RENTAL_PROVIDERS),
+            "buy": extract_providers(us_providers.get("buy", []), TMDB_RENTAL_PROVIDERS),
         }
         # Cache successful result
         _watch_provider_cache[cache_key] = (time.time(), result)
@@ -708,7 +752,7 @@ def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Di
     """
     try:
         url = f"https://api.themoviedb.org/3/collection/{collection_id}"
-        params = {'api_key': tmdb_api_key}
+        params = {"api_key": tmdb_api_key}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code != 200:
@@ -716,22 +760,24 @@ def get_collection_details(tmdb_api_key: str, collection_id: int) -> Optional[Di
 
         data = response.json()
         movies = []
-        for part in data.get('parts', []):
-            movies.append({
-                'tmdb_id': part['id'],
-                'title': part.get('title', ''),
-                'year': (part.get('release_date') or '')[:4],
-                'release_date': part.get('release_date', ''),
-                'genre_ids': part.get('genre_ids', [])  # Include genres to avoid extra API call
-            })
+        for part in data.get("parts", []):
+            movies.append(
+                {
+                    "tmdb_id": part["id"],
+                    "title": part.get("title", ""),
+                    "year": (part.get("release_date") or "")[:4],
+                    "release_date": part.get("release_date", ""),
+                    "genre_ids": part.get("genre_ids", []),  # Include genres to avoid extra API call
+                }
+            )
 
         # Sort by release date
-        movies.sort(key=lambda x: x.get('release_date', ''))
+        movies.sort(key=lambda x: x.get("release_date", ""))
 
         return {
-            'collection_id': collection_id,
-            'collection_name': data.get('name', 'Unknown Collection'),
-            'movies': movies
+            "collection_id": collection_id,
+            "collection_name": data.get("name", "Unknown Collection"),
+            "movies": movies,
         }
     except (requests.RequestException, KeyError) as e:
         logger.debug(f"Error fetching collection {collection_id}: {e}")
@@ -755,11 +801,11 @@ def get_movie_genre_ids(tmdb_api_key: str, tmdb_id: int) -> List[int]:
     """
     try:
         url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-        params = {'api_key': tmdb_api_key}
+        params = {"api_key": tmdb_api_key}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
         if response.status_code == 200:
             data = response.json()
-            return [g['id'] for g in data.get('genres', [])]
+            return [g["id"] for g in data.get("genres", [])]
     except (requests.RequestException, KeyError) as e:
         logger.debug(f"Failed to fetch genres for TMDB ID {tmdb_id}: {e}")
     return []
@@ -778,11 +824,11 @@ def load_huntarr_cache(cache_path: str, stale_days: int = 7) -> Dict:
     """Load Huntarr cache from disk."""
     try:
         if os.path.exists(cache_path):
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 cache = json.load(f)
-                if cache.get('version') == HUNTARR_CACHE_VERSION:
+                if cache.get("version") == HUNTARR_CACHE_VERSION:
                     # Check staleness
-                    cached_at = cache.get('cached_at', 0)
+                    cached_at = cache.get("cached_at", 0)
                     age_days = (time.time() - cached_at) / 86400
                     if age_days < stale_days:
                         return cache
@@ -793,23 +839,18 @@ def load_huntarr_cache(cache_path: str, stale_days: int = 7) -> Dict:
 
 def save_huntarr_cache(cache_path: str, cache: Dict) -> None:
     """Save Huntarr cache to disk."""
-    cache['version'] = HUNTARR_CACHE_VERSION
-    cache['cached_at'] = time.time()
+    cache["version"] = HUNTARR_CACHE_VERSION
+    cache["cached_at"] = time.time()
     try:
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, 'w') as f:
+        with open(cache_path, "w") as f:
             json.dump(cache, f)
     except IOError as e:
         log_warning(f"Could not save Huntarr cache: {e}")
 
 
 def find_missing_sequels(
-    tmdb_api_key: str,
-    plex: Any,
-    library_name: str,
-    tv_library_name: str,
-    user_services: List[str],
-    stale_days: int = 7
+    tmdb_api_key: str, plex: Any, library_name: str, tv_library_name: str, user_services: List[str], stale_days: int = 7
 ) -> List[Dict]:
     """
     Find missing movies from collections user has started.
@@ -833,7 +874,7 @@ def find_missing_sequels(
 
     # Cache paths
     project_root = get_project_root()
-    cache_path = os.path.join(project_root, 'cache', 'huntarr_cache.json')
+    cache_path = os.path.join(project_root, "cache", "huntarr_cache.json")
 
     try:
         library = plex.library.section(library_name)
@@ -846,9 +887,9 @@ def find_missing_sequels(
     library_tmdb_ids = set()
     for item in items:
         for guid in item.guids:
-            if 'tmdb://' in guid.id:
+            if "tmdb://" in guid.id:
                 try:
-                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    tmdb_id = int(guid.id.split("tmdb://")[1])
                     library_tmdb_ids.add(tmdb_id)
                     break
                 except (ValueError, IndexError):
@@ -856,14 +897,14 @@ def find_missing_sequels(
 
     # Load cache and check if library changed
     cache = load_huntarr_cache(cache_path, stale_days)
-    cached_library_ids = set(cache.get('library_tmdb_ids', []))
+    cached_library_ids = set(cache.get("library_tmdb_ids", []))
 
-    if cached_library_ids == library_tmdb_ids and cache.get('missing_sequels'):
+    if cached_library_ids == library_tmdb_ids and cache.get("missing_sequels"):
         print(f"{GREEN}  Using cached Sequel Huntarr data ({len(cache['missing_sequels'])} missing movies){RESET}")
         # Update streaming services for current user
-        missing = cache['missing_sequels']
+        missing = cache["missing_sequels"]
         for item in missing:
-            item['on_user_services'] = [s for s in item.get('streaming_services', []) if s in user_services]
+            item["on_user_services"] = [s for s in item.get("streaming_services", []) if s in user_services]
         return missing
 
     total_items = len(items)
@@ -873,7 +914,7 @@ def find_missing_sequels(
     collection_owned = {}  # collection_id -> set of owned tmdb_ids
 
     # Use cached movie->collection mapping if available
-    movie_collections = cache.get('movie_collections', {})
+    movie_collections = cache.get("movie_collections", {})
     movies_to_fetch = []
 
     for i, item in enumerate(items):
@@ -882,9 +923,9 @@ def find_missing_sequels(
 
         tmdb_id = None
         for guid in item.guids:
-            if 'tmdb://' in guid.id:
+            if "tmdb://" in guid.id:
                 try:
-                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    tmdb_id = int(guid.id.split("tmdb://")[1])
                     break
                 except (ValueError, IndexError):
                     continue
@@ -914,14 +955,14 @@ def find_missing_sequels(
 
             try:
                 url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-                params = {'api_key': tmdb_api_key}
+                params = {"api_key": tmdb_api_key}
                 response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
                 if response.status_code == 200:
                     data = response.json()
-                    collection = data.get('belongs_to_collection')
+                    collection = data.get("belongs_to_collection")
                     if collection:
-                        coll_id = collection['id']
+                        coll_id = collection["id"]
                         movie_collections[str(tmdb_id)] = coll_id
                         if coll_id not in collection_owned:
                             collection_owned[coll_id] = set()
@@ -942,7 +983,7 @@ def find_missing_sequels(
     total_collections = len(collection_owned)
 
     # Use cached collection details
-    collection_details_cache = cache.get('collection_details', {})
+    collection_details_cache = cache.get("collection_details", {})
 
     print(f"{CYAN}  Checking collections for missing movies...{RESET}")
 
@@ -961,11 +1002,11 @@ def find_missing_sequels(
         if not coll_details:
             continue
 
-        coll_name = coll_details['collection_name']
-        all_movies = coll_details['movies']
+        coll_name = coll_details["collection_name"]
+        all_movies = coll_details["movies"]
 
         # Filter to only released movies (must have a year)
-        released_movies = [m for m in all_movies if m.get('year')]
+        released_movies = [m for m in all_movies if m.get("year")]
         total_count = len(released_movies)
 
         # Skip collections with no released movies
@@ -973,62 +1014,64 @@ def find_missing_sequels(
             continue
 
         # Skip if user owns all released movies in collection
-        if all(m['tmdb_id'] in library_tmdb_ids for m in released_movies):
+        if all(m["tmdb_id"] in library_tmdb_ids for m in released_movies):
             continue
 
         collections_with_gaps += 1
 
         # Count owned released movies
-        owned_released = sum(1 for m in released_movies if m['tmdb_id'] in library_tmdb_ids)
+        owned_released = sum(1 for m in released_movies if m["tmdb_id"] in library_tmdb_ids)
 
         # Find missing movies (only released ones)
         for movie in released_movies:
-            if movie['tmdb_id'] not in library_tmdb_ids:
+            if movie["tmdb_id"] not in library_tmdb_ids:
                 # Get streaming/rent/buy availability
-                providers = get_watch_providers(tmdb_api_key, movie['tmdb_id'], 'movie')
-                streaming = providers.get('streaming', [])
+                providers = get_watch_providers(tmdb_api_key, movie["tmdb_id"], "movie")
+                streaming = providers.get("streaming", [])
 
                 # Check if this is a TV movie (special) - genre ID 10770
                 # Use genre_ids from collection details to avoid extra API call
-                genre_ids = movie.get('genre_ids', [])
+                genre_ids = movie.get("genre_ids", [])
                 is_tv_movie = TV_MOVIE_GENRE_ID in genre_ids
                 is_animated = TMDB_ANIMATION_GENRE_ID in genre_ids
 
-                missing_sequels.append({
-                    'tmdb_id': movie['tmdb_id'],
-                    'title': movie['title'],
-                    'year': movie['year'],
-                    'collection_id': coll_id,
-                    'collection_name': coll_name,
-                    'owned_count': owned_released,
-                    'total_count': total_count,
-                    'streaming_services': streaming,
-                    'rent_services': providers.get('rent', []),
-                    'buy_services': providers.get('buy', []),
-                    'on_user_services': [s for s in streaming if s in user_services],
-                    'release_date': movie.get('release_date', ''),
-                    'is_tv_movie': is_tv_movie,
-                    'is_animated': is_animated
-                })
+                missing_sequels.append(
+                    {
+                        "tmdb_id": movie["tmdb_id"],
+                        "title": movie["title"],
+                        "year": movie["year"],
+                        "collection_id": coll_id,
+                        "collection_name": coll_name,
+                        "owned_count": owned_released,
+                        "total_count": total_count,
+                        "streaming_services": streaming,
+                        "rent_services": providers.get("rent", []),
+                        "buy_services": providers.get("buy", []),
+                        "on_user_services": [s for s in streaming if s in user_services],
+                        "release_date": movie.get("release_date", ""),
+                        "is_tv_movie": is_tv_movie,
+                        "is_animated": is_animated,
+                    }
+                )
 
     show_progress("  Checking collections", total_collections, total_collections)
 
     # Sort by collection name, then release date within collection
-    missing_sequels.sort(key=lambda x: (x['collection_name'], x.get('release_date', '')))
+    missing_sequels.sort(key=lambda x: (x["collection_name"], x.get("release_date", "")))
 
     # For TV movies (specials), also check TV library - they might be stored as episodes
     # Note: TMDB often has TV specials as both "movies" and "TV episodes" with different IDs
     # So we use title matching in addition to ID matching
-    tv_movies = [m for m in missing_sequels if m.get('is_tv_movie')]
+    tv_movies = [m for m in missing_sequels if m.get("is_tv_movie")]
     if tv_movies and tv_library_name:
         print(f"{CYAN}  Checking {len(tv_movies)} TV specials against TV library...{RESET}")
 
         # Build lookup maps: normalized title -> TMDB movie ID
         def normalize_title(title: str) -> str:
             """Normalize title for comparison (lowercase, strip punctuation)"""
-            return re.sub(r'[^\w\s]', '', title.lower()).strip()
+            return re.sub(r"[^\w\s]", "", title.lower()).strip()
 
-        tv_movie_ids = {m['tmdb_id'] for m in tv_movies}
+        tv_movie_ids = {m["tmdb_id"] for m in tv_movies}
         found_tmdb_ids = set()
 
         try:
@@ -1039,21 +1082,21 @@ def find_missing_sequels(
                 if i % 5 == 0:
                     show_progress("  Searching TV library", i + 1, len(tv_movies))
 
-                title = tv_movie['title']
+                title = tv_movie["title"]
                 title_norm = normalize_title(title)
 
                 # Search for episodes matching the title
                 try:
                     # Extract key words for search (first few significant words)
-                    search_term = ' '.join(title.split()[:3])
-                    results = tv_library.search(search_term, libtype='episode')
+                    search_term = " ".join(title.split()[:3])
+                    results = tv_library.search(search_term, libtype="episode")
 
                     for episode in results:
                         # Check by TMDB ID
                         for guid in episode.guids:
-                            if 'tmdb://' in guid.id:
+                            if "tmdb://" in guid.id:
                                 try:
-                                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                                    tmdb_id = int(guid.id.split("tmdb://")[1])
                                     if tmdb_id in tv_movie_ids:
                                         found_tmdb_ids.add(tmdb_id)
                                 except (ValueError, IndexError):
@@ -1062,15 +1105,15 @@ def find_missing_sequels(
                         # Check by normalized title match
                         ep_title_norm = normalize_title(episode.title)
                         if ep_title_norm == title_norm:
-                            found_tmdb_ids.add(tv_movie['tmdb_id'])
+                            found_tmdb_ids.add(tv_movie["tmdb_id"])
                         # Also check show name + episode title (e.g., "Phineas and Ferb" + "Mission Marvel")
-                        elif hasattr(episode, 'grandparentTitle'):
+                        elif hasattr(episode, "grandparentTitle"):
                             combined_norm = normalize_title(f"{episode.grandparentTitle} {episode.title}")
                             if combined_norm == title_norm:
-                                found_tmdb_ids.add(tv_movie['tmdb_id'])
+                                found_tmdb_ids.add(tv_movie["tmdb_id"])
                             # Also check if episode title is a suffix of movie title
                             elif title_norm.endswith(ep_title_norm) and len(ep_title_norm) > 5:
-                                found_tmdb_ids.add(tv_movie['tmdb_id'])
+                                found_tmdb_ids.add(tv_movie["tmdb_id"])
                 except Exception:
                     pass  # Search failed for this title, continue
 
@@ -1081,21 +1124,27 @@ def find_missing_sequels(
         # Remove TV movies found in TV library
         if found_tmdb_ids:
             before_count = len(missing_sequels)
-            missing_sequels = [m for m in missing_sequels
-                               if not (m.get('is_tv_movie') and m['tmdb_id'] in found_tmdb_ids)]
+            missing_sequels = [
+                m for m in missing_sequels if not (m.get("is_tv_movie") and m["tmdb_id"] in found_tmdb_ids)
+            ]
             removed = before_count - len(missing_sequels)
             if removed > 0:
                 print(f"{GREEN}  Removed {removed} TV specials found in TV library{RESET}")
 
     # Save cache
-    save_huntarr_cache(cache_path, {
-        'library_tmdb_ids': list(library_tmdb_ids),
-        'movie_collections': movie_collections,
-        'collection_details': collection_details_cache,
-        'missing_sequels': missing_sequels
-    })
+    save_huntarr_cache(
+        cache_path,
+        {
+            "library_tmdb_ids": list(library_tmdb_ids),
+            "movie_collections": movie_collections,
+            "collection_details": collection_details_cache,
+            "missing_sequels": missing_sequels,
+        },
+    )
 
-    print(f"{GREEN}  Found {len(missing_sequels)} missing movies across {collections_with_gaps} incomplete collections{RESET}")
+    print(
+        f"{GREEN}  Found {len(missing_sequels)} missing movies across {collections_with_gaps} incomplete collections{RESET}"
+    )
     return missing_sequels
 
 
@@ -1113,24 +1162,24 @@ def get_movie_status(tmdb_api_key: str, tmdb_id: int) -> Tuple[str, str]:
     """
     try:
         url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-        params = {'api_key': tmdb_api_key}
+        params = {"api_key": tmdb_api_key}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
         if response.status_code == 200:
             data = response.json()
-            return data.get('status', 'Unknown'), data.get('release_date', '')
+            return data.get("status", "Unknown"), data.get("release_date", "")
     except (requests.RequestException, KeyError) as e:
         logger.debug(f"Failed to fetch status for TMDB ID {tmdb_id}: {e}")
-    return 'Unknown', ''
+    return "Unknown", ""
 
 
 def load_horizon_cache(cache_path: str, stale_days: int = 7) -> Dict:
     """Load Horizon Huntarr cache from disk."""
     try:
         if os.path.exists(cache_path):
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 cache = json.load(f)
-                if cache.get('version') == HORIZON_HUNTARR_CACHE_VERSION:
-                    cached_at = cache.get('cached_at', 0)
+                if cache.get("version") == HORIZON_HUNTARR_CACHE_VERSION:
+                    cached_at = cache.get("cached_at", 0)
                     age_days = (time.time() - cached_at) / 86400
                     if age_days < stale_days:
                         return cache
@@ -1141,22 +1190,17 @@ def load_horizon_cache(cache_path: str, stale_days: int = 7) -> Dict:
 
 def save_horizon_cache(cache_path: str, cache: Dict) -> None:
     """Save Horizon Huntarr cache to disk."""
-    cache['version'] = HORIZON_HUNTARR_CACHE_VERSION
-    cache['cached_at'] = time.time()
+    cache["version"] = HORIZON_HUNTARR_CACHE_VERSION
+    cache["cached_at"] = time.time()
     try:
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, 'w') as f:
+        with open(cache_path, "w") as f:
             json.dump(cache, f)
     except IOError as e:
         log_warning(f"Could not save Horizon Huntarr cache: {e}")
 
 
-def find_horizon_movies(
-    tmdb_api_key: str,
-    plex: Any,
-    library_name: str,
-    stale_days: int = 7
-) -> List[Dict]:
+def find_horizon_movies(tmdb_api_key: str, plex: Any, library_name: str, stale_days: int = 7) -> List[Dict]:
     """
     Find upcoming/unreleased movies from collections user owns.
 
@@ -1175,8 +1219,8 @@ def find_horizon_movies(
     from utils.display import show_progress
 
     project_root = get_project_root()
-    cache_path = os.path.join(project_root, 'cache', 'horizon_huntarr_cache.json')
-    sequel_cache_path = os.path.join(project_root, 'cache', 'huntarr_cache.json')
+    cache_path = os.path.join(project_root, "cache", "horizon_huntarr_cache.json")
+    sequel_cache_path = os.path.join(project_root, "cache", "huntarr_cache.json")
 
     try:
         library = plex.library.section(library_name)
@@ -1189,9 +1233,9 @@ def find_horizon_movies(
     library_tmdb_ids = set()
     for item in items:
         for guid in item.guids:
-            if 'tmdb://' in guid.id:
+            if "tmdb://" in guid.id:
                 try:
-                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    tmdb_id = int(guid.id.split("tmdb://")[1])
                     library_tmdb_ids.add(tmdb_id)
                     break
                 except (ValueError, IndexError):
@@ -1199,16 +1243,16 @@ def find_horizon_movies(
 
     # Load horizon cache
     cache = load_horizon_cache(cache_path, stale_days)
-    cached_library_ids = set(cache.get('library_tmdb_ids', []))
+    cached_library_ids = set(cache.get("library_tmdb_ids", []))
 
-    if cached_library_ids == library_tmdb_ids and cache.get('horizon_movies'):
+    if cached_library_ids == library_tmdb_ids and cache.get("horizon_movies"):
         print(f"{GREEN}  Using cached Horizon Huntarr data ({len(cache['horizon_movies'])} upcoming movies){RESET}")
-        return cache['horizon_movies']
+        return cache["horizon_movies"]
 
     # Try to reuse sequel huntarr's collection data
     sequel_cache = load_huntarr_cache(sequel_cache_path, stale_days)
-    movie_collections = sequel_cache.get('movie_collections', {})
-    collection_details_cache = sequel_cache.get('collection_details', {})
+    movie_collections = sequel_cache.get("movie_collections", {})
+    collection_details_cache = sequel_cache.get("collection_details", {})
 
     # Diff the current library against the cached movie->collection map,
     # exactly like find_missing_sequels does: trust the cache for ids it
@@ -1228,9 +1272,9 @@ def find_horizon_movies(
 
         tmdb_id = None
         for guid in item.guids:
-            if 'tmdb://' in guid.id:
+            if "tmdb://" in guid.id:
                 try:
-                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    tmdb_id = int(guid.id.split("tmdb://")[1])
                     break
                 except (ValueError, IndexError):
                     continue
@@ -1249,14 +1293,14 @@ def find_horizon_movies(
             # Fetch collection ID
             try:
                 url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-                params = {'api_key': tmdb_api_key}
+                params = {"api_key": tmdb_api_key}
                 response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
                 if response.status_code == 200:
                     data = response.json()
-                    collection = data.get('belongs_to_collection')
+                    collection = data.get("belongs_to_collection")
                     if collection:
-                        coll_id = collection['id']
+                        coll_id = collection["id"]
                         movie_collections[tmdb_id_str] = coll_id
                         if coll_id not in collection_owned:
                             collection_owned[coll_id] = set()
@@ -1272,7 +1316,7 @@ def find_horizon_movies(
 
     # Find upcoming movies from collections
     horizon_movies = []
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
     total_collections = len(collection_owned)
 
     print(f"{CYAN}  Checking collections for upcoming releases...{RESET}")
@@ -1292,16 +1336,16 @@ def find_horizon_movies(
         if not coll_details:
             continue
 
-        coll_name = coll_details['collection_name']
-        all_movies = coll_details['movies']
+        coll_name = coll_details["collection_name"]
+        all_movies = coll_details["movies"]
 
         # Find movies that are unreleased (no year OR future release date)
         for movie in all_movies:
-            release_date = movie.get('release_date', '')
-            year = movie.get('year', '')
+            release_date = movie.get("release_date", "")
+            year = movie.get("year", "")
 
             # Skip if already in library
-            if movie['tmdb_id'] in library_tmdb_ids:
+            if movie["tmdb_id"] in library_tmdb_ids:
                 continue
 
             # Check if unreleased: no release date OR future release date
@@ -1309,52 +1353,45 @@ def find_horizon_movies(
 
             if is_unreleased:
                 # Get current status from TMDB
-                status, current_release_date = get_movie_status(tmdb_api_key, movie['tmdb_id'])
+                status, current_release_date = get_movie_status(tmdb_api_key, movie["tmdb_id"])
 
                 # Skip canceled movies
-                if status == 'Canceled':
+                if status == "Canceled":
                     continue
 
                 # Skip if status shows it's already released
-                if status == 'Released':
+                if status == "Released":
                     continue
 
-                horizon_movies.append({
-                    'tmdb_id': movie['tmdb_id'],
-                    'title': movie['title'],
-                    'collection_id': coll_id,
-                    'collection_name': coll_name,
-                    'release_date': current_release_date or 'TBA',
-                    'status': status,
-                    'genre_ids': movie.get('genre_ids', [])
-                })
+                horizon_movies.append(
+                    {
+                        "tmdb_id": movie["tmdb_id"],
+                        "title": movie["title"],
+                        "collection_id": coll_id,
+                        "collection_name": coll_name,
+                        "release_date": current_release_date or "TBA",
+                        "status": status,
+                        "genre_ids": movie.get("genre_ids", []),
+                    }
+                )
 
     show_progress("  Checking collections", total_collections, total_collections)
 
     # Sort by collection name, then status priority, then release date
-    status_order = {'Post Production': 0, 'In Production': 1, 'Planned': 2, 'Rumored': 3, 'Unknown': 4}
-    horizon_movies.sort(key=lambda x: (
-        x['collection_name'],
-        status_order.get(x['status'], 5),
-        x.get('release_date', 'ZZZ')
-    ))
+    status_order = {"Post Production": 0, "In Production": 1, "Planned": 2, "Rumored": 3, "Unknown": 4}
+    horizon_movies.sort(
+        key=lambda x: (x["collection_name"], status_order.get(x["status"], 5), x.get("release_date", "ZZZ"))
+    )
 
     # Save cache
-    save_horizon_cache(cache_path, {
-        'library_tmdb_ids': list(library_tmdb_ids),
-        'horizon_movies': horizon_movies
-    })
+    save_horizon_cache(cache_path, {"library_tmdb_ids": list(library_tmdb_ids), "horizon_movies": horizon_movies})
 
     print(f"{GREEN}  Found {len(horizon_movies)} upcoming movies from owned collections{RESET}")
     return horizon_movies
 
 
 def fetch_similar_from_tmdb(
-    tmdb_api_key: str,
-    tmdb_id: int,
-    media_type: str,
-    library_data: Dict,
-    exclude_ids: Optional[Set[int]] = None
+    tmdb_api_key: str, tmdb_id: int, media_type: str, library_data: Dict, exclude_ids: Optional[Set[int]] = None
 ) -> Dict[int, Dict]:
     """
     Fetch similar content from TMDB's recommendations endpoint.
@@ -1374,23 +1411,20 @@ def fetch_similar_from_tmdb(
         exclude_ids = set()
 
     candidates = {}
-    media = 'movie' if media_type == 'movie' else 'tv'
+    media = "movie" if media_type == "movie" else "tv"
 
     try:
         url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}/similar"
-        params = {
-            'api_key': tmdb_api_key,
-            'page': 1
-        }
+        params = {"api_key": tmdb_api_key, "page": 1}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code == 200:
-            results = response.json().get('results', [])
+            results = response.json().get("results", [])
             for item in results[:20]:  # Top 20 similar items
-                item_id = item['id']
-                title = item.get('title') or item.get('name')
-                year = (item.get('release_date') or item.get('first_air_date', ''))[:4]
-                vote_count = item.get('vote_count', 0)
+                item_id = item["id"]
+                title = item.get("title") or item.get("name")
+                year = (item.get("release_date") or item.get("first_air_date", ""))[:4]
+                vote_count = item.get("vote_count", 0)
 
                 # Skip if already seen, in library, or low votes
                 if item_id in exclude_ids:
@@ -1403,11 +1437,11 @@ def fetch_similar_from_tmdb(
                     continue
 
                 candidates[item_id] = {
-                    'tmdb_id': item_id,
-                    'title': title,
-                    'year': year,
-                    'rating': item.get('vote_average', 0),
-                    'vote_count': vote_count
+                    "tmdb_id": item_id,
+                    "title": title,
+                    "year": year,
+                    "rating": item.get("vote_average", 0),
+                    "vote_count": vote_count,
                 }
 
     except (requests.RequestException, KeyError) as e:
@@ -1417,10 +1451,7 @@ def fetch_similar_from_tmdb(
 
 
 def categorize_by_streaming_service(
-    recommendations: List[Dict],
-    tmdb_api_key: str,
-    user_services: List[str],
-    media_type: str = 'movie'
+    recommendations: List[Dict], tmdb_api_key: str, user_services: List[str], media_type: str = "movie"
 ) -> Dict:
     """
     Categorize recommendations by streaming availability.
@@ -1433,30 +1464,25 @@ def categorize_by_streaming_service(
         'all_items': [all items sorted by score with streaming info]
     }
     """
-    result = {
-        'user_services': {},
-        'other_services': {},
-        'acquire': [],
-        'all_items': []
-    }
+    result = {"user_services": {}, "other_services": {}, "acquire": [], "all_items": []}
 
     for item in recommendations:
-        tmdb_id = item['tmdb_id']
+        tmdb_id = item["tmdb_id"]
         providers = get_watch_providers(tmdb_api_key, tmdb_id, media_type)
 
         # Attach streaming info to item
-        streaming = providers.get('streaming', [])
-        item['streaming_services'] = streaming
-        item['rent_services'] = providers.get('rent', [])
-        item['buy_services'] = providers.get('buy', [])
-        item['on_user_services'] = [s for s in streaming if s in user_services]
+        streaming = providers.get("streaming", [])
+        item["streaming_services"] = streaming
+        item["rent_services"] = providers.get("rent", [])
+        item["buy_services"] = providers.get("buy", [])
+        item["on_user_services"] = [s for s in streaming if s in user_services]
 
         # Add to all_items for flat display
-        result['all_items'].append(item)
+        result["all_items"].append(item)
 
         if not streaming:
             # Not available on any subscription streaming service
-            result['acquire'].append(item)
+            result["acquire"].append(item)
         else:
             # Check which services have it - add to FIRST matching service only
             # Priority: user's services first, then other services
@@ -1465,9 +1491,9 @@ def categorize_by_streaming_service(
             # First try user's services
             for service in streaming:
                 if service in user_services:
-                    if service not in result['user_services']:
-                        result['user_services'][service] = []
-                    result['user_services'][service].append(item)
+                    if service not in result["user_services"]:
+                        result["user_services"][service] = []
+                    result["user_services"][service].append(item)
                     placed = True
                     break  # Only add to ONE service
 
@@ -1475,27 +1501,28 @@ def categorize_by_streaming_service(
             if not placed:
                 for service in streaming:
                     if service not in user_services:
-                        if service not in result['other_services']:
-                            result['other_services'][service] = []
-                        result['other_services'][service].append(item)
+                        if service not in result["other_services"]:
+                            result["other_services"][service] = []
+                        result["other_services"][service].append(item)
                         break  # Only add to ONE service
 
     # Sort all_items by score (highest first)
-    result['all_items'].sort(key=lambda x: x.get('score', 0), reverse=True)
+    result["all_items"].sort(key=lambda x: x.get("score", 0), reverse=True)
 
     return result
 
-def get_genre_distribution(plex: Any, config: Dict, username: str, media_type: str = 'movie') -> Tuple[Dict, int]:
+
+def get_genre_distribution(plex: Any, config: Dict, username: str, media_type: str = "movie") -> Tuple[Dict, int]:
     """Calculate genre distribution from user's watch history"""
     try:
-        library_name = config['plex'].get('movie_library' if media_type == 'movie' else 'tv_library')
+        library_name = config["plex"].get("movie_library" if media_type == "movie" else "tv_library")
         library = plex.library.section(library_name)
 
         genre_counts = {}
         total_items = 0
 
         # For admin user, check watched items directly
-        account = MyPlexAccount(token=config['plex']['token'])
+        account = MyPlexAccount(token=config["plex"]["token"])
         if username.lower() == account.username.lower():
             for item in library.all():
                 if item.isWatched:
@@ -1514,13 +1541,14 @@ def get_genre_distribution(plex: Any, config: Dict, username: str, media_type: s
         log_warning(f"  Warning: Could not calculate genre distribution: {e}")
         return {}, 0
 
-def get_user_watch_history(plex: Any, config: Dict, username: str, media_type: str = 'movie') -> List[Dict]:
+
+def get_user_watch_history(plex: Any, config: Dict, username: str, media_type: str = "movie") -> List[Dict]:
     """Get user's watch history from Plex using shared utility"""
     print(f"Fetching {media_type} watch history for {username}...")
 
     try:
         # Get library
-        library_name = config['plex'].get('movie_library' if media_type == 'movie' else 'tv_library')
+        library_name = config["plex"].get("movie_library" if media_type == "movie" else "tv_library")
         library = plex.library.section(library_name)
 
         # Get user's account using flexible matching from shared utils
@@ -1537,10 +1565,11 @@ def get_user_watch_history(plex: Any, config: Dict, username: str, media_type: s
         log_warning(f"  Warning: Could not fetch watch history: {e}")
         return []
 
+
 def is_in_library(tmdb_id: Optional[int], title: Optional[str], year: Optional[str], library_data: Dict) -> bool:
     """Check if item is in library by TMDB ID or title+year"""
     # Check TMDB ID first (fast O(1) lookup)
-    if tmdb_id and tmdb_id in library_data.get('tmdb_ids', set()):
+    if tmdb_id and tmdb_id in library_data.get("tmdb_ids", set()):
         return True
 
     # Fallback: check by title+year
@@ -1548,29 +1577,30 @@ def is_in_library(tmdb_id: Optional[int], title: Optional[str], year: Optional[s
         title_lower = title.lower().strip()
         year_int = int(year) if year and str(year).isdigit() else None
         # Check exact match
-        if (title_lower, year_int) in library_data.get('titles', set()):
+        if (title_lower, year_int) in library_data.get("titles", set()):
             return True
         # Check without year - use pre-built title set if available (O(1) vs O(N))
-        if '_title_set' not in library_data:
+        if "_title_set" not in library_data:
             # Build title-only set once and cache it
-            library_data['_title_set'] = {t for t, y in library_data.get('titles', set())}
-        if title_lower in library_data['_title_set']:
+            library_data["_title_set"] = {t for t, y in library_data.get("titles", set())}
+        if title_lower in library_data["_title_set"]:
             return True
 
     return False
+
 
 def find_similar_content_with_profile(
     tmdb_api_key: str,
     user_profile: Dict,
     library_data: Dict,
-    media_type: str = 'movie',
+    media_type: str = "movie",
     limit: int = 50,
     exclude_genres: Optional[List[str]] = None,
     min_relevance_score: float = 0.65,
     config: Optional[Dict] = None,
     exclude_imdb_ids: Optional[Set[str]] = None,
     max_iterations: Optional[int] = None,
-    exclude_cached_ids: Optional[Set[int]] = None
+    exclude_cached_ids: Optional[Set[int]] = None,
 ) -> List[Dict]:
     """
     Find similar content NOT in library using profile-based scoring.
@@ -1598,7 +1628,7 @@ def find_similar_content_with_profile(
         exclude_imdb_ids = set()
     print(f"{CYAN}Finding external {media_type}s using profile-based scoring...{RESET}")
 
-    if not user_profile or not user_profile.get('genres'):
+    if not user_profile or not user_profile.get("genres"):
         print(f"{YELLOW}No user profile data found{RESET}")
         return []
 
@@ -1606,29 +1636,29 @@ def find_similar_content_with_profile(
     normalize_user_profile(user_profile)
 
     # Get iteration settings from config (can be overridden by parameter)
-    external_config = config.get('external_recommendations', {}) if config else {}
+    external_config = config.get("external_recommendations", {}) if config else {}
     if max_iterations is None:
-        max_iterations = external_config.get('max_iterations', MAX_DISCOVERY_ITERATIONS)
-    min_votes = external_config.get('min_votes', OUTPUT_MIN_VOTES)
-    language_filter = external_config.get('language')  # ISO 639-1 code like 'en'
+        max_iterations = external_config.get("max_iterations", MAX_DISCOVERY_ITERATIONS)
+    min_votes = external_config.get("min_votes", OUTPUT_MIN_VOTES)
+    language_filter = external_config.get("language")  # ISO 639-1 code like 'en'
 
     # Get weights from config or use defaults
     weights = DEFAULT_WEIGHTS
     if config:
-        config_weights = config.get('movies' if media_type == 'movie' else 'tv', {}).get('weights', {})
+        config_weights = config.get("movies" if media_type == "movie" else "tv", {}).get("weights", {})
         if config_weights:
             weights = {
-                'genre': config_weights.get('genre', 0.20),
-                'director': config_weights.get('director', 0.15),
-                'studio': config_weights.get('studio', 0.15),
-                'actor': config_weights.get('actor', 0.15),
-                'keyword': config_weights.get('keyword', 0.45),
-                'language': config_weights.get('language', 0.05)
+                "genre": config_weights.get("genre", 0.20),
+                "director": config_weights.get("director", 0.15),
+                "studio": config_weights.get("studio", 0.15),
+                "actor": config_weights.get("actor", 0.15),
+                "keyword": config_weights.get("keyword", 0.45),
+                "language": config_weights.get("language", 0.05),
             }
 
     # Check for thin profile - reduce iterations instead of skipping personalization entirely
     if is_thin_profile(user_profile):
-        profile_size = sum(user_profile.get('genres', Counter()).values())
+        profile_size = sum(user_profile.get("genres", Counter()).values())
         print(f"  {CYAN}Thin profile detected ({profile_size} items) - using reduced iterations{RESET}")
         max_iterations = min(max_iterations, 2)  # Quick discovery pass, not zero
 
@@ -1646,15 +1676,11 @@ def find_similar_content_with_profile(
     trakt_candidates = {}
     if config:
         project_root = get_project_root()
-        cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
-        library_tmdb_ids = library_data.get('tmdb_ids', set())
+        cache_dir = os.path.join(project_root, config.get("cache_dir", "cache"))
+        library_tmdb_ids = library_data.get("tmdb_ids", set())
 
         trakt_candidates = get_trakt_discovery_candidates(
-            config,
-            media_type,
-            cache_dir,
-            library_tmdb_ids,
-            exclude_imdb_ids
+            config, media_type, cache_dir, library_tmdb_ids, exclude_imdb_ids
         )
 
     # Iterative discovery loop
@@ -1684,7 +1710,7 @@ def find_similar_content_with_profile(
             iteration=iteration,
             exclude_ids=seen_ids,
             top_scored_items=quality_recs[:10],  # Pass top items for similar-to queries
-            language_filter=language_filter
+            language_filter=language_filter,
         )
 
         # On first iteration, also add Trakt candidates
@@ -1722,7 +1748,7 @@ def find_similar_content_with_profile(
 
                 # Check excluded genres
                 if exclude_genres:
-                    content_genres = [g.lower() for g in details.get('genres', [])]
+                    content_genres = [g.lower() for g in details.get("genres", [])]
                     if any(eg.lower() in content_genres for eg in exclude_genres):
                         continue
 
@@ -1734,35 +1760,35 @@ def find_similar_content_with_profile(
 
                 # Calculate similarity score
                 content_info = {
-                    'genres': details.get('genres', []),
-                    'directors': details.get('directors', []),
-                    'studios': details.get('studios', []),
-                    'cast': details.get('cast', []),
-                    'language': details.get('language', ''),
-                    'keywords': details.get('keywords', [])
+                    "genres": details.get("genres", []),
+                    "directors": details.get("directors", []),
+                    "studios": details.get("studios", []),
+                    "cast": details.get("cast", []),
+                    "language": details.get("language", ""),
+                    "keywords": details.get("keywords", []),
                 }
                 score, _ = calculate_similarity_score(content_info, user_profile, media_type, weights)
 
                 scored_item = {
-                    'tmdb_id': candidate_id,
-                    'title': details['title'],
-                    'year': details['year'],
-                    'rating': details['rating'],
-                    'vote_count': details.get('vote_count', 0),
-                    'score': score,
-                    'overview': details.get('overview', ''),
-                    'genres': details.get('genres', []),
-                    'genre_ids': [],
-                    'original_language': details.get('original_language', '')
+                    "tmdb_id": candidate_id,
+                    "title": details["title"],
+                    "year": details["year"],
+                    "rating": details["rating"],
+                    "vote_count": details.get("vote_count", 0),
+                    "score": score,
+                    "overview": details.get("overview", ""),
+                    "genres": details.get("genres", []),
+                    "genre_ids": [],
+                    "original_language": details.get("original_language", ""),
                 }
                 scored_cache[candidate_id] = scored_item
 
                 # Skip if language filter is set and doesn't match
-                if language_filter and details.get('original_language', '') != language_filter:
+                if language_filter and details.get("original_language", "") != language_filter:
                     continue
 
                 # Check if meets quality bar (threshold relaxes in later iterations)
-                if score >= iteration_threshold and scored_item['vote_count'] >= min_votes:
+                if score >= iteration_threshold and scored_item["vote_count"] >= min_votes:
                     quality_recs.append(scored_item)
                     new_quality_this_iteration += 1
 
@@ -1770,11 +1796,11 @@ def find_similar_content_with_profile(
 
         # Re-check previously scored items that may now pass the relaxed threshold
         if iteration >= 2:
-            quality_rec_ids = {r['tmdb_id'] for r in quality_recs}
+            quality_rec_ids = {r["tmdb_id"] for r in quality_recs}
             rechecked = 0
             for tmdb_id, scored_item in scored_cache.items():
                 if tmdb_id not in quality_rec_ids:
-                    if scored_item['score'] >= iteration_threshold and scored_item['vote_count'] >= min_votes:
+                    if scored_item["score"] >= iteration_threshold and scored_item["vote_count"] >= min_votes:
                         quality_recs.append(scored_item)
                         new_quality_this_iteration += 1
                         rechecked += 1
@@ -1782,9 +1808,11 @@ def find_similar_content_with_profile(
                 logger.debug(f"Re-check found {rechecked} items now meeting threshold")
 
         # Re-sort quality_recs after adding new items
-        quality_recs.sort(key=lambda x: (x['score'], x['rating']), reverse=True)
+        quality_recs.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
-        print(f"  {CYAN}Iteration {iteration + 1} ({iteration_threshold:.0%} threshold): {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}")
+        print(
+            f"  {CYAN}Iteration {iteration + 1} ({iteration_threshold:.0%} threshold): {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}"
+        )
 
         # Early termination check - only if we're close to target
         if new_quality_this_iteration == 0:
@@ -1792,7 +1820,9 @@ def find_similar_content_with_profile(
             # Only early exit if we're at least 80% to target
             progress_pct = len(quality_recs) / limit if limit > 0 else 1.0
             if consecutive_zero_iterations >= 2 and progress_pct >= 0.8:
-                print(f"  {CYAN}Early exit: 2 consecutive iterations with no new matches ({len(quality_recs)}/{limit}){RESET}")
+                print(
+                    f"  {CYAN}Early exit: 2 consecutive iterations with no new matches ({len(quality_recs)}/{limit}){RESET}"
+                )
                 break
         else:
             consecutive_zero_iterations = 0  # Reset on success
@@ -1819,34 +1849,34 @@ def load_cache(display_name: str, media_type: str, lib_id: Optional[str] = None)
             media type don't collide. None (default) keeps the legacy
             filename - required for single-library back-compat.
     """
-    cache_dir = os.path.join(get_project_root(), 'cache')
+    cache_dir = os.path.join(get_project_root(), "cache")
     os.makedirs(cache_dir, exist_ok=True)
-    safe_name = display_name.lower().replace(' ', '_')
-    lib_prefix = f'{lib_id}_' if lib_id else ''
-    cache_file = os.path.join(cache_dir, f'external_recs_{lib_prefix}{safe_name}_{media_type}.json')
+    safe_name = display_name.lower().replace(" ", "_")
+    lib_prefix = f"{lib_id}_" if lib_id else ""
+    cache_file = os.path.join(cache_dir, f"external_recs_{lib_prefix}{safe_name}_{media_type}.json")
 
     if os.path.exists(cache_file):
-        with open(cache_file, 'r') as f:
+        with open(cache_file, "r") as f:
             cache = json.load(f)
 
             # Check cache version - invalidate old format
-            cache_version = cache.get('version', 0)
+            cache_version = cache.get("version", 0)
             if cache_version < EXTERNAL_RECS_CACHE_VERSION:
                 print(f"  {YELLOW}External recs cache outdated (v{cache_version}), rebuilding...{RESET}")
                 return {}
 
-            items = cache.get('items', {})
+            items = cache.get("items", {})
 
             # Add tmdb_id to items that don't have it (backwards compatibility)
             for tmdb_id_str, item in items.items():
-                if 'tmdb_id' not in item:
-                    item['tmdb_id'] = int(tmdb_id_str)
+                if "tmdb_id" not in item:
+                    item["tmdb_id"] = int(tmdb_id_str)
 
             # Filter out items without enough votes (match score filtering happens at output)
             filtered = {}
             removed_count = 0
             for tmdb_id_str, item in items.items():
-                vote_count = item.get('vote_count', 0)  # Missing vote_count = needs re-fetch
+                vote_count = item.get("vote_count", 0)  # Missing vote_count = needs re-fetch
                 if vote_count >= MIN_VOTE_COUNT:
                     filtered[tmdb_id_str] = item
                 else:
@@ -1858,6 +1888,7 @@ def load_cache(display_name: str, media_type: str, lib_id: Optional[str] = None)
             return filtered
     return {}
 
+
 def save_cache(display_name: str, media_type: str, cache_data: Dict, lib_id: Optional[str] = None) -> None:
     """Save recommendations cache with version.
 
@@ -1867,18 +1898,16 @@ def save_cache(display_name: str, media_type: str, cache_data: Dict, lib_id: Opt
         cache_data: Cache payload to persist
         lib_id: Optional library id (#157 Phase 3) - see load_cache()
     """
-    cache_dir = os.path.join(get_project_root(), 'cache')
+    cache_dir = os.path.join(get_project_root(), "cache")
     os.makedirs(cache_dir, exist_ok=True)
-    safe_name = display_name.lower().replace(' ', '_')
-    lib_prefix = f'{lib_id}_' if lib_id else ''
-    cache_file = os.path.join(cache_dir, f'external_recs_{lib_prefix}{safe_name}_{media_type}.json')
+    safe_name = display_name.lower().replace(" ", "_")
+    lib_prefix = f"{lib_id}_" if lib_id else ""
+    cache_file = os.path.join(cache_dir, f"external_recs_{lib_prefix}{safe_name}_{media_type}.json")
 
-    versioned_cache = {
-        'version': EXTERNAL_RECS_CACHE_VERSION,
-        'items': cache_data
-    }
-    with open(cache_file, 'w') as f:
+    versioned_cache = {"version": EXTERNAL_RECS_CACHE_VERSION, "items": cache_data}
+    with open(cache_file, "w") as f:
         json.dump(versioned_cache, f, indent=2)
+
 
 def _stamp_library_id(categorized: Dict, library_id: Optional[str]) -> None:
     """Stamp library_id provenance onto every item in a categorized dict (#157 Phase 3).
@@ -1888,25 +1917,26 @@ def _stamp_library_id(categorized: Dict, library_id: Optional[str]) -> None:
             'other_services' (dict of service -> items), and 'acquire' (list)
         library_id: The source library's id, or None
     """
-    for service_items in categorized.get('user_services', {}).values():
+    for service_items in categorized.get("user_services", {}).values():
         for item in service_items:
-            item['library_id'] = library_id
-    for service_items in categorized.get('other_services', {}).values():
+            item["library_id"] = library_id
+    for service_items in categorized.get("other_services", {}).values():
         for item in service_items:
-            item['library_id'] = library_id
-    for item in categorized.get('acquire', []):
-        item['library_id'] = library_id
+            item["library_id"] = library_id
+    for item in categorized.get("acquire", []):
+        item["library_id"] = library_id
 
 
 def load_ignore_list(display_name: str) -> Set[str]:
     """Load user's manual ignore list"""
-    safe_name = display_name.lower().replace(' ', '_')
+    safe_name = display_name.lower().replace(" ", "_")
     project_root = get_project_root()
-    ignore_file = os.path.join(project_root, 'recommendations', 'external', f'{safe_name}_ignore.txt')
+    ignore_file = os.path.join(project_root, "recommendations", "external", f"{safe_name}_ignore.txt")
     if os.path.exists(ignore_file):
-        with open(ignore_file, 'r') as f:
+        with open(ignore_file, "r") as f:
             return set(line.strip() for line in f if line.strip())
     return set()
+
 
 def process_user(config, plex, username, movie_library=None, tv_library=None):
     """Process external recommendations for a single user.
@@ -1922,66 +1952,68 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
             None keeps the legacy single-library behavior
             (config['plex'].tv_library).
     """
-    user_prefs = config.get('users', {}).get('preferences', {}).get(username, {})
-    display_name = user_prefs.get('display_name', username)
+    user_prefs = config.get("users", {}).get("preferences", {}).get(username, {})
+    display_name = user_prefs.get("display_name", username)
 
     print(f"\n{GREEN}Processing external recommendations for: {display_name}{RESET}")
 
     # Get current library contents
-    movie_library_name = movie_library['section'] if movie_library else config['plex'].get('movie_library', 'Movies')
-    tv_library_name = tv_library['section'] if tv_library else config['plex'].get('tv_library', 'TV Shows')
+    movie_library_name = movie_library["section"] if movie_library else config["plex"].get("movie_library", "Movies")
+    tv_library_name = tv_library["section"] if tv_library else config["plex"].get("tv_library", "TV Shows")
 
     # Cache filenames stay legacy (unqualified) unless this install has more
     # than one library of that media type - back-compat for single-library
     # installs (#157 Phase 3), matching the internal recommenders' rule.
     movie_is_multi = bool(movie_library) and len(get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)) > 1
     tv_is_multi = bool(tv_library) and len(get_libraries_for_media_type(config, MEDIA_TYPE_TV)) > 1
-    movie_cache_lib_id = movie_library['id'] if movie_is_multi else None
-    tv_cache_lib_id = tv_library['id'] if tv_is_multi else None
+    movie_cache_lib_id = movie_library["id"] if movie_is_multi else None
+    tv_cache_lib_id = tv_library["id"] if tv_is_multi else None
 
-    library_movies = get_library_items(plex, movie_library_name, 'movie')
-    library_shows = get_library_items(plex, tv_library_name, 'show')
+    library_movies = get_library_items(plex, movie_library_name, "movie")
+    library_shows = get_library_items(plex, tv_library_name, "show")
 
     print(f"{CYAN}Library has {len(library_movies['titles'])} movies, {len(library_shows['titles'])} TV shows{RESET}")
 
     # Load existing cache and ignore list
-    movie_cache = load_cache(display_name, 'movies', lib_id=movie_cache_lib_id)
-    show_cache = load_cache(display_name, 'shows', lib_id=tv_cache_lib_id)
+    movie_cache = load_cache(display_name, "movies", lib_id=movie_cache_lib_id)
+    show_cache = load_cache(display_name, "shows", lib_id=tv_cache_lib_id)
     ignore_list = load_ignore_list(display_name)
 
     # Get language filter from config
-    external_config = config.get('external_recommendations', {})
-    language_filter = external_config.get('language')
+    external_config = config.get("external_recommendations", {})
+    language_filter = external_config.get("language")
 
     # Filter cached items by language if filter is set
     # Items without language info are also filtered (old cache entries)
     if language_filter:
         filtered_movies = 0
         for tmdb_id, item in list(movie_cache.items()):
-            item_lang = item.get('original_language', '')
+            item_lang = item.get("original_language", "")
             if item_lang != language_filter:  # No language or wrong language = filtered
                 del movie_cache[tmdb_id]
                 filtered_movies += 1
         filtered_shows = 0
         for tmdb_id, item in list(show_cache.items()):
-            item_lang = item.get('original_language', '')
+            item_lang = item.get("original_language", "")
             if item_lang != language_filter:  # No language or wrong language = filtered
                 del show_cache[tmdb_id]
                 filtered_shows += 1
         if filtered_movies or filtered_shows:
-            print(f"{CYAN}Filtered {filtered_movies} movies and {filtered_shows} shows (not {language_filter.upper()}){RESET}")
+            print(
+                f"{CYAN}Filtered {filtered_movies} movies and {filtered_shows} shows (not {language_filter.upper()}){RESET}"
+            )
 
     # Remove acquired items from cache (now in library) - check TMDB IDs AND titles
     removed_movies = []
     for tmdb_id, item in list(movie_cache.items()):
-        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_movies):
+        if is_in_library(int(tmdb_id), item.get("title"), item.get("year"), library_movies):
             removed_movies.append(tmdb_id)
             del movie_cache[tmdb_id]
             print(f"  Removed movie from cache: {item.get('title')} (in library)")
 
     removed_shows = []
     for tmdb_id, item in list(show_cache.items()):
-        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_shows):
+        if is_in_library(int(tmdb_id), item.get("title"), item.get("year"), library_shows):
             removed_shows.append(tmdb_id)
             del show_cache[tmdb_id]
             print(f"  Removed show from cache: {item.get('title')} (in library)")
@@ -1992,11 +2024,11 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     # Remove ignored items
     removed_ignored = 0
     for tmdb_id, item in list(movie_cache.items()):
-        if item['title'] in ignore_list:
+        if item["title"] in ignore_list:
             del movie_cache[tmdb_id]
             removed_ignored += 1
     for tmdb_id, item in list(show_cache.items()):
-        if item['title'] in ignore_list:
+        if item["title"] in ignore_list:
             del show_cache[tmdb_id]
             removed_ignored += 1
 
@@ -2005,49 +2037,49 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
 
     # Load user profiles from cache (FAST) or build from scratch (SLOW)
     # Cache is pre-computed by internal recommenders with proper weighting
-    movie_profile = load_user_profile_from_cache(config, username, 'movie')
+    movie_profile = load_user_profile_from_cache(config, username, "movie")
     if not movie_profile:
-        movie_profile = build_user_profile(plex, config, username, 'movie')
+        movie_profile = build_user_profile(plex, config, username, "movie")
 
-    show_profile = load_user_profile_from_cache(config, username, 'tv')
+    show_profile = load_user_profile_from_cache(config, username, "tv")
     if not show_profile:
-        show_profile = build_user_profile(plex, config, username, 'show')
+        show_profile = build_user_profile(plex, config, username, "show")
 
     # Enhance profiles with Trakt watch history (streaming services not in Plex)
     # Only for users in the Trakt mapping
-    tmdb_api_key = get_tmdb_config(config)['api_key']
-    trakt_config = config.get('trakt', {})
-    export_config = trakt_config.get('export', {})
-    user_mode = export_config.get('user_mode', 'mapping')
-    plex_users = export_config.get('plex_users', [])
+    tmdb_api_key = get_tmdb_config(config)["api_key"]
+    trakt_config = config.get("trakt", {})
+    export_config = trakt_config.get("export", {})
+    user_mode = export_config.get("user_mode", "mapping")
+    plex_users = export_config.get("plex_users", [])
 
     should_enhance = True
-    if user_mode == 'mapping' and plex_users:
+    if user_mode == "mapping" and plex_users:
         plex_users_lower = [u.lower() for u in plex_users]
         if username.lower() not in plex_users_lower:
             should_enhance = False
 
     if should_enhance:
-        cache_dir = os.path.join(get_project_root(), config.get('cache_dir', 'cache'))
+        cache_dir = os.path.join(get_project_root(), config.get("cache_dir", "cache"))
         if movie_profile:
-            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, cache_dir, 'movie')
+            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, cache_dir, "movie")
         if show_profile:
-            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, cache_dir, 'tv')
+            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, cache_dir, "tv")
 
     # Find new recommendations using profile-based scoring
-    external_config = config.get('external_recommendations', {})
-    movie_limit = external_config.get('movie_limit', 50)
-    show_limit = external_config.get('show_limit', 20)
-    min_relevance = external_config.get('min_relevance_score', 0.65)
+    external_config = config.get("external_recommendations", {})
+    movie_limit = external_config.get("movie_limit", 50)
+    show_limit = external_config.get("show_limit", 20)
+    min_relevance = external_config.get("min_relevance_score", 0.65)
 
     # Get excluded genres for this user
-    exclude_genres = user_prefs.get('exclude_genres', [])
+    exclude_genres = user_prefs.get("exclude_genres", [])
     if exclude_genres:
         print(f"Excluding genres: {', '.join(exclude_genres)}")
 
     # Check cache health and calculate deficit
-    quality_movies = [m for m in movie_cache.values() if m.get('score', 0) >= min_relevance]
-    quality_shows = [s for s in show_cache.values() if s.get('score', 0) >= min_relevance]
+    quality_movies = [m for m in movie_cache.values() if m.get("score", 0) >= min_relevance]
+    quality_shows = [s for s in show_cache.values() if s.get("score", 0) >= min_relevance]
 
     movie_deficit = max(0, movie_limit - len(quality_movies))
     show_deficit = max(0, show_limit - len(quality_shows))
@@ -2057,19 +2089,21 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     cached_show_ids = {int(tid) for tid in show_cache.keys()}
 
     # Get Trakt watchlist exclusions if enabled (only if we need discovery)
-    trakt_config = config.get('trakt', {})
-    import_config = trakt_config.get('import', {})
+    trakt_config = config.get("trakt", {})
+    import_config = trakt_config.get("import", {})
     exclude_movie_imdb_ids = set()
     exclude_show_imdb_ids = set()
 
-    if (movie_deficit > 0 or show_deficit > 0) and import_config.get('exclude_watchlist', True):
+    if (movie_deficit > 0 or show_deficit > 0) and import_config.get("exclude_watchlist", True):
         trakt_client = get_authenticated_trakt_client(config)
         if trakt_client:
             print("Loading Trakt watchlist for exclusion...")
-            exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids('movies')
-            exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids('shows')
+            exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids("movies")
+            exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids("shows")
             if exclude_movie_imdb_ids or exclude_show_imdb_ids:
-                print(f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist")
+                print(
+                    f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist"
+                )
 
     # Movie discovery - skip if cache is full, otherwise find deficit items
     if movie_deficit == 0:
@@ -2081,13 +2115,13 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
             tmdb_api_key,
             movie_profile,
             library_movies,
-            'movie',
+            "movie",
             limit=movie_deficit,  # Only find what we need
             exclude_genres=exclude_genres,
             min_relevance_score=min_relevance,
             config=config,
             exclude_imdb_ids=exclude_movie_imdb_ids,
-            exclude_cached_ids=cached_movie_ids  # Skip items already in cache
+            exclude_cached_ids=cached_movie_ids,  # Skip items already in cache
         )
 
     # Show discovery - skip if cache is full, otherwise find deficit items
@@ -2100,60 +2134,60 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
             tmdb_api_key,
             show_profile,
             library_shows,
-            'tv',
+            "tv",
             limit=show_deficit,  # Only find what we need
             exclude_genres=exclude_genres,
             min_relevance_score=min_relevance,
             config=config,
             exclude_imdb_ids=exclude_show_imdb_ids,
-            exclude_cached_ids=cached_show_ids  # Skip items already in cache
+            exclude_cached_ids=cached_show_ids,  # Skip items already in cache
         )
 
     # Merge with existing cache - UPDATE scores for existing items, ADD new ones
     for movie in new_movies:
-        tmdb_id = str(movie['tmdb_id'])
+        tmdb_id = str(movie["tmdb_id"])
         if tmdb_id in movie_cache:
             # Update score for existing item (profile may have changed)
-            old_score = movie_cache[tmdb_id].get('score', 0)
-            movie_cache[tmdb_id]['score'] = movie['score']
-            movie_cache[tmdb_id]['rating'] = movie['rating']
-            movie_cache[tmdb_id]['vote_count'] = movie.get('vote_count', 0)
-            if abs(movie['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
+            old_score = movie_cache[tmdb_id].get("score", 0)
+            movie_cache[tmdb_id]["score"] = movie["score"]
+            movie_cache[tmdb_id]["rating"] = movie["rating"]
+            movie_cache[tmdb_id]["vote_count"] = movie.get("vote_count", 0)
+            if abs(movie["score"] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {movie['title']} {old_score:.1%} -> {movie['score']:.1%}")
         else:
             # Add new item
             movie_cache[tmdb_id] = {
-                'tmdb_id': movie['tmdb_id'],
-                'title': movie['title'],
-                'year': movie['year'],
-                'rating': movie['rating'],
-                'vote_count': movie.get('vote_count', 0),
-                'score': movie['score'],
-                'original_language': movie.get('original_language', ''),
-                'added_date': datetime.now().isoformat()
+                "tmdb_id": movie["tmdb_id"],
+                "title": movie["title"],
+                "year": movie["year"],
+                "rating": movie["rating"],
+                "vote_count": movie.get("vote_count", 0),
+                "score": movie["score"],
+                "original_language": movie.get("original_language", ""),
+                "added_date": datetime.now().isoformat(),
             }
 
     for show in new_shows:
-        tmdb_id = str(show['tmdb_id'])
+        tmdb_id = str(show["tmdb_id"])
         if tmdb_id in show_cache:
             # Update score for existing item (profile may have changed)
-            old_score = show_cache[tmdb_id].get('score', 0)
-            show_cache[tmdb_id]['score'] = show['score']
-            show_cache[tmdb_id]['rating'] = show['rating']
-            show_cache[tmdb_id]['vote_count'] = show.get('vote_count', 0)
-            if abs(show['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
+            old_score = show_cache[tmdb_id].get("score", 0)
+            show_cache[tmdb_id]["score"] = show["score"]
+            show_cache[tmdb_id]["rating"] = show["rating"]
+            show_cache[tmdb_id]["vote_count"] = show.get("vote_count", 0)
+            if abs(show["score"] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {show['title']} {old_score:.1%} -> {show['score']:.1%}")
         else:
             # Add new item
             show_cache[tmdb_id] = {
-                'tmdb_id': show['tmdb_id'],
-                'title': show['title'],
-                'year': show['year'],
-                'rating': show['rating'],
-                'vote_count': show.get('vote_count', 0),
-                'score': show['score'],
-                'original_language': show.get('original_language', ''),
-                'added_date': datetime.now().isoformat()
+                "tmdb_id": show["tmdb_id"],
+                "title": show["title"],
+                "year": show["year"],
+                "rating": show["rating"],
+                "vote_count": show.get("vote_count", 0),
+                "score": show["score"],
+                "original_language": show.get("original_language", ""),
+                "added_date": datetime.now().isoformat(),
             }
 
     # Trim caches to limit - keep highest scored items, remove lowest
@@ -2162,7 +2196,7 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     trimmed_shows = 0
 
     if len(movie_cache) > movie_limit:
-        sorted_movies = sorted(movie_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        sorted_movies = sorted(movie_cache.items(), key=lambda x: x[1].get("score", 0), reverse=True)
         keep_ids = {tmdb_id for tmdb_id, _ in sorted_movies[:movie_limit]}
         for tmdb_id in list(movie_cache.keys()):
             if tmdb_id not in keep_ids:
@@ -2170,7 +2204,7 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
                 trimmed_movies += 1
 
     if len(show_cache) > show_limit:
-        sorted_shows = sorted(show_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        sorted_shows = sorted(show_cache.items(), key=lambda x: x[1].get("score", 0), reverse=True)
         keep_ids = {tmdb_id for tmdb_id, _ in sorted_shows[:show_limit]}
         for tmdb_id in list(show_cache.keys()):
             if tmdb_id not in keep_ids:
@@ -2181,69 +2215,67 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
         print(f"{YELLOW}Trimmed cache: {trimmed_movies} movies, {trimmed_shows} shows (replaced by better recs){RESET}")
 
     # Save updated caches
-    save_cache(display_name, 'movies', movie_cache, lib_id=movie_cache_lib_id)
-    save_cache(display_name, 'shows', show_cache, lib_id=tv_cache_lib_id)
+    save_cache(display_name, "movies", movie_cache, lib_id=movie_cache_lib_id)
+    save_cache(display_name, "shows", show_cache, lib_id=tv_cache_lib_id)
 
     # Prepare lists for categorization - apply threshold and limits
-    all_movies = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
-    all_shows = sorted(show_cache.values(), key=lambda x: x['score'], reverse=True)
+    all_movies = sorted(movie_cache.values(), key=lambda x: x["score"], reverse=True)
+    all_shows = sorted(show_cache.values(), key=lambda x: x["score"], reverse=True)
 
     # Filter by relevance threshold - prioritize high-score items
-    high_movies = [m for m in all_movies if m['score'] >= min_relevance]
-    low_movies = [m for m in all_movies if m['score'] < min_relevance]
-    high_shows = [s for s in all_shows if s['score'] >= min_relevance]
-    low_shows = [s for s in all_shows if s['score'] < min_relevance]
+    high_movies = [m for m in all_movies if m["score"] >= min_relevance]
+    low_movies = [m for m in all_movies if m["score"] < min_relevance]
+    high_shows = [s for s in all_shows if s["score"] >= min_relevance]
+    low_shows = [s for s in all_shows if s["score"] < min_relevance]
 
     # Take high-score items first, backfill with low-score only if needed
     movies_list = high_movies[:movie_limit]
     if len(movies_list) < movie_limit:
-        movies_list.extend(low_movies[:movie_limit - len(movies_list)])
+        movies_list.extend(low_movies[: movie_limit - len(movies_list)])
 
     shows_list = high_shows[:show_limit]
     if len(shows_list) < show_limit:
-        shows_list.extend(low_shows[:show_limit - len(shows_list)])
+        shows_list.extend(low_shows[: show_limit - len(shows_list)])
 
-    print(f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance*100)}% threshold){RESET}")
-    print(f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance*100)}% threshold){RESET}")
+    print(
+        f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance * 100)}% threshold){RESET}"
+    )
+    print(
+        f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance * 100)}% threshold){RESET}"
+    )
 
     # Get household streaming services from top-level config
-    user_services = config.get('streaming_services', [])
+    user_services = config.get("streaming_services", [])
 
     # Categorize by streaming service availability
     print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
-    movies_categorized = categorize_by_streaming_service(
-        movies_list,
-        tmdb_api_key,
-        user_services,
-        'movie'
-    )
-    shows_categorized = categorize_by_streaming_service(
-        shows_list,
-        tmdb_api_key,
-        user_services,
-        'tv'
-    )
+    movies_categorized = categorize_by_streaming_service(movies_list, tmdb_api_key, user_services, "movie")
+    shows_categorized = categorize_by_streaming_service(shows_list, tmdb_api_key, user_services, "tv")
 
     # Item provenance (#157 Phase 3): stamp each recommendation with the
     # library it was sourced from/targets. None when running the legacy
     # single-library path (movie_library/tv_library not passed).
-    movie_item_library_id = movie_library['id'] if movie_library else None
-    tv_item_library_id = tv_library['id'] if tv_library else None
+    movie_item_library_id = movie_library["id"] if movie_library else None
+    tv_item_library_id = tv_library["id"] if tv_library else None
     _stamp_library_id(movies_categorized, movie_item_library_id)
     _stamp_library_id(shows_categorized, tv_item_library_id)
 
     # Generate markdown per user
     project_root = get_project_root()
-    output_dir = os.path.join(project_root, 'recommendations', 'external')
+    output_dir = os.path.join(project_root, "recommendations", "external")
     generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir)
 
     # Count totals
-    total_movies = sum(len(items) for items in movies_categorized['user_services'].values()) + \
-                   sum(len(items) for items in movies_categorized['other_services'].values()) + \
-                   len(movies_categorized['acquire'])
-    total_shows = sum(len(items) for items in shows_categorized['user_services'].values()) + \
-                  sum(len(items) for items in shows_categorized['other_services'].values()) + \
-                  len(shows_categorized['acquire'])
+    total_movies = (
+        sum(len(items) for items in movies_categorized["user_services"].values())
+        + sum(len(items) for items in movies_categorized["other_services"].values())
+        + len(movies_categorized["acquire"])
+    )
+    total_shows = (
+        sum(len(items) for items in shows_categorized["user_services"].values())
+        + sum(len(items) for items in shows_categorized["other_services"].values())
+        + len(shows_categorized["acquire"])
+    )
 
     print(f"{GREEN}Processed: {total_movies} movies, {total_shows} shows{RESET}")
     print(f"\nExternal recommendation process completed for {display_name}!")
@@ -2270,14 +2302,14 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     # deliberately left untouched by #157 Phase 3.5 so that path stays
     # byte-identical to Phase 3.
     return {
-        'username': username,
-        'display_name': display_name,
-        'movies_categorized': movies_categorized,
-        'shows_categorized': shows_categorized,
-        'movie_profile': movie_profile,
-        'show_profile': show_profile,
-        'user_services': user_services,
-        'library_id': None
+        "username": username,
+        "display_name": display_name,
+        "movies_categorized": movies_categorized,
+        "shows_categorized": shows_categorized,
+        "movie_profile": movie_profile,
+        "show_profile": show_profile,
+        "user_services": user_services,
+        "library_id": None,
     }
 
 
@@ -2285,7 +2317,7 @@ def _empty_categorized() -> Dict:
     """A freshly-allocated, empty categorize_by_streaming_service()-shaped
     dict (#157 Phase 3.5) - used to fill in the "other" media type's slot
     when a fan-out run only covers one media type."""
-    return {'user_services': {}, 'other_services': {}, 'acquire': [], 'all_items': []}
+    return {"user_services": {}, "other_services": {}, "acquire": [], "all_items": []}
 
 
 def process_user_movie_library(config, plex, username, library):
@@ -2311,32 +2343,32 @@ def process_user_movie_library(config, plex, username, library):
         an empty categorized dict, show_profile is None, and library_id is
         this library's real id (never None - unlike process_user()).
     """
-    user_prefs = config.get('users', {}).get('preferences', {}).get(username, {})
-    display_name = user_prefs.get('display_name', username)
+    user_prefs = config.get("users", {}).get("preferences", {}).get(username, {})
+    display_name = user_prefs.get("display_name", username)
 
     print(f"\n{GREEN}Processing external movie recommendations for: {display_name} ({library['name']}){RESET}")
 
-    movie_library_name = library['section']
+    movie_library_name = library["section"]
 
     # Cache/markdown filenames stay legacy (unqualified) unless this install
     # has more than one movie library - same back-compat rule as
     # process_user()/the internal recommenders (#157 Phase 3).
     is_multi = len(get_libraries_for_media_type(config, MEDIA_TYPE_MOVIE)) > 1
-    cache_lib_id = library['id'] if is_multi else None
+    cache_lib_id = library["id"] if is_multi else None
 
-    library_movies = get_library_items(plex, movie_library_name, 'movie')
+    library_movies = get_library_items(plex, movie_library_name, "movie")
     print(f"{CYAN}Library has {len(library_movies['titles'])} movies{RESET}")
 
-    movie_cache = load_cache(display_name, 'movies', lib_id=cache_lib_id)
+    movie_cache = load_cache(display_name, "movies", lib_id=cache_lib_id)
     ignore_list = load_ignore_list(display_name)
 
-    external_config = config.get('external_recommendations', {})
-    language_filter = external_config.get('language')
+    external_config = config.get("external_recommendations", {})
+    language_filter = external_config.get("language")
 
     if language_filter:
         filtered_movies = 0
         for tmdb_id, item in list(movie_cache.items()):
-            item_lang = item.get('original_language', '')
+            item_lang = item.get("original_language", "")
             if item_lang != language_filter:
                 del movie_cache[tmdb_id]
                 filtered_movies += 1
@@ -2345,7 +2377,7 @@ def process_user_movie_library(config, plex, username, library):
 
     removed_movies = []
     for tmdb_id, item in list(movie_cache.items()):
-        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_movies):
+        if is_in_library(int(tmdb_id), item.get("title"), item.get("year"), library_movies):
             removed_movies.append(tmdb_id)
             del movie_cache[tmdb_id]
             print(f"  Removed movie from cache: {item.get('title')} (in library)")
@@ -2354,53 +2386,53 @@ def process_user_movie_library(config, plex, username, library):
 
     removed_ignored = 0
     for tmdb_id, item in list(movie_cache.items()):
-        if item['title'] in ignore_list:
+        if item["title"] in ignore_list:
             del movie_cache[tmdb_id]
             removed_ignored += 1
     if removed_ignored:
         print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
 
-    movie_profile = load_user_profile_from_cache(config, username, 'movie')
+    movie_profile = load_user_profile_from_cache(config, username, "movie")
     if not movie_profile:
-        movie_profile = build_user_profile(plex, config, username, 'movie')
+        movie_profile = build_user_profile(plex, config, username, "movie")
 
-    tmdb_api_key = get_tmdb_config(config)['api_key']
-    trakt_config = config.get('trakt', {})
-    export_config = trakt_config.get('export', {})
-    user_mode = export_config.get('user_mode', 'mapping')
-    plex_users = export_config.get('plex_users', [])
+    tmdb_api_key = get_tmdb_config(config)["api_key"]
+    trakt_config = config.get("trakt", {})
+    export_config = trakt_config.get("export", {})
+    user_mode = export_config.get("user_mode", "mapping")
+    plex_users = export_config.get("plex_users", [])
 
     should_enhance = True
-    if user_mode == 'mapping' and plex_users:
+    if user_mode == "mapping" and plex_users:
         plex_users_lower = [u.lower() for u in plex_users]
         if username.lower() not in plex_users_lower:
             should_enhance = False
 
     if should_enhance:
-        cache_dir = os.path.join(get_project_root(), config.get('cache_dir', 'cache'))
+        cache_dir = os.path.join(get_project_root(), config.get("cache_dir", "cache"))
         if movie_profile:
-            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, cache_dir, 'movie')
+            movie_profile = enhance_profile_with_trakt(movie_profile, config, tmdb_api_key, cache_dir, "movie")
 
-    movie_limit = external_config.get('movie_limit', 50)
-    min_relevance = external_config.get('min_relevance_score', 0.65)
+    movie_limit = external_config.get("movie_limit", 50)
+    min_relevance = external_config.get("min_relevance_score", 0.65)
 
-    exclude_genres = user_prefs.get('exclude_genres', [])
+    exclude_genres = user_prefs.get("exclude_genres", [])
     if exclude_genres:
         print(f"Excluding genres: {', '.join(exclude_genres)}")
 
-    quality_movies = [m for m in movie_cache.values() if m.get('score', 0) >= min_relevance]
+    quality_movies = [m for m in movie_cache.values() if m.get("score", 0) >= min_relevance]
     movie_deficit = max(0, movie_limit - len(quality_movies))
 
     cached_movie_ids = {int(tid) for tid in movie_cache.keys()}
 
-    import_config = trakt_config.get('import', {})
+    import_config = trakt_config.get("import", {})
     exclude_movie_imdb_ids = set()
 
-    if movie_deficit > 0 and import_config.get('exclude_watchlist', True):
+    if movie_deficit > 0 and import_config.get("exclude_watchlist", True):
         trakt_client = get_authenticated_trakt_client(config)
         if trakt_client:
             print("Loading Trakt watchlist for exclusion...")
-            exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids('movies')
+            exclude_movie_imdb_ids = trakt_client.get_watchlist_imdb_ids("movies")
             if exclude_movie_imdb_ids:
                 print(f"Excluding {len(exclude_movie_imdb_ids)} movies from Trakt watchlist")
 
@@ -2413,39 +2445,39 @@ def process_user_movie_library(config, plex, username, library):
             tmdb_api_key,
             movie_profile,
             library_movies,
-            'movie',
+            "movie",
             limit=movie_deficit,
             exclude_genres=exclude_genres,
             min_relevance_score=min_relevance,
             config=config,
             exclude_imdb_ids=exclude_movie_imdb_ids,
-            exclude_cached_ids=cached_movie_ids
+            exclude_cached_ids=cached_movie_ids,
         )
 
     for movie in new_movies:
-        tmdb_id = str(movie['tmdb_id'])
+        tmdb_id = str(movie["tmdb_id"])
         if tmdb_id in movie_cache:
-            old_score = movie_cache[tmdb_id].get('score', 0)
-            movie_cache[tmdb_id]['score'] = movie['score']
-            movie_cache[tmdb_id]['rating'] = movie['rating']
-            movie_cache[tmdb_id]['vote_count'] = movie.get('vote_count', 0)
-            if abs(movie['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
+            old_score = movie_cache[tmdb_id].get("score", 0)
+            movie_cache[tmdb_id]["score"] = movie["score"]
+            movie_cache[tmdb_id]["rating"] = movie["rating"]
+            movie_cache[tmdb_id]["vote_count"] = movie.get("vote_count", 0)
+            if abs(movie["score"] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {movie['title']} {old_score:.1%} -> {movie['score']:.1%}")
         else:
             movie_cache[tmdb_id] = {
-                'tmdb_id': movie['tmdb_id'],
-                'title': movie['title'],
-                'year': movie['year'],
-                'rating': movie['rating'],
-                'vote_count': movie.get('vote_count', 0),
-                'score': movie['score'],
-                'original_language': movie.get('original_language', ''),
-                'added_date': datetime.now().isoformat()
+                "tmdb_id": movie["tmdb_id"],
+                "title": movie["title"],
+                "year": movie["year"],
+                "rating": movie["rating"],
+                "vote_count": movie.get("vote_count", 0),
+                "score": movie["score"],
+                "original_language": movie.get("original_language", ""),
+                "added_date": datetime.now().isoformat(),
             }
 
     trimmed_movies = 0
     if len(movie_cache) > movie_limit:
-        sorted_movies = sorted(movie_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        sorted_movies = sorted(movie_cache.items(), key=lambda x: x[1].get("score", 0), reverse=True)
         keep_ids = {tmdb_id for tmdb_id, _ in sorted_movies[:movie_limit]}
         for tmdb_id in list(movie_cache.keys()):
             if tmdb_id not in keep_ids:
@@ -2454,49 +2486,55 @@ def process_user_movie_library(config, plex, username, library):
     if trimmed_movies:
         print(f"{YELLOW}Trimmed cache: {trimmed_movies} movies (replaced by better recs){RESET}")
 
-    save_cache(display_name, 'movies', movie_cache, lib_id=cache_lib_id)
+    save_cache(display_name, "movies", movie_cache, lib_id=cache_lib_id)
 
-    all_movies = sorted(movie_cache.values(), key=lambda x: x['score'], reverse=True)
-    high_movies = [m for m in all_movies if m['score'] >= min_relevance]
-    low_movies = [m for m in all_movies if m['score'] < min_relevance]
+    all_movies = sorted(movie_cache.values(), key=lambda x: x["score"], reverse=True)
+    high_movies = [m for m in all_movies if m["score"] >= min_relevance]
+    low_movies = [m for m in all_movies if m["score"] < min_relevance]
     movies_list = high_movies[:movie_limit]
     if len(movies_list) < movie_limit:
-        movies_list.extend(low_movies[:movie_limit - len(movies_list)])
+        movies_list.extend(low_movies[: movie_limit - len(movies_list)])
 
-    print(f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance*100)}% threshold){RESET}")
+    print(
+        f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance * 100)}% threshold){RESET}"
+    )
 
-    user_services = config.get('streaming_services', [])
+    user_services = config.get("streaming_services", [])
 
     print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
-    movies_categorized = categorize_by_streaming_service(movies_list, tmdb_api_key, user_services, 'movie')
+    movies_categorized = categorize_by_streaming_service(movies_list, tmdb_api_key, user_services, "movie")
 
     # Item provenance (#157 Phase 3 stamping, Phase 3.5 fan-out): every item
     # from a scoped single-library run always carries this library's real id.
-    _stamp_library_id(movies_categorized, library['id'])
+    _stamp_library_id(movies_categorized, library["id"])
 
     shows_categorized = _empty_categorized()
 
     project_root = get_project_root()
-    output_dir = os.path.join(project_root, 'recommendations', 'external')
-    library_suffix = f"_{library['id']}" if is_multi else ''
-    generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir, library_suffix=library_suffix)
+    output_dir = os.path.join(project_root, "recommendations", "external")
+    library_suffix = f"_{library['id']}" if is_multi else ""
+    generate_markdown(
+        username, display_name, movies_categorized, shows_categorized, output_dir, library_suffix=library_suffix
+    )
 
-    total_movies = sum(len(items) for items in movies_categorized['user_services'].values()) + \
-                   sum(len(items) for items in movies_categorized['other_services'].values()) + \
-                   len(movies_categorized['acquire'])
+    total_movies = (
+        sum(len(items) for items in movies_categorized["user_services"].values())
+        + sum(len(items) for items in movies_categorized["other_services"].values())
+        + len(movies_categorized["acquire"])
+    )
 
     print(f"{GREEN}Processed: {total_movies} movies (library: {library['name']}){RESET}")
     print(f"\nExternal movie recommendation process completed for {display_name} ({library['name']})!")
 
     return {
-        'username': username,
-        'display_name': display_name,
-        'movies_categorized': movies_categorized,
-        'shows_categorized': shows_categorized,
-        'movie_profile': movie_profile,
-        'show_profile': None,
-        'user_services': user_services,
-        'library_id': library['id']
+        "username": username,
+        "display_name": display_name,
+        "movies_categorized": movies_categorized,
+        "shows_categorized": shows_categorized,
+        "movie_profile": movie_profile,
+        "show_profile": None,
+        "user_services": user_services,
+        "library_id": library["id"],
     }
 
 
@@ -2516,29 +2554,29 @@ def process_user_tv_library(config, plex, username, library):
         an empty categorized dict, movie_profile is None, and library_id is
         this library's real id (never None - unlike process_user()).
     """
-    user_prefs = config.get('users', {}).get('preferences', {}).get(username, {})
-    display_name = user_prefs.get('display_name', username)
+    user_prefs = config.get("users", {}).get("preferences", {}).get(username, {})
+    display_name = user_prefs.get("display_name", username)
 
     print(f"\n{GREEN}Processing external TV recommendations for: {display_name} ({library['name']}){RESET}")
 
-    tv_library_name = library['section']
+    tv_library_name = library["section"]
 
     is_multi = len(get_libraries_for_media_type(config, MEDIA_TYPE_TV)) > 1
-    cache_lib_id = library['id'] if is_multi else None
+    cache_lib_id = library["id"] if is_multi else None
 
-    library_shows = get_library_items(plex, tv_library_name, 'show')
+    library_shows = get_library_items(plex, tv_library_name, "show")
     print(f"{CYAN}Library has {len(library_shows['titles'])} TV shows{RESET}")
 
-    show_cache = load_cache(display_name, 'shows', lib_id=cache_lib_id)
+    show_cache = load_cache(display_name, "shows", lib_id=cache_lib_id)
     ignore_list = load_ignore_list(display_name)
 
-    external_config = config.get('external_recommendations', {})
-    language_filter = external_config.get('language')
+    external_config = config.get("external_recommendations", {})
+    language_filter = external_config.get("language")
 
     if language_filter:
         filtered_shows = 0
         for tmdb_id, item in list(show_cache.items()):
-            item_lang = item.get('original_language', '')
+            item_lang = item.get("original_language", "")
             if item_lang != language_filter:
                 del show_cache[tmdb_id]
                 filtered_shows += 1
@@ -2547,7 +2585,7 @@ def process_user_tv_library(config, plex, username, library):
 
     removed_shows = []
     for tmdb_id, item in list(show_cache.items()):
-        if is_in_library(int(tmdb_id), item.get('title'), item.get('year'), library_shows):
+        if is_in_library(int(tmdb_id), item.get("title"), item.get("year"), library_shows):
             removed_shows.append(tmdb_id)
             del show_cache[tmdb_id]
             print(f"  Removed show from cache: {item.get('title')} (in library)")
@@ -2556,53 +2594,53 @@ def process_user_tv_library(config, plex, username, library):
 
     removed_ignored = 0
     for tmdb_id, item in list(show_cache.items()):
-        if item['title'] in ignore_list:
+        if item["title"] in ignore_list:
             del show_cache[tmdb_id]
             removed_ignored += 1
     if removed_ignored:
         print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
 
-    show_profile = load_user_profile_from_cache(config, username, 'tv')
+    show_profile = load_user_profile_from_cache(config, username, "tv")
     if not show_profile:
-        show_profile = build_user_profile(plex, config, username, 'show')
+        show_profile = build_user_profile(plex, config, username, "show")
 
-    tmdb_api_key = get_tmdb_config(config)['api_key']
-    trakt_config = config.get('trakt', {})
-    export_config = trakt_config.get('export', {})
-    user_mode = export_config.get('user_mode', 'mapping')
-    plex_users = export_config.get('plex_users', [])
+    tmdb_api_key = get_tmdb_config(config)["api_key"]
+    trakt_config = config.get("trakt", {})
+    export_config = trakt_config.get("export", {})
+    user_mode = export_config.get("user_mode", "mapping")
+    plex_users = export_config.get("plex_users", [])
 
     should_enhance = True
-    if user_mode == 'mapping' and plex_users:
+    if user_mode == "mapping" and plex_users:
         plex_users_lower = [u.lower() for u in plex_users]
         if username.lower() not in plex_users_lower:
             should_enhance = False
 
     if should_enhance:
-        cache_dir = os.path.join(get_project_root(), config.get('cache_dir', 'cache'))
+        cache_dir = os.path.join(get_project_root(), config.get("cache_dir", "cache"))
         if show_profile:
-            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, cache_dir, 'tv')
+            show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, cache_dir, "tv")
 
-    show_limit = external_config.get('show_limit', 20)
-    min_relevance = external_config.get('min_relevance_score', 0.65)
+    show_limit = external_config.get("show_limit", 20)
+    min_relevance = external_config.get("min_relevance_score", 0.65)
 
-    exclude_genres = user_prefs.get('exclude_genres', [])
+    exclude_genres = user_prefs.get("exclude_genres", [])
     if exclude_genres:
         print(f"Excluding genres: {', '.join(exclude_genres)}")
 
-    quality_shows = [s for s in show_cache.values() if s.get('score', 0) >= min_relevance]
+    quality_shows = [s for s in show_cache.values() if s.get("score", 0) >= min_relevance]
     show_deficit = max(0, show_limit - len(quality_shows))
 
     cached_show_ids = {int(tid) for tid in show_cache.keys()}
 
-    import_config = trakt_config.get('import', {})
+    import_config = trakt_config.get("import", {})
     exclude_show_imdb_ids = set()
 
-    if show_deficit > 0 and import_config.get('exclude_watchlist', True):
+    if show_deficit > 0 and import_config.get("exclude_watchlist", True):
         trakt_client = get_authenticated_trakt_client(config)
         if trakt_client:
             print("Loading Trakt watchlist for exclusion...")
-            exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids('shows')
+            exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids("shows")
             if exclude_show_imdb_ids:
                 print(f"Excluding {len(exclude_show_imdb_ids)} shows from Trakt watchlist")
 
@@ -2615,39 +2653,39 @@ def process_user_tv_library(config, plex, username, library):
             tmdb_api_key,
             show_profile,
             library_shows,
-            'tv',
+            "tv",
             limit=show_deficit,
             exclude_genres=exclude_genres,
             min_relevance_score=min_relevance,
             config=config,
             exclude_imdb_ids=exclude_show_imdb_ids,
-            exclude_cached_ids=cached_show_ids
+            exclude_cached_ids=cached_show_ids,
         )
 
     for show in new_shows:
-        tmdb_id = str(show['tmdb_id'])
+        tmdb_id = str(show["tmdb_id"])
         if tmdb_id in show_cache:
-            old_score = show_cache[tmdb_id].get('score', 0)
-            show_cache[tmdb_id]['score'] = show['score']
-            show_cache[tmdb_id]['rating'] = show['rating']
-            show_cache[tmdb_id]['vote_count'] = show.get('vote_count', 0)
-            if abs(show['score'] - old_score) > SCORE_CHANGE_THRESHOLD:
+            old_score = show_cache[tmdb_id].get("score", 0)
+            show_cache[tmdb_id]["score"] = show["score"]
+            show_cache[tmdb_id]["rating"] = show["rating"]
+            show_cache[tmdb_id]["vote_count"] = show.get("vote_count", 0)
+            if abs(show["score"] - old_score) > SCORE_CHANGE_THRESHOLD:
                 print(f"    Updated score: {show['title']} {old_score:.1%} -> {show['score']:.1%}")
         else:
             show_cache[tmdb_id] = {
-                'tmdb_id': show['tmdb_id'],
-                'title': show['title'],
-                'year': show['year'],
-                'rating': show['rating'],
-                'vote_count': show.get('vote_count', 0),
-                'score': show['score'],
-                'original_language': show.get('original_language', ''),
-                'added_date': datetime.now().isoformat()
+                "tmdb_id": show["tmdb_id"],
+                "title": show["title"],
+                "year": show["year"],
+                "rating": show["rating"],
+                "vote_count": show.get("vote_count", 0),
+                "score": show["score"],
+                "original_language": show.get("original_language", ""),
+                "added_date": datetime.now().isoformat(),
             }
 
     trimmed_shows = 0
     if len(show_cache) > show_limit:
-        sorted_shows = sorted(show_cache.items(), key=lambda x: x[1].get('score', 0), reverse=True)
+        sorted_shows = sorted(show_cache.items(), key=lambda x: x[1].get("score", 0), reverse=True)
         keep_ids = {tmdb_id for tmdb_id, _ in sorted_shows[:show_limit]}
         for tmdb_id in list(show_cache.keys()):
             if tmdb_id not in keep_ids:
@@ -2656,49 +2694,55 @@ def process_user_tv_library(config, plex, username, library):
     if trimmed_shows:
         print(f"{YELLOW}Trimmed cache: {trimmed_shows} shows (replaced by better recs){RESET}")
 
-    save_cache(display_name, 'shows', show_cache, lib_id=cache_lib_id)
+    save_cache(display_name, "shows", show_cache, lib_id=cache_lib_id)
 
-    all_shows = sorted(show_cache.values(), key=lambda x: x['score'], reverse=True)
-    high_shows = [s for s in all_shows if s['score'] >= min_relevance]
-    low_shows = [s for s in all_shows if s['score'] < min_relevance]
+    all_shows = sorted(show_cache.values(), key=lambda x: x["score"], reverse=True)
+    high_shows = [s for s in all_shows if s["score"] >= min_relevance]
+    low_shows = [s for s in all_shows if s["score"] < min_relevance]
     shows_list = high_shows[:show_limit]
     if len(shows_list) < show_limit:
-        shows_list.extend(low_shows[:show_limit - len(shows_list)])
+        shows_list.extend(low_shows[: show_limit - len(shows_list)])
 
-    print(f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance*100)}% threshold){RESET}")
+    print(
+        f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance * 100)}% threshold){RESET}"
+    )
 
-    user_services = config.get('streaming_services', [])
+    user_services = config.get("streaming_services", [])
 
     print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
-    shows_categorized = categorize_by_streaming_service(shows_list, tmdb_api_key, user_services, 'tv')
+    shows_categorized = categorize_by_streaming_service(shows_list, tmdb_api_key, user_services, "tv")
 
     # Item provenance (#157 Phase 3 stamping, Phase 3.5 fan-out): every item
     # from a scoped single-library run always carries this library's real id.
-    _stamp_library_id(shows_categorized, library['id'])
+    _stamp_library_id(shows_categorized, library["id"])
 
     movies_categorized = _empty_categorized()
 
     project_root = get_project_root()
-    output_dir = os.path.join(project_root, 'recommendations', 'external')
-    library_suffix = f"_{library['id']}" if is_multi else ''
-    generate_markdown(username, display_name, movies_categorized, shows_categorized, output_dir, library_suffix=library_suffix)
+    output_dir = os.path.join(project_root, "recommendations", "external")
+    library_suffix = f"_{library['id']}" if is_multi else ""
+    generate_markdown(
+        username, display_name, movies_categorized, shows_categorized, output_dir, library_suffix=library_suffix
+    )
 
-    total_shows = sum(len(items) for items in shows_categorized['user_services'].values()) + \
-                  sum(len(items) for items in shows_categorized['other_services'].values()) + \
-                  len(shows_categorized['acquire'])
+    total_shows = (
+        sum(len(items) for items in shows_categorized["user_services"].values())
+        + sum(len(items) for items in shows_categorized["other_services"].values())
+        + len(shows_categorized["acquire"])
+    )
 
     print(f"{GREEN}Processed: {total_shows} shows (library: {library['name']}){RESET}")
     print(f"\nExternal TV recommendation process completed for {display_name} ({library['name']})!")
 
     return {
-        'username': username,
-        'display_name': display_name,
-        'movies_categorized': movies_categorized,
-        'shows_categorized': shows_categorized,
-        'movie_profile': None,
-        'show_profile': show_profile,
-        'user_services': user_services,
-        'library_id': library['id']
+        "username": username,
+        "display_name": display_name,
+        "movies_categorized": movies_categorized,
+        "shows_categorized": shows_categorized,
+        "movie_profile": None,
+        "show_profile": show_profile,
+        "user_services": user_services,
+        "library_id": library["id"],
     }
 
 
@@ -2720,13 +2764,13 @@ def _merge_categorized(categorized_list: List[Dict]) -> Dict:
     """
     merged = _empty_categorized()
     for categorized in categorized_list:
-        for service, items in categorized.get('user_services', {}).items():
-            merged['user_services'].setdefault(service, []).extend(items)
-        for service, items in categorized.get('other_services', {}).items():
-            merged['other_services'].setdefault(service, []).extend(items)
-        merged['acquire'].extend(categorized.get('acquire', []))
-        merged['all_items'].extend(categorized.get('all_items', []))
-    merged['all_items'].sort(key=lambda x: x.get('score', 0), reverse=True)
+        for service, items in categorized.get("user_services", {}).items():
+            merged["user_services"].setdefault(service, []).extend(items)
+        for service, items in categorized.get("other_services", {}).items():
+            merged["other_services"].setdefault(service, []).extend(items)
+        merged["acquire"].extend(categorized.get("acquire", []))
+        merged["all_items"].extend(categorized.get("all_items", []))
+    merged["all_items"].sort(key=lambda x: x.get("score", 0), reverse=True)
     return merged
 
 
@@ -2747,18 +2791,22 @@ def _merge_user_runs(username: str, movie_runs: List[Dict], tv_runs: List[Dict])
     """
     source = movie_runs[0] if movie_runs else tv_runs[0]
 
-    movies_categorized = _merge_categorized([r['movies_categorized'] for r in movie_runs]) if movie_runs else _empty_categorized()
-    shows_categorized = _merge_categorized([r['shows_categorized'] for r in tv_runs]) if tv_runs else _empty_categorized()
+    movies_categorized = (
+        _merge_categorized([r["movies_categorized"] for r in movie_runs]) if movie_runs else _empty_categorized()
+    )
+    shows_categorized = (
+        _merge_categorized([r["shows_categorized"] for r in tv_runs]) if tv_runs else _empty_categorized()
+    )
 
     return {
-        'username': username,
-        'display_name': source['display_name'],
-        'movies_categorized': movies_categorized,
-        'shows_categorized': shows_categorized,
-        'movie_profile': movie_runs[0]['movie_profile'] if movie_runs else None,
-        'show_profile': tv_runs[0]['show_profile'] if tv_runs else None,
-        'user_services': source['user_services'],
-        'library_id': None
+        "username": username,
+        "display_name": source["display_name"],
+        "movies_categorized": movies_categorized,
+        "shows_categorized": shows_categorized,
+        "movie_profile": movie_runs[0]["movie_profile"] if movie_runs else None,
+        "show_profile": tv_runs[0]["show_profile"] if tv_runs else None,
+        "user_services": source["user_services"],
+        "library_id": None,
     }
 
 
@@ -2771,30 +2819,30 @@ def main():
     that function's existing body/control flow (including its own
     per-user try/except blocks) needed no re-indentation to add this."""
     run_start = time.monotonic()
-    outcome = 'failure'
+    outcome = "failure"
     try:
         _main_impl()
-        outcome = 'success'
+        outcome = "success"
     except SystemExit:
         raise
     except Exception:
-        record_unhandled_error(component='external')
+        record_unhandled_error(component="external")
         raise
     finally:
-        record_recommender_run('external', outcome, time.monotonic() - run_start)
+        record_recommender_run("external", outcome, time.monotonic() - run_start)
 
 
 def _main_impl():
     import argparse
-    parser = argparse.ArgumentParser(description='External Recommendations Generator')
-    parser.add_argument('--huntarr-only', action='store_true',
-                        help='Run only Huntarr features (skip recommendations)')
+
+    parser = argparse.ArgumentParser(description="External Recommendations Generator")
+    parser.add_argument("--huntarr-only", action="store_true", help="Run only Huntarr features (skip recommendations)")
     args = parser.parse_args()
 
     # Load config from project root (repo root for a source install, the
     # per-user data dir when frozen - see utils.helpers.get_project_root)
     project_root = get_project_root()
-    config_path = os.path.join(project_root, 'config/config.yml')
+    config_path = os.path.join(project_root, "config/config.yml")
     config = load_config(config_path)
 
     # Suppress urllib3's InsecureRequestWarning ONLY when this config
@@ -2805,15 +2853,15 @@ def _main_impl():
     # for every other HTTPS request this process ever makes. Matches
     # utils/plex.py's _resolve_verify_ssl - see that function's
     # docstring for the same reasoning.
-    if not config.get('plex', {}).get('verify_ssl', True):
+    if not config.get("plex", {}).get("verify_ssl", True):
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     # Huntarr: config controls which features are enabled
     # huntarr.sequel_huntarr: true/false (default: true) - missing collection movies
     # huntarr.horizon_huntarr: true/false (default: true) - upcoming unreleased movies
-    huntarr_config = config.get('huntarr', {})
-    run_sequel_huntarr = huntarr_config.get('sequel_huntarr', True)
-    run_horizon_huntarr = huntarr_config.get('horizon_huntarr', True)
+    huntarr_config = config.get("huntarr", {})
+    run_sequel_huntarr = huntarr_config.get("sequel_huntarr", True)
+    run_horizon_huntarr = huntarr_config.get("horizon_huntarr", True)
     run_recommendations = not args.huntarr_only
 
     if args.huntarr_only:
@@ -2826,17 +2874,17 @@ def _main_impl():
             print(f"{CYAN}Horizon Huntarr enabled{RESET}")
 
     # Get TMDB API key
-    tmdb_api_key = get_tmdb_config(config)['api_key']
+    tmdb_api_key = get_tmdb_config(config)["api_key"]
 
     # Get users
-    users = [u.strip() for u in config['users']['list'].split(',')]
+    users = [u.strip() for u in config["users"]["list"].split(",")]
 
     # Note: Trakt sync happens in run.sh BEFORE recommenders run
     # This ensures both internal and external recommenders benefit
 
     # Connect to Plex
     try:
-        plex = PlexServer(config['plex']['url'], config['plex']['token'])
+        plex = PlexServer(config["plex"]["url"], config["plex"]["token"])
         print(f"{GREEN}Connected to Plex{RESET}")
     except Exception as e:
         log_error(f"Error connecting to Plex: {e}")
@@ -2883,9 +2931,7 @@ def _main_impl():
             for username in users:
                 try:
                     user_data = process_user(
-                        config, plex, username,
-                        movie_library=primary_movie_library,
-                        tv_library=primary_tv_library
+                        config, plex, username, movie_library=primary_movie_library, tv_library=primary_tv_library
                     )
                     if user_data:
                         all_users_data.append(user_data)
@@ -2931,31 +2977,31 @@ def _main_impl():
 
         for user_data in all_users_data:
             # Count movies across all categories
-            for category in ['user_services', 'other_services']:
-                for service_items in user_data.get('movies_categorized', {}).get(category, {}).values():
+            for category in ["user_services", "other_services"]:
+                for service_items in user_data.get("movies_categorized", {}).get(category, {}).values():
                     for item in service_items:
-                        tmdb_id = str(item.get('tmdb_id'))
+                        tmdb_id = str(item.get("tmdb_id"))
                         movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
-            for item in user_data.get('movies_categorized', {}).get('acquire', []):
-                tmdb_id = str(item.get('tmdb_id'))
+            for item in user_data.get("movies_categorized", {}).get("acquire", []):
+                tmdb_id = str(item.get("tmdb_id"))
                 movie_counts[tmdb_id] = movie_counts.get(tmdb_id, 0) + 1
             # Count shows across all categories
-            for category in ['user_services', 'other_services']:
-                for service_items in user_data.get('shows_categorized', {}).get(category, {}).values():
+            for category in ["user_services", "other_services"]:
+                for service_items in user_data.get("shows_categorized", {}).get(category, {}).values():
                     for item in service_items:
-                        tmdb_id = str(item.get('tmdb_id'))
+                        tmdb_id = str(item.get("tmdb_id"))
                         show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
-            for item in user_data.get('shows_categorized', {}).get('acquire', []):
-                tmdb_id = str(item.get('tmdb_id'))
+            for item in user_data.get("shows_categorized", {}).get("acquire", []):
+                tmdb_id = str(item.get("tmdb_id"))
                 show_counts[tmdb_id] = show_counts.get(tmdb_id, 0) + 1
 
     # Huntarr: Find missing sequels and upcoming movies
     missing_sequels = []
     horizon_movies = []
-    movie_library = config['plex'].get('movie_library', 'Movies')
-    tv_library = config['plex'].get('tv_library', 'TV Shows')
-    user_services = config.get('streaming_services', [])
-    stale_days = config.get('collections', {}).get('stale_removal_days', 7)
+    movie_library = config["plex"].get("movie_library", "Movies")
+    tv_library = config["plex"].get("tv_library", "TV Shows")
+    user_services = config.get("streaming_services", [])
+    stale_days = config.get("collections", {}).get("stale_removal_days", 7)
 
     if run_sequel_huntarr:
         print(f"\n{CYAN}=== Sequel Huntarr: Finding Missing Collection Movies ==={RESET}")
@@ -2966,13 +3012,19 @@ def _main_impl():
         horizon_movies = find_horizon_movies(tmdb_api_key, plex, movie_library, stale_days)
 
     # Generate combined HTML with all users
-    output_dir = os.path.join(project_root, 'recommendations', 'external')
+    output_dir = os.path.join(project_root, "recommendations", "external")
 
     if all_users_data or missing_sequels or horizon_movies:
         html_file = generate_combined_html(
-            all_users_data, output_dir, tmdb_api_key, get_imdb_id,
-            movie_counts=movie_counts, show_counts=show_counts, total_users=total_users,
-            missing_sequels=missing_sequels, horizon_movies=horizon_movies
+            all_users_data,
+            output_dir,
+            tmdb_api_key,
+            get_imdb_id,
+            movie_counts=movie_counts,
+            show_counts=show_counts,
+            total_users=total_users,
+            missing_sequels=missing_sequels,
+            horizon_movies=horizon_movies,
         )
         print(f"{GREEN}Watchlist generated!{RESET}")
     else:
@@ -2985,8 +3037,8 @@ def _main_impl():
         print(f"\nView watchlist: {clickable_link(file_url)}")
 
     # Auto-open HTML if enabled
-    external_config = config.get('external_recommendations', {})
-    if external_config.get('auto_open_html', False) and html_file:
+    external_config = config.get("external_recommendations", {})
+    if external_config.get("auto_open_html", False) and html_file:
         smart_open_html(html_file)
 
     # Export to external services (if configured and auto_sync enabled).

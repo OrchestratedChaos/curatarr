@@ -50,16 +50,16 @@ def get_project_root() -> str:
         override, the per-user data dir when running as a frozen
         binary, or the repo root - in that priority order).
     """
-    override = os.environ.get('CURATARR_CONFIG_DIR')
+    override = os.environ.get("CURATARR_CONFIG_DIR")
     if override:
         os.makedirs(override, exist_ok=True)
         return override
-    if getattr(sys, 'frozen', False):
-        if os.name == 'nt':
-            base = os.environ.get('APPDATA') or os.path.expanduser('~')
-            root = os.path.join(base, 'curatarr')
+    if getattr(sys, "frozen", False):
+        if os.name == "nt":
+            base = os.environ.get("APPDATA") or os.path.expanduser("~")
+            root = os.path.join(base, "curatarr")
         else:
-            root = os.path.join(os.path.expanduser('~'), '.curatarr')
+            root = os.path.join(os.path.expanduser("~"), ".curatarr")
         os.makedirs(root, exist_ok=True)
         return root
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,7 +147,7 @@ def read_response_capped(response, max_bytes: int = MAX_RESPONSE_BYTES):
     potentially buffering an unbounded body) themselves. Returns
     *response* itself for convenient chaining.
     """
-    content_length = response.headers.get('Content-Length')
+    content_length = response.headers.get("Content-Length")
     if content_length is not None:
         try:
             declared = int(content_length)
@@ -155,8 +155,7 @@ def read_response_capped(response, max_bytes: int = MAX_RESPONSE_BYTES):
             declared = None
         if declared is not None and declared > max_bytes:
             raise ValueError(
-                f"Response declared {declared} bytes via Content-Length, exceeding the "
-                f"{max_bytes}-byte limit"
+                f"Response declared {declared} bytes via Content-Length, exceeding the {max_bytes}-byte limit"
             )
 
     chunks = []
@@ -168,7 +167,7 @@ def read_response_capped(response, max_bytes: int = MAX_RESPONSE_BYTES):
         if total > max_bytes:
             raise ValueError(f"Response exceeded the {max_bytes}-byte limit while streaming")
         chunks.append(chunk)
-    response._content = b''.join(chunks)
+    response._content = b"".join(chunks)
     response._content_consumed = True
     return response
 
@@ -214,8 +213,8 @@ def no_window_kwargs() -> Dict[str, int]:
     AllocConsole() path for the separate, existing mechanism that gives
     the main process itself a console on request.
     """
-    if os.name == 'nt':
-        return {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
     return {}
 
 
@@ -240,7 +239,7 @@ def harden_file_permissions(path: str) -> None:
     with) - calling it would give a false sense of having hardened
     anything.
     """
-    if os.name == 'nt':
+    if os.name == "nt":
         return
     try:
         os.chmod(path, 0o600)
@@ -267,14 +266,30 @@ def compute_profile_hash(profile_data: Dict) -> str:
     serialized = json.dumps(profile_data, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
+
 # Title suffixes to strip for fuzzy matching
 TITLE_SUFFIXES_TO_STRIP = [
-    ' 4K', ' 4k', ' HD', ' hd', ' UHD', ' uhd',
-    ' Extended', ' extended', ' EXTENDED',
-    ' Director\'s Cut', ' Directors Cut', ' Theatrical',
-    ' Unrated', ' UNRATED', ' Remastered', ' REMASTERED',
-    ' Special Edition', ' Collector\'s Edition',
-    ' IMAX', ' 3D', ' 3d'
+    " 4K",
+    " 4k",
+    " HD",
+    " hd",
+    " UHD",
+    " uhd",
+    " Extended",
+    " extended",
+    " EXTENDED",
+    " Director's Cut",
+    " Directors Cut",
+    " Theatrical",
+    " Unrated",
+    " UNRATED",
+    " Remastered",
+    " REMASTERED",
+    " Special Edition",
+    " Collector's Edition",
+    " IMAX",
+    " 3D",
+    " 3d",
 ]
 
 
@@ -294,7 +309,7 @@ def normalize_title(title: str) -> str:
     normalized = title.strip()
     for suffix in TITLE_SUFFIXES_TO_STRIP:
         if normalized.endswith(suffix):
-            normalized = normalized[:-len(suffix)].strip()
+            normalized = normalized[: -len(suffix)].strip()
 
     return normalized
 
@@ -346,7 +361,7 @@ def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
         cutoff_time = datetime.now() - timedelta(days=retention_days)
 
         for filename in os.listdir(log_dir):
-            if not filename.endswith('.log'):
+            if not filename.endswith(".log"):
                 continue
 
             filepath = os.path.join(log_dir, filename)
@@ -354,12 +369,9 @@ def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
             try:
                 file_size = os.path.getsize(filepath)
                 if file_size > MAX_LOG_FILE_BYTES:
-                    with open(filepath, 'w'):
+                    with open(filepath, "w"):
                         pass
-                    log_info(
-                        f"Truncated oversized log: {filename} "
-                        f"({file_size} bytes > {MAX_LOG_FILE_BYTES} cap)"
-                    )
+                    log_info(f"Truncated oversized log: {filename} ({file_size} bytes > {MAX_LOG_FILE_BYTES} cap)")
                     continue
             except Exception as e:
                 log_warning(f"Failed to check/truncate oversized log {filename}: {e}")
