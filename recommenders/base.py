@@ -57,7 +57,7 @@ from utils import (
     get_excluded_genres_for_user,
     get_full_language_name,
     get_libraries_for_media_type,
-    get_library_imdb_ids,
+    get_library_imdb_ids_from_items,
     get_max_rating_for_user,
     get_negative_multiplier,
     get_project_root,
@@ -123,7 +123,9 @@ class BaseCache(ABC):
         self.cache["cache_version"] = CACHE_VERSION
         save_media_cache(self.cache_path, self.cache, self.media_key)
 
-    def update_cache(self, plex, library_title: str, tmdb_api_key: Optional[str] = None) -> bool:
+    def update_cache(
+        self, plex, library_title: str, tmdb_api_key: Optional[str] = None, all_items: Optional[List] = None
+    ) -> bool:
         """
         Update cache with current library contents and TMDB metadata.
 
@@ -131,12 +133,21 @@ class BaseCache(ABC):
             plex: PlexServer instance
             library_title: Name of the library section
             tmdb_api_key: Optional TMDB API key for fetching additional metadata
+            all_items: Optional pre-fetched section.all() result. When
+                provided, this skips the library fetch entirely instead of
+                re-querying Plex - callers that already hold a full-library
+                snapshot (see BaseRecommender._get_all_library_items(), #233
+                audit remediation batch D / PR1(a)) should pass it here so a
+                single run only fetches the library once, not once per
+                consumer. Falls back to fetching it here (unchanged
+                behavior) when omitted.
 
         Returns:
             bool: True if cache was updated, False if already up to date
         """
-        section = plex.library.section(library_title)
-        all_items = section.all()
+        if all_items is None:
+            section = plex.library.section(library_title)
+            all_items = section.all()
         current_count = len(all_items)
 
         if current_count == self.cache["library_count"]:
@@ -385,7 +396,13 @@ class BaseRecommender(ABC):
     library_config_key: str = None  # e.g., 'movie_library_title'
     default_library_name: str = None  # e.g., 'Movies'
 
-    def __init__(self, config_path: str, single_user: str = None, library: Optional[Dict] = None):
+    def __init__(
+        self,
+        config_path: str,
+        single_user: str = None,
+        library: Optional[Dict] = None,
+        library_items_cache: Optional[Dict[str, List]] = None,
+    ):
         """
         Initialize the recommender.
 
@@ -397,10 +414,21 @@ class BaseRecommender(ABC):
                 provided, the recommender operates against this library's
                 Plex section. When None, falls back to the legacy
                 library_config_key/default_library_name resolution.
+            library_items_cache: Optional dict shared across every
+                recommender instance processed against the same library in
+                a single run (utils.cli.run_recommender_main creates one per
+                run and threads it through movie.py/tv.py's
+                process_recommendations -> here). Keyed by library_title;
+                see _get_all_library_items(). When None (direct/test
+                instantiation), a fresh per-instance dict is used instead -
+                this still dedupes the up-to-6x-per-user Plex fetches within
+                one instantiation (#233 audit remediation batch D / PR1(a)),
+                it just doesn't share across users/instances.
         """
         self.single_user = single_user
         self.config = load_config(config_path)
         self.library = library
+        self._library_items_cache: Dict[str, List] = library_items_cache if library_items_cache is not None else {}
 
         if self.library:
             self.library_id = self.library["id"]
@@ -1223,9 +1251,31 @@ class BaseRecommender(ABC):
             self._save_watched_cache()
         return set(keywords)
 
+    def _get_all_library_items(self) -> List:
+        """Fetch this run's full library item list from Plex exactly once,
+        then reuse it for every consumer that needs a full library scan -
+        cache update, ID/title-set derivation, and view-count lookups all
+        used to call section.all() independently, up to 6 Plex round trips
+        per user per run (#233 audit remediation batch D / PR1(a)).
+
+        Cached per library_title in self._library_items_cache. When that
+        dict is the one utils.cli.run_recommender_main shares across every
+        user processed against this library in a single run, this also
+        collapses the fetch to once per library per run, not once per user
+        - see __init__'s library_items_cache docstring. Only a *successful*
+        fetch is cached; a Plex error here propagates to the caller (which
+        already has its own try/except and log message) without poisoning
+        the cache, so the next consumer simply retries instead of being
+        stuck with a cached failure.
+        """
+        if self.library_title not in self._library_items_cache:
+            section = self.plex.library.section(self.library_title)
+            self._library_items_cache[self.library_title] = section.all()
+        return self._library_items_cache[self.library_title]
+
     def _get_library_imdb_ids(self) -> Set[str]:
         """Get set of all IMDb IDs in the library."""
-        return get_library_imdb_ids(self.plex.library.section(self.library_title))
+        return get_library_imdb_ids_from_items(self._get_all_library_items())
 
     @abstractmethod
     def _find_plex_item(self, section, rec: Dict):

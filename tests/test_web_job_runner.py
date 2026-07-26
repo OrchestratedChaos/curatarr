@@ -284,6 +284,98 @@ class TestPopenFailure:
         assert manager.current_job() is None
 
 
+class TestCrossContainerLock:
+    """Tests for the cross-container run lock (#233 audit remediation
+    batch D / PR1(c)) - docker-compose.yml's curatarr (web UI) and
+    curatarr-recommend services share the same bind-mounted ./cache
+    volume; JobManager.start() must refuse to launch a subprocess while
+    that lock is held by *anything* else, not just another run this
+    same JobManager instance already knows about."""
+
+    def test_start_rejected_while_lock_held_by_another_container(self, curatarr_web_root):
+        """Simulates docker-entrypoint.sh's `recommend` mode already
+        running in the sibling curatarr-recommend container: a raw
+        flock on the identical path, held by an fd this JobManager
+        instance has no in-memory knowledge of at all (unlike
+        is_running()/_foreign_run_in_progress(), which only ever see
+        runs *this* process triggered)."""
+        import fcntl
+
+        from utils.run_lock import run_lock_path
+
+        lock_path = run_lock_path(curatarr_web_root)
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        raw_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(raw_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            manager = _manager(curatarr_web_root)
+            with pytest.raises(JobAlreadyRunningError):
+                manager.start("movie", "alice", ["alice"])
+            assert manager.is_running() is False
+            assert manager.current_job() is None
+        finally:
+            fcntl.flock(raw_fd, fcntl.LOCK_UN)
+            os.close(raw_fd)
+
+    def test_start_succeeds_once_the_other_container_releases(self, curatarr_web_root):
+        import fcntl
+
+        from utils.run_lock import run_lock_path
+
+        lock_path = run_lock_path(curatarr_web_root)
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        raw_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(raw_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(raw_fd, fcntl.LOCK_UN)
+        os.close(raw_fd)
+
+        manager = _manager(curatarr_web_root)
+        job = manager.start("movie", "alice", ["alice"])
+        _wait_until_done(job)
+
+        assert job.returncode == 0
+
+    def test_lock_released_after_job_completes_so_a_second_run_is_allowed(self, curatarr_web_root):
+        """The lock must not leak past one job's lifetime - otherwise
+        every run after the first would falsely look like a
+        cross-container collision forever."""
+        manager = _manager(curatarr_web_root)
+        job1 = manager.start("movie", "alice", ["alice", "bob"])
+        _wait_until_done(job1)
+
+        job2 = manager.start("movie", "bob", ["alice", "bob"])
+        _wait_until_done(job2)
+
+        assert job2.returncode == 0
+
+    def test_lock_released_even_when_popen_itself_fails(self, curatarr_web_root, monkeypatch):
+        """A Popen failure (M3) must not leave the cross-container lock
+        stuck held forever - see start()'s except OSError branch."""
+
+        def _boom(*args, **kwargs):
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'bash'")
+
+        monkeypatch.setattr(job_runner_mod.subprocess, "Popen", _boom)
+        manager = _manager(curatarr_web_root)
+
+        with pytest.raises(JobError):
+            manager.start("full", "all", ["alice"])
+
+        # The lock must be free again - a plain flock probe proves it,
+        # independent of any JobManager state.
+        import fcntl
+
+        from utils.run_lock import run_lock_path
+
+        lock_path = run_lock_path(curatarr_web_root)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # must not raise
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 class TestTerminateRunning:
     """Tests for H3 - terminating an in-flight run on server shutdown."""
 

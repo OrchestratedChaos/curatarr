@@ -2,6 +2,68 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.24] - 2026-07-26
+
+### Changed
+
+- **Audit remediation batch D (PR1): fewer redundant Plex fetches per run.**
+  `recommenders/movie.py`/`tv.py`'s init path called Plex's
+  `section.all()` up to 6 times per user per run - once each from
+  `MovieCache`/`ShowCache.update_cache`, `_get_library_movies_set`
+  (itself called twice back-to-back for a byte-identical result),
+  `_get_library_movie_titles`/`_get_library_shows_set`,
+  `_get_library_imdb_ids`, and again inside `_get_plex_watched_data`/
+  `_get_plex_watched_shows_data` for view counts - and `utils/cli.py`'s
+  library-outer/user-inner loop constructed a fresh recommender per
+  user with nothing shared across them either. `BaseRecommender` now
+  fetches the full library once via a new `_get_all_library_items()`
+  and every one of those consumers reuses it; `utils/cli.py` shares one
+  fetch across every user processed against the same library in a run
+  too. Measured before/after (instrumented mock call count, see
+  `tests/test_movie.py::TestLibraryFetchedOnceNotSixTimes`): 6 calls to
+  `section.all()` down to 1 for a single user's instantiation.
+  Behavior is unchanged - only fewer Plex round trips.
+
+### Added
+
+- **Audit remediation batch D (PR1): prune orphaned per-user cache
+  files.** `cache/` had no equivalent of `logs/`'s `cleanup_old_logs` -
+  nothing ever removed a per-user cache file for a user no longer
+  configured (a real example found in a live install: a joined
+  multi-user `watched_cache_plex_<many-usernames>.json` left over from
+  before every run became strictly single-user, plus
+  `external_recs_<removed-user>_*.json`). New `utils/cache_prune.py`
+  diffs the four known per-user cache filename patterns (shared with
+  `utils/user_migration.py`'s rename-migration, now exported as
+  `CACHE_FILENAME_PATTERNS`) against the run's actual resolved
+  usernames. Conservative by design: a file that doesn't match one of
+  those exact patterns is never touched, and the new
+  `general.cache_prune` config (`enabled: true` by default) only logs
+  candidates - nothing is deleted until `dry_run: false` is also set
+  explicitly.
+- **Audit remediation batch D (PR1): cross-container run lock.**
+  `docker-compose.yml`'s `curatarr` (web UI) and `curatarr-recommend`
+  services share the same bind-mounted `./cache` volume, but only the
+  web UI's `job_runner.py` ever took a run lock (in-process +
+  PID-lockfile, meaningless across two containers' separate PID
+  namespaces) - `docker-entrypoint.sh`'s `recommend` mode had no
+  locking at all. Both now take the identical `flock` on a
+  `cache/.recommender_run.lock` file shared by both containers -
+  `job_runner.py` via a new `utils/run_lock.py` (POSIX only; a
+  documented no-op on Windows, where this race can't happen),
+  `docker-entrypoint.sh` via the `flock` command directly. Verified
+  against real Docker containers (not just mocks): a `recommend`
+  invocation correctly refuses to start while the lock is held by a
+  separate container, and the web UI's job runner correctly refuses to
+  launch a subprocess while `docker-entrypoint.sh` holds it. Residual
+  risk: a direct `python3 recommenders/movie.py` invocation bypassing
+  both of those paths still isn't covered - threading the lock through
+  every recommender entry point was judged too invasive for this pass
+  (see `utils/run_lock.py`'s docstring). Cache writes were already
+  atomic (temp file + `os.replace()`, added in 2.10.9) - verified still
+  true across every cache write path (`utils/cache.py`'s
+  `_atomic_write_json`).
+
 ## [2.10.23] - 2026-07-26
 
 ### Fixed

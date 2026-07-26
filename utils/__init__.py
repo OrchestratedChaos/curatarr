@@ -165,6 +165,7 @@ from .plex import (
     get_current_users,
     get_excluded_genres_for_user,
     get_library_imdb_ids,
+    get_library_imdb_ids_from_items,
     get_max_rating_for_user,
     get_plex_account_ids,
     get_plex_user_ids,
@@ -481,6 +482,7 @@ __all__ = [
     "extract_ids_from_guids",
     "extract_rating",
     "get_library_imdb_ids",
+    "get_library_imdb_ids_from_items",
     "get_plex_user_ids",
     # User migration (stable Plex id -> username)
     "USER_ID_MAP_FILENAME",

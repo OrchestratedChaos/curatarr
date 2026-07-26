@@ -14,6 +14,7 @@ from typing import Callable, Dict, List, Optional
 import yaml
 from plexapi.myplex import MyPlexAccount
 
+from .cache_prune import prune_orphaned_cache_files
 from .config import __version__, get_libraries_for_media_type, get_update_mode
 from .display import (
     CYAN,
@@ -251,7 +252,7 @@ def run_recommender_main(
     media_type: str,
     description: str,
     adapt_config_func: Callable[[Dict], Dict],
-    process_func: Callable[[Dict, str, int, Optional[str], Optional[Dict]], None],
+    process_func: Callable[[Dict, str, int, Optional[str], Optional[Dict], Optional[Dict]], None],
     media_type_key: str = "movie",
 ):
     """
@@ -268,7 +269,8 @@ def run_recommender_main(
         description: argparse description
         adapt_config_func: Function to adapt root config to media-specific format
         process_func: Function to process recommendations for a user. Receives
-            (user_config, config_path, log_retention_days, resolved_user, library)
+            (user_config, config_path, log_retention_days, resolved_user,
+            library, library_items_cache)
         media_type_key: 'movie' or 'tv' - selects which libraries to loop over
             (see utils.config.get_libraries_for_media_type)
     """
@@ -363,6 +365,12 @@ def run_recommender_main(
 
         multi_library = len(libraries) > 1
 
+        # Collected across the whole library x user loop below, then used
+        # to prune orphaned per-user cache files at the end of this run
+        # (#233 audit remediation batch D / PR1(b)) - see
+        # utils.cache_prune.prune_orphaned_cache_files.
+        resolved_usernames = set()
+
         # Process each library x user
         plex_token = base_config.get("plex", {}).get("token", "")
         for library in libraries:
@@ -370,17 +378,40 @@ def run_recommender_main(
                 print(f"\n{CYAN}=== Library: {library['name']} ==={RESET}")
                 print("-" * 50)
 
+            # Shared across every user processed against *this* library
+            # below - each recommender's BaseRecommender._get_all_library_items()
+            # fetches Plex's section.all() into this dict on first access and
+            # every subsequent user reuses that same list, so one library
+            # scan serves the whole library's user loop instead of one scan
+            # per user (#233 audit remediation batch D / PR1(a)). A fresh
+            # dict per library (not per run) because two libraries never
+            # share a section, so there's nothing to gain from a wider scope
+            # - and it keeps a library's cache from outliving that library's
+            # own iteration below.
+            library_items_cache: Dict = {}
+
             for user in all_users:
                 print(f"\n{GREEN}Processing recommendations for user: {user}{RESET}")
                 print("-" * 50)
 
                 resolved_user = resolve_admin_username(user, plex_token)
                 user_config = update_config_for_user(base_config, resolved_user)
+                resolved_usernames.add(resolved_user)
 
-                process_func(user_config, config_path, log_retention_days, resolved_user, library)
+                process_func(user_config, config_path, log_retention_days, resolved_user, library, library_items_cache)
 
                 print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
                 print("-" * 50)
+
+        # Prune cache/ files left behind by users no longer configured -
+        # cache/ has no equivalent of logs/'s cleanup_old_logs above this
+        # run never had (#233 audit remediation batch D / PR1(b)).
+        # Conservative by default: dry_run only *logs* candidates, so this
+        # never deletes anything unless a config explicitly opts in via
+        # general.cache_prune.dry_run: false.
+        cache_prune_config = general.get("cache_prune", {}) or {}
+        if cache_prune_config.get("enabled", True):
+            prune_orphaned_cache_files(cache_dir, resolved_usernames, dry_run=cache_prune_config.get("dry_run", True))
 
         outcome = "success"
     except SystemExit:

@@ -41,6 +41,19 @@ NC='\033[0m'
 CONFIG_DIR="${CURATARR_CONFIG_DIR:-/data}"
 CONFIG_YML="${CONFIG_DIR}/config/config.yml"
 
+# Cross-container run lock (#233 audit remediation batch D / PR1(c)):
+# docker-compose.yml can run this `recommend` mode (in the
+# curatarr-recommend service, normally on a host cron/Task Scheduler
+# timer - see docs/DOCKER.md "Scheduling") at the same time the
+# curatarr (web UI) service's own job_runner.py triggers a run - both
+# mutate the same bind-mounted ./cache volume, which is a real
+# interleaved-write hazard, not just a "friendly error" problem.
+# job_runner.py (see utils/run_lock.py) takes the identical flock on
+# this identical path before spawning its own subprocess - same
+# kernel-level lock on the same inode either way, so whichever side
+# gets there first wins and the other fails fast instead of racing.
+RUN_LOCK_FILE="${CONFIG_DIR}/cache/.recommender_run.lock"
+
 _require_config() {
     if [ ! -f "$CONFIG_YML" ]; then
         echo -e "${RED}ERROR: ${CONFIG_YML} not found${NC}"
@@ -79,6 +92,25 @@ case "$MODE" in
         shift
         ENGINE="${1:-full}"
         [ $# -gt 0 ] && shift
+
+        # Acquire the cross-container run lock (see the RUN_LOCK_FILE
+        # comment above) on fd 9 before running anything. Held open for
+        # the rest of this script/process - including across `exec`,
+        # which replaces this process image but does not close
+        # already-open file descriptors - so it stays held for the
+        # *entire* recommender subprocess's lifetime, not just until
+        # this shell would otherwise have exited, and is released
+        # automatically (by the kernel) whenever this process exits,
+        # however it exits.
+        mkdir -p "$(dirname "$RUN_LOCK_FILE")"
+        exec 9>"$RUN_LOCK_FILE"
+        if ! flock -n 9; then
+            echo -e "${RED}ERROR: another recommender run is already in progress${NC} (lock: ${RUN_LOCK_FILE})" >&2
+            echo "This can happen if the web UI triggered a run at the same time as this" >&2
+            echo "scheduled 'recommend' invocation. Wait for the other run to finish and retry." >&2
+            exit 1
+        fi
+
         case "$ENGINE" in
             full)
                 echo -e "${YELLOW}=== Movie recommendations ===${NC}"

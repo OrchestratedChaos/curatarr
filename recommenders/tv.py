@@ -117,16 +117,26 @@ class PlexTVRecommender(BaseRecommender):
             "language": weights_config.get("language", weights_config.get("language_weight", 0.05)),
         }
 
-    def __init__(self, config_path: str, single_user: str = None, library: Optional[Dict] = None):
+    def __init__(
+        self,
+        config_path: str,
+        single_user: str = None,
+        library: Optional[Dict] = None,
+        library_items_cache: Optional[Dict] = None,
+    ):
         """Initialize the TV show recommender.
 
         Args:
             config_path: Path to the config.yml configuration file
             single_user: Optional username to generate recommendations for a single user
             library: Optional normalized library dict (#157 Phase 3 per-library loop)
+            library_items_cache: Optional dict shared across every user's
+                recommender instance for this library in one run (see
+                BaseRecommender.__init__ / _get_all_library_items - #233
+                audit remediation batch D / PR1(a))
         """
         # Initialize base class (config, plex, display options, weights, etc.)
-        super().__init__(config_path, single_user, library=library)
+        super().__init__(config_path, single_user, library=library, library_items_cache=library_items_cache)
 
         # TV-specific initialization
         self.cached_unwatched_count = 0
@@ -137,7 +147,12 @@ class PlexTVRecommender(BaseRecommender):
 
         # Create show cache
         self.show_cache = ShowCache(self.cache_dir, recommender=self)
-        self.show_cache.update_cache(self.plex, self.library_title, self.tmdb_api_key)
+        # Pass the run's (or run+library-shared) library snapshot in
+        # rather than letting update_cache() re-fetch it - see
+        # _get_all_library_items() (#233 audit remediation batch D / PR1(a)).
+        self.show_cache.update_cache(
+            self.plex, self.library_title, self.tmdb_api_key, all_items=self._get_all_library_items()
+        )
 
         # Verify Plex user configuration
         if self.users["plex_users"]:
@@ -154,9 +169,10 @@ class PlexTVRecommender(BaseRecommender):
         # Load watched cache using base class method
         watched_cache = self._load_watched_cache()
 
-        # Get library rating keys for filtering (must be ints to match watched_ids)
-        shows_section = self.plex.library.section(self.library_title)
-        current_library_rating_keys = {int(show.ratingKey) for show in shows_section.all()}
+        # Get library rating keys for filtering (must be ints to match watched_ids).
+        # Reuses this run's shared library snapshot instead of a fresh
+        # section.all() (#233 audit remediation batch D / PR1(a)).
+        current_library_rating_keys = {int(show.ratingKey) for show in self._get_all_library_items()}
 
         # Clean up both watched show tracking mechanisms
         self.plex_watched_rating_keys = {
@@ -288,8 +304,10 @@ class PlexTVRecommender(BaseRecommender):
         # Only apply rewatch bonus if user actually rewatched episodes
         show_rewatch_counts = {}
         user_ratings = {}  # Store user ratings for each show
+        # Reuses this run's shared library snapshot instead of a fresh
+        # section.all() (#233 audit remediation batch D / PR1(a)).
         try:
-            for show in shows_section.all():
+            for show in self._get_all_library_items():
                 show_id = int(show.ratingKey)
                 if show_id in watched_ids:
                     # Get rewatch count
@@ -400,9 +418,8 @@ class PlexTVRecommender(BaseRecommender):
     # ------------------------------------------------------------------------
     def _get_library_shows_set(self) -> Set[Tuple[str, Optional[int]]]:
         try:
-            shows = self.plex.library.section(self.library_title)
             library_shows = set()
-            for show in shows.all():
+            for show in self._get_all_library_items():
                 # Handle both normal titles and titles with embedded years
                 title = show.title.lower()
                 year = show.year
@@ -585,7 +602,9 @@ def main():
     )
 
 
-def process_recommendations(config, config_path, log_retention_days, single_user=None, library=None):
+def process_recommendations(
+    config, config_path, log_retention_days, single_user=None, library=None, library_items_cache=None
+):
     """Process and display TV show recommendations for configured users."""
     original_stdout = sys.stdout
     log_dir = os.path.join(get_project_root(), "logs")
@@ -593,7 +612,9 @@ def process_recommendations(config, config_path, log_retention_days, single_user
 
     try:
         # Create recommender with single user context
-        recommender = PlexTVRecommender(config_path, single_user, library=library)
+        recommender = PlexTVRecommender(
+            config_path, single_user, library=library, library_items_cache=library_items_cache
+        )
         recommendations = recommender.get_recommendations()
 
         print(f"\n{GREEN}=== Recommended Unwatched Shows in Your Library ==={RESET}")

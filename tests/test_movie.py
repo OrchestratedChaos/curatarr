@@ -561,7 +561,9 @@ class TestProcessRecommendationsLibraryParam:
         library = {"id": "movies-4k", "name": "Movies 4K", "section": "Movies 4K", "media_type": "movie"}
         process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice", library=library)
 
-        mock_recommender_cls.assert_called_once_with("/path/to/config.yml", single_user="alice", library=library)
+        mock_recommender_cls.assert_called_once_with(
+            "/path/to/config.yml", single_user="alice", library=library, library_items_cache=None
+        )
 
     @patch("recommenders.movie.PlexMovieRecommender")
     @patch("recommenders.movie.teardown_log_file")
@@ -575,7 +577,9 @@ class TestProcessRecommendationsLibraryParam:
 
         process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
 
-        mock_recommender_cls.assert_called_once_with("/path/to/config.yml", single_user="alice", library=None)
+        mock_recommender_cls.assert_called_once_with(
+            "/path/to/config.yml", single_user="alice", library=None, library_items_cache=None
+        )
 
 
 class TestMainMediaTypeKey:
@@ -1132,7 +1136,7 @@ class TestFormatMovieOutputExtended:
 class TestPlexMovieRecommenderLibraryImdbIds:
     """Tests for PlexMovieRecommender._get_library_imdb_ids method (inherited from BaseRecommender)."""
 
-    @patch("recommenders.base.get_library_imdb_ids")
+    @patch("recommenders.base.get_library_imdb_ids_from_items")
     @patch("recommenders.movie.MovieCache")
     @patch("recommenders.base.init_plex")
     @patch("recommenders.base.get_configured_users")
@@ -1502,3 +1506,77 @@ class TestProcessRecommendationsMovie:
             process_recommendations({"general": {}}, "/path/to/config.yml", 0)
 
         mock_exit.assert_not_called()
+
+
+class TestLibraryFetchedOnceNotSixTimes:
+    """#233 audit remediation batch D / PR1(a) regression coverage.
+
+    Before this fix, PlexMovieRecommender.__init__ called
+    section.all() independently from up to 6 places for a single
+    user's instantiation: MovieCache.update_cache, _get_library_movies_set
+    (itself called twice back-to-back for a byte-identical result),
+    _get_library_movie_titles, _get_library_imdb_ids, and the view-count
+    loop inside _get_plex_watched_data. All six now share one fetch via
+    BaseRecommender._get_all_library_items().
+
+    Runs a real (unmocked) MovieCache/update_cache - not a mocked
+    stand-in - so this exercises the actual code path, not just the
+    call site. get_project_root() is @lru_cache'd, so CURATARR_CONFIG_DIR
+    is pointed at tmp_path and the cache cleared before/after, same
+    convention as TestBaseRecommenderCacheDirResolution in
+    test_base.py - this must never resolve to the real project's own
+    cache/ directory.
+    """
+
+    def setup_method(self):
+        from utils.helpers import get_project_root
+
+        get_project_root.cache_clear()
+
+    def teardown_method(self):
+        from utils.helpers import get_project_root
+
+        get_project_root.cache_clear()
+
+    @patch("recommenders.movie.fetch_plex_watch_history_movies", return_value=([], {}))
+    @patch("recommenders.movie.get_plex_account_ids", return_value=["acct1"])
+    @patch("recommenders.movie.get_watched_movie_count", return_value=0)
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    def test_section_all_called_exactly_once(
+        self,
+        mock_load,
+        mock_tmdb,
+        mock_users,
+        mock_plex,
+        mock_watched_count,
+        mock_account_ids,
+        mock_history,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("CURATARR_CONFIG_DIR", str(tmp_path))
+
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "weights": {"genre": 0.3, "director": 0.2, "actor": 0.2, "language": 0.1, "keyword": 0.2},
+        }
+        mock_users.return_value = {"plex_users": ["user1"], "managed_users": [], "admin_user": "admin"}
+        # No TMDB key - keeps MovieCache._process_item on its no-TMDB
+        # branch so this test only measures Plex round trips.
+        mock_tmdb.return_value = {"use_keywords": False, "api_key": None}
+
+        mock_movie = Mock(ratingKey=1, year=2020, guids=[], directors=[], genres=[], roles=[], viewCount=0)
+        mock_movie.title = "Test Movie"
+        mock_section = Mock()
+        mock_section.all.return_value = [mock_movie]
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+
+        PlexMovieRecommender("/path/to/config.yml")
+
+        assert mock_section.all.call_count == 1

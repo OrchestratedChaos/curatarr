@@ -126,16 +126,26 @@ class PlexMovieRecommender(BaseRecommender):
             "language": weights_config.get("language", weights_config.get("language_weight", 0.0)),
         }
 
-    def __init__(self, config_path: str, single_user: str = None, library: Optional[Dict] = None):
+    def __init__(
+        self,
+        config_path: str,
+        single_user: str = None,
+        library: Optional[Dict] = None,
+        library_items_cache: Optional[Dict] = None,
+    ):
         """Initialize the movie recommender.
 
         Args:
             config_path: Path to the config.yml configuration file
             single_user: Optional username to generate recommendations for a single user
             library: Optional normalized library dict (#157 Phase 3 per-library loop)
+            library_items_cache: Optional dict shared across every user's
+                recommender instance for this library in one run (see
+                BaseRecommender.__init__ / _get_all_library_items - #233
+                audit remediation batch D / PR1(a))
         """
         # Initialize base class (config, plex, display options, weights, etc.)
-        super().__init__(config_path, single_user, library=library)
+        super().__init__(config_path, single_user, library=library, library_items_cache=library_items_cache)
 
         # Movie-specific initialization
         self.cached_unwatched_count = 0
@@ -151,7 +161,12 @@ class PlexMovieRecommender(BaseRecommender):
 
         # Create movie cache
         self.movie_cache = MovieCache(self.cache_dir, recommender=self)
-        self.movie_cache.update_cache(self.plex, self.library_title, self.tmdb_api_key)
+        # Pass the run's (or run+library-shared) library snapshot in
+        # rather than letting update_cache() re-fetch it - see
+        # _get_all_library_items() (#233 audit remediation batch D / PR1(a)).
+        self.movie_cache.update_cache(
+            self.plex, self.library_title, self.tmdb_api_key, all_items=self._get_all_library_items()
+        )
 
         # Verify Plex user configuration
         if self.users["plex_users"]:
@@ -209,7 +224,12 @@ class PlexMovieRecommender(BaseRecommender):
         self.profile_hash = compute_profile_hash(self.watched_data_counters)
 
         print("Fetching library metadata (for existing Movies checks)...")
-        self.library_movies = self._get_library_movies_set()
+        # current_library_ids (above) and this were previously two
+        # independent _get_library_movies_set() calls producing a
+        # byte-identical result (same library, no reload/filter change
+        # between them) - confirmed redundant, so this just reuses it
+        # instead of re-fetching (#233 audit remediation batch D / PR1(a)).
+        self.library_movies = current_library_ids
         self.library_movie_titles = self._get_library_movie_titles()
         self.library_imdb_ids = self._get_library_imdb_ids()
 
@@ -275,9 +295,11 @@ class PlexMovieRecommender(BaseRecommender):
                 if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
                     user_ratings[movie_id] = user_rating
 
-        # Get view counts from library (history API doesn't provide this)
+        # Get view counts from library (history API doesn't provide this).
+        # Reuses this run's shared library snapshot instead of a fresh
+        # section.all() (#233 audit remediation batch D / PR1(a)).
         try:
-            for movie in movies_section.all():
+            for movie in self._get_all_library_items():
                 movie_id = int(movie.ratingKey)
                 if movie_id in watched_ids and hasattr(movie, "viewCount") and movie.viewCount:
                     watched_movie_views[movie_id] = int(movie.viewCount)
@@ -368,8 +390,7 @@ class PlexMovieRecommender(BaseRecommender):
     def _get_library_movies_set(self) -> Set[int]:
         """Get set of all movie IDs in the library"""
         try:
-            movies = self.plex.library.section(self.library_title)
-            return {int(movie.ratingKey) for movie in movies.all()}
+            return {int(movie.ratingKey) for movie in self._get_all_library_items()}
         except Exception as e:
             log_error(f"Error getting library movies: {e}")
             return set()
@@ -377,8 +398,7 @@ class PlexMovieRecommender(BaseRecommender):
     def _get_library_movie_titles(self) -> Set[Tuple[str, Optional[int]]]:
         """Get set of (title, year) tuples for all movies in the library"""
         try:
-            movies = self.plex.library.section(self.library_title)
-            return {(movie.title.lower(), getattr(movie, "year", None)) for movie in movies.all()}
+            return {(movie.title.lower(), getattr(movie, "year", None)) for movie in self._get_all_library_items()}
         except Exception as e:
             log_error(f"Error getting library movie titles: {e}")
             return set()
@@ -533,14 +553,18 @@ def adapt_root_config_to_legacy(root_config):
 # ------------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------------
-def process_recommendations(config, config_path, log_retention_days, single_user=None, library=None):
+def process_recommendations(
+    config, config_path, log_retention_days, single_user=None, library=None, library_items_cache=None
+):
     original_stdout = sys.stdout
     log_dir = os.path.join(get_project_root(), "logs")
     setup_log_file(log_dir, log_retention_days, single_user, "recommendations")
 
     try:
         # Create recommender with single user context
-        recommender = PlexMovieRecommender(config_path, single_user=single_user, library=library)
+        recommender = PlexMovieRecommender(
+            config_path, single_user=single_user, library=library, library_items_cache=library_items_cache
+        )
 
         # Check for debug mode
         if config.get("general", {}).get("debug", False):

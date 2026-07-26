@@ -1099,9 +1099,34 @@ def get_library_imdb_ids(plex_section: Any) -> Set[str]:
     Returns:
         Set of IMDb ID strings
     """
+    try:
+        items = plex_section.all()
+    except (plexapi.exceptions.PlexApiException, TypeError) as e:
+        log_warning(f"Error retrieving IMDb IDs from library: {e}")
+        return set()
+    return get_library_imdb_ids_from_items(items)
+
+
+def get_library_imdb_ids_from_items(items: Any) -> Set[str]:
+    """
+    Extract IMDb IDs from an already-fetched list/iterable of Plex
+    library items (e.g. a section.all() result a caller already holds).
+
+    Shares the guid-parsing logic with get_library_imdb_ids() so a
+    caller that's already fetched the full library once (see
+    recommenders/base.py's _get_all_library_items(), #233 audit
+    remediation batch D / PR1(a)) doesn't have to re-query Plex just to
+    derive this set too.
+
+    Args:
+        items: Iterable of Plex media items (already fetched)
+
+    Returns:
+        Set of IMDb ID strings
+    """
     imdb_ids = set()
     try:
-        for item in plex_section.all():
+        for item in items:
             if hasattr(item, "guids"):
                 for guid in item.guids:
                     if guid.id.startswith("imdb://"):

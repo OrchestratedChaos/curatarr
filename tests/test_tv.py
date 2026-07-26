@@ -1097,7 +1097,9 @@ class TestProcessRecommendationsLibraryParam:
         library = {"id": "anime", "name": "Anime", "section": "Anime", "media_type": "tv"}
         process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice", library=library)
 
-        mock_recommender_cls.assert_called_once_with("/path/to/config.yml", "alice", library=library)
+        mock_recommender_cls.assert_called_once_with(
+            "/path/to/config.yml", "alice", library=library, library_items_cache=None
+        )
 
     @patch("recommenders.tv.PlexTVRecommender")
     @patch("recommenders.tv.teardown_log_file")
@@ -1111,7 +1113,9 @@ class TestProcessRecommendationsLibraryParam:
 
         process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
 
-        mock_recommender_cls.assert_called_once_with("/path/to/config.yml", "alice", library=None)
+        mock_recommender_cls.assert_called_once_with(
+            "/path/to/config.yml", "alice", library=None, library_items_cache=None
+        )
 
 
 class TestMainMediaTypeKey:
@@ -1427,6 +1431,12 @@ class TestGetLibraryShowsSetError:
 
     def test_returns_empty_set_on_error(self):
         recommender = _make_tv_recommender()
+        # __init__ already populated the shared library-items cache (see
+        # BaseRecommender._get_all_library_items, #233 audit remediation
+        # batch D / PR1(a)) with a successful (if empty) fetch, so force a
+        # cache miss here to actually re-exercise a *fresh* Plex failure
+        # rather than silently reusing that cached result.
+        recommender._library_items_cache.clear()
         recommender.plex.library.section.side_effect = Exception("boom")
 
         result = recommender._get_library_shows_set()

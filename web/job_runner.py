@@ -9,6 +9,10 @@ short-lived CLI invocation, unsafe inside a long-running Flask process.
 Only one job may run at a time (a run mutates shared caches under
 cache/ and Plex collections), enforced by JobManager's lock (in-process)
 and a PID lockfile (cross-process - see _foreign_run_in_progress).
+Neither of those is cross-container-aware (PIDs aren't even comparable
+across two containers' separate PID namespaces) - see utils/run_lock.py
+for the actual fix covering docker-compose.yml's two services, wired in
+below (POSIX only; a no-op on Windows, see that module's docstring).
 
 Frozen (PyInstaller onefile) binary note: `sys.executable
 recommenders/<x>.py` doesn't exist once packaged - there is no
@@ -33,6 +37,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from utils.helpers import no_window_kwargs
+from utils.run_lock import PosixRunLock, run_lock_path
 
 from .security import redact
 
@@ -131,6 +136,11 @@ class Job:
         self.finished_at: Optional[datetime] = None
         self.returncode: Optional[int] = None
         self.process: Optional[subprocess.Popen] = None
+        # Cross-container run lock (see utils/run_lock.py) held for this
+        # job's subprocess lifetime, None on Windows (that lock is POSIX
+        # only - see that module's docstring). Released in _pump()'s
+        # finally alongside the existing PID lockfile cleanup.
+        self._run_lock: Optional[PosixRunLock] = None
 
         self._data_lock = threading.Lock()
         self.lines: List[str] = []
@@ -258,11 +268,31 @@ class JobManager:
             if self._foreign_run_in_progress():
                 raise JobAlreadyRunningError("A run started by a previous server process is still in progress")
 
+            # Cross-container run lock (see utils/run_lock.py): a
+            # docker-entrypoint.sh `recommend` invocation in the sibling
+            # curatarr-recommend container holds the identical flock on
+            # the identical path while it runs - this is what actually
+            # detects that case (the checks above only ever see runs
+            # *this* process/container triggered). POSIX only; a no-op
+            # on Windows, where this race can't happen (see that
+            # module's docstring).
+            run_lock = None
+            if os.name != "nt":
+                run_lock = PosixRunLock(run_lock_path(self.project_root))
+                try:
+                    run_lock.acquire()
+                except OSError as exc:
+                    raise JobAlreadyRunningError(
+                        "A recommender run is already in progress in another container/process "
+                        f"(cross-container lock held): {exc}"
+                    ) from exc
+
             cmd, env, log_name = self._build_command(engine, user)
             os.makedirs(self.logs_dir, exist_ok=True)
             log_path = os.path.join(self.logs_dir, log_name)
 
             job = Job(engine, user, cmd, log_path)
+            job._run_lock = run_lock
             popen_kwargs = dict(
                 cwd=self.project_root,
                 stdout=subprocess.PIPE,
@@ -298,6 +328,8 @@ class JobManager:
                 # surface as a normal, friendly JobError - the /run route
                 # already turns that into a redirect with an error
                 # message - not an unhandled 500.
+                if run_lock is not None:
+                    run_lock.release()
                 raise JobError(f"Could not start the {engine} run: {exc}") from exc
 
             job.process = process
@@ -371,7 +403,8 @@ class JobManager:
         wasn't reliably captured either way, and (this is what actually
         matters operationally) job._finish() is now *always* reached
         even on that path, so the job never gets stuck "running"
-        forever and the single-run lock is always released.
+        forever and both the PID lockfile and the cross-container
+        run_lock (see utils/run_lock.py) are always released.
         """
         log_file = None
         returncode: Optional[int] = None
@@ -412,6 +445,8 @@ class JobManager:
                     job.process.kill()
                     job.process.wait()
             self._remove_lock()
+            if job._run_lock is not None:
+                job._run_lock.release()
             job._finish(returncode if returncode is not None else -1)
 
     def terminate_running(self) -> None:
