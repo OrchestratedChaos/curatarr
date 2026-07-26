@@ -2,6 +2,40 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.13] - 2026-07-25
+
+### Added
+
+- **Linter/formatter/type-checker configuration** - this repo had none
+  before (no ruff/flake8/black/mypy config anywhere, no lint step in
+  any of the 6 GitHub Actions workflows). Config and CI only in this
+  release; no code was reformatted (see 2.10.14 for that).
+  - `ruff.toml`: `line-length = 120` (measured off this codebase's own
+    per-line-length distribution - 99.7% of lines are already under
+    it), `target-version = "py310"` (matches requirements.lock's
+    pinned floor), and lint rules E/W (pycodestyle)/F (pyflakes)/I
+    (isort)/B (bugbear). `utils/__init__.py` gets a per-file `F401`
+    ignore - it's a barrel module that deliberately re-exports its
+    submodules' public names, so every import in it is "unused" by
+    F401's definition without actually being dead code.
+  - `mypy.ini`: non-strict, `ignore_missing_imports = True` - this
+    codebase is only partially annotated (`utils/self_update.py` ~94%,
+    `web/app.py` ~14%), so this is a reporting baseline, not an
+    immediate gate.
+  - Measured before deciding what to enable: `ruff check` -> 477
+    violations (179 `E501`, 101 `I001`, 71 `F401`, 28 `W293`, 22
+    `F541`, 16 `F841`, 11 `E402`, 9 `B904`, 9 `E731`, 8 `B007`, 8
+    `E741`, 7 `F811`, 3 `F821`, 2 `W292`, 1 `B017`, 1 `E714`, 1
+    `W291`); `ruff format --diff` -> 105 files would be reformatted, 9
+    already formatted; `mypy` -> 255 errors across 36 files. None of
+    these were large enough, on their own, to justify disabling a rule
+    outright.
+  - A new `lint` job in `.github/workflows/tests.yml` runs `ruff
+    check`, `ruff format --check`, and `mypy`, each with
+    `continue-on-error: true` - it reports on every PR without
+    wedging merges on a first pass across a never-linted codebase. The
+    existing `test`/`secret-scan` required checks are unchanged.
+
 ## [2.10.12] - 2026-07-25
 
 ### Fixed

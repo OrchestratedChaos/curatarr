@@ -1,0 +1,59 @@
+# Ruff configuration (lint + format). No pyproject.toml exists in this
+# repo (see requirements*.txt/.lock's own header for why packaging
+# stays plain-script-shaped rather than a build-backend project) - this
+# file is the standalone equivalent, picked up automatically by ruff
+# without needing one.
+#
+# Added as part of the 2.10.13 audit-remediation pass, which measured
+# the codebase against this exact config before deciding what to
+# enable/ignore - see CHANGELOG.md's [2.10.13] entry for the violation
+# counts by rule that justified every choice below. Non-blocking in CI
+# for now (see .github/workflows/tests.yml's lint job) until the
+# 2.10.14 reformat lands.
+
+# 99.7% of lines in this codebase are under 120 columns already (measured
+# via a per-line-length histogram of every tracked .py file) - 120 keeps
+# the line length close to the codebase's actual, pre-existing style
+# instead of forcing the stricter 79/88 defaults onto ~63k lines of code
+# that were never written to fit them.
+line-length = 120
+
+# Matches requirements.lock's pinned `--python-version 3.10` floor
+# (also documented in requirements.txt and README.md) - the oldest
+# interpreter this project actually promises to run on.
+target-version = "py310"
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes - unused imports/variables, undefined names, etc.
+    "I",   # isort - import sorting/grouping
+    "B",   # flake8-bugbear - common real-world bug patterns
+]
+
+[lint.per-file-ignores]
+# utils/__init__.py deliberately re-exports its submodules' public names
+# (`from .cache import (...)`, `from .self_update import (...)`, etc.)
+# so the rest of the codebase can do `from utils import X` - see that
+# file itself. Every one of those imports is "unused" by F401's
+# definition (nothing in __init__.py itself references the name), but
+# removing any of them would be a real, breaking API change, not a
+# lint fix. This is the standard, well-known shape of a barrel
+# __init__.py; per-file-ignoring F401 here (rather than adding
+# `__all__` or per-import `# noqa`, either of which is a code change
+# out of scope for a config-only PR) is the correct fix, not a
+# workaround.
+"utils/__init__.py" = ["F401"]
+
+[lint.isort]
+# This codebase already groups "stdlib, then blank line, then
+# third-party/local" without stdlib/third-party/first-party
+# sub-grouping (see e.g. recommenders/external.py) - force-single-line
+# stays off and force-sort-within-sections stays default so isort's
+# fixes match that existing shape rather than inventing a new one.
+combine-as-imports = true
+
+[format]
+# Defaults (double quotes, space indentation) match the codebase's
+# existing predominant style - nothing overridden here.
