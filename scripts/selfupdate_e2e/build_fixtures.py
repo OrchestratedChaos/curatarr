@@ -25,10 +25,10 @@ Usage:
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -93,26 +93,97 @@ def generate_attacker_signing_key(work_dir):
 SELF_UPDATE_PY_RELATIVE = os.path.join("utils", "self_update.py")
 CONFIG_PY_RELATIVE = os.path.join("utils", "config.py")
 
-_PINNED_KEY_RE = re.compile(
-    r"PINNED_SIGNING_PUBLIC_KEY_B64 = \(\n\s*'[^']*'\n\)\n"
-    r"PINNED_SIGNING_KEY_FINGERPRINT = '[^']*'\n"
-)
-_VERSION_RE = re.compile(r'^__version__ = "[^"]*"', re.MULTILINE)
+
+# =============================================================================
+# Source patching - by AST shape, never by source text shape.
+#
+# This file has to rewrite two throwaway constants inside a REAL source
+# file before building a binary from it (see module docstring), then put
+# the original text back. A previous version of this did that via a
+# regex matched against the constant declaration's exact text layout
+# (quote style/line-wrapping/parenthesization) - a routine `ruff format`
+# reformat (2.10.14) changed that layout, the regex silently matched
+# zero times, and patch_pinned_key() never ran, so every fixture build
+# quietly built binaries that still trusted the REAL pinned key instead
+# of the throwaway one, and the whole workflow failed downstream instead
+# (see 2.10.16 CHANGELOG). Fixed by locating the assignment by parsing
+# the file into an AST and matching on the target's NAME - which is
+# identical however the assignment happens to be formatted - and
+# rewriting only that node's exact span. Still fails loudly (raises
+# SystemExit) if it can't find exactly one matching assignment, rather
+# than silently skipping the patch - that fail-loud design is what
+# surfaced the original regex break in the first place.
+# =============================================================================
+
+
+def _line_start_offsets(source):
+    """offsets[i] is the absolute character offset of the start of line
+    i + 1 (ast line numbers are 1-indexed) - lets an ast node's
+    (lineno, col_offset)/(end_lineno, end_col_offset) be converted into
+    plain string slice indices."""
+    offsets = [0]
+    for line in source.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    return offsets
+
+
+def _find_top_level_string_assignments(tree, name):
+    """Every top-level (module body) `<name> = "<string literal>"`
+    Assign node in `tree` - matched on AST shape (a single Name target
+    with this exact id, assigned a string constant), never on source
+    text shape, so quote style/line-wrapping/parenthesization can't
+    hide or duplicate a match."""
+    matches = []
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == name
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            matches.append(node)
+    return matches
+
+
+def _require_one(tree, name):
+    matches = _find_top_level_string_assignments(tree, name)
+    if len(matches) != 1:
+        raise SystemExit(
+            f'expected exactly one top-level `{name} = "..."` assignment, found {len(matches)} '
+            "- has that constant's declaration changed shape (renamed, moved into a class/function, "
+            "no longer a plain string literal)?"
+        )
+    return matches[0]
+
+
+def read_top_level_string_constant(source, name):
+    """Returns the string value of the sole top-level `name = "..."`
+    assignment in `source`. Fails loudly if it can't find exactly one."""
+    node = _require_one(ast.parse(source), name)
+    return node.value.value
+
+
+def replace_top_level_string_constant(source, name, new_value):
+    """Rewrites the sole top-level `name = "..."` assignment in `source`
+    to `name = <repr(new_value)>`, in place of whatever the original
+    assignment's exact text looked like. Fails loudly if it can't find
+    exactly one such assignment."""
+    tree = ast.parse(source)
+    node = _require_one(tree, name)
+    offsets = _line_start_offsets(source)
+    start = offsets[node.lineno - 1] + node.col_offset
+    end = offsets[node.end_lineno - 1] + node.end_col_offset
+    return source[:start] + f"{name} = {new_value!r}" + source[end:]
 
 
 def patch_pinned_key(repo_root, pub_b64, fingerprint):
     path = os.path.join(repo_root, SELF_UPDATE_PY_RELATIVE)
     with open(path, encoding="utf-8") as f:
         original = f.read()
-    replacement = (
-        f"PINNED_SIGNING_PUBLIC_KEY_B64 = (\n    '{pub_b64}'\n)\nPINNED_SIGNING_KEY_FINGERPRINT = '{fingerprint}'\n"
-    )
-    patched, n = _PINNED_KEY_RE.subn(replacement, original)
-    if n != 1:
-        raise SystemExit(
-            f"could not find exactly one PINNED_SIGNING_* block to patch in {path} "
-            f"(found {n}) - has that constant's format changed?"
-        )
+    patched = replace_top_level_string_constant(original, "PINNED_SIGNING_PUBLIC_KEY_B64", pub_b64)
+    patched = replace_top_level_string_constant(patched, "PINNED_SIGNING_KEY_FINGERPRINT", fingerprint)
     with open(path, "w", encoding="utf-8") as f:
         f.write(patched)
     return original
@@ -128,19 +199,15 @@ def read_version(repo_root):
     path = os.path.join(repo_root, CONFIG_PY_RELATIVE)
     with open(path, encoding="utf-8") as f:
         content = f.read()
-    m = re.search(r'^__version__ = "([^"]*)"', content, re.MULTILINE)
-    if not m:
-        raise SystemExit(f"could not find __version__ in {path}")
-    return content, m.group(1)
+    version = read_top_level_string_constant(content, "__version__")
+    return content, version
 
 
 def bump_version(repo_root, new_version):
     path = os.path.join(repo_root, CONFIG_PY_RELATIVE)
     with open(path, encoding="utf-8") as f:
         content = f.read()
-    patched, n = _VERSION_RE.subn(f'__version__ = "{new_version}"', content)
-    if n != 1:
-        raise SystemExit(f"could not patch __version__ in {path} (found {n} matches)")
+    patched = replace_top_level_string_constant(content, "__version__", new_version)
     with open(path, "w", encoding="utf-8") as f:
         f.write(patched)
 
