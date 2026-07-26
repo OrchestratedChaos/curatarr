@@ -2,22 +2,51 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.12] - 2026-07-25
+
+### Fixed
+
+- **`run.ps1` could abort mid-run on PowerShell 7.x where a plain PS 5.1
+  run would just warn and continue.** Every native-command call in the
+  script (`git`, `python`, ...) is followed by a `$LASTEXITCODE` check
+  that expects to handle a non-zero exit itself, matching `run.sh`'s
+  `|| echo ...` fallbacks - but PowerShell 7's
+  `$PSNativeCommandUseErrorActionPreference` (default has varied across
+  7.x) can turn that same non-zero exit into a *terminating* error under
+  this script's `$ErrorActionPreference = "Stop"`, aborting the whole
+  run before the check ever gets a chance to run. Found 17 call sites
+  with this exposure (the Trakt-sync step added in 2.10.11 plus 16
+  others - dependency install, update-check/apply, and the
+  recommendation steps). Fixed once, consistently, by forcing
+  `$PSNativeCommandUseErrorActionPreference = $false` at script scope,
+  restoring identical `$LASTEXITCODE`-based handling on both Windows
+  PowerShell 5.1 (which has no such variable at all - setting it there
+  is harmless) and PowerShell 7.x.
+- **`curatarr --help` / `-h` launched the full web UI instead of
+  printing usage.** `curatarr_app.py`'s argv dispatch had no case for
+  `--help`/`-h`, so both fell through to the same `else` branch as a
+  normal no-flag launch. Added real usage output (`--help`, `--version`,
+  `--self-update`, `--run-recommender <movie|tv|external|full> [user]`,
+  `--debug`) that exits 0 without touching Flask, and a regression test
+  proving it works even when Flask isn't installed (CLI/cron-only
+  installs).
+
+### Changed
+
+- Consolidated the `CHANGELOG.md` entries for `2.10.9` and `2.10.10`
+  into `2.10.11` - neither was ever tagged or released (`2.10.8` shipped,
+  then `2.10.11` shipped next), so a user reading the changelog could
+  believe they could install versions that never existed as releases.
+
 ## [2.10.11] - 2026-07-25
+
+_`2.10.9` and `2.10.10` were never tagged or released - their changes
+are folded into this entry rather than listed as separate installable
+versions._
 
 ### Fixed
 
 - **Horizon Huntarr (`find_horizon_movies`) no longer silently skips movies added to Plex after Sequel Huntarr's last run.** It reused Sequel Huntarr's cached movie-to-collection map but trusted it wholesale instead of diffing against the current library the way Sequel Huntarr's own `find_missing_sequels` already does. A movie added to the library after Sequel Huntarr's last scan had no entry in that cache, so Horizon Huntarr never looked up its collection and never checked it for upcoming/unreleased sequels - with zero network calls even attempted, and no error or warning. It stayed invisible to Horizon recommendations until Sequel Huntarr happened to run again and refresh the shared cache. Fixed by having Horizon Huntarr diff its current library against the cached map the same way Sequel Huntarr does, fetching collection data only for the still-uncached (newly-owned) movies.
-
-## [2.10.10] - 2026-07-25
-
-### Changed
-
-- **Added direct test coverage for Sequel Huntarr (`find_missing_sequels`) and Horizon Huntarr (`find_horizon_movies`) in `recommenders/external.py`** - both functions were previously only ever referenced via `@patch('recommenders.external.find_missing_sequels'/'find_horizon_movies')` in `tests/test_external.py`, so their real gap-finding, caching, and TV-special-reconciliation logic never actually ran under CI. Added 41 new tests that mock only the TMDB HTTP boundary (`requests.get`) and the Plex library/guid scan, so the real branching logic executes: library-access failure, empty library, cache hit vs. miss, missing/failed collection lookups, fully-owned and no-released-movies skip paths, unreleased-date heuristics, live `Canceled`/`Released` status overrides, sort order, cache-save shape, and Sequel Huntarr's TV-special reconciliation (TMDB-guid, normalized-title, grandparent-title-combo, and title-suffix matching, plus not-found/search-failure/section-failure paths). `recommenders/external.py` coverage: 55% -> 73% (both target functions individually now fully covered bar one apparently-unreachable defensive line). Surfaced but deliberately left unfixed (out of scope for this pass, flagged for follow-up): when Sequel Huntarr's shared cache exists but is partial (a movie was added to the library after Sequel Huntarr's last run), `find_horizon_movies`'s cache-reuse branch trusts `movie_collections` wholesale instead of diffing against it the way `find_missing_sequels` does, so a legitimately-owned movie's collection is silently never (re)checked for upcoming releases until Sequel Huntarr happens to run again.
-
-## [2.10.9] - 2026-07-25
-
-### Fixed
-
 - **Windows users' Trakt watch-history sync was silently never running.**
   `run.sh` syncs Plex watch history to Trakt before generating
   recommendations when `config/trakt.yml` has `auto_sync: true` - the
@@ -68,6 +97,10 @@ All notable changes to Curatarr will be documented in this file.
   is integrity-sensitive, so a swallowed `OSError` there was exactly
   the kind of bug that could hide silently. No control flow changed;
   the exceptions are still swallowed.
+
+### Changed
+
+- **Added direct test coverage for Sequel Huntarr (`find_missing_sequels`) and Horizon Huntarr (`find_horizon_movies`) in `recommenders/external.py`** - both functions were previously only ever referenced via `@patch('recommenders.external.find_missing_sequels'/'find_horizon_movies')` in `tests/test_external.py`, so their real gap-finding, caching, and TV-special-reconciliation logic never actually ran under CI. Added 41 new tests that mock only the TMDB HTTP boundary (`requests.get`) and the Plex library/guid scan, so the real branching logic executes: library-access failure, empty library, cache hit vs. miss, missing/failed collection lookups, fully-owned and no-released-movies skip paths, unreleased-date heuristics, live `Canceled`/`Released` status overrides, sort order, cache-save shape, and Sequel Huntarr's TV-special reconciliation (TMDB-guid, normalized-title, grandparent-title-combo, and title-suffix matching, plus not-found/search-failure/section-failure paths). `recommenders/external.py` coverage: 55% -> 73% (both target functions individually now fully covered bar one apparently-unreachable defensive line). Surfaced but deliberately left unfixed (out of scope for this pass, flagged for follow-up): when Sequel Huntarr's shared cache exists but is partial (a movie was added to the library after Sequel Huntarr's last run), `find_horizon_movies`'s cache-reuse branch trusts `movie_collections` wholesale instead of diffing against it the way `find_missing_sequels` does, so a legitimately-owned movie's collection is silently never (re)checked for upcoming releases until Sequel Huntarr happens to run again.
 
 ### Removed
 
