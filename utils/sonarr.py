@@ -4,11 +4,11 @@ Handles adding TV show recommendations to Sonarr.
 """
 
 import logging
-from typing import Dict, Optional, Any, List
+from typing import Any, Dict, List, Optional
 
 from .api_client import BaseAPIClient
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Backwards compatibility exports (now defined on class)
 SONARR_RATE_LIMIT_DELAY = 0.1
@@ -17,6 +17,7 @@ SONARR_REQUEST_TIMEOUT = 30
 
 class SonarrAPIError(Exception):
     """Raised when Sonarr API request fails."""
+
     pass
 
 
@@ -41,20 +42,17 @@ class SonarrClient(BaseAPIClient):
             api_key: Sonarr API key
         """
         super().__init__()
-        self.url = url.rstrip('/')
+        self.url = url.rstrip("/")
         self.api_key = api_key
         self._existing_series: Optional[Dict[str, int]] = None
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests."""
-        return {
-            "Content-Type": "application/json",
-            "X-Api-Key": self.api_key
-        }
+        return {"Content-Type": "application/json", "X-Api-Key": self.api_key}
 
-    def _make_request(self, method: str, endpoint: str,
-                      data: Optional[Dict] = None,
-                      params: Optional[Dict] = None) -> Any:
+    def _make_request(
+        self, method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None
+    ) -> Any:
         """Make an API request to Sonarr."""
         url = f"{self.url}/api/v3/{endpoint}"
         return self._make_request_to_url(method, url, data, params)
@@ -95,9 +93,9 @@ class SonarrClient(BaseAPIClient):
             series = self.get_series()
             self._existing_series = {}
             for s in series:
-                imdb_id = s.get('imdbId')
+                imdb_id = s.get("imdbId")
                 if imdb_id:
-                    self._existing_series[imdb_id] = s['id']
+                    self._existing_series[imdb_id] = s["id"]
         return self._existing_series
 
     def series_exists(self, imdb_id: str) -> bool:
@@ -149,8 +147,8 @@ class SonarrClient(BaseAPIClient):
         """
         profiles = self.get_quality_profiles()
         for profile in profiles:
-            if profile['name'].lower() == profile_name.lower():
-                return profile['id']
+            if profile["name"].lower() == profile_name.lower():
+                return profile["id"]
         return None
 
     def get_root_folders(self) -> List[Dict]:
@@ -174,8 +172,8 @@ class SonarrClient(BaseAPIClient):
         """
         folders = self.get_root_folders()
         for folder in folders:
-            if folder['path'] == folder_path:
-                return folder['path']
+            if folder["path"] == folder_path:
+                return folder["path"]
         return None
 
     def get_tags(self) -> List[Dict]:
@@ -199,12 +197,12 @@ class SonarrClient(BaseAPIClient):
         """
         tags = self.get_tags()
         for tag in tags:
-            if tag['label'].lower() == tag_label.lower():
-                return tag['id']
+            if tag["label"].lower() == tag_label.lower():
+                return tag["id"]
 
         # Create new tag
         result = self._make_request("POST", "tag", data={"label": tag_label})
-        return result['id']
+        return result["id"]
 
     def add_series(
         self,
@@ -217,7 +215,7 @@ class SonarrClient(BaseAPIClient):
         season_folder: bool = True,
         series_type: str = "standard",
         tag_ids: Optional[List[int]] = None,
-        search_for_missing: bool = False
+        search_for_missing: bool = False,
     ) -> Dict:
         """
         Add a series to Sonarr.
@@ -244,7 +242,7 @@ class SonarrClient(BaseAPIClient):
         add_options = {
             "searchForMissingEpisodes": search_for_missing,
             "searchForCutoffUnmetEpisodes": False,
-            "monitor": monitor_option
+            "monitor": monitor_option,
         }
 
         data = {
@@ -256,7 +254,7 @@ class SonarrClient(BaseAPIClient):
             "seasonFolder": season_folder,
             "seriesType": series_type,
             "addOptions": add_options,
-            "tags": tag_ids or []
+            "tags": tag_ids or [],
         }
 
         return self._make_request("POST", "series", data=data)
@@ -278,7 +276,7 @@ def create_sonarr_client_from(url: Optional[str], api_key: Optional[str]) -> Opt
         SonarrClient if url/api_key are present and api_key isn't the
         placeholder, None otherwise
     """
-    if not url or not api_key or api_key == 'YOUR_SONARR_API_KEY':
+    if not url or not api_key or api_key == "YOUR_SONARR_API_KEY":
         return None
 
     return SonarrClient(url, api_key)
@@ -294,9 +292,9 @@ def create_sonarr_client(config: Dict) -> Optional[SonarrClient]:
     Returns:
         SonarrClient if configured and enabled, None otherwise
     """
-    sonarr_config = config.get('sonarr', {})
+    sonarr_config = config.get("sonarr", {})
 
-    if not sonarr_config.get('enabled', False):
+    if not sonarr_config.get("enabled", False):
         return None
 
-    return create_sonarr_client_from(sonarr_config.get('url'), sonarr_config.get('api_key'))
+    return create_sonarr_client_from(sonarr_config.get("url"), sonarr_config.get("api_key"))

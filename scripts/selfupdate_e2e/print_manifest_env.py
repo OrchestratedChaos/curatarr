@@ -14,22 +14,23 @@ contains.
 
 Usage: python print_manifest_env.py <bad_sig|bad_hash|rollback>
 """
+
 import json
 import os
 import shlex
 import sys
 
 scenario = sys.argv[1]
-manifest_path = os.environ['MANIFEST']
+manifest_path = os.environ["MANIFEST"]
 
 with open(manifest_path) as f:
     manifest = json.load(f)
 
 values = {
-    'RELEASE_DIR': manifest['releases'][scenario]['dir'],
-    'OLD_BINARY': manifest['old_binary'],
-    'OLD_VERSION': manifest['old_version'],
-    'NEW_VERSION': manifest['new_version'],
+    "RELEASE_DIR": manifest["releases"][scenario]["dir"],
+    "OLD_BINARY": manifest["old_binary"],
+    "OLD_VERSION": manifest["old_version"],
+    "NEW_VERSION": manifest["new_version"],
 }
 for key, value in values.items():
     print(f"{key}={shlex.quote(value)}")

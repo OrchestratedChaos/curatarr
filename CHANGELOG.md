@@ -2,6 +2,54 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.14] - 2026-07-25
+
+### Changed
+
+- **Reformatted the entire codebase with `ruff format` and applied
+  `ruff check --fix`'s safe auto-fixes** (added in 2.10.13) - mechanical
+  only, no hand-edited logic. 105 files reformatted (quote-style
+  normalization, slice/whitespace spacing, multi-line call/import
+  reflow to the configured 120-column width); `ruff check --fix` then
+  cleared every safely-fixable violation it found (unsorted imports,
+  most unused imports, useless f-string prefixes, one
+  redefined-while-unused, one `not ... is` rewrite).
+  - **Six of the "unused" imports `--fix` removed were actually
+    cross-module re-exports** - a name imported into a module without
+    being referenced inside that module itself, but relied on
+    elsewhere (`recommenders/external.py`'s `SERVICE_DISPLAY_NAMES`,
+    `get_tmdb_id_from_imdb`, and `sync_watch_history_to_trakt`;
+    `web/config_test_connection.py`'s `RadarrAPIError`,
+    `SonarrAPIError`, and `TautulliAPIError`, used by tests to
+    construct fake client errors). Removing them broke real imports/
+    tests, caught by running the full suite - reverted all six by
+    hand; they remain as unresolved `F401` findings (ruff has no way to
+    know a name is part of a module's public surface without an
+    `__all__` it doesn't have) rather than silently "fixed" again.
+  - Two guardrail tests (`test_web_docker_server.py`,
+    `test_web_routes.py`) asserted on the literal single-quoted source
+    text of a binding call - updated to match the reformatted
+    double-quoted source; the guardrail itself (never binding
+    `0.0.0.0` outside `docker_server.py`) is unchanged.
+  - **`utils/self_update.py` got extra scrutiny** (it performs the
+    self-update itself, and has shipped broken three times before):
+    diffed in isolation after the reformat - every change is
+    quote-style normalization, slice/whitespace spacing, or line
+    reflow; confirmed zero remaining `ruff check` findings for the
+    file and all of `tests/test_self_update.py`/
+    `test_self_update_handoff.py` still passing.
+  - Full suite: 2333 passed, 1 skipped (unchanged from 2.10.13).
+  - `ruff check` still finds 128 violations post-fix (the six reverted
+    re-exports above plus 122 that need a human judgment call - long
+    lines inside strings/comments the formatter can't wrap, unused
+    variables, ambiguous single-letter names, bare-`raise`-without-
+    `from`, etc.) - left as-is, not hand-fixed, per this pass's
+    mechanical-only scope. `mypy` is untouched (still 255 pre-existing
+    errors - this codebase is only partially annotated).
+  - CI's `lint` job (2.10.13): `ruff format --check` is now blocking
+    (main is clean) - `ruff check` and `mypy` stay non-blocking for the
+    reasons above.
+
 ## [2.10.13] - 2026-07-25
 
 ### Added

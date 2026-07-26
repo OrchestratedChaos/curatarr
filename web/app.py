@@ -37,8 +37,16 @@ import webbrowser
 from datetime import datetime
 
 from flask import (
-    Flask, Response, abort, jsonify, redirect, render_template,
-    request, send_from_directory, stream_with_context, url_for,
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    stream_with_context,
+    url_for,
 )
 from flask.testing import FlaskClient
 from werkzeug.datastructures import Headers
@@ -123,10 +131,10 @@ BASELINE_CSP = (
 )
 
 _BASELINE_SECURITY_HEADERS = {
-    'X-Frame-Options': 'DENY',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': BASELINE_CSP,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": BASELINE_CSP,
 }
 
 # Used by update_dismiss() below to validate a 'next' redirect target is
@@ -137,7 +145,7 @@ _BASELINE_SECURITY_HEADERS = {
 # URL to another origin (//evil.com) - a well-known open-redirect
 # bypass. Requiring the character right after the leading '/' to be
 # neither '/' nor '\' closes that off.
-_SAFE_RELATIVE_REDIRECT_RE = re.compile(r'^/[^/\\]')
+_SAFE_RELATIVE_REDIRECT_RE = re.compile(r"^/[^/\\]")
 
 
 class _BrowserLikeTestClient(FlaskClient):
@@ -152,10 +160,10 @@ class _BrowserLikeTestClient(FlaskClient):
     """
 
     def open(self, *args, **kwargs):
-        headers = Headers(kwargs.pop('headers', None))
-        if 'Origin' not in headers:
-            headers['Origin'] = 'http://localhost'
-        kwargs['headers'] = headers
+        headers = Headers(kwargs.pop("headers", None))
+        if "Origin" not in headers:
+            headers["Origin"] = "http://localhost"
+        kwargs["headers"] = headers
         return super().open(*args, **kwargs)
 
 
@@ -174,14 +182,14 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
     explicitly keeps today's loopback-only, no-token-required behavior.
     """
     project_root = project_root or get_project_root()
-    bind_host = bind_host or os.environ.get('CURATARR_UI_HOST', '127.0.0.1')
-    logs_dir = os.path.join(project_root, 'logs')
-    external_dir = os.path.join(project_root, 'recommendations', 'external')
+    bind_host = bind_host or os.environ.get("CURATARR_UI_HOST", "127.0.0.1")
+    logs_dir = os.path.join(project_root, "logs")
+    external_dir = os.path.join(project_root, "recommendations", "external")
 
     app = Flask(__name__)
-    app.config['PROJECT_ROOT'] = project_root
-    app.config['LOGS_DIR'] = logs_dir
-    app.config['EXTERNAL_DIR'] = external_dir
+    app.config["PROJECT_ROOT"] = project_root
+    app.config["LOGS_DIR"] = logs_dir
+    app.config["EXTERNAL_DIR"] = external_dir
     app.job_manager = JobManager(project_root, logs_dir)
     app.update_manager = UpdateManager(project_root, logs_dir)
     app.test_client_class = _BrowserLikeTestClient
@@ -203,7 +211,7 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         return response
 
     def _load_config():
-        config_path = os.path.join(project_root, 'config', 'config.yml')
+        config_path = os.path.join(project_root, "config", "config.yml")
         try:
             return load_config(config_path)
         except Exception:
@@ -246,35 +254,35 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
             # every single page render for an install that can't even
             # load its config yet.
             if not config:
-                return {'update_banner': None}
+                return {"update_banner": None}
             update_mode = get_update_mode(config)
             latest, current, is_newer = update_available(update_mode=update_mode)
             if not is_newer:
-                return {'update_banner': None}
+                return {"update_banner": None}
             # 7-day dismiss snooze, keyed to the exact version offered -
             # see utils.update_dismissal.is_dismissed's docstring for why
             # a newer release than the one dismissed always overrides an
             # active snooze instead of also being suppressed.
             if is_dismissed(latest):
-                return {'update_banner': None}
+                return {"update_banner": None}
             return {
-                'update_banner': {
-                    'latest': latest,
-                    'current': current,
-                    'frozen': getattr(sys, 'frozen', False),
+                "update_banner": {
+                    "latest": latest,
+                    "current": current,
+                    "frozen": getattr(sys, "frozen", False),
                     # Docker images update via `docker pull`, not this
                     # banner's "Update now" button (see
                     # web/update_apply.py's UpdateManager.begin_update
                     # RUNNING_IN_DOCKER gate, which refuses that button
                     # anyway) - base.html renders a pull-the-new-image
                     # instruction instead of the button when this is set.
-                    'docker': os.environ.get('RUNNING_IN_DOCKER') == 'true',
+                    "docker": os.environ.get("RUNNING_IN_DOCKER") == "true",
                 }
             }
         except Exception:
-            return {'update_banner': None}
+            return {"update_banner": None}
 
-    @app.post('/update/dismiss')
+    @app.post("/update/dismiss")
     def update_dismiss():
         """Snooze the update banner for this version for 7 days (see
         utils.update_dismissal) - server-side state, not a cookie (as of
@@ -283,20 +291,20 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         state is what lets utils.cli's print_update_notice respect the
         same dismissal, which a browser cookie never could. Redirects
         back to wherever the dismiss button was clicked from."""
-        version = request.form.get('version', '')
-        next_url = request.form.get('next') or url_for('dashboard')
+        version = request.form.get("version", "")
+        next_url = request.form.get("next") or url_for("dashboard")
         # Only ever redirect to a same-app relative path - never let an
         # attacker-controlled 'next' turn this into an open redirect
         # (see _SAFE_RELATIVE_REDIRECT_RE's comment for the '/\' bypass
         # a plain startswith('/') check alone would miss).
         if not _SAFE_RELATIVE_REDIRECT_RE.match(next_url):
-            next_url = url_for('dashboard')
+            next_url = url_for("dashboard")
         record_dismissal(version)
         return redirect(next_url, code=303)
 
-    @app.post('/update/apply')
+    @app.post("/update/apply")
     def update_apply_route():
-        """"Update now": source installs verify a newer signed release
+        """ "Update now": source installs verify a newer signed release
         actually exists (see web.update_apply.check_verified_update -
         shells out to run.sh's/run.ps1's own verification, never
         reimplemented here); frozen binaries do a cheap advisory check
@@ -321,19 +329,21 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         # synchronous "no" for the common case of a user clicking
         # Update now while a run they can see is still going.
         if app.job_manager.is_running():
-            return jsonify({'error': 'A recommender run is currently in progress - wait for it to finish before updating.'}), 409
+            return jsonify(
+                {"error": "A recommender run is currently in progress - wait for it to finish before updating."}
+            ), 409
 
-        host = '127.0.0.1'
-        port = int(os.environ.get('CURATARR_UI_PORT', DEFAULT_PORT))
+        host = "127.0.0.1"
+        port = int(os.environ.get("CURATARR_UI_PORT", DEFAULT_PORT))
         try:
             tag = app.update_manager.begin_update(host, port)
         except UpdateAlreadyInProgressError as exc:
-            return jsonify({'error': str(exc)}), 409
+            return jsonify({"error": str(exc)}), 409
         except UpdateNotAvailableError as exc:
-            return jsonify({'error': str(exc)}), 404
-        return jsonify({'status': 'started', 'tag': tag}), 202
+            return jsonify({"error": str(exc)}), 404
+        return jsonify({"status": "started", "tag": tag}), 202
 
-    @app.get('/healthz')
+    @app.get("/healthz")
     def healthz():
         """Unauthenticated-by-design (matches every other GET route -
         this app has no auth boundary beyond binding 127.0.0.1 and the
@@ -348,9 +358,9 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         needs a valid token/loopback bind the same as every other
         route), widening this unauthenticated endpoint with any of that
         would be an information-disclosure regression."""
-        return jsonify({'version': __version__})
+        return jsonify({"version": __version__})
 
-    @app.get('/status.json')
+    @app.get("/status.json")
     def status_json():
         """Authenticated (NOT in web.security's _TOKEN_EXEMPT_PATHS,
         same as every route below) readiness/status detail that would be
@@ -366,21 +376,25 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         last_run = None
         for user in users:
             status = get_last_run_status(logs_dir, user)
-            if status.get('timestamp') is None:
+            if status.get("timestamp") is None:
                 continue
-            if last_run is None or status['timestamp'] > last_run['timestamp']:
+            if last_run is None or status["timestamp"] > last_run["timestamp"]:
                 last_run = status
-        return jsonify({
-            'version': __version__,
-            'config_valid': config is not None,
-            'job_running': app.job_manager.is_running(),
-            'last_run': {
-                'timestamp': last_run['timestamp'].isoformat(),
-                'status': last_run['status'],
-            } if last_run else None,
-        })
+        return jsonify(
+            {
+                "version": __version__,
+                "config_valid": config is not None,
+                "job_running": app.job_manager.is_running(),
+                "last_run": {
+                    "timestamp": last_run["timestamp"].isoformat(),
+                    "status": last_run["status"],
+                }
+                if last_run
+                else None,
+            }
+        )
 
-    @app.get('/metrics')
+    @app.get("/metrics")
     def metrics_endpoint():
         """Prometheus text-format metrics (see utils/metrics.py) - NOT
         in web.security's _TOKEN_EXEMPT_PATHS, so it's behind the exact
@@ -396,7 +410,7 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         anything curatarr talks to."""
         return Response(
             render_prometheus_text(),
-            mimetype='text/plain; version=0.0.4; charset=utf-8',
+            mimetype="text/plain; version=0.0.4; charset=utf-8",
         )
 
     @app.errorhandler(Exception)
@@ -415,47 +429,48 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         code/body instead of this becoming a second, wrongly-classified
         exception)."""
         from werkzeug.exceptions import HTTPException
+
         if isinstance(exc, HTTPException):
             return exc
-        record_unhandled_error(component='web')
+        record_unhandled_error(component="web")
         raise exc
 
-    @app.get('/')
+    @app.get("/")
     def dashboard():
         config = _load_config()
         rows = [
             {
-                'username': user,
+                "username": user,
                 **get_last_run_status(logs_dir, user),
-                'watchlist_file': find_user_watchlist(external_dir, config, user),
+                "watchlist_file": find_user_watchlist(external_dir, config, user),
             }
             for user in (get_users_from_config(config) if config else [])
         ]
-        return render_template('dashboard.html', rows=rows, job=app.job_manager.status())
+        return render_template("dashboard.html", rows=rows, job=app.job_manager.status())
 
-    @app.get('/run')
+    @app.get("/run")
     def run_form():
         return render_template(
-            'run.html',
+            "run.html",
             users=_load_users(),
             job=app.job_manager.status(),
             running=app.job_manager.is_running(),
-            error=request.args.get('error'),
+            error=request.args.get("error"),
         )
 
-    @app.post('/run')
+    @app.post("/run")
     def run_trigger():
-        engine = request.form.get('engine', 'full')
-        user = request.form.get('user', 'all')
+        engine = request.form.get("engine", "full")
+        user = request.form.get("user", "all")
         try:
             app.job_manager.start(engine, user, _load_users())
         except JobAlreadyRunningError:
-            return redirect(url_for('run_form', error='busy'), code=303)
+            return redirect(url_for("run_form", error="busy"), code=303)
         except JobError as exc:
-            return redirect(url_for('run_form', error=str(exc)), code=303)
-        return redirect(url_for('run_form'), code=303)
+            return redirect(url_for("run_form", error=str(exc)), code=303)
+        return redirect(url_for("run_form"), code=303)
 
-    @app.get('/run/stream')
+    @app.get("/run/stream")
     def run_stream():
         job = app.job_manager.current_job()
         if job is None:
@@ -489,52 +504,54 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
 
         return Response(
             stream_with_context(generate()),
-            mimetype='text/event-stream',
-            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    @app.get('/run/status')
+    @app.get("/run/status")
     def run_status():
-        return jsonify(app.job_manager.status() or {'state': 'idle'})
+        return jsonify(app.job_manager.status() or {"state": "idle"})
 
-    @app.get('/results')
+    @app.get("/results")
     def results():
         watchlists = []
         if os.path.isdir(external_dir):
             for name in sorted(os.listdir(external_dir)):
-                if name.endswith(('.html', '.md')):
+                if name.endswith((".html", ".md")):
                     path = os.path.join(external_dir, name)
-                    watchlists.append({
-                        'name': name,
-                        'mtime': datetime.fromtimestamp(os.path.getmtime(path)),
-                    })
-        return render_template('results.html', watchlists=watchlists, logs=list_log_files(logs_dir))
+                    watchlists.append(
+                        {
+                            "name": name,
+                            "mtime": datetime.fromtimestamp(os.path.getmtime(path)),
+                        }
+                    )
+        return render_template("results.html", watchlists=watchlists, logs=list_log_files(logs_dir))
 
-    @app.get('/results/watchlist/<path:filename>')
+    @app.get("/results/watchlist/<path:filename>")
     def results_watchlist(filename):
-        if not filename.endswith(('.html', '.md')) or not os.path.isdir(external_dir):
+        if not filename.endswith((".html", ".md")) or not os.path.isdir(external_dir):
             abort(404)
         # send_from_directory refuses path traversal on its own; the
         # extension check above is belt-and-suspenders since this only
         # ever serves generated watchlist output, not arbitrary files.
         response = send_from_directory(external_dir, filename)
-        if filename.endswith('.html'):
+        if filename.endswith(".html"):
             # Defense-in-depth on top of the escaping fix in
             # recommenders/external_output.py (TMDB-derived fields are
             # HTML-escaped at generation time now) - even a future gap
             # there shouldn't be able to turn into a script that can
             # drive this app's own state-changing endpoints.
-            response.headers['Content-Security-Policy'] = WATCHLIST_CSP
-            response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers["Content-Security-Policy"] = WATCHLIST_CSP
+            response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
-    @app.get('/results/log/<path:filename>')
+    @app.get("/results/log/<path:filename>")
     def results_log(filename):
         try:
             tail = read_log_tail(logs_dir, filename)
         except FileNotFoundError:
             abort(404)
-        return render_template('log_view.html', filename=filename, content=tail)
+        return render_template("log_view.html", filename=filename, content=tail)
 
     return app
 
@@ -545,7 +562,7 @@ def _wait_for_listening(port: int, timeout: float = 15.0) -> bool:
     while time.time() < deadline:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.2)
-            if sock.connect_ex(('127.0.0.1', port)) == 0:
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
                 return True
         time.sleep(0.1)
     return False
@@ -578,14 +595,14 @@ def _skip_slow_server_name_lookup() -> None:
     since Flask's own app.run() doesn't expose a server class hook."""
     import socket as _socket
 
-    if getattr(_socket.getfqdn, '_curatarr_fast_path', False):
+    if getattr(_socket.getfqdn, "_curatarr_fast_path", False):
         return
 
     _real_getfqdn = _socket.getfqdn
 
-    def _fast_getfqdn(name=''):
-        if not name or name in ('127.0.0.1', 'localhost', '::1'):
-            return 'localhost'
+    def _fast_getfqdn(name=""):
+        if not name or name in ("127.0.0.1", "localhost", "::1"):
+            return "localhost"
         return _real_getfqdn(name)
 
     _fast_getfqdn._curatarr_fast_path = True
@@ -615,7 +632,7 @@ def main():
     Starts Flask bound to 127.0.0.1 only, and opens the browser once the
     server is actually accepting connections (not on a fixed timer).
     """
-    port = int(os.environ.get('CURATARR_UI_PORT', DEFAULT_PORT))
+    port = int(os.environ.get("CURATARR_UI_PORT", DEFAULT_PORT))
     app = create_app()
 
     # H3: a server shutdown (Ctrl+C, SIGTERM from a process manager, or
@@ -645,10 +662,11 @@ def main():
     # tab is already open and will reload itself once /healthz comes
     # back, so auto-opening a second one here would just be an
     # unexpected extra tab popping up after an update.
-    if os.environ.get('CURATARR_SKIP_BROWSER_OPEN') != '1':
+    if os.environ.get("CURATARR_SKIP_BROWSER_OPEN") != "1":
+
         def _open_when_ready():
             if _wait_for_listening(port):
-                webbrowser.open(f'http://127.0.0.1:{port}/')
+                webbrowser.open(f"http://127.0.0.1:{port}/")
 
         threading.Thread(target=_open_when_ready, daemon=True).start()
 
@@ -656,8 +674,8 @@ def main():
     # doesn't block other requests (dashboard/results while a run is
     # live). See _run_with_bind_retry for why this isn't a bare
     # app.run() call.
-    _run_with_bind_retry(app, '127.0.0.1', port)
+    _run_with_bind_retry(app, "127.0.0.1", port)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

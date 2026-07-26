@@ -2,31 +2,33 @@
 Tests for utils/display.py - Display and logging utilities.
 """
 
-import pytest
+import json
 import logging
 import sys
 from io import StringIO
-from unittest.mock import Mock, patch, MagicMock
-
-import json
+from unittest.mock import Mock, patch
 
 from utils.display import (
-    RED, GREEN, YELLOW, CYAN, RESET,
     ANSI_PATTERN,
+    CYAN,
+    GREEN,
+    RED,
+    RESET,
+    YELLOW,
     ColoredFormatter,
     JsonFormatter,
     TeeLogger,
-    setup_logging,
-    print_user_header,
-    print_user_footer,
-    print_status,
+    format_media_output,
+    log_error,
     log_info,
     log_warning,
-    log_error,
-    show_progress,
-    format_media_output,
     print_similarity_breakdown,
-    user_select_recommendations
+    print_status,
+    print_user_footer,
+    print_user_header,
+    setup_logging,
+    show_progress,
+    user_select_recommendations,
 )
 
 
@@ -35,16 +37,16 @@ class TestColorConstants:
 
     def test_color_codes_defined(self):
         """Test that color codes are defined."""
-        assert RED == '\033[91m'
-        assert GREEN == '\033[92m'
-        assert YELLOW == '\033[93m'
-        assert CYAN == '\033[96m'
-        assert RESET == '\033[0m'
+        assert RED == "\033[91m"
+        assert GREEN == "\033[92m"
+        assert YELLOW == "\033[93m"
+        assert CYAN == "\033[96m"
+        assert RESET == "\033[0m"
 
     def test_ansi_pattern_strips_colors(self):
         """Test that ANSI pattern matches color codes."""
         colored_text = f"{RED}Error{RESET}"
-        stripped = ANSI_PATTERN.sub('', colored_text)
+        stripped = ANSI_PATTERN.sub("", colored_text)
         assert stripped == "Error"
 
 
@@ -55,8 +57,7 @@ class TestColoredFormatter:
         """Test formatting DEBUG level."""
         formatter = ColoredFormatter()
         record = logging.LogRecord(
-            name='test', level=logging.DEBUG, pathname='', lineno=0,
-            msg='Test message', args=(), exc_info=None
+            name="test", level=logging.DEBUG, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
         formatted = formatter.format(record)
@@ -67,8 +68,7 @@ class TestColoredFormatter:
         """Test formatting INFO level."""
         formatter = ColoredFormatter()
         record = logging.LogRecord(
-            name='test', level=logging.INFO, pathname='', lineno=0,
-            msg='Test message', args=(), exc_info=None
+            name="test", level=logging.INFO, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
         formatted = formatter.format(record)
@@ -79,8 +79,7 @@ class TestColoredFormatter:
         """Test formatting WARNING level."""
         formatter = ColoredFormatter()
         record = logging.LogRecord(
-            name='test', level=logging.WARNING, pathname='', lineno=0,
-            msg='Test message', args=(), exc_info=None
+            name="test", level=logging.WARNING, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
         formatted = formatter.format(record)
@@ -91,8 +90,7 @@ class TestColoredFormatter:
         """Test formatting ERROR level."""
         formatter = ColoredFormatter()
         record = logging.LogRecord(
-            name='test', level=logging.ERROR, pathname='', lineno=0,
-            msg='Test message', args=(), exc_info=None
+            name="test", level=logging.ERROR, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
         formatted = formatter.format(record)
@@ -103,8 +101,7 @@ class TestColoredFormatter:
         """Test formatting CRITICAL level."""
         formatter = ColoredFormatter()
         record = logging.LogRecord(
-            name='test', level=logging.CRITICAL, pathname='', lineno=0,
-            msg='Test message', args=(), exc_info=None
+            name="test", level=logging.CRITICAL, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
         formatted = formatter.format(record)
@@ -122,7 +119,7 @@ class TestTeeLogger:
 
         # Directly manipulate to test file writing
         colored_text = f"{GREEN}Success{RESET}"
-        stripped = ANSI_PATTERN.sub('', colored_text)
+        stripped = ANSI_PATTERN.sub("", colored_text)
         mock_logfile.write(stripped)
 
         assert mock_logfile.getvalue() == "Success"
@@ -157,7 +154,7 @@ class TestTeeLogger:
         original_stdout = sys.stdout
 
         # Create mock stdout without buffer
-        mock_stdout = Mock(spec=['write', 'flush'])
+        mock_stdout = Mock(spec=["write", "flush"])
 
         try:
             sys.stdout = mock_stdout
@@ -188,7 +185,7 @@ class TestTeeLogger:
         original_stdout = sys.stdout
 
         # Create mock stdout without buffer
-        mock_stdout = Mock(spec=['write', 'flush'])
+        mock_stdout = Mock(spec=["write", "flush"])
 
         try:
             sys.stdout = mock_stdout
@@ -206,10 +203,12 @@ class TestTeeLogger:
 
         # Create mock buffer that raises once, then succeeds
         mock_buffer = Mock()
-        mock_buffer.write = Mock(side_effect=[
-            UnicodeEncodeError('ascii', 'test', 0, 1, 'test'),  # First call fails
-            None  # Second call succeeds (fallback)
-        ])
+        mock_buffer.write = Mock(
+            side_effect=[
+                UnicodeEncodeError("ascii", "test", 0, 1, "test"),  # First call fails
+                None,  # Second call succeeds (fallback)
+            ]
+        )
         tee.stdout_buffer = mock_buffer
 
         # Should not raise, falls back to safe encoding
@@ -227,7 +226,7 @@ class TestTeeLogger:
         original_sys_stdout = sys.__stdout__
 
         # Create mock stdout without buffer
-        mock_stdout = Mock(spec=['write', 'flush'])
+        mock_stdout = Mock(spec=["write", "flush"])
         mock_sys_stdout = Mock()
         mock_sys_stdout.flush = Mock()
 
@@ -259,14 +258,14 @@ class TestSetupLogging:
 
     def test_config_level(self):
         """Test using level from config."""
-        config = {'logging': {'level': 'warning'}}
+        config = {"logging": {"level": "warning"}}
         logger = setup_logging(debug=False, config=config)
 
         assert logger.level == logging.WARNING
 
     def test_invalid_config_level_defaults_to_info(self):
         """Test that invalid config level defaults to INFO."""
-        config = {'logging': {'level': 'invalid_level'}}
+        config = {"logging": {"level": "invalid_level"}}
         logger = setup_logging(debug=False, config=config)
 
         assert logger.level == logging.INFO
@@ -275,17 +274,22 @@ class TestSetupLogging:
         """Test that curatarr logger is returned."""
         logger = setup_logging()
 
-        assert logger.name == 'curatarr'
+        assert logger.name == "curatarr"
 
 
 class TestJsonFormatter:
     """Tests for JsonFormatter - the opt-in structured (JSON-lines) log
     format (see logging.format: json in config.yml / setup_logging)."""
 
-    def _record(self, msg='Test message', level=logging.INFO, extra=None):
+    def _record(self, msg="Test message", level=logging.INFO, extra=None):
         record = logging.LogRecord(
-            name='curatarr', level=level, pathname='', lineno=0,
-            msg=msg, args=(), exc_info=None,
+            name="curatarr",
+            level=level,
+            pathname="",
+            lineno=0,
+            msg=msg,
+            args=(),
+            exc_info=None,
         )
         for key, value in (extra or {}).items():
             setattr(record, key, value)
@@ -299,28 +303,33 @@ class TestJsonFormatter:
 
     def test_has_consistent_core_fields(self):
         formatter = JsonFormatter()
-        payload = json.loads(formatter.format(self._record(msg='hello world', level=logging.WARNING)))
-        assert payload['level'] == 'WARNING'
-        assert payload['logger'] == 'curatarr'
-        assert payload['message'] == 'hello world'
-        assert 'timestamp' in payload
+        payload = json.loads(formatter.format(self._record(msg="hello world", level=logging.WARNING)))
+        assert payload["level"] == "WARNING"
+        assert payload["logger"] == "curatarr"
+        assert payload["message"] == "hello world"
+        assert "timestamp" in payload
 
     def test_timestamp_is_iso8601(self):
         from datetime import datetime
+
         formatter = JsonFormatter()
         payload = json.loads(formatter.format(self._record()))
         # Raises ValueError if not a real ISO 8601 timestamp.
-        datetime.fromisoformat(payload['timestamp'])
+        datetime.fromisoformat(payload["timestamp"])
 
     def test_includes_structured_extra_fields(self):
         formatter = JsonFormatter()
-        payload = json.loads(formatter.format(self._record(
-            msg='run finished',
-            extra={'user': 'alice', 'engine': 'movie', 'duration': 12.5},
-        )))
-        assert payload['user'] == 'alice'
-        assert payload['engine'] == 'movie'
-        assert payload['duration'] == 12.5
+        payload = json.loads(
+            formatter.format(
+                self._record(
+                    msg="run finished",
+                    extra={"user": "alice", "engine": "movie", "duration": 12.5},
+                )
+            )
+        )
+        assert payload["user"] == "alice"
+        assert payload["engine"] == "movie"
+        assert payload["duration"] == 12.5
 
     def test_redacts_token_shaped_value_in_message(self):
         """Proves a token-shaped value is redacted in JSON output - same
@@ -332,31 +341,39 @@ class TestJsonFormatter:
         check inspects on its own merits regardless of similar-shaped
         values already existing elsewhere in the suite."""
         formatter = JsonFormatter()
-        payload = json.loads(formatter.format(self._record(
-            msg='GET http://localhost:32400/library?X-Plex-Token=xxxxxxxxxxxxxxxxxxxx',
-        )))
-        assert 'xxxxxxxxxxxxxxxxxxxx' not in payload['message']
-        assert 'REDACTED' in payload['message']
+        payload = json.loads(
+            formatter.format(
+                self._record(
+                    msg="GET http://localhost:32400/library?X-Plex-Token=xxxxxxxxxxxxxxxxxxxx",
+                )
+            )
+        )
+        assert "xxxxxxxxxxxxxxxxxxxx" not in payload["message"]
+        assert "REDACTED" in payload["message"]
 
     def test_redacts_token_shaped_value_in_extra_field(self):
         """Same placeholder value as test_masks_bearer_header in
         tests/test_web_security.py's TestRedact."""
         formatter = JsonFormatter()
-        payload = json.loads(formatter.format(self._record(
-            msg='Trakt call',
-            extra={'response_headers': 'Authorization: Bearer abcdefghijklmnop'},
-        )))
-        assert 'abcdefghijklmnop' not in payload['response_headers']
-        assert 'REDACTED' in payload['response_headers']
+        payload = json.loads(
+            formatter.format(
+                self._record(
+                    msg="Trakt call",
+                    extra={"response_headers": "Authorization: Bearer abcdefghijklmnop"},
+                )
+            )
+        )
+        assert "abcdefghijklmnop" not in payload["response_headers"]
+        assert "REDACTED" in payload["response_headers"]
 
     def test_does_not_leak_internal_logrecord_attributes(self):
         formatter = JsonFormatter()
         payload = json.loads(formatter.format(self._record()))
         # 'msg'/'args'/'pathname'/etc. are internal LogRecord plumbing,
         # not part of the documented structured field set.
-        assert 'msg' not in payload
-        assert 'args' not in payload
-        assert 'pathname' not in payload
+        assert "msg" not in payload
+        assert "args" not in payload
+        assert "pathname" not in payload
 
 
 class TestSetupLoggingFormat:
@@ -369,17 +386,17 @@ class TestSetupLoggingFormat:
         assert isinstance(root_handler.formatter, ColoredFormatter)
 
     def test_json_format_selects_json_formatter(self):
-        setup_logging(debug=False, config={'logging': {'format': 'json'}})
+        setup_logging(debug=False, config={"logging": {"format": "json"}})
         root_handler = logging.getLogger().handlers[0]
         assert isinstance(root_handler.formatter, JsonFormatter)
 
     def test_unknown_format_falls_back_to_text(self):
-        setup_logging(debug=False, config={'logging': {'format': 'xml'}})
+        setup_logging(debug=False, config={"logging": {"format": "xml"}})
         root_handler = logging.getLogger().handlers[0]
         assert isinstance(root_handler.formatter, ColoredFormatter)
 
     def test_json_format_is_case_insensitive(self):
-        setup_logging(debug=False, config={'logging': {'format': 'JSON'}})
+        setup_logging(debug=False, config={"logging": {"format": "JSON"}})
         root_handler = logging.getLogger().handlers[0]
         assert isinstance(root_handler.formatter, JsonFormatter)
 
@@ -428,14 +445,14 @@ class TestPrintStatus:
         captured = capsys.readouterr()
         assert "Info message" in captured.out
 
-    @patch('utils.display.log_warning')
+    @patch("utils.display.log_warning")
     def test_warning_status(self, mock_log_warning):
         """Test warning status message."""
         print_status("Warning message", level="warning")
 
         mock_log_warning.assert_called_once_with("Warning message")
 
-    @patch('utils.display.log_error')
+    @patch("utils.display.log_error")
     def test_error_status(self, mock_log_error):
         """Test error status message."""
         print_status("Error message", level="error")
@@ -496,168 +513,164 @@ class TestFormatMediaOutput:
 
     def test_basic_movie_output(self):
         """Test basic movie formatting."""
-        media = {
-            'title': 'The Matrix',
-            'year': 1999,
-            'genres': ['Action', 'Sci-Fi']
-        }
+        media = {"title": "The Matrix", "year": 1999, "genres": ["Action", "Sci-Fi"]}
 
         result = format_media_output(media)
 
-        assert 'The Matrix' in result
-        assert '1999' in result
-        assert 'Action' in result
+        assert "The Matrix" in result
+        assert "1999" in result
+        assert "Action" in result
 
     def test_with_index(self):
         """Test formatting with index."""
-        media = {'title': 'Movie', 'year': 2020}
+        media = {"title": "Movie", "year": 2020}
 
         result = format_media_output(media, index=5)
 
-        assert '5.' in result
+        assert "5." in result
 
     def test_with_similarity_score(self):
         """Test formatting with similarity score."""
-        media = {'title': 'Movie', 'similarity_score': 0.85}
+        media = {"title": "Movie", "similarity_score": 0.85}
 
         result = format_media_output(media)
 
-        assert 'Similarity' in result
+        assert "Similarity" in result
 
     def test_with_rating(self):
         """Test formatting with rating."""
-        media = {'title': 'Movie', 'rating': 8.5}
+        media = {"title": "Movie", "rating": 8.5}
 
         result = format_media_output(media, show_rating=True)
 
-        assert 'Rating' in result
-        assert '8.5' in result
+        assert "Rating" in result
+        assert "8.5" in result
 
     def test_with_language(self):
         """Test formatting with language."""
-        media = {'title': 'Movie', 'language': 'English'}
+        media = {"title": "Movie", "language": "English"}
 
         result = format_media_output(media, show_language=True)
 
-        assert 'Language' in result
-        assert 'English' in result
+        assert "Language" in result
+        assert "English" in result
 
     def test_skips_na_language(self):
         """Test skipping N/A language."""
-        media = {'title': 'Movie', 'language': 'N/A'}
+        media = {"title": "Movie", "language": "N/A"}
 
         result = format_media_output(media, show_language=True)
 
-        assert 'Language' not in result
+        assert "Language" not in result
 
     def test_with_cast(self):
         """Test formatting with cast."""
-        media = {'title': 'Movie', 'cast': ['Actor 1', 'Actor 2']}
+        media = {"title": "Movie", "cast": ["Actor 1", "Actor 2"]}
 
         result = format_media_output(media, show_cast=True)
 
-        assert 'Cast' in result
-        assert 'Actor 1' in result
+        assert "Cast" in result
+        assert "Actor 1" in result
 
     def test_with_directors(self):
         """Test formatting with directors."""
-        media = {'title': 'Movie', 'directors': ['Director 1']}
+        media = {"title": "Movie", "directors": ["Director 1"]}
 
-        result = format_media_output(media, media_type='movie', show_director=True)
+        result = format_media_output(media, media_type="movie", show_director=True)
 
-        assert 'Director' in result
+        assert "Director" in result
 
     def test_with_studio_for_tv(self):
         """Test formatting with studio for TV shows."""
-        media = {'title': 'Show', 'studio': 'HBO'}
+        media = {"title": "Show", "studio": "HBO"}
 
-        result = format_media_output(media, media_type='tv')
+        result = format_media_output(media, media_type="tv")
 
-        assert 'Studio' in result
-        assert 'HBO' in result
+        assert "Studio" in result
+        assert "HBO" in result
 
     def test_with_summary(self):
         """Test formatting with summary."""
-        media = {'title': 'Movie', 'summary': 'A great movie about something.'}
+        media = {"title": "Movie", "summary": "A great movie about something."}
 
         result = format_media_output(media, show_summary=True)
 
-        assert 'A great movie' in result
+        assert "A great movie" in result
 
     def test_truncates_long_summary(self):
         """Test truncating long summary."""
         long_summary = "A" * 250
-        media = {'title': 'Movie', 'summary': long_summary}
+        media = {"title": "Movie", "summary": long_summary}
 
         result = format_media_output(media, show_summary=True)
 
-        assert '...' in result
+        assert "..." in result
         assert len(result) < 250 + 100  # Title + truncated summary
 
     def test_with_imdb_link(self):
         """Test formatting with IMDB link."""
-        media = {'title': 'Movie', 'imdb_id': 'tt1234567'}
+        media = {"title": "Movie", "imdb_id": "tt1234567"}
 
         result = format_media_output(media, show_imdb_link=True)
 
-        assert 'imdb.com/title/tt1234567' in result
+        assert "imdb.com/title/tt1234567" in result
 
     def test_genres_as_string(self):
         """Test handling genres as string."""
-        media = {'title': 'Movie', 'genres': 'Action, Comedy'}
+        media = {"title": "Movie", "genres": "Action, Comedy"}
 
         result = format_media_output(media)
 
-        assert 'Action, Comedy' in result
+        assert "Action, Comedy" in result
 
     def test_similarity_as_string(self):
         """Test handling similarity as string."""
-        media = {'title': 'Movie', 'similarity_score': '85%'}
+        media = {"title": "Movie", "similarity_score": "85%"}
 
         result = format_media_output(media)
 
-        assert '85%' in result
+        assert "85%" in result
 
     def test_no_year(self):
         """Test formatting without year."""
-        media = {'title': 'Movie'}
+        media = {"title": "Movie"}
 
         result = format_media_output(media)
 
-        assert 'Movie' in result
+        assert "Movie" in result
 
     def test_no_genres(self):
         """Test formatting without genres."""
-        media = {'title': 'Movie'}
+        media = {"title": "Movie"}
 
         result = format_media_output(media, show_genres=True)
 
-        assert 'Genres' not in result
+        assert "Genres" not in result
 
     def test_cast_as_string(self):
         """Test handling cast as string."""
-        media = {'title': 'Movie', 'cast': 'Actor 1, Actor 2'}
+        media = {"title": "Movie", "cast": "Actor 1, Actor 2"}
 
         result = format_media_output(media, show_cast=True)
 
-        assert 'Actor 1, Actor 2' in result
+        assert "Actor 1, Actor 2" in result
 
     def test_directors_as_string(self):
         """Test handling directors as string."""
-        media = {'title': 'Movie', 'directors': 'Director Name'}
+        media = {"title": "Movie", "directors": "Director Name"}
 
-        result = format_media_output(media, media_type='movie', show_director=True)
+        result = format_media_output(media, media_type="movie", show_director=True)
 
-        assert 'Director Name' in result
+        assert "Director Name" in result
 
     def test_studio_as_list(self):
         """Test handling studio as list for TV."""
-        media = {'title': 'Show', 'studio': ['HBO', 'Netflix', 'Amazon']}
+        media = {"title": "Show", "studio": ["HBO", "Netflix", "Amazon"]}
 
-        result = format_media_output(media, media_type='tv')
+        result = format_media_output(media, media_type="tv")
 
-        assert 'HBO' in result
-        assert 'Netflix' in result
+        assert "HBO" in result
+        assert "Netflix" in result
 
 
 class TestPrintSimilarityBreakdown:
@@ -665,44 +678,40 @@ class TestPrintSimilarityBreakdown:
 
     def test_prints_movie_breakdown(self, capsys):
         """Test printing movie similarity breakdown."""
-        media_info = {'title': 'The Matrix'}
+        media_info = {"title": "The Matrix"}
         breakdown = {
-            'genre_score': 0.5,
-            'director_score': 0.3,
-            'actor_score': 0.2,
-            'keyword_score': 0.1,
-            'language_score': 0.0,
-            'details': {
-                'genres': ['Action', 'Sci-Fi'],
-                'actors': ['Keanu Reeves'],
-                'keywords': ['dystopia']
-            }
+            "genre_score": 0.5,
+            "director_score": 0.3,
+            "actor_score": 0.2,
+            "keyword_score": 0.1,
+            "language_score": 0.0,
+            "details": {"genres": ["Action", "Sci-Fi"], "actors": ["Keanu Reeves"], "keywords": ["dystopia"]},
         }
 
-        print_similarity_breakdown(media_info, 0.85, breakdown, 'movie')
+        print_similarity_breakdown(media_info, 0.85, breakdown, "movie")
 
         captured = capsys.readouterr()
-        assert 'The Matrix' in captured.out
-        assert 'Director Score' in captured.out
-        assert 'Genre Score' in captured.out
+        assert "The Matrix" in captured.out
+        assert "Director Score" in captured.out
+        assert "Genre Score" in captured.out
 
     def test_prints_tv_breakdown(self, capsys):
         """Test printing TV show similarity breakdown."""
-        media_info = {'title': 'Breaking Bad'}
+        media_info = {"title": "Breaking Bad"}
         breakdown = {
-            'genre_score': 0.5,
-            'studio_score': 0.3,
-            'actor_score': 0.2,
-            'keyword_score': 0.1,
-            'language_score': 0.0,
-            'details': {}
+            "genre_score": 0.5,
+            "studio_score": 0.3,
+            "actor_score": 0.2,
+            "keyword_score": 0.1,
+            "language_score": 0.0,
+            "details": {},
         }
 
-        print_similarity_breakdown(media_info, 0.75, breakdown, 'tv')
+        print_similarity_breakdown(media_info, 0.75, breakdown, "tv")
 
         captured = capsys.readouterr()
-        assert 'Breaking Bad' in captured.out
-        assert 'Studio Score' in captured.out
+        assert "Breaking Bad" in captured.out
+        assert "Studio Score" in captured.out
 
     def test_unknown_title(self, capsys):
         """Test with missing title."""
@@ -712,7 +721,7 @@ class TestPrintSimilarityBreakdown:
         print_similarity_breakdown(media_info, 0.5, breakdown)
 
         captured = capsys.readouterr()
-        assert 'Unknown' in captured.out
+        assert "Unknown" in captured.out
 
 
 class TestUserSelectRecommendations:
@@ -724,133 +733,133 @@ class TestUserSelectRecommendations:
 
         assert result == []
 
-    @patch('builtins.input', return_value='')
+    @patch("builtins.input", return_value="")
     def test_returns_empty_on_enter(self, mock_input, capsys):
         """Test returning empty on just Enter."""
-        recs = [{'title': 'Movie 1', 'year': 2020, 'similarity': 0.8}]
+        recs = [{"title": "Movie 1", "year": 2020, "similarity": 0.8}]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == []
 
-    @patch('builtins.input', return_value='none')
+    @patch("builtins.input", return_value="none")
     def test_returns_empty_on_none(self, mock_input, capsys):
         """Test returning empty on 'none'."""
-        recs = [{'title': 'Movie 1', 'year': 2020, 'similarity': 0.8}]
+        recs = [{"title": "Movie 1", "year": 2020, "similarity": 0.8}]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == []
 
-    @patch('builtins.input', return_value='all')
+    @patch("builtins.input", return_value="all")
     def test_returns_all_on_all(self, mock_input, capsys):
         """Test returning all recommendations on 'all'."""
         recs = [
-            {'title': 'Movie 1', 'year': 2020, 'similarity': 0.8},
-            {'title': 'Movie 2', 'year': 2021, 'similarity': 0.7}
+            {"title": "Movie 1", "year": 2020, "similarity": 0.8},
+            {"title": "Movie 2", "year": 2021, "similarity": 0.7},
         ]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == recs
 
-    @patch('builtins.input', return_value='1')
+    @patch("builtins.input", return_value="1")
     def test_selects_single_item(self, mock_input, capsys):
         """Test selecting single item."""
         recs = [
-            {'title': 'Movie 1', 'year': 2020, 'similarity': 0.8},
-            {'title': 'Movie 2', 'year': 2021, 'similarity': 0.7}
+            {"title": "Movie 1", "year": 2020, "similarity": 0.8},
+            {"title": "Movie 2", "year": 2021, "similarity": 0.7},
         ]
 
         result = user_select_recommendations(recs, "add")
 
         assert len(result) == 1
-        assert result[0]['title'] == 'Movie 1'
+        assert result[0]["title"] == "Movie 1"
 
-    @patch('builtins.input', return_value='1,3')
+    @patch("builtins.input", return_value="1,3")
     def test_selects_multiple_items(self, mock_input, capsys):
         """Test selecting multiple items."""
         recs = [
-            {'title': 'Movie 1', 'year': 2020, 'similarity': 0.8},
-            {'title': 'Movie 2', 'year': 2021, 'similarity': 0.7},
-            {'title': 'Movie 3', 'year': 2022, 'similarity': 0.6}
+            {"title": "Movie 1", "year": 2020, "similarity": 0.8},
+            {"title": "Movie 2", "year": 2021, "similarity": 0.7},
+            {"title": "Movie 3", "year": 2022, "similarity": 0.6},
         ]
 
         result = user_select_recommendations(recs, "add")
 
         assert len(result) == 2
-        assert result[0]['title'] == 'Movie 1'
-        assert result[1]['title'] == 'Movie 3'
+        assert result[0]["title"] == "Movie 1"
+        assert result[1]["title"] == "Movie 3"
 
-    @patch('builtins.input', return_value='1-3')
+    @patch("builtins.input", return_value="1-3")
     def test_selects_range(self, mock_input, capsys):
         """Test selecting range of items."""
         recs = [
-            {'title': 'Movie 1', 'year': 2020, 'similarity': 0.8},
-            {'title': 'Movie 2', 'year': 2021, 'similarity': 0.7},
-            {'title': 'Movie 3', 'year': 2022, 'similarity': 0.6}
+            {"title": "Movie 1", "year": 2020, "similarity": 0.8},
+            {"title": "Movie 2", "year": 2021, "similarity": 0.7},
+            {"title": "Movie 3", "year": 2022, "similarity": 0.6},
         ]
 
         result = user_select_recommendations(recs, "add")
 
         assert len(result) == 3
 
-    @patch('builtins.input', return_value='invalid')
+    @patch("builtins.input", return_value="invalid")
     def test_handles_invalid_input(self, mock_input, capsys):
         """Test handling invalid input."""
-        recs = [{'title': 'Movie 1', 'year': 2020, 'similarity': 0.8}]
+        recs = [{"title": "Movie 1", "year": 2020, "similarity": 0.8}]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == []
 
-    @patch('builtins.input', return_value='10')
+    @patch("builtins.input", return_value="10")
     def test_ignores_out_of_range(self, mock_input, capsys):
         """Test ignoring out of range selections."""
-        recs = [{'title': 'Movie 1', 'year': 2020, 'similarity': 0.8}]
+        recs = [{"title": "Movie 1", "year": 2020, "similarity": 0.8}]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == []
 
-    @patch('builtins.input', side_effect=EOFError)
+    @patch("builtins.input", side_effect=EOFError)
     def test_handles_eof_error(self, mock_input, capsys):
         """Test handling EOFError."""
-        recs = [{'title': 'Movie 1', 'year': 2020, 'similarity': 0.8}]
+        recs = [{"title": "Movie 1", "year": 2020, "similarity": 0.8}]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == []
 
-    @patch('builtins.input', side_effect=KeyboardInterrupt)
+    @patch("builtins.input", side_effect=KeyboardInterrupt)
     def test_handles_keyboard_interrupt(self, mock_input, capsys):
         """Test handling KeyboardInterrupt."""
-        recs = [{'title': 'Movie 1', 'year': 2020, 'similarity': 0.8}]
+        recs = [{"title": "Movie 1", "year": 2020, "similarity": 0.8}]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == []
 
-    @patch('builtins.input', return_value='invalid-range')
+    @patch("builtins.input", return_value="invalid-range")
     def test_handles_invalid_range(self, mock_input, capsys):
         """Test handling invalid range format."""
-        recs = [{'title': 'Movie 1', 'year': 2020, 'similarity': 0.8}]
+        recs = [{"title": "Movie 1", "year": 2020, "similarity": 0.8}]
 
         result = user_select_recommendations(recs, "add")
 
         assert result == []
 
-    @patch('builtins.input', return_value='1,2')
+    @patch("builtins.input", return_value="1,2")
     def test_displays_recommendations(self, mock_input, capsys):
         """Test that recommendations are displayed."""
         recs = [
-            {'title': 'Movie 1', 'year': 2020, 'similarity': 0.8},
-            {'title': 'Movie 2', 'year': 2021, 'score': 0.7}  # Test 'score' fallback
+            {"title": "Movie 1", "year": 2020, "similarity": 0.8},
+            {"title": "Movie 2", "year": 2021, "score": 0.7},  # Test 'score' fallback
         ]
 
         user_select_recommendations(recs, "add")
 
         captured = capsys.readouterr()
-        assert 'Movie 1' in captured.out
-        assert 'Movie 2' in captured.out
-        assert '2020' in captured.out
+        assert "Movie 1" in captured.out
+        assert "Movie 2" in captured.out
+        assert "2020" in captured.out

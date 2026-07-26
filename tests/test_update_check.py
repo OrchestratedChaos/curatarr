@@ -37,8 +37,8 @@ def _isolated_cache_dir(tmp_path, monkeypatch, _no_real_update_check_network):
     than relying on autouse-ordering) guarantees this restoration always
     wins, regardless of fixture collection order.
     """
-    monkeypatch.setattr('utils.update_check.get_project_root', lambda: str(tmp_path))
-    monkeypatch.setattr('utils.update_check._fetch_latest_version', _REAL_FETCH_LATEST_VERSION)
+    monkeypatch.setattr("utils.update_check.get_project_root", lambda: str(tmp_path))
+    monkeypatch.setattr("utils.update_check._fetch_latest_version", _REAL_FETCH_LATEST_VERSION)
     return tmp_path
 
 
@@ -46,7 +46,7 @@ def _cache_file_path(tmp_path):
     """Matches utils.update_check._cache_path()'s project_root/cache/
     convention (same dir every other cache file in this codebase uses -
     see recommenders/external.py)."""
-    return os.path.join(str(tmp_path), 'cache', 'update_check_cache.json')
+    return os.path.join(str(tmp_path), "cache", "update_check_cache.json")
 
 
 def _seed_cache(tmp_path, data):
@@ -54,7 +54,7 @@ def _seed_cache(tmp_path, data):
     creating the cache/ dir first since plain open(..., 'w') doesn't."""
     path = _cache_file_path(tmp_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f)
     return path
 
@@ -64,7 +64,7 @@ def _seed_cache_raw(tmp_path, text):
     corrupt-cache-file test."""
     path = _cache_file_path(tmp_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return path
 
@@ -74,10 +74,10 @@ class TestParseVersion:
     never a string compare (which would put "2.10.0" before "2.9.0")."""
 
     def test_parses_plain_version(self):
-        assert parse_version('2.8.28') == (2, 8, 28)
+        assert parse_version("2.8.28") == (2, 8, 28)
 
     def test_parses_v_prefixed_version(self):
-        assert parse_version('v2.8.28') == (2, 8, 28)
+        assert parse_version("v2.8.28") == (2, 8, 28)
 
     def test_rejects_version_with_trailing_suffix(self):
         # SECURITY (regression guard): parse_version used to be only
@@ -89,37 +89,40 @@ class TestParseVersion:
         # a spoofed GitHub tag_name like "2.99.0/../v2.5.0" relies on
         # exactly this kind of prefix-only match to smuggle a path-
         # traversal sequence past the version check).
-        assert parse_version('2.8.28-rc1') is None
+        assert parse_version("2.8.28-rc1") is None
 
     def test_returns_none_for_empty_string(self):
-        assert parse_version('') is None
+        assert parse_version("") is None
 
     def test_returns_none_for_none(self):
         assert parse_version(None) is None
 
     def test_returns_none_for_garbage(self):
-        assert parse_version('not-a-version') is None
+        assert parse_version("not-a-version") is None
 
     def test_tuple_compare_is_correct_across_digit_widths(self):
         """The whole reason this isn't a string compare: "2.10.0" must
         sort AFTER "2.9.0", which '2.10.0' > '2.9.0' as strings gets
         wrong (string compare puts '1' before '9')."""
-        assert parse_version('2.10.0') > parse_version('2.9.0')
+        assert parse_version("2.10.0") > parse_version("2.9.0")
 
     def test_strips_only_surrounding_whitespace(self):
         """Trailing whitespace (e.g. a stray newline/space in a GitHub
         API response) is stripped and the clean version still parses -
         this is the one "leading-valid" malicious-looking input in
         TestMaliciousTagNameNeutralized below that's actually safe."""
-        assert parse_version('2.99.0 ') == (2, 99, 0)
-        assert parse_version(' v2.99.0\n') == (2, 99, 0)
+        assert parse_version("2.99.0 ") == (2, 99, 0)
+        assert parse_version(" v2.99.0\n") == (2, 99, 0)
 
-    @pytest.mark.parametrize('malicious', [
-        '2.99.0/../v2.5.0',
-        '2.99.0/../../etc',
-        '2.99.0\n2.5.0',
-        '2.99.0; rm -rf',
-    ])
+    @pytest.mark.parametrize(
+        "malicious",
+        [
+            "2.99.0/../v2.5.0",
+            "2.99.0/../../etc",
+            "2.99.0\n2.5.0",
+            "2.99.0; rm -rf",
+        ],
+    )
     def test_rejects_path_traversal_and_injection_attempts(self, malicious):
         """SECURITY: none of these may parse - each has a valid-looking
         X.Y.Z prefix (so a start-anchored-only match, the pre-fix
@@ -134,64 +137,65 @@ class TestGetLatestVersionFailOpen:
     None instead of raising, so a broken/offline check never blocks or
     crashes the app."""
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_network_error_returns_none(self, mock_get):
-        mock_get.side_effect = ConnectionError('no network')
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        mock_get.side_effect = ConnectionError("no network")
+        result = get_latest_version(update_mode="notify", force_refresh=True)
         assert result is None
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_timeout_returns_none(self, mock_get):
         import requests
-        mock_get.side_effect = requests.exceptions.Timeout('timed out')
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+
+        mock_get.side_effect = requests.exceptions.Timeout("timed out")
+        result = get_latest_version(update_mode="notify", force_refresh=True)
         assert result is None
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_http_error_returns_none(self, mock_get):
         mock_response = Mock()
-        mock_response.raise_for_status.side_effect = Exception('rate limited')
+        mock_response.raise_for_status.side_effect = Exception("rate limited")
         mock_get.return_value = mock_response
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        result = get_latest_version(update_mode="notify", force_refresh=True)
         assert result is None
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_malformed_json_returns_none(self, mock_get):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.side_effect = ValueError('not json')
+        mock_response.json.side_effect = ValueError("not json")
         mock_get.return_value = mock_response
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        result = get_latest_version(update_mode="notify", force_refresh=True)
         assert result is None
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_missing_tag_name_returns_none(self, mock_get):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'name': 'Some Release'}
+        mock_response.json.return_value = {"name": "Some Release"}
         mock_get.return_value = mock_response
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        result = get_latest_version(update_mode="notify", force_refresh=True)
         assert result is None
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_unparsable_tag_name_returns_none(self, mock_get):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'not-a-version'}
+        mock_response.json.return_value = {"tag_name": "not-a-version"}
         mock_get.return_value = mock_response
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        result = get_latest_version(update_mode="notify", force_refresh=True)
         assert result is None
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_fail_open_never_raises(self, mock_get):
         """The app must be completely unaffected by an update-check
         failure - calling get_latest_version() must never propagate an
         exception under any failure mode."""
-        mock_get.side_effect = Exception('anything at all')
+        mock_get.side_effect = Exception("anything at all")
         try:
-            result = get_latest_version(update_mode='notify', force_refresh=True)
+            result = get_latest_version(update_mode="notify", force_refresh=True)
         except Exception as e:
-            pytest.fail(f'get_latest_version() raised instead of failing open: {e}')
+            pytest.fail(f"get_latest_version() raised instead of failing open: {e}")
         assert result is None
 
 
@@ -203,60 +207,60 @@ class TestGetLatestVersionOffMode:
     the bug). 'off' now uses the exact same cache/fetch path as
     'notify'/'force', with no special-casing at all."""
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_off_mode_fetches_same_as_notify(self, mock_get):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_response.json.return_value = {"tag_name": "v2.9.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='off', force_refresh=True)
+        result = get_latest_version(update_mode="off", force_refresh=True)
 
-        assert result == '2.9.0'
+        assert result == "2.9.0"
         mock_get.assert_called_once()
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_off_mode_uses_existing_fresh_cache_without_a_network_call(self, mock_get, tmp_path):
-        _seed_cache(tmp_path, {'latest': '9.9.9', 'checked_at': time.time()})
+        _seed_cache(tmp_path, {"latest": "9.9.9", "checked_at": time.time()})
 
-        result = get_latest_version(update_mode='off')
+        result = get_latest_version(update_mode="off")
 
-        assert result == '9.9.9'
+        assert result == "9.9.9"
         mock_get.assert_not_called()
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_off_mode_refetches_on_stale_cache(self, mock_get, tmp_path):
         stale_time = time.time() - (UPDATE_CHECK_INTERVAL_HOURS + 1) * 3600
-        _seed_cache(tmp_path, {'latest': '2.9.0', 'checked_at': stale_time})
+        _seed_cache(tmp_path, {"latest": "2.9.0", "checked_at": stale_time})
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.10.0'}
+        mock_response.json.return_value = {"tag_name": "v2.10.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='off')
+        result = get_latest_version(update_mode="off")
 
-        assert result == '2.10.0'
+        assert result == "2.10.0"
         mock_get.assert_called_once()
 
 
 class TestGetLatestVersionSuccess:
     """Successful fetch + on-disk caching behavior."""
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_no_cache_file_yet_fetches_fresh(self, mock_get, tmp_path):
         """First-ever check on a fresh install: no cache file exists at
         all (not just stale) - must fetch rather than error."""
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_response.json.return_value = {"tag_name": "v2.9.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='notify')
+        result = get_latest_version(update_mode="notify")
 
-        assert result == '2.9.0'
+        assert result == "2.9.0"
         mock_get.assert_called_once()
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_cache_write_failure_is_not_fatal(self, mock_get, monkeypatch, tmp_path):
         """A disk error writing the cache (permissions, full disk, a
         cache dir that doesn't exist, etc.) must not surface as an
@@ -271,110 +275,110 @@ class TestGetLatestVersionSuccess:
         created for real and leak onto disk) - so the real open() call
         fails naturally, instead of risky global builtins.open
         patching."""
-        blocker = tmp_path / 'blocker'
-        blocker.write_bytes(b'not a directory')
+        blocker = tmp_path / "blocker"
+        blocker.write_bytes(b"not a directory")
         monkeypatch.setattr(
-            'utils.update_check.get_project_root',
-            lambda: str(blocker / 'unreachable'),
+            "utils.update_check.get_project_root",
+            lambda: str(blocker / "unreachable"),
         )
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_response.json.return_value = {"tag_name": "v2.9.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        result = get_latest_version(update_mode="notify", force_refresh=True)
 
-        assert result == '2.9.0'
+        assert result == "2.9.0"
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_successful_fetch_strips_v_prefix(self, mock_get):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_response.json.return_value = {"tag_name": "v2.9.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        result = get_latest_version(update_mode="notify", force_refresh=True)
 
-        assert result == '2.9.0'
+        assert result == "2.9.0"
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_calls_the_github_releases_api(self, mock_get):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_response.json.return_value = {"tag_name": "v2.9.0"}
         mock_get.return_value = mock_response
 
-        get_latest_version(update_mode='notify', force_refresh=True)
+        get_latest_version(update_mode="notify", force_refresh=True)
 
         called_url = mock_get.call_args[0][0]
         assert called_url == GITHUB_RELEASES_API
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_writes_cache_after_fetch(self, mock_get, tmp_path):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_response.json.return_value = {"tag_name": "v2.9.0"}
         mock_get.return_value = mock_response
 
-        get_latest_version(update_mode='notify', force_refresh=True)
+        get_latest_version(update_mode="notify", force_refresh=True)
 
         cache_path = _cache_file_path(tmp_path)
         assert os.path.isfile(cache_path)
-        with open(cache_path, encoding='utf-8') as f:
+        with open(cache_path, encoding="utf-8") as f:
             cached = json.load(f)
-        assert cached['latest'] == '2.9.0'
-        assert isinstance(cached['checked_at'], (int, float))
+        assert cached["latest"] == "2.9.0"
+        assert isinstance(cached["checked_at"], (int, float))
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_fresh_cache_is_used_without_a_network_call(self, mock_get, tmp_path):
-        _seed_cache(tmp_path, {'latest': '2.9.0', 'checked_at': time.time()})
+        _seed_cache(tmp_path, {"latest": "2.9.0", "checked_at": time.time()})
 
-        result = get_latest_version(update_mode='notify')
+        result = get_latest_version(update_mode="notify")
 
-        assert result == '2.9.0'
+        assert result == "2.9.0"
         mock_get.assert_not_called()
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_stale_cache_triggers_a_fresh_fetch(self, mock_get, tmp_path):
         stale_time = time.time() - (UPDATE_CHECK_INTERVAL_HOURS + 1) * 3600
-        _seed_cache(tmp_path, {'latest': '2.9.0', 'checked_at': stale_time})
+        _seed_cache(tmp_path, {"latest": "2.9.0", "checked_at": stale_time})
 
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.10.0'}
+        mock_response.json.return_value = {"tag_name": "v2.10.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='notify')
+        result = get_latest_version(update_mode="notify")
 
-        assert result == '2.10.0'
+        assert result == "2.10.0"
         mock_get.assert_called_once()
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_force_refresh_bypasses_fresh_cache(self, mock_get, tmp_path):
-        _seed_cache(tmp_path, {'latest': '2.9.0', 'checked_at': time.time()})
+        _seed_cache(tmp_path, {"latest": "2.9.0", "checked_at": time.time()})
 
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.10.0'}
+        mock_response.json.return_value = {"tag_name": "v2.10.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='notify', force_refresh=True)
+        result = get_latest_version(update_mode="notify", force_refresh=True)
 
-        assert result == '2.10.0'
+        assert result == "2.10.0"
         mock_get.assert_called_once()
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_corrupt_cache_file_is_ignored_not_fatal(self, mock_get, tmp_path):
-        _seed_cache_raw(tmp_path, '{not valid json')
+        _seed_cache_raw(tmp_path, "{not valid json")
 
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': 'v2.9.0'}
+        mock_response.json.return_value = {"tag_name": "v2.9.0"}
         mock_get.return_value = mock_response
 
-        result = get_latest_version(update_mode='notify')
+        result = get_latest_version(update_mode="notify")
 
-        assert result == '2.9.0'
+        assert result == "2.9.0"
 
 
 class TestMaliciousTagNameNeutralized:
@@ -392,20 +396,26 @@ class TestMaliciousTagNameNeutralized:
     into a URL.
     """
 
-    @pytest.mark.parametrize('malicious_tag, expected', [
-        ('2.99.0/../v2.5.0', None),
-        ('2.99.0/../../etc', None),
-        ('2.99.0\n2.5.0', None),
-        ('2.99.0; rm -rf', None),
-        ('2.99.0 ', '2.99.0'),  # trailing whitespace only - safe to normalize
-    ])
-    @patch('utils.update_check.requests.get')
+    @pytest.mark.parametrize(
+        "malicious_tag, expected",
+        [
+            ("2.99.0/../v2.5.0", None),
+            ("2.99.0/../../etc", None),
+            ("2.99.0\n2.5.0", None),
+            ("2.99.0; rm -rf", None),
+            ("2.99.0 ", "2.99.0"),  # trailing whitespace only - safe to normalize
+        ],
+    )
+    @patch("utils.update_check.requests.get")
     def test_fetch_latest_version_neutralizes_malicious_tag_name(
-        self, mock_get, malicious_tag, expected,
+        self,
+        mock_get,
+        malicious_tag,
+        expected,
     ):
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': malicious_tag}
+        mock_response.json.return_value = {"tag_name": malicious_tag}
         mock_get.return_value = mock_response
 
         result = _REAL_FETCH_LATEST_VERSION()
@@ -415,18 +425,21 @@ class TestMaliciousTagNameNeutralized:
             # Whatever DID come back must be pure digits-and-dots - no
             # path separator, traversal sequence, whitespace, or shell
             # metacharacter could possibly have survived.
-            assert set(result) <= set('0123456789.')
-            assert '..' not in result
-            assert '/' not in result
-            assert '\\' not in result
+            assert set(result) <= set("0123456789.")
+            assert ".." not in result
+            assert "/" not in result
+            assert "\\" not in result
 
-    @pytest.mark.parametrize('malicious_tag', [
-        '2.99.0/../v2.5.0',
-        '2.99.0/../../etc',
-        '2.99.0\n2.5.0',
-        '2.99.0; rm -rf',
-    ])
-    @patch('utils.update_check.requests.get')
+    @pytest.mark.parametrize(
+        "malicious_tag",
+        [
+            "2.99.0/../v2.5.0",
+            "2.99.0/../../etc",
+            "2.99.0\n2.5.0",
+            "2.99.0; rm -rf",
+        ],
+    )
+    @patch("utils.update_check.requests.get")
     def test_malicious_tag_name_never_registers_as_an_update(self, mock_get, malicious_tag):
         """Even setting aside URL-safety: a tag_name that fails to
         parse must make the whole check report "no update", not just
@@ -434,15 +447,15 @@ class TestMaliciousTagNameNeutralized:
         the same fail-closed contract as an unreachable network."""
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': malicious_tag}
+        mock_response.json.return_value = {"tag_name": malicious_tag}
         mock_get.return_value = mock_response
 
-        latest, _current, is_newer = update_available(update_mode='notify', force_refresh=True)
+        latest, _current, is_newer = update_available(update_mode="notify", force_refresh=True)
 
         assert latest is None
         assert is_newer is False
 
-    @patch('utils.update_check.requests.get')
+    @patch("utils.update_check.requests.get")
     def test_normalized_version_builds_a_traversal_free_download_url(self, mock_get):
         """End-to-end proof for the one input that DOES normalize
         (trailing whitespace only): feed it through the real fetch,
@@ -452,60 +465,60 @@ class TestMaliciousTagNameNeutralized:
 
         mock_response = Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'tag_name': '2.99.0 '}
+        mock_response.json.return_value = {"tag_name": "2.99.0 "}
         mock_get.return_value = mock_response
 
         version = _REAL_FETCH_LATEST_VERSION()
-        assert version == '2.99.0'
+        assert version == "2.99.0"
 
-        url = self_update_module.release_asset_url(version, 'SHA256SUMS.txt')
-        assert '..' not in url
-        assert url == f'{self_update_module.GITHUB_RELEASES_DOWNLOAD_BASE}/v2.99.0/SHA256SUMS.txt'
+        url = self_update_module.release_asset_url(version, "SHA256SUMS.txt")
+        assert ".." not in url
+        assert url == f"{self_update_module.GITHUB_RELEASES_DOWNLOAD_BASE}/v2.99.0/SHA256SUMS.txt"
 
 
 class TestUpdateAvailable:
     """Tests for update_available - the (latest, current, is_newer)
     resolver used by every surface (CLI/run.sh/run.ps1/web)."""
 
-    @patch('utils.update_check.__version__', '2.8.28')
-    @patch('utils.update_check.get_latest_version')
+    @patch("utils.update_check.__version__", "2.8.28")
+    @patch("utils.update_check.get_latest_version")
     def test_newer_release_reports_is_newer_true(self, mock_get_latest):
-        mock_get_latest.return_value = '2.9.0'
-        latest, current, is_newer = update_available(update_mode='notify')
-        assert latest == '2.9.0'
-        assert current == '2.8.28'
+        mock_get_latest.return_value = "2.9.0"
+        latest, current, is_newer = update_available(update_mode="notify")
+        assert latest == "2.9.0"
+        assert current == "2.8.28"
         assert is_newer is True
 
-    @patch('utils.update_check.__version__', '2.8.28')
-    @patch('utils.update_check.get_latest_version')
+    @patch("utils.update_check.__version__", "2.8.28")
+    @patch("utils.update_check.get_latest_version")
     def test_same_version_reports_is_newer_false(self, mock_get_latest):
-        mock_get_latest.return_value = '2.8.28'
-        _, _, is_newer = update_available(update_mode='notify')
+        mock_get_latest.return_value = "2.8.28"
+        _, _, is_newer = update_available(update_mode="notify")
         assert is_newer is False
 
-    @patch('utils.update_check.__version__', '2.8.28')
-    @patch('utils.update_check.get_latest_version')
+    @patch("utils.update_check.__version__", "2.8.28")
+    @patch("utils.update_check.get_latest_version")
     def test_older_release_reports_is_newer_false(self, mock_get_latest):
-        mock_get_latest.return_value = '2.7.0'
-        _, _, is_newer = update_available(update_mode='notify')
+        mock_get_latest.return_value = "2.7.0"
+        _, _, is_newer = update_available(update_mode="notify")
         assert is_newer is False
 
-    @patch('utils.update_check.get_latest_version')
+    @patch("utils.update_check.get_latest_version")
     def test_unknown_latest_reports_is_newer_false(self, mock_get_latest):
-        """"We don't know" (network failure etc.) must never be treated
+        """ "We don't know" (network failure etc.) must never be treated
         as "yes there's an update"."""
         mock_get_latest.return_value = None
-        latest, _, is_newer = update_available(update_mode='notify')
+        latest, _, is_newer = update_available(update_mode="notify")
         assert latest is None
         assert is_newer is False
 
-    @patch('utils.update_check.__version__', '2.8.28')
-    @patch('utils.update_check.get_latest_version')
+    @patch("utils.update_check.__version__", "2.8.28")
+    @patch("utils.update_check.get_latest_version")
     def test_double_digit_minor_version_compares_correctly(self, mock_get_latest):
         """Regression guard for the string-vs-tuple compare bug: v2.10.0
         must register as newer than v2.8.28."""
-        mock_get_latest.return_value = '2.10.0'
-        _, _, is_newer = update_available(update_mode='notify')
+        mock_get_latest.return_value = "2.10.0"
+        _, _, is_newer = update_available(update_mode="notify")
         assert is_newer is True
 
 
@@ -519,20 +532,24 @@ class TestReleasesApiOverride:
 
     def test_env_override_wins_over_default(self):
         import importlib
+
         import utils.update_check as update_check_module
+
         try:
-            with patch.dict(os.environ, {'CURATARR_RELEASES_API_OVERRIDE': 'http://127.0.0.1:9/fake-api'}):
+            with patch.dict(os.environ, {"CURATARR_RELEASES_API_OVERRIDE": "http://127.0.0.1:9/fake-api"}):
                 importlib.reload(update_check_module)
-                assert update_check_module.GITHUB_RELEASES_API == 'http://127.0.0.1:9/fake-api'
+                assert update_check_module.GITHUB_RELEASES_API == "http://127.0.0.1:9/fake-api"
         finally:
             importlib.reload(update_check_module)  # restore the real default for every later test
 
     def test_default_used_when_env_var_unset(self):
         import importlib
+
         import utils.update_check as update_check_module
+
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop('CURATARR_RELEASES_API_OVERRIDE', None)
+            os.environ.pop("CURATARR_RELEASES_API_OVERRIDE", None)
             importlib.reload(update_check_module)
         assert update_check_module.GITHUB_RELEASES_API == (
-            'https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest'
+            "https://api.github.com/repos/OrchestratedChaos/curatarr/releases/latest"
         )

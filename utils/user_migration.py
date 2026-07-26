@@ -29,18 +29,18 @@ from plexapi.myplex import MyPlexAccount
 from .display import log_warning
 from .plex import cleanup_old_collections, init_plex
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
-USER_ID_MAP_FILENAME = 'user_id_map.json'
+USER_ID_MAP_FILENAME = "user_id_map.json"
 
 # Cache filename patterns keyed on username. Kept explicit (rather than a
 # filesystem glob) so migration only ever touches files curatarr itself
 # generates for a given user.
 _CACHE_FILENAME_PATTERNS = [
-    'watched_cache_plex_{username}.json',
-    'tv_watched_cache_plex_{username}.json',
-    'external_recs_{username}_movies.json',
-    'external_recs_{username}_shows.json',
+    "watched_cache_plex_{username}.json",
+    "tv_watched_cache_plex_{username}.json",
+    "external_recs_{username}_movies.json",
+    "external_recs_{username}_shows.json",
 ]
 
 
@@ -48,13 +48,14 @@ _CACHE_FILENAME_PATTERNS = [
 # Stable id <-> username map
 # ---------------------------------------------------------------------------
 
+
 def load_user_id_map(cache_dir: str) -> Dict[str, str]:
     """Load the persisted Plex account id -> last-known-username map."""
     path = os.path.join(cache_dir, USER_ID_MAP_FILENAME)
     if not os.path.exists(path):
         return {}
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return {str(k): str(v) for k, v in data.items()}
@@ -68,7 +69,7 @@ def save_user_id_map(cache_dir: str, id_map: Dict[str, str]) -> None:
     path = os.path.join(cache_dir, USER_ID_MAP_FILENAME)
     try:
         os.makedirs(cache_dir, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(id_map, f, indent=2, sort_keys=True)
     except (IOError, OSError) as e:
         log_warning(f"Could not save user id map ({path}): {e}")
@@ -84,10 +85,10 @@ def get_live_plex_user_map(config: Dict) -> Dict[str, str]:
     callers can safely no-op.
     """
     try:
-        account = MyPlexAccount(token=config['plex']['token'])
+        account = MyPlexAccount(token=config["plex"]["token"])
         live_map = {str(account.id): account.username}
         for user in account.users():
-            if hasattr(user, 'id') and hasattr(user, 'title') and user.title:
+            if hasattr(user, "id") and hasattr(user, "title") and user.title:
                 live_map[str(user.id)] = user.title
         return live_map
     except (plexapi.exceptions.PlexApiException, KeyError, TypeError) as e:
@@ -113,13 +114,14 @@ def detect_renamed_users(previous_map: Dict[str, str], live_map: Dict[str, str])
 # for everything outside the specific lines being changed)
 # ---------------------------------------------------------------------------
 
+
 def _line_indent(line: str) -> int:
-    return len(line) - len(line.lstrip(' '))
+    return len(line) - len(line.lstrip(" "))
 
 
 def _find_bare_key_line(lines: List[str], key: str, start: int, end: int) -> Optional[int]:
     """Find a `key:` line (block mapping key, no inline scalar value) within lines[start:end]."""
-    pattern = re.compile(rf'^[ \t]*{re.escape(key)}\s*:\s*(#.*)?$')
+    pattern = re.compile(rf"^[ \t]*{re.escape(key)}\s*:\s*(#.*)?$")
     for i in range(start, end):
         if pattern.match(lines[i]):
             return i
@@ -134,7 +136,7 @@ def _block_end(lines: List[str], key_line: int, key_indent: int) -> int:
     """
     for i in range(key_line + 1, len(lines)):
         stripped = lines[i].strip()
-        if not stripped or stripped.startswith('#'):
+        if not stripped or stripped.startswith("#"):
             continue
         if _line_indent(lines[i]) <= key_indent:
             return i
@@ -144,7 +146,7 @@ def _block_end(lines: List[str], key_line: int, key_indent: int) -> int:
 def _first_child_indent(lines: List[str], key_line: int, block_end: int) -> Optional[int]:
     for i in range(key_line + 1, block_end):
         stripped = lines[i].strip()
-        if not stripped or stripped.startswith('#'):
+        if not stripped or stripped.startswith("#"):
             continue
         return _line_indent(lines[i])
     return None
@@ -160,13 +162,13 @@ def rename_user_preferences_key(config_text: str, old_username: str, new_usernam
     """
     lines = config_text.splitlines(keepends=True)
 
-    users_line = _find_bare_key_line(lines, 'users', 0, len(lines))
+    users_line = _find_bare_key_line(lines, "users", 0, len(lines))
     if users_line is None:
         return config_text, False
     users_indent = _line_indent(lines[users_line])
     users_end = _block_end(lines, users_line, users_indent)
 
-    prefs_line = _find_bare_key_line(lines, 'preferences', users_line + 1, users_end)
+    prefs_line = _find_bare_key_line(lines, "preferences", users_line + 1, users_end)
     if prefs_line is None:
         return config_text, False
     prefs_indent = _line_indent(lines[prefs_line])
@@ -177,17 +179,17 @@ def rename_user_preferences_key(config_text: str, old_username: str, new_usernam
         return config_text, False
 
     key_pattern = re.compile(
-        rf'^(?P<indent>[ \t]{{{user_key_indent}}}){re.escape(old_username)}(?P<rest>\s*:\s*(#.*)?)$'
+        rf"^(?P<indent>[ \t]{{{user_key_indent}}}){re.escape(old_username)}(?P<rest>\s*:\s*(#.*)?)$"
     )
     for i in range(prefs_line + 1, prefs_end):
         if _line_indent(lines[i]) != user_key_indent:
             continue
-        stripped_line = lines[i].rstrip('\r\n')
-        newline = lines[i][len(stripped_line):]
+        stripped_line = lines[i].rstrip("\r\n")
+        newline = lines[i][len(stripped_line) :]
         m = key_pattern.match(stripped_line)
         if m:
             lines[i] = f"{m.group('indent')}{new_username}{m.group('rest')}{newline}"
-            return ''.join(lines), True
+            return "".join(lines), True
 
     return config_text, False
 
@@ -199,30 +201,30 @@ def rename_user_in_users_list(config_text: str, old_username: str, new_username:
     """
     lines = config_text.splitlines(keepends=True)
 
-    users_line = _find_bare_key_line(lines, 'users', 0, len(lines))
+    users_line = _find_bare_key_line(lines, "users", 0, len(lines))
     if users_line is None:
         return config_text, False
     users_indent = _line_indent(lines[users_line])
     users_end = _block_end(lines, users_line, users_indent)
 
-    token_pattern = re.compile(rf'(?<![\w.-]){re.escape(old_username)}(?![\w.-])')
+    token_pattern = re.compile(rf"(?<![\w.-]){re.escape(old_username)}(?![\w.-])")
 
     for i in range(users_line + 1, users_end):
         stripped = lines[i].strip()
 
-        if re.match(r'^list\s*:', stripped):
+        if re.match(r"^list\s*:", stripped):
             if token_pattern.search(lines[i]):
                 lines[i] = token_pattern.sub(new_username, lines[i], count=1)
-                return ''.join(lines), True
+                return "".join(lines), True
             continue
 
-        seq_match = re.match(r'^-\s*(?P<val>.+?)\s*$', stripped)
-        if seq_match and seq_match.group('val') == old_username:
-            indent = ' ' * _line_indent(lines[i])
-            newline = lines[i][len(lines[i].rstrip('\r\n')):]
-            dash = re.match(r'^-\s*', stripped).group(0)
+        seq_match = re.match(r"^-\s*(?P<val>.+?)\s*$", stripped)
+        if seq_match and seq_match.group("val") == old_username:
+            indent = " " * _line_indent(lines[i])
+            newline = lines[i][len(lines[i].rstrip("\r\n")) :]
+            dash = re.match(r"^-\s*", stripped).group(0)
             lines[i] = f"{indent}{dash}{new_username}{newline}"
-            return ''.join(lines), True
+            return "".join(lines), True
 
     return config_text, False
 
@@ -231,10 +233,11 @@ def rename_user_in_users_list(config_text: str, old_username: str, new_username:
 # Cache files + orphaned collections
 # ---------------------------------------------------------------------------
 
+
 def _capture_old_display_name(root_config: Dict, old_username: str) -> str:
-    prefs = (root_config.get('users', {}) or {}).get('preferences', {}) or {}
+    prefs = (root_config.get("users", {}) or {}).get("preferences", {}) or {}
     old_prefs = prefs.get(old_username, {}) or {}
-    return old_prefs.get('display_name') or old_username.capitalize()
+    return old_prefs.get("display_name") or old_username.capitalize()
 
 
 def _safe_cache_path(cache_dir: str, filename: str) -> Optional[str]:
@@ -308,10 +311,10 @@ def cleanup_orphaned_user_collections(config: Dict, old_username: str, old_displ
         log_warning(f"Could not connect to Plex for orphaned-collection cleanup: {e}")
         return
 
-    plex_config = config.get('plex', {}) or {}
+    plex_config = config.get("plex", {}) or {}
     library_targets = (
-        (plex_config.get('movie_library', 'Movies'), '🎬'),
-        (plex_config.get('tv_library', 'TV Shows'), '📺'),
+        (plex_config.get("movie_library", "Movies"), "🎬"),
+        (plex_config.get("tv_library", "TV Shows"), "📺"),
     )
 
     for library_title, emoji in library_targets:
@@ -324,9 +327,13 @@ def cleanup_orphaned_user_collections(config: Dict, old_username: str, old_displ
         # No collection exists yet under the new name at migration time,
         # so there's nothing that needs to be protected from deletion.
         try:
-            cleanup_old_collections(section, current_collection_name="", username=old_display_name, emoji=emoji, logger=logger)
+            cleanup_old_collections(
+                section, current_collection_name="", username=old_display_name, emoji=emoji, logger=logger
+            )
             if old_display_name.lower() != old_username.lower():
-                cleanup_old_collections(section, current_collection_name="", username=old_username, emoji=emoji, logger=logger)
+                cleanup_old_collections(
+                    section, current_collection_name="", username=old_username, emoji=emoji, logger=logger
+                )
         except plexapi.exceptions.PlexApiException as e:
             log_warning(f"Error cleaning up orphaned collection in '{library_title}': {e}")
 
@@ -334,6 +341,7 @@ def cleanup_orphaned_user_collections(config: Dict, old_username: str, old_displ
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
+
 
 def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: str) -> Dict[str, str]:
     """
@@ -364,7 +372,7 @@ def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: s
         if renames:
             config_text = None
             try:
-                with open(config_path, 'r', encoding='utf-8') as f:
+                with open(config_path, "r", encoding="utf-8") as f:
                     config_text = f.read()
             except (IOError, OSError) as e:
                 log_warning(f"Could not read {config_path} for user migration: {e}")
@@ -375,7 +383,9 @@ def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: s
 
                 if config_text is not None:
                     try:
-                        config_text, prefs_changed = rename_user_preferences_key(config_text, old_username, new_username)
+                        config_text, prefs_changed = rename_user_preferences_key(
+                            config_text, old_username, new_username
+                        )
                         config_text, list_changed = rename_user_in_users_list(config_text, old_username, new_username)
                         if not (prefs_changed or list_changed):
                             log_warning(
@@ -397,7 +407,7 @@ def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: s
 
             if config_text is not None:
                 try:
-                    with open(config_path, 'w', encoding='utf-8') as f:
+                    with open(config_path, "w", encoding="utf-8") as f:
                         f.write(config_text)
                 except (IOError, OSError) as e:
                     log_warning(f"Could not write migrated config.yml: {e}")

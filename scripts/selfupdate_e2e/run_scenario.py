@@ -23,6 +23,7 @@ Prints clear PASS/FAIL evidence; exits 1 on any unexpected outcome or
 timeout (a stuck/hung process must fail the CI job, never hang it
 forever).
 """
+
 import argparse
 import hashlib
 import json
@@ -44,29 +45,29 @@ except ImportError:
 
 def http_get_json(url, timeout=3):
     with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def http_post(url, timeout=5):
     # web/security.py's register_origin_host_guard requires a same-origin
     # Origin header on every state-changing request.
     origin = f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
-    req = urllib.request.Request(url, method='POST', data=b'', headers={'Origin': origin})
+    req = urllib.request.Request(url, method="POST", data=b"", headers={"Origin": origin})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read().decode('utf-8'))
+            return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        raw = e.read().decode('utf-8', errors='replace')
+        raw = e.read().decode("utf-8", errors="replace")
         try:
             return e.code, json.loads(raw)
         except json.JSONDecodeError:
-            return e.code, {'raw_body': raw}
+            return e.code, {"raw_body": raw}
 
 
 def sha256_file(path):
     h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(1 << 20), b''):
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
 
@@ -77,7 +78,7 @@ class Outcome:
         self.elapsed = elapsed
 
 
-def wait_for_version(port, timeout, acceptable, forbidden=(), label=''):
+def wait_for_version(port, timeout, acceptable, forbidden=(), label=""):
     """Polls /healthz until it reports a version in `acceptable`
     (success) or `forbidden` (immediate hard failure - e.g. a rollback
     scenario must never actually end up serving the broken "new"
@@ -87,8 +88,8 @@ def wait_for_version(port, timeout, acceptable, forbidden=(), label=''):
     last_seen = None
     while time.time() < deadline:
         try:
-            data = http_get_json(f'http://127.0.0.1:{port}/healthz', timeout=2)
-            v = data.get('version')
+            data = http_get_json(f"http://127.0.0.1:{port}/healthz", timeout=2)
+            v = data.get("version")
             if v != last_seen:
                 print(f"    [{label}] healthz version = {v!r} at t={time.time():.1f}", flush=True)
                 last_seen = v
@@ -99,9 +100,9 @@ def wait_for_version(port, timeout, acceptable, forbidden=(), label=''):
         except SystemExit:
             raise
         except Exception:
-            if last_seen != '<unreachable>':
+            if last_seen != "<unreachable>":
                 print(f"    [{label}] healthz unreachable at t={time.time():.1f}", flush=True)
-                last_seen = '<unreachable>'
+                last_seen = "<unreachable>"
         time.sleep(0.5)
     raise TimeoutError(f"[{label}] /healthz on port {port} never reported one of {acceptable} within {timeout}s")
 
@@ -138,68 +139,72 @@ def kill_by_install_dir(install_dir):
     the swap-relaunched process this script never has a PID for
     directly."""
     install_dir_norm = os.path.normcase(os.path.abspath(install_dir))
-    for proc in psutil.process_iter(['pid', 'exe', 'cmdline']):
+    for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
         try:
-            exe = proc.info.get('exe') or ''
-            cmdline = proc.info.get('cmdline') or []
+            exe = proc.info.get("exe") or ""
+            cmdline = proc.info.get("cmdline") or []
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
         haystacks = [exe] + cmdline
         if any(install_dir_norm in os.path.normcase(h) for h in haystacks if h):
-            kill_tree(proc.info['pid'])
+            kill_tree(proc.info["pid"])
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--scenario', required=True, choices=['swap', 'bad_sig', 'bad_hash', 'rollback'])
-    p.add_argument('--old-binary', required=True)
-    p.add_argument('--release-dir', required=True)
-    p.add_argument('--old-version', required=True)
-    p.add_argument('--target-version', required=True)
-    p.add_argument('--ui-port', type=int, required=True)
-    p.add_argument('--server-port', type=int, required=True)
-    p.add_argument('--work-dir', required=True)
-    p.add_argument('--debug-log', default=None)
+    p.add_argument("--scenario", required=True, choices=["swap", "bad_sig", "bad_hash", "rollback"])
+    p.add_argument("--old-binary", required=True)
+    p.add_argument("--release-dir", required=True)
+    p.add_argument("--old-version", required=True)
+    p.add_argument("--target-version", required=True)
+    p.add_argument("--ui-port", type=int, required=True)
+    p.add_argument("--server-port", type=int, required=True)
+    p.add_argument("--work-dir", required=True)
+    p.add_argument("--debug-log", default=None)
     args = p.parse_args()
 
     if os.path.isdir(args.work_dir):
         shutil.rmtree(args.work_dir)
-    install_dir = os.path.join(args.work_dir, 'install')
-    home_dir = os.path.join(args.work_dir, 'home')
+    install_dir = os.path.join(args.work_dir, "install")
+    home_dir = os.path.join(args.work_dir, "home")
     os.makedirs(install_dir)
     os.makedirs(home_dir)
 
     exe_name = os.path.basename(args.old_binary)
     exe_path = os.path.join(install_dir, exe_name)
     shutil.copy2(args.old_binary, exe_path)
-    if os.name != 'nt':
+    if os.name != "nt":
         os.chmod(exe_path, 0o755)
     original_hash = sha256_file(exe_path)
 
     print(f"=== [{args.scenario}] release_dir={args.release_dir} target={args.target_version} ===", flush=True)
     print(f"[{args.scenario}] old binary sha256: {original_hash}", flush=True)
 
-    server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fake_release_server.py')
-    server_log_path = os.path.join(args.work_dir, 'fake_release_server.log')
-    server_log_file = open(server_log_path, 'w')
+    server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_release_server.py")
+    server_log_path = os.path.join(args.work_dir, "fake_release_server.log")
+    server_log_file = open(server_log_path, "w")
     server_proc = subprocess.Popen(
         [sys.executable, server_script, args.release_dir, args.target_version, str(args.server_port)],
-        stdout=server_log_file, stderr=subprocess.STDOUT,
+        stdout=server_log_file,
+        stderr=subprocess.STDOUT,
     )
     time.sleep(1.0)
     if server_proc.poll() is not None:
         server_log_file.close()
         with open(server_log_path) as f:
-            print(f"[{args.scenario}] fake release server exited immediately (code {server_proc.returncode}):\n{f.read()}", flush=True)
+            print(
+                f"[{args.scenario}] fake release server exited immediately (code {server_proc.returncode}):\n{f.read()}",
+                flush=True,
+            )
         raise SystemExit(f"[{args.scenario}] FAIL: fake release server never started")
 
     env = dict(os.environ)
-    env['HOME'] = home_dir
-    env['APPDATA'] = home_dir  # harmless no-op on POSIX, correct override on Windows
-    env['CURATARR_UI_PORT'] = str(args.ui_port)
-    env['CURATARR_SKIP_BROWSER_OPEN'] = '1'
-    env['CURATARR_RELEASES_API_OVERRIDE'] = f'http://127.0.0.1:{args.server_port}/api/latest'
-    env['CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE'] = f'http://127.0.0.1:{args.server_port}/download'
+    env["HOME"] = home_dir
+    env["APPDATA"] = home_dir  # harmless no-op on POSIX, correct override on Windows
+    env["CURATARR_UI_PORT"] = str(args.ui_port)
+    env["CURATARR_SKIP_BROWSER_OPEN"] = "1"
+    env["CURATARR_RELEASES_API_OVERRIDE"] = f"http://127.0.0.1:{args.server_port}/api/latest"
+    env["CURATARR_RELEASES_DOWNLOAD_BASE_OVERRIDE"] = f"http://127.0.0.1:{args.server_port}/download"
     # GitHub-hosted runners can have HTTP(S)_PROXY set for outbound
     # traffic control - confirmed via a real CI run that without an
     # explicit NO_PROXY, `requests` (used by utils/update_check.py and
@@ -208,47 +213,52 @@ def main():
     # precondition check fail-open to "no update available" - never a
     # real bug in the self-update logic itself, just this harness
     # needing to force loopback traffic to bypass any proxy.
-    env['NO_PROXY'] = '127.0.0.1,localhost'
-    env['no_proxy'] = '127.0.0.1,localhost'
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    env["no_proxy"] = "127.0.0.1,localhost"
     if args.debug_log:
-        env['CURATARR_HANDOFF_DEBUG_LOG'] = args.debug_log
+        env["CURATARR_HANDOFF_DEBUG_LOG"] = args.debug_log
 
     exe_proc = subprocess.Popen([exe_path], cwd=install_dir, env=env)
 
     try:
         print(f"[{args.scenario}] waiting for old server on port {args.ui_port}...", flush=True)
-        old_up = wait_for_version(args.ui_port, timeout=30, acceptable={args.old_version}, label='startup')
+        old_up = wait_for_version(args.ui_port, timeout=30, acceptable={args.old_version}, label="startup")
         print(f"[{args.scenario}] old server up: version={old_up.version}", flush=True)
 
-        appdata_curatarr = os.path.join(home_dir, 'curatarr') if os.name == 'nt' else os.path.join(home_dir, '.curatarr')
-        update_log_path = os.path.join(appdata_curatarr, 'logs', 'update_apply.log')
-        app_log_path = os.path.join(appdata_curatarr, 'logs', 'curatarr.log')
+        appdata_curatarr = (
+            os.path.join(home_dir, "curatarr") if os.name == "nt" else os.path.join(home_dir, ".curatarr")
+        )
+        update_log_path = os.path.join(appdata_curatarr, "logs", "update_apply.log")
+        app_log_path = os.path.join(appdata_curatarr, "logs", "curatarr.log")
 
         def read_update_log():
             if os.path.isfile(update_log_path):
-                with open(update_log_path, encoding='utf-8', errors='replace') as f:
+                with open(update_log_path, encoding="utf-8", errors="replace") as f:
                     return f.read()
-            return ''
+            return ""
 
         def dump_diagnostics():
-            for label, path in (('curatarr.log', app_log_path), ('fake_release_server.log', server_log_path)):
+            for label, path in (("curatarr.log", app_log_path), ("fake_release_server.log", server_log_path)):
                 if os.path.isfile(path):
-                    with open(path, encoding='utf-8', errors='replace') as f:
+                    with open(path, encoding="utf-8", errors="replace") as f:
                         print(f"[{args.scenario}] --- {label} ---\n{f.read()}\n--- end {label} ---", flush=True)
                 else:
                     print(f"[{args.scenario}] {label} does not exist at {path}", flush=True)
 
         print(f"[{args.scenario}] POST /update/apply ...", flush=True)
-        status, body = http_post(f'http://127.0.0.1:{args.ui_port}/update/apply')
+        status, body = http_post(f"http://127.0.0.1:{args.ui_port}/update/apply")
         print(f"[{args.scenario}] /update/apply -> {status} {body}", flush=True)
         if status != 202:
             dump_diagnostics()
             raise SystemExit(f"[{args.scenario}] FAIL: expected 202, got {status}: {body}")
 
-        if args.scenario == 'swap':
+        if args.scenario == "swap":
             outcome = wait_for_version(
-                args.ui_port, timeout=110,
-                acceptable={args.target_version}, forbidden=set(), label='swap',
+                args.ui_port,
+                timeout=110,
+                acceptable={args.target_version},
+                forbidden=set(),
+                label="swap",
             )
             final_hash = sha256_file(exe_path)
             log = read_update_log()
@@ -257,35 +267,44 @@ def main():
                 f"on-disk binary hash {final_hash} does not match the release asset's hash "
                 f"{expected_new_hash} after a reported swap"
             )
-            assert 'handing off swap+relaunch' in log, f"update_apply.log missing hand-off line: {log!r}"
-            print(f"[{args.scenario}] PASS: swapped to v{outcome.version}, "
-                  f"binary hash {original_hash[:12]} -> {final_hash[:12]}", flush=True)
-
-        elif args.scenario in ('bad_sig', 'bad_hash'):
-            time.sleep(20)
-            data = http_get_json(f'http://127.0.0.1:{args.ui_port}/healthz', timeout=3)
-            assert data.get('version') == args.old_version, (
-                f"expected version to stay {args.old_version}, got {data}"
+            assert "handing off swap+relaunch" in log, f"update_apply.log missing hand-off line: {log!r}"
+            print(
+                f"[{args.scenario}] PASS: swapped to v{outcome.version}, "
+                f"binary hash {original_hash[:12]} -> {final_hash[:12]}",
+                flush=True,
             )
+
+        elif args.scenario in ("bad_sig", "bad_hash"):
+            time.sleep(20)
+            data = http_get_json(f"http://127.0.0.1:{args.ui_port}/healthz", timeout=3)
+            assert data.get("version") == args.old_version, f"expected version to stay {args.old_version}, got {data}"
             final_hash = sha256_file(exe_path)
             assert final_hash == original_hash, "binary hash CHANGED - a bad update was applied!"
             log = read_update_log()
-            assert 'verify failed' in log, f"update_apply.log does not show a verify failure: {log!r}"
-            print(f"[{args.scenario}] PASS: update refused, binary hash unchanged "
-                  f"({final_hash[:12]}), still serving v{args.old_version}", flush=True)
+            assert "verify failed" in log, f"update_apply.log does not show a verify failure: {log!r}"
+            print(
+                f"[{args.scenario}] PASS: update refused, binary hash unchanged "
+                f"({final_hash[:12]}), still serving v{args.old_version}",
+                flush=True,
+            )
 
-        elif args.scenario == 'rollback':
+        elif args.scenario == "rollback":
             outcome = wait_for_version(
-                args.ui_port, timeout=110,
-                acceptable={args.old_version}, forbidden={args.target_version}, label='rollback',
+                args.ui_port,
+                timeout=110,
+                acceptable={args.old_version},
+                forbidden={args.target_version},
+                label="rollback",
             )
             final_hash = sha256_file(exe_path)
             assert final_hash == original_hash, (
                 f"binary hash did not revert to the original after rollback "
                 f"(expected {original_hash}, got {final_hash})"
             )
-            print(f"[{args.scenario}] PASS: rolled back to v{outcome.version}, "
-                  f"binary hash restored ({final_hash[:12]})", flush=True)
+            print(
+                f"[{args.scenario}] PASS: rolled back to v{outcome.version}, binary hash restored ({final_hash[:12]})",
+                flush=True,
+            )
 
         return 0
     finally:
@@ -306,5 +325,5 @@ def main():
             pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

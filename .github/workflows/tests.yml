@@ -47,13 +47,25 @@ jobs:
   lint:
     runs-on: ubuntu-latest
 
-    # Non-blocking for now (every step below is continue-on-error) -
-    # this job was added by the 2.10.13 audit-remediation pass to start
-    # reporting ruff/mypy findings on every PR without wedging merges
-    # on a first pass across a codebase that had never been linted
-    # before. See CHANGELOG.md's [2.10.13]/[2.10.14] entries for the
-    # measured violation counts and the plan to flip pieces of this to
-    # blocking once they're clean on main.
+    # Added by the 2.10.13 audit-remediation pass to start reporting
+    # ruff/mypy findings on every PR without wedging merges on a first
+    # pass across a codebase that had never been linted before - see
+    # CHANGELOG.md's [2.10.13] entry for the measured violation counts
+    # that justified starting non-blocking.
+    #
+    # The 2.10.14 reformat then cleaned up every mechanically-fixable
+    # violation and got `ruff format --check` clean on main, so that
+    # step's continue-on-error was removed below - a real formatting
+    # regression now fails this job for real, not just in the log.
+    # `ruff check` stays non-blocking: 128 violations remain that are
+    # deliberately NOT auto-fixed (removing them either changes
+    # behavior - see CHANGELOG.md's [2.10.14] entry on the six
+    # cross-module "unused" imports that are actually re-exports relied
+    # on elsewhere - or needs a human judgment call ruff can't make
+    # safely, e.g. an ambiguous variable rename or an `except:` that
+    # legitimately shouldn't chain `from`). `mypy` also stays
+    # non-blocking (255 pre-existing errors, unrelated to this pass -
+    # this codebase is only partially annotated).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -73,7 +85,6 @@ jobs:
         run: ruff check .
 
       - name: ruff format --check
-        continue-on-error: true
         run: ruff format --check .
 
       - name: mypy

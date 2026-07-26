@@ -61,9 +61,9 @@ from typing import Dict, Iterator
 from .config import __version__
 from .helpers import get_project_root
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
-_METRICS_FILENAME = 'metrics_state.json'
+_METRICS_FILENAME = "metrics_state.json"
 
 # In-process only - guards read-modify-write of the on-disk state
 # against concurrent callers *within this same process* (e.g. two
@@ -78,36 +78,43 @@ DURATION_BUCKETS = (0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800)
 
 # name -> (HELP text, label names) - counters
 _COUNTERS = {
-    'curatarr_recommender_runs_total': (
-        'Total recommender runs, by engine and outcome.', ('engine', 'outcome'),
+    "curatarr_recommender_runs_total": (
+        "Total recommender runs, by engine and outcome.",
+        ("engine", "outcome"),
     ),
-    'curatarr_api_requests_total': (
-        'Total outbound API requests, by service and outcome.', ('service', 'outcome'),
+    "curatarr_api_requests_total": (
+        "Total outbound API requests, by service and outcome.",
+        ("service", "outcome"),
     ),
-    'curatarr_cache_lookups_total': (
-        'Total local cache lookups, by result.', ('result',),
+    "curatarr_cache_lookups_total": (
+        "Total local cache lookups, by result.",
+        ("result",),
     ),
-    'curatarr_self_update_attempts_total': (
-        'Total self-update attempts, by outcome.', ('outcome',),
+    "curatarr_self_update_attempts_total": (
+        "Total self-update attempts, by outcome.",
+        ("outcome",),
     ),
-    'curatarr_unhandled_errors_total': (
-        'Total unhandled errors, by component.', ('component',),
+    "curatarr_unhandled_errors_total": (
+        "Total unhandled errors, by component.",
+        ("component",),
     ),
 }
 
 # name -> (HELP text, label names) - histograms
 _HISTOGRAMS = {
-    'curatarr_recommender_run_duration_seconds': (
-        'Recommender run duration in seconds, by engine and outcome.', ('engine', 'outcome'),
+    "curatarr_recommender_run_duration_seconds": (
+        "Recommender run duration in seconds, by engine and outcome.",
+        ("engine", "outcome"),
     ),
-    'curatarr_api_request_duration_seconds': (
-        'Outbound API request duration in seconds, by service.', ('service',),
+    "curatarr_api_request_duration_seconds": (
+        "Outbound API request duration in seconds, by service.",
+        ("service",),
     ),
 }
 
 
 def _state_path() -> str:
-    cache_dir = os.path.join(get_project_root(), 'cache')
+    cache_dir = os.path.join(get_project_root(), "cache")
     try:
         os.makedirs(cache_dir, exist_ok=True)
     except Exception as e:
@@ -118,18 +125,18 @@ def _state_path() -> str:
 def _load_state() -> dict:
     path = _state_path()
     if not os.path.isfile(path):
-        return {'counters': {}, 'histograms': {}}
+        return {"counters": {}, "histograms": {}}
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
-            return {'counters': {}, 'histograms': {}}
-        data.setdefault('counters', {})
-        data.setdefault('histograms', {})
+            return {"counters": {}, "histograms": {}}
+        data.setdefault("counters", {})
+        data.setdefault("histograms", {})
         return data
     except Exception as e:
         logger.debug(f"Could not read metrics state ({path}): {e}")
-        return {'counters': {}, 'histograms': {}}
+        return {"counters": {}, "histograms": {}}
 
 
 def _atomic_write(path: str, data: dict) -> None:
@@ -137,8 +144,8 @@ def _atomic_write(path: str, data: dict) -> None:
     possibly in a different process) never sees a partially-written file -
     same pattern used throughout this codebase's own binary-swap code
     (see utils/self_update.py)."""
-    tmp_path = f'{path}.tmp-{os.getpid()}-{threading.get_ident()}'
-    with open(tmp_path, 'w', encoding='utf-8') as f:
+    tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f)
     os.replace(tmp_path, path)
 
@@ -146,7 +153,7 @@ def _atomic_write(path: str, data: dict) -> None:
 def _label_key(labels: Dict[str, str]) -> str:
     """Stable, internal-only string key for a label dict - never rendered
     directly (see _format_labels for the quoted Prometheus form)."""
-    return ','.join(f'{k}={v}' for k, v in labels.items())
+    return ",".join(f"{k}={v}" for k, v in labels.items())
 
 
 def _format_labels(key: str) -> str:
@@ -157,12 +164,12 @@ def _format_labels(key: str) -> str:
     service name, ...) - never free-form user input - so no
     quote/backslash escaping of the value is needed here."""
     if not key:
-        return ''
+        return ""
     pairs = []
-    for part in key.split(','):
-        name, _, value = part.partition('=')
+    for part in key.split(","):
+        name, _, value = part.partition("=")
         pairs.append(f'{name}="{value}"')
-    return ','.join(pairs)
+    return ",".join(pairs)
 
 
 def _increment_counter(name: str, labels: Dict[str, str], amount: float = 1.0) -> None:
@@ -170,7 +177,7 @@ def _increment_counter(name: str, labels: Dict[str, str], amount: float = 1.0) -
     with _lock:
         try:
             state = _load_state()
-            series = state['counters'].setdefault(name, {})
+            series = state["counters"].setdefault(name, {})
             series[key] = series.get(key, 0.0) + amount
             _atomic_write(_state_path(), state)
         except Exception as e:
@@ -182,14 +189,14 @@ def _observe_histogram(name: str, labels: Dict[str, str], value: float) -> None:
     with _lock:
         try:
             state = _load_state()
-            series = state['histograms'].setdefault(name, {})
-            entry = series.setdefault(key, {'sum': 0.0, 'count': 0, 'buckets': {}})
-            entry['sum'] += value
-            entry['count'] += 1
+            series = state["histograms"].setdefault(name, {})
+            entry = series.setdefault(key, {"sum": 0.0, "count": 0, "buckets": {}})
+            entry["sum"] += value
+            entry["count"] += 1
             for bound in DURATION_BUCKETS:
                 if value <= bound:
                     bucket_key = str(bound)
-                    entry['buckets'][bucket_key] = entry['buckets'].get(bucket_key, 0) + 1
+                    entry["buckets"][bucket_key] = entry["buckets"].get(bucket_key, 0) + 1
             _atomic_write(_state_path(), state)
         except Exception as e:
             logger.debug(f"Could not persist metric {name}: {e}")
@@ -203,6 +210,7 @@ def _observe_histogram(name: str, labels: Dict[str, str], value: float) -> None:
 # recommender run, API call, or cache lookup fails.
 # ---------------------------------------------------------------------------
 
+
 def record_recommender_run(engine: str, outcome: str, duration_seconds: float) -> None:
     """One completed recommender run. `engine` is 'movie', 'tv', or
     'external' (matches web/job_runner.py's ENGINES, minus 'full' - a
@@ -215,17 +223,17 @@ def record_recommender_run(engine: str, outcome: str, duration_seconds: float) -
     counted exactly the same as one triggered from the web UI's Run
     button (which just launches that same entry point as a subprocess -
     see web/job_runner.py)."""
-    labels = {'engine': engine, 'outcome': outcome}
-    _increment_counter('curatarr_recommender_runs_total', labels)
-    _observe_histogram('curatarr_recommender_run_duration_seconds', labels, duration_seconds)
+    labels = {"engine": engine, "outcome": outcome}
+    _increment_counter("curatarr_recommender_runs_total", labels)
+    _observe_histogram("curatarr_recommender_run_duration_seconds", labels, duration_seconds)
 
 
 def record_api_call(service: str, outcome: str, duration_seconds: float) -> None:
     """One outbound API call to `service` (plex, radarr, sonarr, tmdb,
     trakt, simkl, mdblist, or tautulli). `outcome` is 'success' or
     'error'."""
-    _increment_counter('curatarr_api_requests_total', {'service': service, 'outcome': outcome})
-    _observe_histogram('curatarr_api_request_duration_seconds', {'service': service}, duration_seconds)
+    _increment_counter("curatarr_api_requests_total", {"service": service, "outcome": outcome})
+    _observe_histogram("curatarr_api_request_duration_seconds", {"service": service}, duration_seconds)
 
 
 @contextmanager
@@ -235,11 +243,11 @@ def track_api_call(service: str) -> Iterator[None]:
     block raised, 'success' otherwise - the exception (if any) still
     propagates unchanged; this only observes, it never suppresses."""
     start = time.monotonic()
-    outcome = 'success'
+    outcome = "success"
     try:
         yield
     except Exception:
-        outcome = 'error'
+        outcome = "error"
         raise
     finally:
         record_api_call(service, outcome, time.monotonic() - start)
@@ -247,7 +255,7 @@ def track_api_call(service: str) -> Iterator[None]:
 
 def record_cache_lookup(result: str) -> None:
     """One local on-disk cache read. `result` is 'hit' or 'miss'."""
-    _increment_counter('curatarr_cache_lookups_total', {'result': result})
+    _increment_counter("curatarr_cache_lookups_total", {"result": result})
 
 
 def record_self_update_attempt(outcome: str) -> None:
@@ -255,19 +263,20 @@ def record_self_update_attempt(outcome: str) -> None:
     "Update now" for a frozen binary - see utils/self_update.py's
     download_and_verify_update, the single choke point both paths call
     through). `outcome` is 'success' or 'failure'."""
-    _increment_counter('curatarr_self_update_attempts_total', {'outcome': outcome})
+    _increment_counter("curatarr_self_update_attempts_total", {"outcome": outcome})
 
 
-def record_unhandled_error(component: str = 'unknown') -> None:
+def record_unhandled_error(component: str = "unknown") -> None:
     """One unhandled exception - a recommender run crashing outside its
     own per-item error handling, or a Flask request handler raising past
     web/app.py's own error handler."""
-    _increment_counter('curatarr_unhandled_errors_total', {'component': component})
+    _increment_counter("curatarr_unhandled_errors_total", {"component": component})
 
 
 # ---------------------------------------------------------------------------
 # Rendering - the only thing web/app.py's /metrics route calls.
 # ---------------------------------------------------------------------------
+
 
 def render_prometheus_text() -> str:
     """Render every metric as Prometheus text exposition format. Cheap:
@@ -276,33 +285,33 @@ def render_prometheus_text() -> str:
     often as desired."""
     state = _load_state()
     lines = [
-        '# HELP curatarr_build_info Curatarr build/version info.',
-        '# TYPE curatarr_build_info gauge',
+        "# HELP curatarr_build_info Curatarr build/version info.",
+        "# TYPE curatarr_build_info gauge",
         f'curatarr_build_info{{version="{__version__}"}} 1',
     ]
 
-    counters = state.get('counters', {})
+    counters = state.get("counters", {})
     for name, (help_text, _label_names) in _COUNTERS.items():
-        lines.append(f'# HELP {name} {help_text}')
-        lines.append(f'# TYPE {name} counter')
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} counter")
         for key, value in sorted(counters.get(name, {}).items()):
             label_str = _format_labels(key)
-            labels = f'{{{label_str}}}' if label_str else ''
-            lines.append(f'{name}{labels} {value}')
+            labels = f"{{{label_str}}}" if label_str else ""
+            lines.append(f"{name}{labels} {value}")
 
-    histograms = state.get('histograms', {})
+    histograms = state.get("histograms", {})
     for name, (help_text, _label_names) in _HISTOGRAMS.items():
-        lines.append(f'# HELP {name} {help_text}')
-        lines.append(f'# TYPE {name} histogram')
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} histogram")
         for key, entry in sorted(histograms.get(name, {}).items()):
             label_str = _format_labels(key)
-            bucket_prefix = f'{label_str},' if label_str else ''
-            base_labels = f'{{{label_str}}}' if label_str else ''
+            bucket_prefix = f"{label_str}," if label_str else ""
+            base_labels = f"{{{label_str}}}" if label_str else ""
             for bound in DURATION_BUCKETS:
-                bucket_count = entry.get('buckets', {}).get(str(bound), 0)
+                bucket_count = entry.get("buckets", {}).get(str(bound), 0)
                 lines.append(f'{name}_bucket{{{bucket_prefix}le="{bound}"}} {bucket_count}')
             lines.append(f'{name}_bucket{{{bucket_prefix}le="+Inf"}} {entry.get("count", 0)}')
-            lines.append(f'{name}_sum{base_labels} {entry.get("sum", 0)}')
-            lines.append(f'{name}_count{base_labels} {entry.get("count", 0)}')
+            lines.append(f"{name}_sum{base_labels} {entry.get('sum', 0)}")
+            lines.append(f"{name}_count{base_labels} {entry.get('count', 0)}")
 
-    return '\n'.join(lines) + '\n'
+    return "\n".join(lines) + "\n"

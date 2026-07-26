@@ -3,21 +3,22 @@ Similarity scoring utilities for Curatarr.
 Handles content-to-profile similarity calculations.
 """
 
-import math
 import logging
+import math
 import random
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 from utils.config import (
+    POPULARITY_DAMPENING_CAP,
+    POPULARITY_DAMPENING_FACTOR,
     TFIDF_GENRE_PENALTY,
     TFIDF_KEYWORD_PENALTY,
     UNSEEN_GENRE_PENALTY,
     UNSEEN_KEYWORD_PENALTY,
-    POPULARITY_DAMPENING_FACTOR,
-    POPULARITY_DAMPENING_CAP,
 )
+
 
 def normalize_user_profile(user_prefs: Dict, tfidf_penalty_threshold: float = 0.15) -> Dict:
     """
@@ -34,19 +35,16 @@ def normalize_user_profile(user_prefs: Dict, tfidf_penalty_threshold: float = 0.
         and pre-computed threshold values
     """
     # Only normalize if not already done
-    if '_normalized' in user_prefs:
+    if "_normalized" in user_prefs:
         return user_prefs
 
     # Create lowercase versions of all string-keyed preference dicts
-    for key in ['directors', 'actors', 'keywords', 'studios', 'languages']:
+    for key in ["directors", "actors", "keywords", "studios", "languages"]:
         if key in user_prefs and isinstance(user_prefs[key], (dict, Counter)):
-            user_prefs[f'{key}_lower'] = {
-                k.lower() if isinstance(k, str) else k: v
-                for k, v in user_prefs[key].items()
-            }
+            user_prefs[f"{key}_lower"] = {k.lower() if isinstance(k, str) else k: v for k, v in user_prefs[key].items()}
 
     # Initialize fuzzy keyword match cache (populated lazily during scoring)
-    user_prefs['_fuzzy_cache'] = {}
+    user_prefs["_fuzzy_cache"] = {}
 
     # Pre-compute max counts for normalization and TF-IDF
     def max_positive(d):
@@ -56,40 +54,40 @@ def normalize_user_profile(user_prefs: Dict, tfidf_penalty_threshold: float = 0.
         return max(positive_vals) if positive_vals else 1
 
     max_counts = {
-        'genres': max_positive(user_prefs.get('genres', {})),
-        'directors': max_positive(user_prefs.get('directors', {})),
-        'studios': max_positive(user_prefs.get('studios', {})),
-        'actors': max_positive(user_prefs.get('actors', {})),
-        'languages': max_positive(user_prefs.get('languages', {})),
-        'keywords': max_positive(user_prefs.get('keywords', user_prefs.get('tmdb_keywords', {})))
+        "genres": max_positive(user_prefs.get("genres", {})),
+        "directors": max_positive(user_prefs.get("directors", {})),
+        "studios": max_positive(user_prefs.get("studios", {})),
+        "actors": max_positive(user_prefs.get("actors", {})),
+        "languages": max_positive(user_prefs.get("languages", {})),
+        "keywords": max_positive(user_prefs.get("keywords", user_prefs.get("tmdb_keywords", {}))),
     }
-    user_prefs['_max_counts'] = max_counts
+    user_prefs["_max_counts"] = max_counts
 
     # Pre-compute TF-IDF thresholds
-    user_prefs['_tfidf_thresholds'] = {
-        'genres': max_counts['genres'] * tfidf_penalty_threshold,
-        'keywords': max_counts['keywords'] * tfidf_penalty_threshold
+    user_prefs["_tfidf_thresholds"] = {
+        "genres": max_counts["genres"] * tfidf_penalty_threshold,
+        "keywords": max_counts["keywords"] * tfidf_penalty_threshold,
     }
 
-    user_prefs['_normalized'] = True
+    user_prefs["_normalized"] = True
     return user_prefs
 
 
 # Genre normalization: Map various genre names to standard lowercase names
 GENRE_NORMALIZATION = {
-    'sci-fi': 'science fiction',
-    'scifi': 'science fiction',
-    'science-fiction': 'science fiction',
-    'sci-fi & fantasy': 'science fiction',
-    'action & adventure': 'action',
-    'action/adventure': 'action',
-    'war & politics': 'war',
-    'tv movie': 'drama',
-    'news': 'documentary',
-    'talk': 'comedy',
-    'reality': 'documentary',
-    'soap': 'drama',
-    'kids': 'family',
+    "sci-fi": "science fiction",
+    "scifi": "science fiction",
+    "science-fiction": "science fiction",
+    "sci-fi & fantasy": "science fiction",
+    "action & adventure": "action",
+    "action/adventure": "action",
+    "war & politics": "war",
+    "tv movie": "drama",
+    "news": "documentary",
+    "talk": "comedy",
+    "reality": "documentary",
+    "soap": "drama",
+    "kids": "family",
 }
 
 
@@ -112,9 +110,7 @@ def normalize_genre(genre_name: str) -> str:
 
 
 def fuzzy_keyword_match(
-    keyword: str,
-    user_keywords: Dict[str, int],
-    cache: Optional[Dict[str, Tuple[float, Optional[str]]]] = None
+    keyword: str, user_keywords: Dict[str, int], cache: Optional[Dict[str, Tuple[float, Optional[str]]]] = None
 ) -> Tuple[float, Optional[str]]:
     """
     Check if keyword fuzzy-matches any user keyword.
@@ -182,7 +178,7 @@ def calculate_recency_multiplier(viewed_at, recency_config: dict) -> float:
         Multiplier value (0.1 to 1.0)
     """
     # Check if recency decay is enabled
-    if not recency_config.get('enabled', True):
+    if not recency_config.get("enabled", True):
         return 1.0
 
     # Calculate days since watched
@@ -192,15 +188,15 @@ def calculate_recency_multiplier(viewed_at, recency_config: dict) -> float:
 
     # Apply time-based decay weights
     if days_ago <= 30:
-        multiplier = recency_config.get('days_0_30', 1.0)
+        multiplier = recency_config.get("days_0_30", 1.0)
     elif days_ago <= 90:
-        multiplier = recency_config.get('days_31_90', 0.75)
+        multiplier = recency_config.get("days_31_90", 0.75)
     elif days_ago <= 180:
-        multiplier = recency_config.get('days_91_180', 0.50)
+        multiplier = recency_config.get("days_91_180", 0.50)
     elif days_ago <= 365:
-        multiplier = recency_config.get('days_181_365', 0.25)
+        multiplier = recency_config.get("days_181_365", 0.25)
     else:
-        multiplier = recency_config.get('days_365_plus', 0.10)
+        multiplier = recency_config.get("days_365_plus", 0.10)
 
     return multiplier
 
@@ -227,7 +223,7 @@ def calculate_rewatch_multiplier(view_count: int) -> float:
     return math.log2(view_count) + 1
 
 
-def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = 'movie') -> Dict:
+def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = "movie") -> Dict:
     """
     Redistribute weights from empty profile components to components with data.
 
@@ -243,20 +239,20 @@ def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = '
         Dict of effective weights with redistribution applied
     """
     # Check which components have data in user profile
-    has_genres = bool(user_profile.get('genres', {}))
-    has_directors = bool(user_profile.get('directors', {})) if media_type == 'movie' else False
-    has_studios = bool(user_profile.get('studios', {})) if media_type == 'tv' else False
-    has_actors = bool(user_profile.get('actors', {}))
-    has_languages = bool(user_profile.get('languages', {}))
-    has_keywords = bool(user_profile.get('keywords', user_profile.get('tmdb_keywords', {})))
+    has_genres = bool(user_profile.get("genres", {}))
+    has_directors = bool(user_profile.get("directors", {})) if media_type == "movie" else False
+    has_studios = bool(user_profile.get("studios", {})) if media_type == "tv" else False
+    has_actors = bool(user_profile.get("actors", {}))
+    has_languages = bool(user_profile.get("languages", {}))
+    has_keywords = bool(user_profile.get("keywords", user_profile.get("tmdb_keywords", {})))
 
     # Get original weights
-    genre_w = weights.get('genre', weights.get('genre_weight', 0.20))
-    director_w = weights.get('director', weights.get('director_weight', 0.15)) if media_type == 'movie' else 0
-    studio_w = weights.get('studio', weights.get('studio_weight', 0.15)) if media_type == 'tv' else 0
-    actor_w = weights.get('actor', weights.get('actor_weight', 0.15))
-    language_w = weights.get('language', weights.get('language_weight', 0.05))
-    keyword_w = weights.get('keyword', weights.get('keyword_weight', 0.45))
+    genre_w = weights.get("genre", weights.get("genre_weight", 0.20))
+    director_w = weights.get("director", weights.get("director_weight", 0.15)) if media_type == "movie" else 0
+    studio_w = weights.get("studio", weights.get("studio_weight", 0.15)) if media_type == "tv" else 0
+    actor_w = weights.get("actor", weights.get("actor_weight", 0.15))
+    language_w = weights.get("language", weights.get("language_weight", 0.05))
+    keyword_w = weights.get("keyword", weights.get("keyword_weight", 0.45))
 
     # Calculate used and unused weight
     used_weight = 0.0
@@ -267,7 +263,7 @@ def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = '
     else:
         unused_weight += genre_w
 
-    if media_type == 'movie':
+    if media_type == "movie":
         if has_directors:
             used_weight += director_w
         else:
@@ -302,12 +298,12 @@ def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = '
 
     # Build effective weights
     effective = {}
-    effective['genre'] = (genre_w * multiplier) if has_genres else 0
-    effective['director'] = (director_w * multiplier) if has_directors else 0
-    effective['studio'] = (studio_w * multiplier) if has_studios else 0
-    effective['actor'] = (actor_w * multiplier) if has_actors else 0
-    effective['language'] = (language_w * multiplier) if has_languages else 0
-    effective['keyword'] = (keyword_w * multiplier) if has_keywords else 0
+    effective["genre"] = (genre_w * multiplier) if has_genres else 0
+    effective["director"] = (director_w * multiplier) if has_directors else 0
+    effective["studio"] = (studio_w * multiplier) if has_studios else 0
+    effective["actor"] = (actor_w * multiplier) if has_actors else 0
+    effective["language"] = (language_w * multiplier) if has_languages else 0
+    effective["keyword"] = (keyword_w * multiplier) if has_keywords else 0
 
     return effective
 
@@ -315,14 +311,14 @@ def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = '
 def calculate_similarity_score(
     content_info: Dict,
     user_profile: Dict,
-    media_type: str = 'movie',
+    media_type: str = "movie",
     weights: Optional[Dict] = None,
     normalize_counters: bool = True,
     use_fuzzy_keywords: bool = True,
     use_tfidf: bool = True,
     tfidf_penalty_threshold: float = 0.15,
     use_popularity_dampening: bool = True,
-    popularity_threshold: int = 50000
+    popularity_threshold: int = 50000,
 ) -> Tuple[float, Dict]:
     """
     Calculate similarity score between content and user profile.
@@ -346,33 +342,19 @@ def calculate_similarity_score(
         Tuple of (score 0-1, breakdown dict with component scores)
     """
     # Default weights (specificity-first approach)
-    default_weights = {
-        'genre': 0.25,
-        'director': 0.05,
-        'studio': 0.10,
-        'actor': 0.20,
-        'keyword': 0.50,
-        'language': 0.0
-    }
+    default_weights = {"genre": 0.25, "director": 0.05, "studio": 0.10, "actor": 0.20, "keyword": 0.50, "language": 0.0}
     weights = weights or default_weights
 
     effective_weights = _redistribute_weights(weights, user_profile, media_type)
 
     score_breakdown = {
-        'genre_score': 0.0,
-        'director_score': 0.0,
-        'studio_score': 0.0,
-        'actor_score': 0.0,
-        'language_score': 0.0,
-        'keyword_score': 0.0,
-        'details': {
-            'genres': [],
-            'directors': [],
-            'studio': None,
-            'actors': [],
-            'language': None,
-            'keywords': []
-        }
+        "genre_score": 0.0,
+        "director_score": 0.0,
+        "studio_score": 0.0,
+        "actor_score": 0.0,
+        "language_score": 0.0,
+        "keyword_score": 0.0,
+        "details": {"genres": [], "directors": [], "studio": None, "actors": [], "language": None, "keywords": []},
     }
 
     if not content_info or not user_profile:
@@ -382,30 +364,31 @@ def calculate_similarity_score(
         score = 0.0
 
         user_prefs = {
-            'genres': Counter(user_profile.get('genres', {})),
-            'directors': Counter(user_profile.get('directors', {})),
-            'studios': Counter(user_profile.get('studios', {})),
-            'actors': Counter(user_profile.get('actors', {})),
-            'languages': Counter(user_profile.get('languages', {})),
-            'keywords': Counter(user_profile.get('keywords', user_profile.get('tmdb_keywords', {})))
+            "genres": Counter(user_profile.get("genres", {})),
+            "directors": Counter(user_profile.get("directors", {})),
+            "studios": Counter(user_profile.get("studios", {})),
+            "actors": Counter(user_profile.get("actors", {})),
+            "languages": Counter(user_profile.get("languages", {})),
+            "keywords": Counter(user_profile.get("keywords", user_profile.get("tmdb_keywords", {}))),
         }
 
         # Use pre-computed max counts if available (from normalize_user_profile)
         # Otherwise calculate them (for backwards compatibility)
-        if '_max_counts' in user_profile:
-            max_counts = user_profile['_max_counts']
+        if "_max_counts" in user_profile:
+            max_counts = user_profile["_max_counts"]
         else:
+
             def max_positive(counter):
                 positive_vals = [v for v in counter.values() if v > 0]
                 return max(positive_vals) if positive_vals else 1
 
             max_counts = {
-                'genres': max_positive(user_prefs['genres']),
-                'directors': max_positive(user_prefs['directors']),
-                'studios': max_positive(user_prefs['studios']),
-                'actors': max_positive(user_prefs['actors']),
-                'languages': max_positive(user_prefs['languages']),
-                'keywords': max_positive(user_prefs['keywords'])
+                "genres": max_positive(user_prefs["genres"]),
+                "directors": max_positive(user_prefs["directors"]),
+                "studios": max_positive(user_prefs["studios"]),
+                "actors": max_positive(user_prefs["actors"]),
+                "languages": max_positive(user_prefs["languages"]),
+                "keywords": max_positive(user_prefs["keywords"]),
             }
 
         # Track penalties from negative signals
@@ -413,7 +396,7 @@ def calculate_similarity_score(
 
         # Build normalized genre lookup
         normalized_user_genres = {}
-        for genre, count in user_prefs['genres'].items():
+        for genre, count in user_prefs["genres"].items():
             norm_genre = normalize_genre(genre)
             if norm_genre in normalized_user_genres:
                 normalized_user_genres[norm_genre] = max(normalized_user_genres[norm_genre], count)
@@ -422,14 +405,14 @@ def calculate_similarity_score(
         max_genre_count = max(normalized_user_genres.values()) if normalized_user_genres else 1
 
         # --- Genre Score with TF-IDF ---
-        content_genres = set(content_info.get('genres', []))
+        content_genres = set(content_info.get("genres", []))
         if content_genres:
             genre_scores = []
             genre_penalty = 0.0
             # Use pre-computed threshold if available, otherwise calculate
             if use_tfidf:
-                tfidf_threshold_count = user_profile.get('_tfidf_thresholds', {}).get(
-                    'genres', max_genre_count * tfidf_penalty_threshold
+                tfidf_threshold_count = user_profile.get("_tfidf_thresholds", {}).get(
+                    "genres", max_genre_count * tfidf_penalty_threshold
                 )
             else:
                 tfidf_threshold_count = 0
@@ -438,7 +421,7 @@ def calculate_similarity_score(
                 norm_genre = normalize_genre(genre)
                 genre_count = normalized_user_genres.get(norm_genre, 0)
                 if genre_count == 0:
-                    genre_count = user_prefs['genres'].get(genre, 0)
+                    genre_count = user_prefs["genres"].get(genre, 0)
 
                 if genre_count > 0:
                     # TF-IDF: if genre is rare in user's profile, apply penalty
@@ -448,7 +431,7 @@ def calculate_similarity_score(
                         rarity = 1 - (genre_count / tfidf_threshold_count)
                         penalty = rarity * TFIDF_GENRE_PENALTY
                         genre_penalty += penalty
-                        score_breakdown['details']['genres'].append(
+                        score_breakdown["details"]["genres"].append(
                             f"{genre} (TF-IDF: count {genre_count:.1f} < threshold {tfidf_threshold_count:.1f}, penalty: {round(penalty, 2)})"
                         )
                     else:
@@ -458,73 +441,75 @@ def calculate_similarity_score(
                         else:
                             normalized_score = min(genre_count / max_genre_count, 1.0)
                         genre_scores.append(normalized_score)
-                        score_breakdown['details']['genres'].append(
+                        score_breakdown["details"]["genres"].append(
                             f"{genre} (count: {genre_count:.1f}, norm: {round(normalized_score, 2)})"
                         )
                 elif genre_count < 0:
                     # Explicit negative signal: penalize this genre
                     penalty = abs(genre_count) / max_genre_count * 0.5  # Cap penalty contribution
                     genre_penalty += penalty
-                    score_breakdown['details']['genres'].append(
+                    score_breakdown["details"]["genres"].append(
                         f"{genre} (NEGATIVE: {genre_count}, penalty: {round(penalty, 2)})"
                     )
                 elif use_tfidf and genre_count == 0:
                     # User has never watched this genre - mild penalty
                     genre_penalty += UNSEEN_GENRE_PENALTY
-                    score_breakdown['details']['genres'].append(
+                    score_breakdown["details"]["genres"].append(
                         f"{genre} (TF-IDF: unseen genre, penalty: {UNSEEN_GENRE_PENALTY})"
                     )
 
             if genre_scores or genre_penalty > 0:
-                genre_weight = effective_weights.get('genre', 0.20)
+                genre_weight = effective_weights.get("genre", 0.20)
                 genre_sum = sum(genre_scores)
                 genre_ratio = 1 - (1 / (1 + genre_sum))
                 genre_final = max(0, genre_ratio - genre_penalty) * genre_weight
                 score += genre_final
                 total_penalty += genre_penalty * genre_weight
-                score_breakdown['genre_score'] = round(genre_final, 3)
+                score_breakdown["genre_score"] = round(genre_final, 3)
 
         # --- Director Score (movies only) ---
-        if media_type == 'movie':
-            content_directors = content_info.get('directors', [])
+        if media_type == "movie":
+            content_directors = content_info.get("directors", [])
             if content_directors:
                 # Use pre-normalized if available, otherwise build inline
-                user_directors_lower = user_prefs.get('directors_lower') or {k.lower(): v for k, v in user_prefs['directors'].items()}
+                user_directors_lower = user_prefs.get("directors_lower") or {
+                    k.lower(): v for k, v in user_prefs["directors"].items()
+                }
                 director_scores = []
                 director_penalty = 0.0
                 for director in content_directors:
                     director_lower = director.lower() if isinstance(director, str) else director
-                    director_count = user_prefs['directors'].get(director, 0)
+                    director_count = user_prefs["directors"].get(director, 0)
                     if director_count == 0:
                         director_count = user_directors_lower.get(director_lower, 0)
                     if director_count > 0:
                         if normalize_counters:
-                            normalized_score = math.sqrt(director_count / max_counts['directors'])
+                            normalized_score = math.sqrt(director_count / max_counts["directors"])
                         else:
-                            normalized_score = min(director_count / max_counts['directors'], 1.0)
+                            normalized_score = min(director_count / max_counts["directors"], 1.0)
                         director_scores.append(normalized_score)
-                        score_breakdown['details']['directors'].append(
+                        score_breakdown["details"]["directors"].append(
                             f"{director} (count: {director_count}, norm: {round(normalized_score, 2)})"
                         )
                     elif director_count < 0:
-                        penalty = abs(director_count) / max_counts['directors'] * 0.5
+                        penalty = abs(director_count) / max_counts["directors"] * 0.5
                         director_penalty += penalty
-                        score_breakdown['details']['directors'].append(
+                        score_breakdown["details"]["directors"].append(
                             f"{director} (NEGATIVE: {director_count}, penalty: {round(penalty, 2)})"
                         )
                 if director_scores or director_penalty > 0:
-                    director_weight = effective_weights.get('director', 0.15)
+                    director_weight = effective_weights.get("director", 0.15)
                     avg_score = (sum(director_scores) / len(director_scores)) if director_scores else 0
                     director_final = max(0, avg_score - director_penalty) * director_weight
                     score += director_final
                     total_penalty += director_penalty * director_weight
-                    score_breakdown['director_score'] = round(director_final, 3)
+                    score_breakdown["director_score"] = round(director_final, 3)
 
         # --- Studio Score (TV only) ---
-        if media_type == 'tv':
-            content_studio = content_info.get('studio', content_info.get('studios', []))
+        if media_type == "tv":
+            content_studio = content_info.get("studio", content_info.get("studios", []))
             if isinstance(content_studio, str):
-                studios_to_check = [content_studio] if content_studio and content_studio != 'N/A' else []
+                studios_to_check = [content_studio] if content_studio and content_studio != "N/A" else []
             else:
                 studios_to_check = content_studio or []
 
@@ -533,104 +518,114 @@ def calculate_similarity_score(
                 studio_penalty = 0.0
                 for studio in studios_to_check:
                     studio_lower = studio.lower() if isinstance(studio, str) else studio
-                    studio_count = user_prefs['studios'].get(studio_lower, 0)
+                    studio_count = user_prefs["studios"].get(studio_lower, 0)
                     if studio_count == 0:
-                        studio_count = user_prefs['studios'].get(studio, 0)
+                        studio_count = user_prefs["studios"].get(studio, 0)
                     if studio_count > 0:
                         if normalize_counters:
-                            normalized_score = math.sqrt(studio_count / max_counts['studios'])
+                            normalized_score = math.sqrt(studio_count / max_counts["studios"])
                         else:
-                            normalized_score = min(studio_count / max_counts['studios'], 1.0)
+                            normalized_score = min(studio_count / max_counts["studios"], 1.0)
                         studio_scores.append(normalized_score)
-                        score_breakdown['details']['studio'] = f"{studio} (count: {studio_count}, norm: {round(normalized_score, 2)})"
+                        score_breakdown["details"]["studio"] = (
+                            f"{studio} (count: {studio_count}, norm: {round(normalized_score, 2)})"
+                        )
                     elif studio_count < 0:
-                        penalty = abs(studio_count) / max_counts['studios'] * 0.5
+                        penalty = abs(studio_count) / max_counts["studios"] * 0.5
                         studio_penalty += penalty
-                        score_breakdown['details']['studio'] = f"{studio} (NEGATIVE: {studio_count}, penalty: {round(penalty, 2)})"
+                        score_breakdown["details"]["studio"] = (
+                            f"{studio} (NEGATIVE: {studio_count}, penalty: {round(penalty, 2)})"
+                        )
                 if studio_scores or studio_penalty > 0:
-                    studio_weight = effective_weights.get('studio', 0.15)
+                    studio_weight = effective_weights.get("studio", 0.15)
                     avg_score = (sum(studio_scores) / len(studio_scores)) if studio_scores else 0
                     studio_final = max(0, avg_score - studio_penalty) * studio_weight
                     score += studio_final
                     total_penalty += studio_penalty * studio_weight
-                    score_breakdown['studio_score'] = round(studio_final, 3)
+                    score_breakdown["studio_score"] = round(studio_final, 3)
 
         # --- Actor Score ---
-        content_cast = content_info.get('cast', [])
+        content_cast = content_info.get("cast", [])
         if content_cast:
             # Use pre-normalized if available, otherwise build inline
-            user_actors_lower = user_prefs.get('actors_lower') or {k.lower(): v for k, v in user_prefs['actors'].items()}
+            user_actors_lower = user_prefs.get("actors_lower") or {
+                k.lower(): v for k, v in user_prefs["actors"].items()
+            }
             actor_scores = []
             actor_penalty = 0.0
             matched_actors = 0
             for actor in content_cast:
                 actor_lower = actor.lower() if isinstance(actor, str) else actor
-                actor_count = user_prefs['actors'].get(actor, 0)
+                actor_count = user_prefs["actors"].get(actor, 0)
                 if actor_count == 0:
                     actor_count = user_actors_lower.get(actor_lower, 0)
                 if actor_count > 0:
                     matched_actors += 1
                     if normalize_counters:
-                        normalized_score = math.sqrt(actor_count / max_counts['actors'])
+                        normalized_score = math.sqrt(actor_count / max_counts["actors"])
                     else:
-                        normalized_score = min(actor_count / max_counts['actors'], 1.0)
+                        normalized_score = min(actor_count / max_counts["actors"], 1.0)
                     actor_scores.append(normalized_score)
-                    score_breakdown['details']['actors'].append(
+                    score_breakdown["details"]["actors"].append(
                         f"{actor} (count: {actor_count}, norm: {round(normalized_score, 2)})"
                     )
                 elif actor_count < 0:
-                    penalty = abs(actor_count) / max_counts['actors'] * 0.5
+                    penalty = abs(actor_count) / max_counts["actors"] * 0.5
                     actor_penalty += penalty
-                    score_breakdown['details']['actors'].append(
+                    score_breakdown["details"]["actors"].append(
                         f"{actor} (NEGATIVE: {actor_count}, penalty: {round(penalty, 2)})"
                     )
             if matched_actors > 0 or actor_penalty > 0:
                 actor_sum = sum(actor_scores)
                 actor_ratio = 1 - (1 / (1 + actor_sum))
-                actor_weight = effective_weights.get('actor', 0.15)
+                actor_weight = effective_weights.get("actor", 0.15)
                 actor_final = max(0, actor_ratio - actor_penalty) * actor_weight
                 score += actor_final
                 total_penalty += actor_penalty * actor_weight
-                score_breakdown['actor_score'] = round(actor_final, 3)
+                score_breakdown["actor_score"] = round(actor_final, 3)
 
         # --- Language Score ---
-        content_language = content_info.get('language', 'N/A')
-        if content_language and content_language != 'N/A':
+        content_language = content_info.get("language", "N/A")
+        if content_language and content_language != "N/A":
             lang_lower = content_language.lower()
-            lang_count = user_prefs['languages'].get(lang_lower, 0)
+            lang_count = user_prefs["languages"].get(lang_lower, 0)
             if lang_count > 0:
                 if normalize_counters:
-                    normalized_score = math.sqrt(lang_count / max_counts['languages'])
+                    normalized_score = math.sqrt(lang_count / max_counts["languages"])
                 else:
-                    normalized_score = min(lang_count / max_counts['languages'], 1.0)
-                language_weight = effective_weights.get('language', 0.05)
+                    normalized_score = min(lang_count / max_counts["languages"], 1.0)
+                language_weight = effective_weights.get("language", 0.05)
                 lang_final = normalized_score * language_weight
                 score += lang_final
-                score_breakdown['language_score'] = round(lang_final, 3)
-                score_breakdown['details']['language'] = f"{content_language} (count: {lang_count}, norm: {round(normalized_score, 2)})"
+                score_breakdown["language_score"] = round(lang_final, 3)
+                score_breakdown["details"]["language"] = (
+                    f"{content_language} (count: {lang_count}, norm: {round(normalized_score, 2)})"
+                )
 
         # --- Keyword Score with TF-IDF ---
-        content_keywords = content_info.get('keywords', content_info.get('tmdb_keywords', []))
+        content_keywords = content_info.get("keywords", content_info.get("tmdb_keywords", []))
         if content_keywords:
             keyword_scores = []
             keyword_penalty = 0.0
             # Use pre-normalized if available, otherwise build inline
-            user_keywords_lower = user_prefs.get('keywords_lower') or {k.lower(): v for k, v in user_prefs['keywords'].items()}
+            user_keywords_lower = user_prefs.get("keywords_lower") or {
+                k.lower(): v for k, v in user_prefs["keywords"].items()
+            }
             # Use pre-computed threshold if available, otherwise calculate
             if use_tfidf:
-                tfidf_kw_threshold = user_profile.get('_tfidf_thresholds', {}).get(
-                    'keywords', max_counts['keywords'] * tfidf_penalty_threshold
+                tfidf_kw_threshold = user_profile.get("_tfidf_thresholds", {}).get(
+                    "keywords", max_counts["keywords"] * tfidf_penalty_threshold
                 )
             else:
                 tfidf_kw_threshold = 0
 
             for kw in content_keywords:
                 kw_lower = kw.lower() if isinstance(kw, str) else kw
-                count = user_prefs['keywords'].get(kw, 0)
+                count = user_prefs["keywords"].get(kw, 0)
                 if count == 0:
                     count = user_keywords_lower.get(kw_lower, 0)
                 if count == 0 and use_fuzzy_keywords:
-                    fuzzy_cache = user_prefs.get('_fuzzy_cache')
+                    fuzzy_cache = user_prefs.get("_fuzzy_cache")
                     fuzzy_count, matched_kw = fuzzy_keyword_match(kw, user_keywords_lower, fuzzy_cache)
                     count = fuzzy_count
                 if count > 0:
@@ -640,49 +635,49 @@ def calculate_similarity_score(
                         rarity = 1 - (count / tfidf_kw_threshold)
                         penalty = rarity * TFIDF_KEYWORD_PENALTY
                         keyword_penalty += penalty
-                        score_breakdown['details']['keywords'].append(
+                        score_breakdown["details"]["keywords"].append(
                             f"{kw} (TF-IDF: count {count:.1f} < threshold {tfidf_kw_threshold:.1f}, penalty: {round(penalty, 2)})"
                         )
                     else:
                         # Keyword is common in user's profile - good match
                         if normalize_counters:
-                            normalized_score = math.sqrt(count / max_counts['keywords'])
+                            normalized_score = math.sqrt(count / max_counts["keywords"])
                         else:
-                            normalized_score = min(count / max_counts['keywords'], 1.0)
+                            normalized_score = min(count / max_counts["keywords"], 1.0)
                         keyword_scores.append(normalized_score)
-                        score_breakdown['details']['keywords'].append(
+                        score_breakdown["details"]["keywords"].append(
                             f"{kw} (count: {int(count)}, norm: {round(normalized_score, 2)})"
                         )
                 elif count < 0:
-                    penalty = abs(count) / max_counts['keywords'] * 0.5
+                    penalty = abs(count) / max_counts["keywords"] * 0.5
                     keyword_penalty += penalty
-                    score_breakdown['details']['keywords'].append(
+                    score_breakdown["details"]["keywords"].append(
                         f"{kw} (NEGATIVE: {int(count)}, penalty: {round(penalty, 2)})"
                     )
                 elif use_tfidf and count == 0:
                     # User has never seen content with this keyword - very mild penalty
                     # Keywords are more numerous and specific than genres, so smaller penalty
                     keyword_penalty += UNSEEN_KEYWORD_PENALTY
-                    score_breakdown['details']['keywords'].append(
+                    score_breakdown["details"]["keywords"].append(
                         f"{kw} (TF-IDF: unseen keyword, penalty: {UNSEEN_KEYWORD_PENALTY})"
                     )
             if keyword_scores or keyword_penalty > 0:
-                keyword_weight = effective_weights.get('keyword', 0.45)
+                keyword_weight = effective_weights.get("keyword", 0.45)
                 keyword_sum = sum(keyword_scores)
                 keyword_ratio = 1 - (1 / (1 + keyword_sum))
                 keyword_final = max(0, keyword_ratio - keyword_penalty) * keyword_weight
                 score += keyword_final
                 total_penalty += keyword_penalty * keyword_weight
-                score_breakdown['keyword_score'] = round(keyword_final, 3)
+                score_breakdown["keyword_score"] = round(keyword_final, 3)
 
         # Per-item weight redistribution
         component_scores = {
-            'genre': score_breakdown['genre_score'],
-            'director': score_breakdown['director_score'],
-            'studio': score_breakdown['studio_score'],
-            'actor': score_breakdown['actor_score'],
-            'language': score_breakdown['language_score'],
-            'keyword': score_breakdown['keyword_score']
+            "genre": score_breakdown["genre_score"],
+            "director": score_breakdown["director_score"],
+            "studio": score_breakdown["studio_score"],
+            "actor": score_breakdown["actor_score"],
+            "language": score_breakdown["language_score"],
+            "keyword": score_breakdown["keyword_score"],
         }
 
         active_weights = {}
@@ -709,7 +704,7 @@ def calculate_similarity_score(
         # Apply popularity dampening for very popular content
         # This prevents blockbusters from dominating just because they have more metadata
         if use_popularity_dampening:
-            vote_count = content_info.get('vote_count', 0) or 0
+            vote_count = content_info.get("vote_count", 0) or 0
             if vote_count > popularity_threshold:
                 # Logarithmic dampening: ~3% penalty per order of magnitude above threshold
                 # 50k votes: no penalty, 500k votes: ~3% penalty, 5M votes: ~6% penalty
@@ -717,7 +712,7 @@ def calculate_similarity_score(
                 dampening = 1 - (math.log10(excess_ratio) * POPULARITY_DAMPENING_FACTOR)
                 dampening = max(POPULARITY_DAMPENING_CAP, dampening)
                 score = score * dampening
-                score_breakdown['popularity_dampening'] = round(dampening, 3)
+                score_breakdown["popularity_dampening"] = round(dampening, 3)
 
         return score, score_breakdown
 
@@ -731,7 +726,7 @@ def select_tiered_recommendations(
     limit: int,
     safe_percent: float = 0.6,
     diverse_percent: float = 0.3,
-    wildcard_percent: float = 0.1
+    wildcard_percent: float = 0.1,
 ) -> List[Dict]:
     """
     Select recommendations using a tiered approach for variety.
@@ -777,7 +772,7 @@ def select_tiered_recommendations(
     selected = []
 
     # Select safe picks (top tier, highest scores)
-    safe_picks = safe_pool[:min(safe_count, len(safe_pool))]
+    safe_picks = safe_pool[: min(safe_count, len(safe_pool))]
     selected.extend(safe_picks)
 
     # Select diverse picks (mid tier, some randomization for variety)
@@ -801,10 +796,10 @@ def select_tiered_recommendations(
     # Fill remaining slots from safe pool if needed
     remaining = limit - len(selected)
     if remaining > 0 and len(safe_pool) > safe_count:
-        extra = safe_pool[safe_count:safe_count + remaining]
+        extra = safe_pool[safe_count : safe_count + remaining]
         selected.extend(extra)
 
     # Sort final selection by score for consistent output
-    selected.sort(key=lambda x: x.get('similarity_score', x.get('score', 0)), reverse=True)
+    selected.sort(key=lambda x: x.get("similarity_score", x.get("score", 0)), reverse=True)
 
     return selected[:limit]

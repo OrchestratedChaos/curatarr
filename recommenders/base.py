@@ -10,69 +10,68 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import logging
 import re
 import time
-import logging
 import traceback
-import requests
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
-from plexapi.myplex import MyPlexAccount
 import plexapi.exceptions
+import requests
+from plexapi.myplex import MyPlexAccount
 
 from utils import (
     CACHE_VERSION,
+    CYAN,
+    GREEN,
+    RED,
+    RESET,
+    TIER_DIVERSE_PERCENT,
+    TIER_SAFE_PERCENT,
+    TIER_WILDCARD_PERCENT,
     TMDB_RATE_LIMIT_DELAY,
-    DEFAULT_LIMIT_PLEX_RESULTS,
     WEIGHT_SUM_TOLERANCE,
-    TIER_SAFE_PERCENT, TIER_DIVERSE_PERCENT, TIER_WILDCARD_PERCENT,
-    GREEN, YELLOW, CYAN, RED, RESET,
-    load_config,
-    init_plex,
-    get_configured_users,
-    get_tmdb_config,
-    get_libraries_for_media_type,
-    check_cache_version,
-    load_media_cache,
-    save_media_cache,
-    save_watched_cache,
-    extract_ids_from_guids,
-    get_tmdb_id_for_item,
-    get_tmdb_keywords,
-    fetch_tmdb_with_retry,
-    get_full_language_name,
-    log_warning,
-    log_error,
-    select_tiered_recommendations,
-    get_excluded_genres_for_user,
-    get_max_rating_for_user,
-    is_rating_allowed,
-    show_progress,
-    create_empty_counters,
-    process_counters_from_cache,
-    user_select_recommendations,
+    YELLOW,
+    add_labels_to_items,
+    apply_user_label_restrictions,
     build_label_name,
     categorize_labeled_items,
-    remove_labels_from_items,
-    add_labels_to_items,
-    update_plex_collection,
+    check_cache_version,
     cleanup_old_collections,
-    get_library_imdb_ids,
-    apply_user_label_restrictions,
-    get_authenticated_trakt_client,
-    load_imdb_tmdb_cache,
-    save_imdb_tmdb_cache,
-    get_tmdb_id_from_imdb,
-    load_trakt_enhance_cache,
-    save_trakt_enhance_cache,
+    create_empty_counters,
     enhance_profile_with_trakt,
+    extract_ids_from_guids,
+    fetch_tmdb_with_retry,
+    get_configured_users,
+    get_excluded_genres_for_user,
+    get_full_language_name,
+    get_libraries_for_media_type,
+    get_library_imdb_ids,
+    get_max_rating_for_user,
     get_project_root,
+    get_tmdb_config,
+    get_tmdb_id_for_item,
+    get_tmdb_keywords,
+    init_plex,
+    is_rating_allowed,
+    load_config,
+    load_media_cache,
+    log_error,
+    log_warning,
     migrate_legacy_cache_dir,
+    process_counters_from_cache,
+    remove_labels_from_items,
+    save_media_cache,
+    save_watched_cache,
+    select_tiered_recommendations,
+    show_progress,
+    update_plex_collection,
+    user_select_recommendations,
 )
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 
 class BaseCache(ABC):
@@ -85,7 +84,7 @@ class BaseCache(ABC):
 
     # Subclasses must define these
     media_type: str = None  # 'movie' or 'tv'
-    media_key: str = None   # 'movies' or 'shows'
+    media_key: str = None  # 'movies' or 'shows'
     cache_filename: str = None  # e.g., 'all_movies_cache.json'
 
     def __init__(self, cache_dir: str, recommender=None):
@@ -110,7 +109,7 @@ class BaseCache(ABC):
 
     def _save_cache(self):
         """Save cache to file."""
-        self.cache['cache_version'] = CACHE_VERSION
+        self.cache["cache_version"] = CACHE_VERSION
         save_media_cache(self.cache_path, self.cache, self.media_key)
 
     def update_cache(self, plex, library_title: str, tmdb_api_key: Optional[str] = None) -> bool:
@@ -129,10 +128,10 @@ class BaseCache(ABC):
         all_items = section.all()
         current_count = len(all_items)
 
-        if current_count == self.cache['library_count']:
+        if current_count == self.cache["library_count"]:
             print(f"{GREEN}{self.media_key.title()} cache is up to date{RESET}")
             # Still check for missing collection data (backfill for existing caches)
-            if self.media_type == 'movie' and tmdb_api_key:
+            if self.media_type == "movie" and tmdb_api_key:
                 if self._backfill_collection_data(tmdb_api_key):
                     self._save_cache()
             return False
@@ -156,7 +155,7 @@ class BaseCache(ABC):
             print(f"Found {len(new_items)} new {self.media_key} to analyze")
 
             for i, item in enumerate(new_items, 1):
-                msg = f"\r{CYAN}Processing {self.media_type} {i}/{len(new_items)} ({int((i/len(new_items))*100)}%){RESET}"
+                msg = f"\r{CYAN}Processing {self.media_type} {i}/{len(new_items)} ({int((i / len(new_items)) * 100)}%){RESET}"
                 sys.stdout.write(msg)
                 sys.stdout.flush()
 
@@ -178,11 +177,11 @@ class BaseCache(ABC):
                     log_warning(f"Error processing {self.media_type} {item.title}: {e}")
                     continue
 
-        self.cache['library_count'] = current_count
-        self.cache['last_updated'] = datetime.now().isoformat()
+        self.cache["library_count"] = current_count
+        self.cache["last_updated"] = datetime.now().isoformat()
 
         # Backfill collection data for movies missing it
-        if self.media_type == 'movie' and tmdb_api_key:
+        if self.media_type == "movie" and tmdb_api_key:
             self._backfill_collection_data(tmdb_api_key)
 
         self._save_cache()
@@ -200,8 +199,9 @@ class BaseCache(ABC):
             True if any movies were updated, False otherwise
         """
         movies_needing_collection = [
-            (item_id, info) for item_id, info in self.cache[self.media_key].items()
-            if info.get('tmdb_id') and 'collection_id' not in info
+            (item_id, info)
+            for item_id, info in self.cache[self.media_key].items()
+            if info.get("tmdb_id") and "collection_id" not in info
         ]
 
         if not movies_needing_collection:
@@ -219,27 +219,26 @@ class BaseCache(ABC):
             try:
                 time.sleep(TMDB_RATE_LIMIT_DELAY)
                 detail_data = fetch_tmdb_with_retry(
-                    f"https://api.themoviedb.org/3/movie/{info['tmdb_id']}",
-                    {'api_key': tmdb_api_key}
+                    f"https://api.themoviedb.org/3/movie/{info['tmdb_id']}", {"api_key": tmdb_api_key}
                 )
                 if detail_data:
-                    collection = detail_data.get('belongs_to_collection')
+                    collection = detail_data.get("belongs_to_collection")
                     if collection:
-                        info['collection_id'] = collection.get('id')
-                        info['collection_name'] = collection.get('name')
+                        info["collection_id"] = collection.get("id")
+                        info["collection_name"] = collection.get("name")
                         updated += 1
                     else:
-                        info['collection_id'] = None
-                        info['collection_name'] = None
+                        info["collection_id"] = None
+                        info["collection_name"] = None
                 else:
                     # API failed (404, etc) - mark as processed to avoid infinite retries
-                    info['collection_id'] = None
-                    info['collection_name'] = None
+                    info["collection_id"] = None
+                    info["collection_name"] = None
             except (requests.RequestException, KeyError) as e:
                 # Mark as processed even on exception
                 logger.debug(f"Error fetching collection for TMDB {info.get('tmdb_id')}: {e}")
-                info['collection_id'] = None
-                info['collection_name'] = None
+                info["collection_id"] = None
+                info["collection_name"] = None
 
         print(f"\n{GREEN}Added collection data for {updated} movies{RESET}")
         return True
@@ -272,7 +271,7 @@ class BaseCache(ABC):
         """
         try:
             # For TV shows, get first episode
-            if self.media_type == 'tv':
+            if self.media_type == "tv":
                 episodes = item.episodes()
                 if not episodes:
                     return "N/A"
@@ -287,10 +286,7 @@ class BaseCache(ABC):
                     audio_streams = part.audioStreams()
                     if audio_streams:
                         audio = audio_streams[0]
-                        lang_code = (
-                            getattr(audio, 'languageTag', None) or
-                            getattr(audio, 'language', None)
-                        )
+                        lang_code = getattr(audio, "languageTag", None) or getattr(audio, "language", None)
                         if lang_code:
                             return get_full_language_name(lang_code)
         except (plexapi.exceptions.PlexApiException, AttributeError, TypeError) as e:
@@ -309,60 +305,58 @@ class BaseCache(ABC):
             Dict with 'tmdb_id', 'imdb_id', 'keywords', 'rating', 'vote_count'
         """
         result = {
-            'tmdb_id': None,
-            'imdb_id': None,
-            'keywords': [],
-            'rating': None,
-            'vote_count': None,
-            'collection_id': None,
-            'collection_name': None,
-            'production_company_ids': []  # For TV franchise detection
+            "tmdb_id": None,
+            "imdb_id": None,
+            "keywords": [],
+            "rating": None,
+            "vote_count": None,
+            "collection_id": None,
+            "collection_name": None,
+            "production_company_ids": [],  # For TV franchise detection
         }
 
         # Extract IDs from GUIDs
         ids = extract_ids_from_guids(item)
-        result['imdb_id'] = ids['imdb_id']
-        result['tmdb_id'] = ids['tmdb_id']
+        result["imdb_id"] = ids["imdb_id"]
+        result["tmdb_id"] = ids["tmdb_id"]
 
         # Get TMDB ID if not found in GUIDs
-        if not result['tmdb_id'] and tmdb_api_key:
-            result['tmdb_id'] = get_tmdb_id_for_item(item, tmdb_api_key, self.media_type)
+        if not result["tmdb_id"] and tmdb_api_key:
+            result["tmdb_id"] = get_tmdb_id_for_item(item, tmdb_api_key, self.media_type)
 
         # Fetch TMDB metadata
-        if result['tmdb_id'] and tmdb_api_key:
+        if result["tmdb_id"] and tmdb_api_key:
             # Get keywords
-            result['keywords'] = get_tmdb_keywords(tmdb_api_key, result['tmdb_id'], self.media_type)
+            result["keywords"] = get_tmdb_keywords(tmdb_api_key, result["tmdb_id"], self.media_type)
 
             # Get rating/vote_count/collection (movies only)
-            if self.media_type == 'movie':
+            if self.media_type == "movie":
                 detail_data = fetch_tmdb_with_retry(
-                    f"https://api.themoviedb.org/3/movie/{result['tmdb_id']}",
-                    {'api_key': tmdb_api_key}
+                    f"https://api.themoviedb.org/3/movie/{result['tmdb_id']}", {"api_key": tmdb_api_key}
                 )
                 if detail_data:
-                    result['rating'] = detail_data.get('vote_average')
-                    result['vote_count'] = detail_data.get('vote_count')
+                    result["rating"] = detail_data.get("vote_average")
+                    result["vote_count"] = detail_data.get("vote_count")
                     # Extract collection info (for sequel bonus)
-                    collection = detail_data.get('belongs_to_collection')
+                    collection = detail_data.get("belongs_to_collection")
                     if collection:
-                        result['collection_id'] = collection.get('id')
-                        result['collection_name'] = collection.get('name')
+                        result["collection_id"] = collection.get("id")
+                        result["collection_name"] = collection.get("name")
 
             # Get production companies for TV (for franchise/spinoff bonus)
-            elif self.media_type == 'tv':
+            elif self.media_type == "tv":
                 detail_data = fetch_tmdb_with_retry(
-                    f"https://api.themoviedb.org/3/tv/{result['tmdb_id']}",
-                    {'api_key': tmdb_api_key}
+                    f"https://api.themoviedb.org/3/tv/{result['tmdb_id']}", {"api_key": tmdb_api_key}
                 )
                 if detail_data:
-                    production_companies = detail_data.get('production_companies', [])
-                    result['production_company_ids'] = [pc['id'] for pc in production_companies]
+                    production_companies = detail_data.get("production_companies", [])
+                    result["production_company_ids"] = [pc["id"] for pc in production_companies]
 
         # Update recommender caches if available
-        if self.recommender and result['tmdb_id']:
-            self.recommender.plex_tmdb_cache[str(item.ratingKey)] = result['tmdb_id']
-            if result['keywords']:
-                self.recommender.tmdb_keywords_cache[str(result['tmdb_id'])] = result['keywords']
+        if self.recommender and result["tmdb_id"]:
+            self.recommender.plex_tmdb_cache[str(item.ratingKey)] = result["tmdb_id"]
+            if result["keywords"]:
+                self.recommender.tmdb_keywords_cache[str(result["tmdb_id"])] = result["keywords"]
 
         return result
 
@@ -398,11 +392,11 @@ class BaseRecommender(ABC):
         self.library = library
 
         if self.library:
-            self.library_id = self.library['id']
-            self.library_title = self.library['section']
+            self.library_id = self.library["id"]
+            self.library_title = self.library["section"]
         else:
             self.library_id = None
-            self.library_title = self.config['plex'].get(self.library_config_key, self.default_library_name)
+            self.library_title = self.config["plex"].get(self.library_config_key, self.default_library_name)
 
         # Sibling libraries of this media type - drives cache filename /
         # collection naming back-compat: a single library (synthesized or
@@ -425,16 +419,16 @@ class BaseRecommender(ABC):
         print("Initializing recommendation system...")
         print("Connecting to Plex server...")
         self.plex = init_plex(self.config)
-        print(f"Connected to Plex successfully!\n")
+        print("Connected to Plex successfully!\n")
 
         # Load general config
-        general_config = self.config.get('general', {})
-        self.debug = general_config.get('debug', False)
+        general_config = self.config.get("general", {})
+        self.debug = general_config.get("debug", False)
 
         print(f"{YELLOW}Checking Cache...{RESET}")
         tmdb_config = get_tmdb_config(self.config)
-        self.use_tmdb_keywords = tmdb_config['use_keywords']
-        self.tmdb_api_key = tmdb_config['api_key']
+        self.use_tmdb_keywords = tmdb_config["use_keywords"]
+        self.tmdb_api_key = tmdb_config["api_key"]
 
         # Setup cache directory - routed through get_project_root() (same
         # resolver as utils/cli.py and recommenders/external.py) rather than
@@ -445,37 +439,37 @@ class BaseRecommender(ABC):
         # (relative subdir name or absolute path) is applied the same way
         # external.py's cache_dir setup does - os.path.join() already
         # discards project_root when the override is absolute.
-        legacy_cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
-        self.cache_dir = os.path.join(get_project_root(), self.config.get('cache_dir', 'cache'))
+        legacy_cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
+        self.cache_dir = os.path.join(get_project_root(), self.config.get("cache_dir", "cache"))
         os.makedirs(self.cache_dir, exist_ok=True)
         migrate_legacy_cache_dir(legacy_cache_dir, self.cache_dir)
 
         # Load display options
-        self.confirm_operations = general_config.get('confirm_operations', False)
+        self.confirm_operations = general_config.get("confirm_operations", False)
         # Generate 2x the collection target to ensure best items compete with existing labeled
         # Collection target is 50 movies / 20 TV, so generate 100 / 40 candidates
-        default_limit = 100 if self.media_type == 'movie' else 40
-        self.limit_plex_results = general_config.get('limit_plex_results', default_limit)
-        self.randomize_recommendations = general_config.get('randomize_recommendations', True)
-        self.normalize_counters = general_config.get('normalize_counters', True)
-        self.show_summary = general_config.get('show_summary', False)
-        self.show_genres = general_config.get('show_genres', True)
-        self.show_cast = general_config.get('show_cast', False)
-        self.show_language = general_config.get('show_language', False)
-        self.show_rating = general_config.get('show_rating', False)
-        self.show_imdb_link = general_config.get('show_imdb_link', False)
+        default_limit = 100 if self.media_type == "movie" else 40
+        self.limit_plex_results = general_config.get("limit_plex_results", default_limit)
+        self.randomize_recommendations = general_config.get("randomize_recommendations", True)
+        self.normalize_counters = general_config.get("normalize_counters", True)
+        self.show_summary = general_config.get("show_summary", False)
+        self.show_genres = general_config.get("show_genres", True)
+        self.show_cast = general_config.get("show_cast", False)
+        self.show_language = general_config.get("show_language", False)
+        self.show_rating = general_config.get("show_rating", False)
+        self.show_imdb_link = general_config.get("show_imdb_link", False)
 
         # Load excluded genres
-        exclude_genre_str = general_config.get('exclude_genre', '')
-        self.exclude_genres = [
-            g.strip().lower() for g in exclude_genre_str.split(',') if g.strip()
-        ] if exclude_genre_str else []
+        exclude_genre_str = general_config.get("exclude_genre", "")
+        self.exclude_genres = (
+            [g.strip().lower() for g in exclude_genre_str.split(",") if g.strip()] if exclude_genre_str else []
+        )
 
         # Load user preferences
-        self.user_preferences = self.config.get('users', {}).get('preferences', {}) or {}
+        self.user_preferences = self.config.get("users", {}).get("preferences", {}) or {}
 
         # Load weights
-        weights_config = self.config.get('weights', {})
+        weights_config = self.config.get("weights", {})
         self.weights = self._load_weights(weights_config)
 
         # Validate weights sum
@@ -511,20 +505,20 @@ class BaseRecommender(ABC):
             "{library_id}_" when multi-library, else ""
         """
         if not self._is_multi_library:
-            return ''
+            return ""
         return f"{self.library_id}_"
 
     def _library_suffix_for_label(self) -> str:
         """Plex label suffix - empty unless >1 library shares this media type."""
         if not self._is_multi_library:
-            return ''
+            return ""
         return f"_{self.library_id}"
 
     def _library_suffix_for_collection_name(self) -> str:
         """Collection display-name suffix - empty unless >1 library shares this media type."""
         if not self._is_multi_library:
-            return ''
-        name = (self.library or {}).get('name') or self.library_title
+            return ""
+        name = (self.library or {}).get("name") or self.library_title
         return f" ({name})"
 
     def _get_user_context(self) -> str:
@@ -537,12 +531,12 @@ class BaseRecommender(ABC):
         """
         if self.single_user:
             user_ctx = f"plex_{self.single_user}"
-        elif self.users['plex_users']:
-            user_ctx = 'plex_' + '_'.join(self.users['plex_users'])
+        elif self.users["plex_users"]:
+            user_ctx = "plex_" + "_".join(self.users["plex_users"])
         else:
-            user_ctx = 'plex_' + '_'.join(self.users['managed_users'])
+            user_ctx = "plex_" + "_".join(self.users["managed_users"])
 
-        sanitized = re.sub(r'\W+', '', user_ctx)
+        sanitized = re.sub(r"\W+", "", user_ctx)
         return f"{self._cache_library_prefix()}{sanitized}"
 
     def _refresh_watched_data(self):
@@ -554,26 +548,26 @@ class BaseRecommender(ABC):
 
     def _get_managed_users_watched_data(self) -> Dict:
         """Get watched data from managed Plex users."""
-        if not self.single_user and hasattr(self, 'watched_data_counters') and self.watched_data_counters:
+        if not self.single_user and hasattr(self, "watched_data_counters") and self.watched_data_counters:
             logger.debug("Using cached watched data (not single user mode)")
             return self.watched_data_counters
 
-        if hasattr(self, 'watched_data_counters') and self.watched_data_counters:
+        if hasattr(self, "watched_data_counters") and self.watched_data_counters:
             logger.debug("Using existing watched data counters")
             return self.watched_data_counters
 
         counters = create_empty_counters(self.media_type)
 
-        account = MyPlexAccount(token=self.config['plex']['token'])
-        admin_user = self.users['admin_user']
+        account = MyPlexAccount(token=self.config["plex"]["token"])
+        admin_user = self.users["admin_user"]
 
         if self.single_user:
-            if self.single_user.lower() in ['admin', 'administrator']:
+            if self.single_user.lower() in ["admin", "administrator"]:
                 users_to_process = [admin_user]
             else:
                 users_to_process = [self.single_user]
         else:
-            users_to_process = self.users['managed_users'] or [admin_user]
+            users_to_process = self.users["managed_users"] or [admin_user]
 
         for username in users_to_process:
             try:
@@ -594,8 +588,8 @@ class BaseRecommender(ABC):
                     if item_info:
                         process_counters_from_cache(item_info, counters, media_type=self.media_type)
 
-                        if tmdb_id := item_info.get('tmdb_id'):
-                            counters['tmdb_ids'].add(tmdb_id)
+                        if tmdb_id := item_info.get("tmdb_id"):
+                            counters["tmdb_ids"].add(tmdb_id)
 
             except (plexapi.exceptions.PlexApiException, KeyError, AttributeError) as e:
                 log_error(f"Error processing user {username}: {e}")
@@ -611,16 +605,20 @@ class BaseRecommender(ABC):
         cache_valid = check_cache_version(self.watched_cache_path, f"{self.media_type.upper()} watched cache")
         if cache_valid and os.path.exists(self.watched_cache_path):
             try:
-                with open(self.watched_cache_path, 'r', encoding='utf-8') as f:
+                with open(self.watched_cache_path, "r", encoding="utf-8") as f:
                     watched_cache = json.load(f)
-                    self.cached_watched_count = watched_cache.get('watched_count', 0)
-                    self.watched_data_counters = watched_cache.get('watched_data_counters', {})
-                    self.plex_tmdb_cache = {str(k): v for k, v in watched_cache.get('plex_tmdb_cache', {}).items()}
-                    self.tmdb_keywords_cache = {str(k): v for k, v in watched_cache.get('tmdb_keywords_cache', {}).items()}
-                    self.label_dates = watched_cache.get('label_dates', {})
+                    self.cached_watched_count = watched_cache.get("watched_count", 0)
+                    self.watched_data_counters = watched_cache.get("watched_data_counters", {})
+                    self.plex_tmdb_cache = {str(k): v for k, v in watched_cache.get("plex_tmdb_cache", {}).items()}
+                    self.tmdb_keywords_cache = {
+                        str(k): v for k, v in watched_cache.get("tmdb_keywords_cache", {}).items()
+                    }
+                    self.label_dates = watched_cache.get("label_dates", {})
 
                     # Load watched IDs (key differs by media type)
-                    watched_ids_key = f'watched_{self.media_type}_ids' if self.media_type == 'movie' else 'watched_show_ids'
+                    watched_ids_key = (
+                        f"watched_{self.media_type}_ids" if self.media_type == "movie" else "watched_show_ids"
+                    )
                     watched_ids_list = watched_cache.get(watched_ids_key, [])
                     if isinstance(watched_ids_list, list):
                         self.watched_ids = {int(id_) for id_ in watched_ids_list if str(id_).isdigit()}
@@ -629,7 +627,9 @@ class BaseRecommender(ABC):
                         self.watched_ids = set()
 
                     if not self.watched_ids and self.cached_watched_count > 0:
-                        log_error(f"Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded")
+                        log_error(
+                            f"Warning: Cached watched count is {self.cached_watched_count} but no valid IDs loaded"
+                        )
                         self._refresh_watched_data()
 
             except (json.JSONDecodeError, KeyError, IOError) as e:
@@ -645,9 +645,9 @@ class BaseRecommender(ABC):
             plex_tmdb_cache=self.plex_tmdb_cache,
             tmdb_keywords_cache=self.tmdb_keywords_cache,
             watched_ids=self.watched_ids,
-            label_dates=getattr(self, 'label_dates', {}),
-            watched_count=len(self.watched_ids) if self.media_type == 'movie' else self.cached_watched_count,
-            media_type=self.media_type
+            label_dates=getattr(self, "label_dates", {}),
+            watched_count=len(self.watched_ids) if self.media_type == "movie" else self.cached_watched_count,
+            media_type=self.media_type,
         )
 
     def get_recommendations(self) -> Dict[str, List[Dict]]:
@@ -671,33 +671,35 @@ class BaseRecommender(ABC):
         excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
 
         # Get quality filters from config
-        quality_filters = self.config.get('quality_filters', {})
-        min_rating = quality_filters.get('min_rating', 0.0)
-        min_vote_count = quality_filters.get('min_vote_count', 0)
+        quality_filters = self.config.get("quality_filters", {})
+        min_rating = quality_filters.get("min_rating", 0.0)
+        min_vote_count = quality_filters.get("min_vote_count", 0)
 
         for item_id, item_info in all_items.items():
             if int(str(item_id)) in self.watched_ids:
                 continue
 
-            if any(g.lower() in excluded_genres for g in item_info.get('genres', [])):
+            if any(g.lower() in excluded_genres for g in item_info.get("genres", [])):
                 excluded_count += 1
                 continue
 
-            rating = item_info.get('rating') or 0.0
-            vote_count = item_info.get('vote_count') or 0
+            rating = item_info.get("rating") or 0.0
+            vote_count = item_info.get("vote_count") or 0
 
             if rating < min_rating or vote_count < min_vote_count:
                 quality_filtered_count += 1
                 continue
 
             # Store ratingKey in item for later matching
-            item_info['plex_rating_key'] = int(str(item_id))
+            item_info["plex_rating_key"] = int(str(item_id))
             unwatched_items.append(item_info)
 
         if excluded_count > 0:
             print(f"Excluded {excluded_count} {self.media_key} based on genre filters")
         if quality_filtered_count > 0:
-            log_warning(f"Filtered {quality_filtered_count} {self.media_key} below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+)")
+            log_warning(
+                f"Filtered {quality_filtered_count} {self.media_key} below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+)"
+            )
 
         if not unwatched_items:
             log_warning(f"No unwatched {self.media_key} found matching your criteria.")
@@ -711,21 +713,21 @@ class BaseRecommender(ABC):
             for i, item_info in enumerate(unwatched_items, 1):
                 show_progress("Processing", i, len(unwatched_items))
                 try:
-                    cached_hash = item_info.get('profile_hash')
-                    cached_score = item_info.get('cached_score')
+                    cached_hash = item_info.get("profile_hash")
+                    cached_score = item_info.get("cached_score")
 
                     if cached_hash == self.profile_hash and cached_score is not None:
                         similarity_score = cached_score
-                        breakdown = item_info.get('score_breakdown', {})
+                        breakdown = item_info.get("score_breakdown", {})
                         cache_hits += 1
                     else:
                         similarity_score, breakdown = self._calculate_similarity_from_cache(item_info)
-                        item_info['cached_score'] = similarity_score
-                        item_info['profile_hash'] = self.profile_hash
-                        item_info['score_breakdown'] = breakdown
+                        item_info["cached_score"] = similarity_score
+                        item_info["profile_hash"] = self.profile_hash
+                        item_info["score_breakdown"] = breakdown
                         scores_updated = True
 
-                    item_info['similarity_score'] = similarity_score
+                    item_info["similarity_score"] = similarity_score
                     scored_items.append(item_info)
                 except (KeyError, TypeError, ValueError) as e:
                     log_warning(f"Error processing {item_info['title']}: {e}")
@@ -737,7 +739,7 @@ class BaseRecommender(ABC):
             if cache_hits > 0:
                 logger.debug(f"Used {cache_hits} cached scores")
 
-            scored_items.sort(key=lambda x: x['similarity_score'], reverse=True)
+            scored_items.sort(key=lambda x: x["similarity_score"], reverse=True)
 
             if self.randomize_recommendations:
                 plex_recs = select_tiered_recommendations(
@@ -745,20 +747,18 @@ class BaseRecommender(ABC):
                     self.limit_plex_results,
                     TIER_SAFE_PERCENT,
                     TIER_DIVERSE_PERCENT,
-                    TIER_WILDCARD_PERCENT
+                    TIER_WILDCARD_PERCENT,
                 )
             else:
-                plex_recs = scored_items[:self.limit_plex_results]
+                plex_recs = scored_items[: self.limit_plex_results]
 
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("=== Similarity Score Breakdowns for Recommendations ===")
                 for item in plex_recs:
-                    self._print_similarity_breakdown(item, item['similarity_score'], item['score_breakdown'])
+                    self._print_similarity_breakdown(item, item["similarity_score"], item["score_breakdown"])
 
-        print(f"\nRecommendation process completed!")
-        return {
-            'plex_recommendations': plex_recs
-        }
+        print("\nRecommendation process completed!")
+        return {"plex_recommendations": plex_recs}
 
     def _find_plex_items_for_recs(self, section, selected_items: List[Dict]) -> Tuple[List, List[str]]:
         """Find Plex items matching recommendations."""
@@ -774,7 +774,7 @@ class BaseRecommender(ABC):
             plex_item = None
 
             # Try direct fetch by ratingKey first (reliable)
-            rating_key = rec.get('plex_rating_key')
+            rating_key = rec.get("plex_rating_key")
             if rating_key:
                 try:
                     plex_item = self.plex.fetchItem(int(rating_key))
@@ -801,18 +801,17 @@ class BaseRecommender(ABC):
 
         excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
         categories = categorize_labeled_items(
-            currently_labeled, self.watched_ids, excluded_genres,
-            label_name, self.label_dates, stale_days
+            currently_labeled, self.watched_ids, excluded_genres, label_name, self.label_dates, stale_days
         )
 
         print(f"{GREEN}Keeping {len(categories['fresh'])} unwatched recommendations{RESET}")
         print(f"{YELLOW}Removing {len(categories['watched'])} watched {self.media_key} from recommendations{RESET}")
         print(f"{YELLOW}Removing {len(categories['excluded'])} {self.media_key} with excluded genres{RESET}")
 
-        remove_labels_from_items(categories['watched'], label_name, self.label_dates, "watched")
-        remove_labels_from_items(categories['excluded'], label_name, self.label_dates, "excluded genre")
+        remove_labels_from_items(categories["watched"], label_name, self.label_dates, "watched")
+        remove_labels_from_items(categories["excluded"], label_name, self.label_dates, "excluded genre")
 
-        return categories['fresh']
+        return categories["fresh"]
 
     def _build_scored_candidates(self, unwatched_labeled: List, selected_items: List[Dict], items_found: List) -> Dict:
         """Build dict of item_id -> (plex_item, score) for all candidates."""
@@ -846,21 +845,20 @@ class BaseRecommender(ABC):
 
         for rec in selected_items:
             # Match by ratingKey (reliable) instead of title+year (can mismatch with fuzzy search)
-            rec_key = rec.get('plex_rating_key')
+            rec_key = rec.get("plex_rating_key")
             plex_item = items_found_by_key.get(rec_key) if rec_key else None
 
             # Fallback to title+year match for backwards compatibility
             if not plex_item:
                 plex_item = next(
-                    (m for m in items_found if m.title == rec['title'] and m.year == rec.get('year')),
-                    None
+                    (m for m in items_found if m.title == rec["title"] and m.year == rec.get("year")), None
                 )
 
             if plex_item:
                 item_id = int(plex_item.ratingKey)
-                is_watched = item_id in self.watched_ids or getattr(plex_item, 'isPlayed', False)
+                is_watched = item_id in self.watched_ids or getattr(plex_item, "isPlayed", False)
                 if not is_watched:
-                    score = rec.get('similarity_score', 0.0)
+                    score = rec.get("similarity_score", 0.0)
                     if item_id not in all_candidates or score > all_candidates[item_id][1]:
                         all_candidates[item_id] = (plex_item, score)
 
@@ -883,7 +881,7 @@ class BaseRecommender(ABC):
         filtered_count = 0
 
         for item_id, (plex_item, score) in all_candidates.items():
-            content_rating = getattr(plex_item, 'contentRating', None)
+            content_rating = getattr(plex_item, "contentRating", None)
             if is_rating_allowed(content_rating, max_rating, self.media_type):
                 filtered[item_id] = (plex_item, score)
             else:
@@ -895,7 +893,9 @@ class BaseRecommender(ABC):
 
         return filtered
 
-    def _update_labels_by_rank(self, all_candidates: Dict, unwatched_labeled: List, label_name: str, target_count: int) -> List:
+    def _update_labels_by_rank(
+        self, all_candidates: Dict, unwatched_labeled: List, label_name: str, target_count: int
+    ) -> List:
         """Update labels to keep only top-scoring items, return final collection."""
         sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
         top_candidates = sorted_candidates[:target_count]
@@ -928,13 +928,17 @@ class BaseRecommender(ABC):
             print(f"{YELLOW}No items to add to collection{RESET}")
             return False
 
-        username = label_name.replace('Recommended_', '')
-        if self.user_preferences and username in self.user_preferences and 'display_name' in self.user_preferences[username]:
-            display_name = self.user_preferences[username]['display_name']
+        username = label_name.replace("Recommended_", "")
+        if (
+            self.user_preferences
+            and username in self.user_preferences
+            and "display_name" in self.user_preferences[username]
+        ):
+            display_name = self.user_preferences[username]["display_name"]
         else:
             display_name = username.capitalize()
 
-        emoji = "🎬" if self.media_type == 'movie' else "📺"
+        emoji = "🎬" if self.media_type == "movie" else "📺"
         collection_name = f"{emoji} {display_name} - Recommendation{self._library_suffix_for_collection_name()}"
         success = update_plex_collection(section, collection_name, final_items, logger, label_name=label_name)
         if success:
@@ -947,7 +951,7 @@ class BaseRecommender(ABC):
         Returns:
             True if collection was created/updated, False otherwise.
         """
-        if not self.config.get('collections', {}).get('add_label', True):
+        if not self.config.get("collections", {}).get("add_label", True):
             print(f"{YELLOW}Skipping collection creation (add_label is disabled in config){RESET}")
             return False
 
@@ -966,10 +970,10 @@ class BaseRecommender(ABC):
 
         try:
             section = self.plex.library.section(self.library_title)
-            base_label = self.config.get('collections', {}).get('label_name', 'Recommended')
+            base_label = self.config.get("collections", {}).get("label_name", "Recommended")
             base_label = f"{base_label}{self._library_suffix_for_label()}"
-            append_usernames = self.config.get('collections', {}).get('append_usernames', False)
-            users = self.users['plex_users'] or self.users['managed_users']
+            append_usernames = self.config.get("collections", {}).get("append_usernames", False)
+            users = self.users["plex_users"] or self.users["managed_users"]
             label_name = build_label_name(base_label, users, self.single_user, append_usernames)
 
             # Find items in Plex
@@ -987,16 +991,16 @@ class BaseRecommender(ABC):
 
             print(f"{GREEN}Starting incremental collection update with staleness check...{RESET}")
 
-            if not hasattr(self, 'label_dates') or not self.label_dates:
+            if not hasattr(self, "label_dates") or not self.label_dates:
                 self.label_dates = {}
 
-            stale_days = self.config.get('collections', {}).get('stale_removal_days', 7)
+            stale_days = self.config.get("collections", {}).get("stale_removal_days", 7)
 
             # Remove outdated labels and get fresh items
             unwatched_labeled = self._remove_outdated_labels(section, label_name, stale_days)
 
             # Build candidates with scores
-            target_count = self.config['general'].get('limit_plex_results', 50 if self.media_type == 'movie' else 20)
+            target_count = self.config["general"].get("limit_plex_results", 50 if self.media_type == "movie" else 20)
             print(f"{GREEN}Building optimal collection of top {target_count} recommendations...{RESET}")
 
             all_candidates = self._build_scored_candidates(unwatched_labeled, selected_items, items_found)
@@ -1020,11 +1024,11 @@ class BaseRecommender(ABC):
 
             # Apply user label restrictions if private_collections is enabled (default: true)
             # Note: Only works for shared friends, not Plex Home managed users
-            if success and self.config.get('collections', {}).get('private_collections', True):
+            if success and self.config.get("collections", {}).get("private_collections", True):
                 # Build dict of all user labels for exclude-based restrictions
                 # Each user's label excludes them from seeing other users' recommendations
                 all_user_labels = {}
-                users = self.users['plex_users'] or self.users['managed_users']
+                users = self.users["plex_users"] or self.users["managed_users"]
 
                 for username in users:
                     user_label = build_label_name(base_label, users, username, append_usernames)
@@ -1082,29 +1086,27 @@ class BaseRecommender(ABC):
         """
         # Try extracting from GUIDs first
         ids = extract_ids_from_guids(plex_item)
-        if ids['imdb_id']:
-            return ids['imdb_id']
+        if ids["imdb_id"]:
+            return ids["imdb_id"]
 
         # Fallback: Check legacy guid attribute
-        if hasattr(plex_item, 'guid') and plex_item.guid and plex_item.guid.startswith('imdb://'):
-            return plex_item.guid.split('imdb://')[1]
+        if hasattr(plex_item, "guid") and plex_item.guid and plex_item.guid.startswith("imdb://"):
+            return plex_item.guid.split("imdb://")[1]
 
         # Fallback to TMDB to get IMDb ID
         tmdb_id = self._get_plex_item_tmdb_id(plex_item)
         if tmdb_id:
-            if self.media_type == 'movie':
+            if self.media_type == "movie":
                 data = fetch_tmdb_with_retry(
-                    f"https://api.themoviedb.org/3/movie/{tmdb_id}",
-                    {'api_key': self.tmdb_api_key}
+                    f"https://api.themoviedb.org/3/movie/{tmdb_id}", {"api_key": self.tmdb_api_key}
                 )
-                return data.get('imdb_id') if data else None
+                return data.get("imdb_id") if data else None
             else:
                 # TV shows need the external_ids endpoint
                 data = fetch_tmdb_with_retry(
-                    f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids",
-                    {'api_key': self.tmdb_api_key}
+                    f"https://api.themoviedb.org/3/tv/{tmdb_id}/external_ids", {"api_key": self.tmdb_api_key}
                 )
-                return data.get('imdb_id') if data else None
+                return data.get("imdb_id") if data else None
         return None
 
     def _get_tmdb_id_via_imdb(self, plex_item) -> Optional[int]:
@@ -1121,14 +1123,13 @@ class BaseRecommender(ABC):
             return None
 
         data = fetch_tmdb_with_retry(
-            f"https://api.themoviedb.org/3/find/{imdb_id}",
-            {'api_key': self.tmdb_api_key, 'external_source': 'imdb_id'}
+            f"https://api.themoviedb.org/3/find/{imdb_id}", {"api_key": self.tmdb_api_key, "external_source": "imdb_id"}
         )
         if data:
-            results_key = 'movie_results' if self.media_type == 'movie' else 'tv_results'
+            results_key = "movie_results" if self.media_type == "movie" else "tv_results"
             results = data.get(results_key, [])
             if results:
-                return results[0].get('id')
+                return results[0].get("id")
         return None
 
     def _get_tmdb_keywords_for_id(self, tmdb_id: int) -> Set[str]:
@@ -1216,5 +1217,5 @@ class BaseRecommender(ABC):
             tmdb_api_key=self.tmdb_api_key,
             cache_dir=self.cache_dir,
             media_type=self.media_type,
-            single_user=self.single_user
+            single_user=self.single_user,
         )

@@ -3,24 +3,24 @@ Display and logging utilities for Curatarr.
 Handles colored output, progress indicators, and formatting.
 """
 
-import sys
-import re
 import json
 import logging
+import re
+import sys
 from datetime import datetime, timezone
 from typing import Dict, List
 
 from .redact import redact
 
 # ANSI color codes
-RED = '\033[91m'
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-CYAN = '\033[96m'
-RESET = '\033[0m'
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+CYAN = "\033[96m"
+RESET = "\033[0m"
 
 # ANSI pattern for stripping color codes from log files
-ANSI_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class ColoredFormatter(logging.Formatter):
@@ -36,7 +36,7 @@ class ColoredFormatter(logging.Formatter):
 
     def format(self, record):
         # Add color to the level name
-        color = self.LEVEL_COLORS.get(record.levelno, '')
+        color = self.LEVEL_COLORS.get(record.levelno, "")
         record.levelname = f"{color}{record.levelname}{RESET}"
         return super().format(record)
 
@@ -47,12 +47,33 @@ class ColoredFormatter(logging.Formatter):
 # logger.info(msg, extra={...}). Anything not in this set (and not
 # private, i.e. not leading with '_') is treated as a structured extra
 # and included in the rendered JSON object verbatim.
-_LOG_RECORD_RESERVED_ATTRS = frozenset({
-    'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 'filename',
-    'module', 'exc_info', 'exc_text', 'stack_info', 'lineno', 'funcName',
-    'created', 'msecs', 'relativeCreated', 'thread', 'threadName',
-    'processName', 'process', 'message', 'asctime', 'taskName',
-})
+_LOG_RECORD_RESERVED_ATTRS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "message",
+        "asctime",
+        "taskName",
+    }
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -82,17 +103,17 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            'timestamp': datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
-            'level': record.levelname,
-            'logger': record.name,
-            'message': redact(record.getMessage()),
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": redact(record.getMessage()),
         }
         for key, value in record.__dict__.items():
-            if key in _LOG_RECORD_RESERVED_ATTRS or key.startswith('_'):
+            if key in _LOG_RECORD_RESERVED_ATTRS or key.startswith("_"):
                 continue
             payload[key] = redact(value) if isinstance(value, str) else value
         if record.exc_info:
-            payload['exception'] = redact(self.formatException(record.exc_info))
+            payload["exception"] = redact(self.formatException(record.exc_info))
         return json.dumps(payload, default=str)
 
 
@@ -101,10 +122,11 @@ class TeeLogger:
     A simple 'tee' class that writes to both console and a file,
     stripping ANSI color codes for the file and handling Unicode characters.
     """
+
     def __init__(self, logfile):
         self.logfile = logfile
         # Force UTF-8 encoding for stdout
-        if hasattr(sys.stdout, 'buffer'):
+        if hasattr(sys.stdout, "buffer"):
             self.stdout_buffer = sys.stdout.buffer
         else:
             self.stdout_buffer = sys.stdout
@@ -118,26 +140,26 @@ class TeeLogger:
         text = redact(text)
         try:
             # Write to console
-            if hasattr(sys.stdout, 'buffer'):
-                self.stdout_buffer.write(text.encode('utf-8'))
+            if hasattr(sys.stdout, "buffer"):
+                self.stdout_buffer.write(text.encode("utf-8"))
             else:
                 sys.__stdout__.write(text)
 
             # Write to file (strip ANSI codes)
-            stripped = ANSI_PATTERN.sub('', text)
+            stripped = ANSI_PATTERN.sub("", text)
             self.logfile.write(stripped)
         except UnicodeEncodeError:
             # Fallback for problematic characters
-            safe_text = text.encode('ascii', 'replace').decode('ascii')
-            if hasattr(sys.stdout, 'buffer'):
-                self.stdout_buffer.write(safe_text.encode('utf-8'))
+            safe_text = text.encode("ascii", "replace").decode("ascii")
+            if hasattr(sys.stdout, "buffer"):
+                self.stdout_buffer.write(safe_text.encode("utf-8"))
             else:
                 sys.__stdout__.write(safe_text)
-            stripped = ANSI_PATTERN.sub('', safe_text)
+            stripped = ANSI_PATTERN.sub("", safe_text)
             self.logfile.write(stripped)
 
     def flush(self):
-        if hasattr(sys.stdout, 'buffer'):
+        if hasattr(sys.stdout, "buffer"):
             self.stdout_buffer.flush()
         else:
             sys.__stdout__.flush()
@@ -163,26 +185,23 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
     # Determine log level
     if debug:
         level = logging.DEBUG
-    elif config and config.get('logging', {}).get('level'):
-        level_str = config['logging']['level'].upper()
+    elif config and config.get("logging", {}).get("level"):
+        level_str = config["logging"]["level"].upper()
         level = getattr(logging, level_str, logging.INFO)
     else:
         level = logging.INFO
 
-    log_format = str((config or {}).get('logging', {}).get('format', 'text')).lower()
+    log_format = str((config or {}).get("logging", {}).get("format", "text")).lower()
 
     # Create handler with the configured formatter - JSON opt-in via
     # logging.format: json, text (ColoredFormatter) otherwise/by default.
     handler = logging.StreamHandler()
     handler.setLevel(level)
 
-    if log_format == 'json':
+    if log_format == "json":
         formatter = JsonFormatter()
     else:
-        formatter = ColoredFormatter(
-            fmt='%(asctime)s [%(levelname)s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
+        formatter = ColoredFormatter(fmt="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     handler.setFormatter(formatter)
 
     # Configure root logger
@@ -193,10 +212,10 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
     root_logger.addHandler(handler)
 
     # Suppress noisy third-party loggers
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
 
-    logger = logging.getLogger('curatarr')
+    logger = logging.getLogger("curatarr")
     logger.setLevel(level)
 
     return logger
@@ -216,7 +235,7 @@ def print_user_footer(username: str) -> None:
 
 def print_status(message: str, level: str = "info") -> None:
     """Print a status message with appropriate color and log to file."""
-    logger = logging.getLogger('curatarr')
+    logger = logging.getLogger("curatarr")
     if level == "success":
         print(f"{GREEN}✓ {message}{RESET}")
         logger.info(message)
@@ -231,7 +250,7 @@ def print_status(message: str, level: str = "info") -> None:
 
 def log_info(message: str) -> None:
     """Log info message."""
-    logger = logging.getLogger('curatarr')
+    logger = logging.getLogger("curatarr")
     logger.info(message)
 
 
@@ -242,7 +261,7 @@ def log_warning(message: str) -> None:
     wrap raw exception text (a failed request's URL, an API error body),
     which could in principle contain a token.
     """
-    logger = logging.getLogger('curatarr')
+    logger = logging.getLogger("curatarr")
     logger.warning(redact(message))
 
 
@@ -251,7 +270,7 @@ def log_error(message: str) -> None:
 
     Redacted before emitting - see log_warning's docstring above.
     """
-    logger = logging.getLogger('curatarr')
+    logger = logging.getLogger("curatarr")
     logger.error(redact(message))
 
 
@@ -294,7 +313,7 @@ def show_progress(prefix: str, current: int, total: int) -> None:
 
 def format_media_output(
     media: Dict,
-    media_type: str = 'movie',
+    media_type: str = "movie",
     show_summary: bool = False,
     index: int = None,
     show_cast: bool = False,
@@ -302,7 +321,7 @@ def format_media_output(
     show_language: bool = False,
     show_rating: bool = False,
     show_genres: bool = True,
-    show_imdb_link: bool = False
+    show_imdb_link: bool = False,
 ) -> str:
     """
     Format media item (movie or TV show) for display output.
@@ -323,9 +342,9 @@ def format_media_output(
     lines = []
 
     # Title line with optional index
-    title = media.get('title', 'Unknown')
-    year = media.get('year', '')
-    similarity = media.get('similarity_score', media.get('similarity', media.get('score', 0)))
+    title = media.get("title", "Unknown")
+    year = media.get("year", "")
+    similarity = media.get("similarity_score", media.get("similarity", media.get("score", 0)))
 
     if index:
         title_line = f"{index}. {CYAN}{title}{RESET}"
@@ -343,47 +362,47 @@ def format_media_output(
 
     # Genres
     if show_genres:
-        genres = media.get('genres', [])
+        genres = media.get("genres", [])
         if genres:
-            genre_str = ', '.join(genres) if isinstance(genres, list) else genres
+            genre_str = ", ".join(genres) if isinstance(genres, list) else genres
             lines.append(f"  {YELLOW}Genres:{RESET} {genre_str}")
 
     # Rating
     if show_rating:
-        rating = media.get('rating', media.get('vote_average', 0))
+        rating = media.get("rating", media.get("vote_average", 0))
         if rating:
             lines.append(f"  {YELLOW}Rating:{RESET} {rating:.1f}/10")
 
     # Language
     if show_language:
-        language = media.get('language', media.get('original_language', ''))
-        if language and language != 'N/A':
+        language = media.get("language", media.get("original_language", ""))
+        if language and language != "N/A":
             lines.append(f"  {YELLOW}Language:{RESET} {language}")
 
     # Cast
     if show_cast:
-        cast = media.get('cast', [])
+        cast = media.get("cast", [])
         if cast:
-            cast_str = ', '.join(cast[:5]) if isinstance(cast, list) else cast
+            cast_str = ", ".join(cast[:5]) if isinstance(cast, list) else cast
             lines.append(f"  {YELLOW}Cast:{RESET} {cast_str}")
 
     # Director (movies only when show_director is True)
-    if show_director and media_type == 'movie':
-        directors = media.get('directors', media.get('director', []))
+    if show_director and media_type == "movie":
+        directors = media.get("directors", media.get("director", []))
         if directors:
-            dir_str = ', '.join(directors) if isinstance(directors, list) else directors
+            dir_str = ", ".join(directors) if isinstance(directors, list) else directors
             lines.append(f"  {YELLOW}Director:{RESET} {dir_str}")
 
     # Studio (TV shows)
-    if media_type == 'tv':
-        studio = media.get('studio', media.get('studios', ''))
+    if media_type == "tv":
+        studio = media.get("studio", media.get("studios", ""))
         if studio:
-            studio_str = studio if isinstance(studio, str) else ', '.join(studio[:2])
+            studio_str = studio if isinstance(studio, str) else ", ".join(studio[:2])
             lines.append(f"  {YELLOW}Studio:{RESET} {studio_str}")
 
     # Summary
     if show_summary:
-        summary = media.get('summary', media.get('overview', ''))
+        summary = media.get("summary", media.get("overview", ""))
         if summary:
             # Truncate long summaries
             if len(summary) > 200:
@@ -392,14 +411,14 @@ def format_media_output(
 
     # IMDB link
     if show_imdb_link:
-        imdb_id = media.get('imdb_id')
+        imdb_id = media.get("imdb_id")
         if imdb_id:
             lines.append(f"  {CYAN}https://www.imdb.com/title/{imdb_id}/{RESET}")
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
-def print_similarity_breakdown(media_info: Dict, score: float, breakdown: Dict, media_type: str = 'movie') -> None:
+def print_similarity_breakdown(media_info: Dict, score: float, breakdown: Dict, media_type: str = "movie") -> None:
     """
     Print detailed similarity score breakdown for debugging.
 
@@ -409,14 +428,14 @@ def print_similarity_breakdown(media_info: Dict, score: float, breakdown: Dict, 
         breakdown: Dict with component scores and details
         media_type: 'movie' or 'tv'
     """
-    title = media_info.get('title', 'Unknown')
+    title = media_info.get("title", "Unknown")
     print(f"\n{CYAN}=== Similarity Breakdown: {title} ==={RESET}")
     print(f"Total Score: {YELLOW}{score:.1%}{RESET}")
     print()
 
     # Component scores
     print(f"  Genre Score:    {breakdown.get('genre_score', 0):.3f}")
-    if media_type == 'movie':
+    if media_type == "movie":
         print(f"  Director Score: {breakdown.get('director_score', 0):.3f}")
     else:
         print(f"  Studio Score:   {breakdown.get('studio_score', 0):.3f}")
@@ -426,12 +445,12 @@ def print_similarity_breakdown(media_info: Dict, score: float, breakdown: Dict, 
     print()
 
     # Details
-    details = breakdown.get('details', {})
-    if details.get('genres'):
+    details = breakdown.get("details", {})
+    if details.get("genres"):
         print(f"  Matched Genres: {', '.join(details['genres'][:5])}")
-    if details.get('actors'):
+    if details.get("actors"):
         print(f"  Matched Actors: {', '.join(details['actors'][:3])}")
-    if details.get('keywords'):
+    if details.get("keywords"):
         print(f"  Matched Keywords: {', '.join(details['keywords'][:5])}")
 
 
@@ -451,34 +470,34 @@ def user_select_recommendations(recommendations: List[Dict], operation_label: st
 
     print(f"\n{CYAN}Found {len(recommendations)} recommendations:{RESET}")
     for i, rec in enumerate(recommendations, 1):
-        title = rec.get('title', 'Unknown')
-        year = rec.get('year', '')
-        similarity = rec.get('similarity', rec.get('score', 0))
+        title = rec.get("title", "Unknown")
+        year = rec.get("year", "")
+        similarity = rec.get("similarity", rec.get("score", 0))
         sim_str = f"{similarity:.1%}" if isinstance(similarity, float) else similarity
         print(f"  {i}. {title} ({year}) - {sim_str}")
 
     print(f"\n{YELLOW}Options:{RESET}")
-    print(f"  - Enter numbers to select (e.g., '1,3,5' or '1-5')")
+    print("  - Enter numbers to select (e.g., '1,3,5' or '1-5')")
     print(f"  - Enter 'all' to {operation_label} all")
-    print(f"  - Enter 'none' or press Enter to skip")
+    print("  - Enter 'none' or press Enter to skip")
 
     try:
         choice = input(f"\n{CYAN}Select items to {operation_label}: {RESET}").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return []
 
-    if not choice or choice == 'none':
+    if not choice or choice == "none":
         return []
 
-    if choice == 'all':
+    if choice == "all":
         return recommendations
 
     # Parse selection
     selected_indices = set()
-    for part in choice.replace(' ', '').split(','):
-        if '-' in part:
+    for part in choice.replace(" ", "").split(","):
+        if "-" in part:
             try:
-                start, end = part.split('-')
+                start, end = part.split("-")
                 selected_indices.update(range(int(start), int(end) + 1))
             except ValueError:
                 continue
@@ -512,7 +531,6 @@ def smart_open_html(file_path: str) -> bool:
         True if successful, False otherwise
     """
     import platform
-    import subprocess
     import webbrowser
 
     file_url = f"file://{file_path}"
@@ -535,7 +553,6 @@ def smart_open_html(file_path: str) -> bool:
 def _open_html_macos(file_path: str, file_url: str) -> bool:
     """Handle browser opening on macOS using AppleScript."""
     import subprocess
-    import webbrowser
 
     # Try Chrome first, then Safari
     for browser, script in [
@@ -546,14 +563,13 @@ def _open_html_macos(file_path: str, file_url: str) -> bool:
             # Check if browser is running
             check_running = subprocess.run(
                 ["osascript", "-e", f'tell application "System Events" to (name of processes) contains "{browser}"'],
-                capture_output=True, text=True, timeout=5
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if "true" in check_running.stdout.lower():
                 # Browser is running, use AppleScript to find/refresh or open tab
-                result = subprocess.run(
-                    ["osascript", "-e", script],
-                    capture_output=True, text=True, timeout=10
-                )
+                result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
                 if result.returncode == 0:
                     print(f"Opened in {browser}")
                     return True

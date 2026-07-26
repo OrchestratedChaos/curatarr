@@ -33,7 +33,7 @@ def _load_imdb_cache(cache_path: str) -> Dict[str, str]:
     """Load IMDB ID cache from disk. IDs are permanent so no staleness check."""
     try:
         if os.path.exists(cache_path):
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 return json.load(f)
     except (json.JSONDecodeError, IOError):
         pass
@@ -44,52 +44,53 @@ def _save_imdb_cache(cache_path: str, cache: Dict[str, str]) -> None:
     """Save IMDB ID cache to disk."""
     try:
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, 'w') as f:
+        with open(cache_path, "w") as f:
             json.dump(cache, f)
     except IOError:
         pass
 
+
 # ANSI color codes
-CYAN = '\033[96m'
-GREEN = '\033[92m'
-RESET = '\033[0m'
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+RESET = "\033[0m"
 
 # Service display name mappings
 SERVICE_DISPLAY_NAMES = {
-    'netflix': 'Netflix',
-    'hulu': 'Hulu',
-    'disney_plus': 'Disney+',
-    'amazon_prime': 'Amazon Prime Video',
-    'paramount_plus': 'Paramount+',
-    'apple_tv_plus': 'Apple TV+',
-    'max': 'Max',
-    'peacock': 'Peacock',
-    'crunchyroll': 'Crunchyroll',
-    'crackle': 'Crackle',
-    'tubi': 'Tubi',
-    'mubi': 'MUBI',
-    'shudder': 'Shudder'
+    "netflix": "Netflix",
+    "hulu": "Hulu",
+    "disney_plus": "Disney+",
+    "amazon_prime": "Amazon Prime Video",
+    "paramount_plus": "Paramount+",
+    "apple_tv_plus": "Apple TV+",
+    "max": "Max",
+    "peacock": "Peacock",
+    "crunchyroll": "Crunchyroll",
+    "crackle": "Crackle",
+    "tubi": "Tubi",
+    "mubi": "MUBI",
+    "shudder": "Shudder",
 }
 
 # Short display names for icons (space-efficient)
 SERVICE_SHORT_NAMES = {
-    'netflix': 'Netflix',
-    'hulu': 'Hulu',
-    'disney_plus': 'Disney+',
-    'amazon_prime': 'Prime',
-    'paramount_plus': 'P+',
-    'apple_tv_plus': 'Apple',
-    'max': 'Max',
-    'peacock': 'Peacock',
-    'crunchyroll': 'Crunchy',
-    'crackle': 'Crackle',
-    'tubi': 'Tubi',
-    'mubi': 'MUBI',
-    'shudder': 'Shudder'
+    "netflix": "Netflix",
+    "hulu": "Hulu",
+    "disney_plus": "Disney+",
+    "amazon_prime": "Prime",
+    "paramount_plus": "P+",
+    "apple_tv_plus": "Apple",
+    "max": "Max",
+    "peacock": "Peacock",
+    "crunchyroll": "Crunchy",
+    "crackle": "Crackle",
+    "tubi": "Tubi",
+    "mubi": "MUBI",
+    "shudder": "Shudder",
 }
 
 # JustWatch search URL - universal streaming search that works for all services
-JUSTWATCH_SEARCH_URL = 'https://www.justwatch.com/us/search?q={title}'
+JUSTWATCH_SEARCH_URL = "https://www.justwatch.com/us/search?q={title}"
 
 
 def render_streaming_icons(
@@ -97,7 +98,7 @@ def render_streaming_icons(
     user_services: List[str],
     rent_services: List[str] = None,
     buy_services: List[str] = None,
-    title: str = None
+    title: str = None,
 ) -> str:
     """
     Render HTML streaming service icons/badges with optional search links.
@@ -106,7 +107,7 @@ def render_streaming_icons(
     When title is provided, badges link to JustWatch search.
     """
     encoded_title = quote_plus(title) if title else None
-    justwatch_url = JUSTWATCH_SEARCH_URL.replace('{title}', encoded_title) if encoded_title else None
+    justwatch_url = JUSTWATCH_SEARCH_URL.replace("{title}", encoded_title) if encoded_title else None
 
     # If streaming services available, show them
     if services:
@@ -125,21 +126,23 @@ def render_streaming_icons(
                 css_class += " user-service"
             # Wrap in link to JustWatch if we have a title
             if justwatch_url:
-                icons.append(f'<a href="{justwatch_url}" target="_blank" class="streaming-link"><span class="{css_class}">{short_name}</span></a>')
+                icons.append(
+                    f'<a href="{justwatch_url}" target="_blank" class="streaming-link"><span class="{css_class}">{short_name}</span></a>'
+                )
             else:
                 icons.append(f'<span class="{css_class}">{short_name}</span>')
-        return ' '.join(icons)
+        return " ".join(icons)
 
     # No streaming - check rent/buy availability
     if rent_services:
-        display = _esc(', '.join(rent_services[:2]))  # Show first 2
-        all_providers = _esc(', '.join(rent_services))  # Tooltip shows all
+        display = _esc(", ".join(rent_services[:2]))  # Show first 2
+        all_providers = _esc(", ".join(rent_services))  # Tooltip shows all
         more = f" +{len(rent_services) - 2}" if len(rent_services) > 2 else ""
         return f'<span class="streaming-icon rent" title="Available: {all_providers}">Rent: {display}{more}</span>'
 
     if buy_services:
-        display = _esc(', '.join(buy_services[:2]))
-        all_providers = _esc(', '.join(buy_services))
+        display = _esc(", ".join(buy_services[:2]))
+        all_providers = _esc(", ".join(buy_services))
         more = f" +{len(buy_services) - 2}" if len(buy_services) > 2 else ""
         return f'<span class="streaming-icon buy" title="Available: {all_providers}">Buy: {display}{more}</span>'
 
@@ -152,7 +155,7 @@ def generate_markdown(
     movies_categorized: Dict,
     shows_categorized: Dict,
     output_dir: str,
-    library_suffix: str = ''
+    library_suffix: str = "",
 ) -> str:
     """
     Generate markdown watchlist file with streaming service grouping
@@ -172,8 +175,8 @@ def generate_markdown(
     """
     os.makedirs(output_dir, exist_ok=True)
     # Use display_name for filename, sanitized for filesystem
-    safe_name = display_name.lower().replace(' ', '_')
-    output_file = os.path.join(output_dir, f'{safe_name}{library_suffix}_watchlist.md')
+    safe_name = display_name.lower().replace(" ", "_")
+    output_file = os.path.join(output_dir, f"{safe_name}{library_suffix}_watchlist.md")
 
     now = datetime.now()
 
@@ -182,72 +185,76 @@ def generate_markdown(
         f.write("| Title | Year | Rating | Score | Days on List |\n")
         f.write("|-------|------|--------|-------|-------------|\n")
         for item in items:
-            days_listed = (now - datetime.fromisoformat(item['added_date'])).days
-            f.write(f"| {item['title']} | {item['year']} | {item['rating']:.1f} | {item['score']:.1%} | {days_listed} |\n")
+            days_listed = (now - datetime.fromisoformat(item["added_date"])).days
+            f.write(
+                f"| {item['title']} | {item['year']} | {item['rating']:.1f} | {item['score']:.1%} | {days_listed} |\n"
+            )
         f.write("\n")
 
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         f.write(f"# Watchlist for {display_name}\n\n")
         f.write(f"*Last updated: {now.strftime('%Y-%m-%d %H:%M')}*\n\n")
         f.write("---\n\n")
 
         # Movies section
-        if any([movies_categorized['user_services'], movies_categorized['other_services'], movies_categorized['acquire']]):
+        if any(
+            [movies_categorized["user_services"], movies_categorized["other_services"], movies_categorized["acquire"]]
+        ):
             f.write("## Movies to Watch\n\n")
 
             # User's services
-            if movies_categorized['user_services']:
+            if movies_categorized["user_services"]:
                 f.write("### Available on Your Services\n\n")
-                for service, items in sorted(movies_categorized['user_services'].items(), key=lambda x: -len(x[1])):
+                for service, items in sorted(movies_categorized["user_services"].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} movies)\n\n")
                     write_service_section(f, items)
                 f.write("---\n\n")
 
             # Other services
-            if movies_categorized['other_services']:
+            if movies_categorized["other_services"]:
                 f.write("### Available on Other Services\n\n")
                 f.write("*Consider subscribing if many recommendations are on a single service*\n\n")
-                for service, items in sorted(movies_categorized['other_services'].items(), key=lambda x: -len(x[1])):
+                for service, items in sorted(movies_categorized["other_services"].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} movies)\n\n")
                     write_service_section(f, items)
                 f.write("---\n\n")
 
             # Acquire
-            if movies_categorized['acquire']:
+            if movies_categorized["acquire"]:
                 f.write(f"### Acquire ({len(movies_categorized['acquire'])} movies)\n\n")
                 f.write("*Not available on any streaming service - need physical/digital copy*\n\n")
-                write_service_section(f, movies_categorized['acquire'])
+                write_service_section(f, movies_categorized["acquire"])
 
         # TV Shows section
-        if any([shows_categorized['user_services'], shows_categorized['other_services'], shows_categorized['acquire']]):
+        if any([shows_categorized["user_services"], shows_categorized["other_services"], shows_categorized["acquire"]]):
             f.write("## TV Shows to Watch\n\n")
 
             # User's services
-            if shows_categorized['user_services']:
+            if shows_categorized["user_services"]:
                 f.write("### Available on Your Services\n\n")
-                for service, items in sorted(shows_categorized['user_services'].items(), key=lambda x: -len(x[1])):
+                for service, items in sorted(shows_categorized["user_services"].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} shows)\n\n")
                     write_service_section(f, items)
                 f.write("---\n\n")
 
             # Other services
-            if shows_categorized['other_services']:
+            if shows_categorized["other_services"]:
                 f.write("### Available on Other Services\n\n")
                 f.write("*Consider subscribing if many recommendations are on a single service*\n\n")
-                for service, items in sorted(shows_categorized['other_services'].items(), key=lambda x: -len(x[1])):
+                for service, items in sorted(shows_categorized["other_services"].items(), key=lambda x: -len(x[1])):
                     service_display = SERVICE_DISPLAY_NAMES.get(service, service.title())
                     f.write(f"#### {service_display} ({len(items)} shows)\n\n")
                     write_service_section(f, items)
                 f.write("---\n\n")
 
             # Acquire
-            if shows_categorized['acquire']:
+            if shows_categorized["acquire"]:
                 f.write(f"### Acquire ({len(shows_categorized['acquire'])} shows)\n\n")
                 f.write("*Not available on any streaming service - need physical/digital copy*\n\n")
-                write_service_section(f, shows_categorized['acquire'])
+                write_service_section(f, shows_categorized["acquire"])
 
         # Instructions
         f.write("---\n\n")
@@ -269,7 +276,7 @@ def generate_combined_html(
     show_counts: Dict[str, int] = None,
     total_users: int = 1,
     missing_sequels: List[Dict] = None,
-    horizon_movies: List[Dict] = None
+    horizon_movies: List[Dict] = None,
 ) -> str:
     """
     Generate single HTML watchlist with tabs for all users.
@@ -294,13 +301,13 @@ def generate_combined_html(
     missing_sequels = missing_sequels or []
     horizon_movies = horizon_movies or []
     os.makedirs(output_dir, exist_ok=True)
-    output_file = os.path.join(output_dir, 'watchlist.html')
+    output_file = os.path.join(output_dir, "watchlist.html")
 
     now = datetime.now()
 
     # Load IMDB ID cache (IDs are permanent, no staleness needed)
     cache_dir = os.path.dirname(output_dir)
-    imdb_cache_path = os.path.join(cache_dir, 'cache', 'imdb_ids_cache.json')
+    imdb_cache_path = os.path.join(cache_dir, "cache", "imdb_ids_cache.json")
     imdb_cache = _load_imdb_cache(imdb_cache_path)
 
     # Collect all unique TMDB IDs that need IMDB lookup
@@ -309,16 +316,16 @@ def generate_combined_html(
 
     def collect_tmdb_ids_from_categorized(categorized, media_type):
         """Helper to collect TMDB IDs from categorized items."""
-        items = categorized.get('all_items', [])
+        items = categorized.get("all_items", [])
         if not items:
-            for service_items in categorized.get('user_services', {}).values():
+            for service_items in categorized.get("user_services", {}).values():
                 items.extend(service_items)
-            for service_items in categorized.get('other_services', {}).values():
+            for service_items in categorized.get("other_services", {}).values():
                 items.extend(service_items)
-            items.extend(categorized.get('acquire', []))
+            items.extend(categorized.get("acquire", []))
 
         for item in items:
-            tmdb_id = item.get('tmdb_id')
+            tmdb_id = item.get("tmdb_id")
             if not tmdb_id:
                 continue
             # Check cache first
@@ -329,30 +336,30 @@ def generate_combined_html(
                 pending_lookups.append((tmdb_id, media_type))
 
     for user_data in all_users_data:
-        collect_tmdb_ids_from_categorized(user_data['movies_categorized'], 'movie')
-        collect_tmdb_ids_from_categorized(user_data['shows_categorized'], 'tv')
+        collect_tmdb_ids_from_categorized(user_data["movies_categorized"], "movie")
+        collect_tmdb_ids_from_categorized(user_data["shows_categorized"], "tv")
 
     # Also collect from missing sequels (Sequel Huntarr)
     for item in missing_sequels:
-        tmdb_id = item.get('tmdb_id')
+        tmdb_id = item.get("tmdb_id")
         if not tmdb_id:
             continue
         cache_key = f"{tmdb_id}_movie"
         if cache_key in imdb_cache:
             all_imdb_ids[tmdb_id] = imdb_cache[cache_key]
-        elif tmdb_id not in all_imdb_ids and (tmdb_id, 'movie') not in [(p[0], p[1]) for p in pending_lookups]:
-            pending_lookups.append((tmdb_id, 'movie'))
+        elif tmdb_id not in all_imdb_ids and (tmdb_id, "movie") not in [(p[0], p[1]) for p in pending_lookups]:
+            pending_lookups.append((tmdb_id, "movie"))
 
     # Also collect from horizon movies (Horizon Huntarr)
     for item in horizon_movies:
-        tmdb_id = item.get('tmdb_id')
+        tmdb_id = item.get("tmdb_id")
         if not tmdb_id:
             continue
         cache_key = f"{tmdb_id}_movie"
         if cache_key in imdb_cache:
             all_imdb_ids[tmdb_id] = imdb_cache[cache_key]
-        elif tmdb_id not in all_imdb_ids and (tmdb_id, 'movie') not in [(p[0], p[1]) for p in pending_lookups]:
-            pending_lookups.append((tmdb_id, 'movie'))
+        elif tmdb_id not in all_imdb_ids and (tmdb_id, "movie") not in [(p[0], p[1]) for p in pending_lookups]:
+            pending_lookups.append((tmdb_id, "movie"))
 
     # Fetch IMDB IDs for items not in cache
     total_lookups = len(pending_lookups)
@@ -376,98 +383,110 @@ def generate_combined_html(
     def render_table_flat(items, media_type, user_id, user_services):
         """Render HTML table with streaming icons column (score-sorted)"""
         rows = []
-        counts = movie_counts if media_type == 'movie' else show_counts
+        counts = movie_counts if media_type == "movie" else show_counts
         for item in items:
-            tmdb_id = item.get('tmdb_id', '')
-            imdb_id = all_imdb_ids.get(tmdb_id, '')
-            days_listed = (now - datetime.fromisoformat(item['added_date'])).days
+            tmdb_id = item.get("tmdb_id", "")
+            imdb_id = all_imdb_ids.get(tmdb_id, "")
+            days_listed = (now - datetime.fromisoformat(item["added_date"])).days
             # Show shared count if more than one user
             user_count = counts.get(str(tmdb_id), 1)
-            shared_badge = f'<span class="shared-badge" title="{user_count} of {total_users} users want this">{user_count}/{total_users}</span>' if total_users > 1 else ''
+            shared_badge = (
+                f'<span class="shared-badge" title="{user_count} of {total_users} users want this">{user_count}/{total_users}</span>'
+                if total_users > 1
+                else ""
+            )
             # Render streaming icons (with rent/buy fallback)
-            streaming_services = item.get('streaming_services', [])
-            rent_services = item.get('rent_services', [])
-            buy_services = item.get('buy_services', [])
-            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services, item['title'])
+            streaming_services = item.get("streaming_services", [])
+            rent_services = item.get("rent_services", [])
+            buy_services = item.get("buy_services", [])
+            streaming_html = render_streaming_icons(
+                streaming_services, user_services, rent_services, buy_services, item["title"]
+            )
             # Add animated badge if applicable
-            genre_ids = item.get('genre_ids', [])
-            animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ''
+            genre_ids = item.get("genre_ids", [])
+            animated_badge = (
+                '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ""
+            )
             rows.append(f'''
                 <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="{_esc(media_type)}" data-user="{_esc(user_id)}">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{_esc(item['title'])} {animated_badge}{shared_badge}</td>
-                    <td>{_esc(item['year'])}</td>
-                    <td>{item['rating']:.1f}</td>
-                    <td>{item['score']:.0%}</td>
+                    <td>{_esc(item["title"])} {animated_badge}{shared_badge}</td>
+                    <td>{_esc(item["year"])}</td>
+                    <td>{item["rating"]:.1f}</td>
+                    <td>{item["score"]:.0%}</td>
                     <td><div class="streaming-icons">{streaming_html}</div></td>
                     <td>{days_listed}</td>
                 </tr>''')
-        return '\n'.join(rows)
+        return "\n".join(rows)
 
     def render_sequels_table(items, user_services):
         """Render HTML table for missing sequels (Sequel Huntarr)"""
         rows = []
         for item in items:
-            tmdb_id = item.get('tmdb_id', '')
-            imdb_id = all_imdb_ids.get(tmdb_id, '')
-            collection_name = item.get('collection_name', 'Unknown')
-            owned = item.get('owned_count', 0)
-            total = item.get('total_count', 0)
-            streaming_services = item.get('streaming_services', [])
-            rent_services = item.get('rent_services', [])
-            buy_services = item.get('buy_services', [])
-            streaming_html = render_streaming_icons(streaming_services, user_services, rent_services, buy_services, item['title'])
+            tmdb_id = item.get("tmdb_id", "")
+            imdb_id = all_imdb_ids.get(tmdb_id, "")
+            collection_name = item.get("collection_name", "Unknown")
+            owned = item.get("owned_count", 0)
+            total = item.get("total_count", 0)
+            streaming_services = item.get("streaming_services", [])
+            rent_services = item.get("rent_services", [])
+            buy_services = item.get("buy_services", [])
+            streaming_html = render_streaming_icons(
+                streaming_services, user_services, rent_services, buy_services, item["title"]
+            )
             # Add badges for TV Special and Animated
-            badges = ''
-            if item.get('is_animated'):
+            badges = ""
+            if item.get("is_animated"):
                 badges += '<span class="animated-badge">Animated</span>'
-            if item.get('is_tv_movie'):
+            if item.get("is_tv_movie"):
                 badges += '<span class="tv-special-badge">TV Special</span>'
             rows.append(f'''
                 <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="sequel-huntarr">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{_esc(item['title'])} {badges}</td>
-                    <td>{_esc(item.get('year', ''))}</td>
+                    <td>{_esc(item["title"])} {badges}</td>
+                    <td>{_esc(item.get("year", ""))}</td>
                     <td>{_esc(collection_name)}</td>
                     <td>{owned}/{total}</td>
                     <td><div class="streaming-icons">{streaming_html}</div></td>
                 </tr>''')
-        return '\n'.join(rows)
+        return "\n".join(rows)
 
     def render_horizon_table(items):
         """Render HTML table for upcoming movies (Horizon Huntarr)"""
         rows = []
         for item in items:
-            tmdb_id = item.get('tmdb_id', '')
-            imdb_id = all_imdb_ids.get(tmdb_id, '')
-            collection_name = item.get('collection_name', 'Unknown')
-            release_date = item.get('release_date', 'TBA')
-            status = item.get('status', 'Unknown')
+            tmdb_id = item.get("tmdb_id", "")
+            imdb_id = all_imdb_ids.get(tmdb_id, "")
+            collection_name = item.get("collection_name", "Unknown")
+            release_date = item.get("release_date", "TBA")
+            status = item.get("status", "Unknown")
             # Status badge styling
-            status_class = status.lower().replace(' ', '-')
+            status_class = status.lower().replace(" ", "-")
             # Add animated badge if applicable
-            genre_ids = item.get('genre_ids', [])
-            animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ''
+            genre_ids = item.get("genre_ids", [])
+            animated_badge = (
+                '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ""
+            )
             rows.append(f'''
                 <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="horizon-huntarr">
                     <td><input type="checkbox" class="select-item"></td>
-                    <td>{_esc(item['title'])} {animated_badge}</td>
+                    <td>{_esc(item["title"])} {animated_badge}</td>
                     <td>{_esc(collection_name)}</td>
                     <td>{_esc(release_date)}</td>
                     <td><span class="status-badge {_esc(status_class)}">{_esc(status)}</span></td>
                 </tr>''')
-        return '\n'.join(rows)
+        return "\n".join(rows)
 
     # Build tabs HTML
     tabs_html = ""
     panels_html = ""
 
     for i, user_data in enumerate(all_users_data):
-        display_name = user_data['display_name']
-        user_id = user_data['username'].lower().replace(' ', '_')
-        movies_cat = user_data['movies_categorized']
-        shows_cat = user_data['shows_categorized']
-        user_services = user_data.get('user_services', [])
+        display_name = user_data["display_name"]
+        user_id = user_data["username"].lower().replace(" ", "_")
+        movies_cat = user_data["movies_categorized"]
+        shows_cat = user_data["shows_categorized"]
+        user_services = user_data.get("user_services", [])
         is_active = "active" if i == 0 else ""
 
         # Tab button
@@ -477,32 +496,32 @@ def generate_combined_html(
         panel_content = ""
 
         # Movies section - flat table sorted by score
-        all_movies = movies_cat.get('all_items', [])
+        all_movies = movies_cat.get("all_items", [])
         if all_movies:
             panel_content += f"<h2>Movies to Watch ({len(all_movies)})</h2>"
-            panel_content += f'''
+            panel_content += f"""
                 <table>
                     <thead>
                         <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Rating</th><th class="sortable desc">Score</th><th class="sortable">Streaming</th><th class="sortable">Days</th></tr>
                     </thead>
                     <tbody>
-                        {render_table_flat(all_movies, 'movie', user_id, user_services)}
+                        {render_table_flat(all_movies, "movie", user_id, user_services)}
                     </tbody>
-                </table>'''
+                </table>"""
 
         # Shows section - flat table sorted by score
-        all_shows = shows_cat.get('all_items', [])
+        all_shows = shows_cat.get("all_items", [])
         if all_shows:
             panel_content += f"<h2>TV Shows to Watch ({len(all_shows)})</h2>"
-            panel_content += f'''
+            panel_content += f"""
                 <table>
                     <thead>
                         <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Rating</th><th class="sortable desc">Score</th><th class="sortable">Streaming</th><th class="sortable">Days</th></tr>
                     </thead>
                     <tbody>
-                        {render_table_flat(all_shows, 'show', user_id, user_services)}
+                        {render_table_flat(all_shows, "show", user_id, user_services)}
                     </tbody>
-                </table>'''
+                </table>"""
 
         if not panel_content:
             panel_content = "<p>No recommendations available for this user.</p>"
@@ -511,7 +530,7 @@ def generate_combined_html(
 
     # Build Huntarr tabs (separate row below user tabs)
     huntarr_tabs_html = ""
-    first_user_services = all_users_data[0].get('user_services', []) if all_users_data else []
+    first_user_services = all_users_data[0].get("user_services", []) if all_users_data else []
     has_user_tabs = bool(all_users_data)
     first_huntarr_tab = True  # Track if this is the first huntarr tab (for active state)
 
@@ -522,8 +541,8 @@ def generate_combined_html(
         first_huntarr_tab = False
         huntarr_tabs_html += f'<button class="tab-btn {is_active}" data-user="sequel-huntarr">Sequel Huntarr</button>\n'
         sequels_content = f"<h2>Sequel Huntarr ({len(missing_sequels)})</h2>"
-        sequels_content += "<p class=\"subtitle\">Missing movies from collections you've started.</p>"
-        sequels_content += f'''
+        sequels_content += '<p class="subtitle">Missing movies from collections you\'ve started.</p>'
+        sequels_content += f"""
             <table>
                 <thead>
                     <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Collection</th><th class="sortable">Owned</th><th class="sortable">Streaming</th></tr>
@@ -531,7 +550,7 @@ def generate_combined_html(
                 <tbody>
                     {render_sequels_table(missing_sequels, first_user_services)}
                 </tbody>
-            </table>'''
+            </table>"""
         panels_html += f'<div class="tab-panel {is_active}" data-user="sequel-huntarr">{sequels_content}</div>\n'
 
     # Horizon Huntarr tab
@@ -539,10 +558,12 @@ def generate_combined_html(
         # Make first huntarr tab active if no user tabs (and sequel wasn't first)
         is_active = "active" if not has_user_tabs and first_huntarr_tab else ""
         first_huntarr_tab = False
-        huntarr_tabs_html += f'<button class="tab-btn {is_active}" data-user="horizon-huntarr">Horizon Huntarr</button>\n'
+        huntarr_tabs_html += (
+            f'<button class="tab-btn {is_active}" data-user="horizon-huntarr">Horizon Huntarr</button>\n'
+        )
         horizon_content = f"<h2>Horizon Huntarr ({len(horizon_movies)})</h2>"
-        horizon_content += "<p class=\"subtitle\">Upcoming unreleased movies from collections you own.</p>"
-        horizon_content += f'''
+        horizon_content += '<p class="subtitle">Upcoming unreleased movies from collections you own.</p>'
+        horizon_content += f"""
             <table>
                 <thead>
                     <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Collection</th><th class="sortable">Release Date</th><th class="sortable">Status</th></tr>
@@ -550,12 +571,12 @@ def generate_combined_html(
                 <tbody>
                     {render_horizon_table(horizon_movies)}
                 </tbody>
-            </table>'''
+            </table>"""
         panels_html += f'<div class="tab-panel {is_active}" data-user="horizon-huntarr">{horizon_content}</div>\n'
 
     html_content = _generate_html_template(tabs_html, panels_html, now, huntarr_tabs_html)
 
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         f.write(html_content)
 
     return output_file
@@ -569,14 +590,14 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         tabs_html = huntarr_tabs_html
         huntarr_tabs_row = ""
     elif huntarr_tabs_html:
-        huntarr_tabs_row = f'''
+        huntarr_tabs_row = f"""
             <div class="huntarr-tabs">
                 {huntarr_tabs_html}
-            </div>'''
+            </div>"""
     else:
         huntarr_tabs_row = ""
 
-    return f'''<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1508,7 +1529,7 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         <div class="brand">
             <h1>CURATARR</h1>
             <div class="subtitle">Watchlist</div>
-            <div class="timestamp">Updated {now.strftime('%B %d, %Y at %H:%M')}</div>
+            <div class="timestamp">Updated {now.strftime("%B %d, %Y at %H:%M")}</div>
         </div>
 
         <div class="header-actions">
@@ -1950,4 +1971,4 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         }}
     </script>
 </body>
-</html>'''
+</html>"""

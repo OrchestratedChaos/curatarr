@@ -85,14 +85,12 @@ bytes end up running, safely.
 import logging
 import os
 import subprocess
-import sys
 import tempfile
-from typing import Optional
 
 from .helpers import get_project_root, resolve_system_executable
 from .self_update import sanitize_frozen_relaunch_env
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # How long the hand-off script itself waits for things, in seconds -
 # module-level constants (not buried in the script templates) so tests
@@ -396,12 +394,12 @@ def _write_script(content: str) -> str:
     directory - deliberately NOT anywhere under this (frozen) process's
     own sys._MEIPASS, which gets torn down when this process exits
     (moments after launching the script - see module docstring)."""
-    tmp_dir = tempfile.mkdtemp(prefix='curatarr-handoff-')
-    suffix = '.ps1' if os.name == 'nt' else '.sh'
-    script_path = os.path.join(tmp_dir, f'curatarr-swap{suffix}')
-    with open(script_path, 'w', encoding='utf-8', newline='\n') as f:
+    tmp_dir = tempfile.mkdtemp(prefix="curatarr-handoff-")
+    suffix = ".ps1" if os.name == "nt" else ".sh"
+    script_path = os.path.join(tmp_dir, f"curatarr-swap{suffix}")
+    with open(script_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
-    if os.name != 'nt':
+    if os.name != "nt":
         os.chmod(script_path, 0o755)
     return script_path
 
@@ -422,9 +420,9 @@ def _debug_log_allowed_roots() -> list:
     The plain OS temp dir is deliberately NOT included - broader than
     either legitimate use needs.
     """
-    roots = [os.path.join(get_project_root(), 'logs')]
-    if os.environ.get('GITHUB_ACTIONS') == 'true':
-        runner_temp = os.environ.get('RUNNER_TEMP')
+    roots = [os.path.join(get_project_root(), "logs")]
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        runner_temp = os.environ.get("RUNNER_TEMP")
         if runner_temp:
             roots.append(runner_temp)
     return roots
@@ -457,13 +455,13 @@ def _is_safe_debug_log_path(path: str) -> bool:
 
 
 def _windows_powershell_path() -> str:
-    system_root = os.environ.get('SystemRoot', r'C:\Windows')
-    candidate = os.path.join(system_root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    return resolve_system_executable(candidate, 'powershell')
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return resolve_system_executable(candidate, "powershell")
 
 
 def _posix_sh_path() -> str:
-    return resolve_system_executable('/bin/sh', 'sh')
+    return resolve_system_executable("/bin/sh", "sh")
 
 
 def write_and_launch_handoff_script(
@@ -494,22 +492,37 @@ def write_and_launch_handoff_script(
     web/update_apply.py's _run_worker, which already wraps its whole
     frozen apply/hand-off path in a catch-all for exactly this reason).
     """
-    if os.name == 'nt':
+    if os.name == "nt":
         script_path = _write_script(_windows_script_content())
         cmd = [
-            _windows_powershell_path(), '-ExecutionPolicy', 'Bypass', '-File', script_path,
-            '-OldPid', str(old_pid),
-            '-CurrentExePath', current_exe_path,
-            '-NewAssetPath', verified_asset_path,
-            '-Port', str(port),
-            '-TargetVersion', target_version,
-            '-ExpectedSha256', verified_asset_sha256,
+            _windows_powershell_path(),
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            script_path,
+            "-OldPid",
+            str(old_pid),
+            "-CurrentExePath",
+            current_exe_path,
+            "-NewAssetPath",
+            verified_asset_path,
+            "-Port",
+            str(port),
+            "-TargetVersion",
+            target_version,
+            "-ExpectedSha256",
+            verified_asset_sha256,
         ]
     else:
         script_path = _write_script(_posix_script_content())
         cmd = [
-            _posix_sh_path(), script_path,
-            str(old_pid), current_exe_path, verified_asset_path, str(port), target_version,
+            _posix_sh_path(),
+            script_path,
+            str(old_pid),
+            current_exe_path,
+            verified_asset_path,
+            str(port),
+            target_version,
             verified_asset_sha256,
         ]
 
@@ -531,17 +544,14 @@ def write_and_launch_handoff_script(
     # this is an env-controlled path opened in APPEND mode, so an
     # unvalidated value would let anything that can set this process's
     # environment make it open an arbitrary file on disk.
-    debug_log_path = env.get('CURATARR_HANDOFF_DEBUG_LOG')
+    debug_log_path = env.get("CURATARR_HANDOFF_DEBUG_LOG")
     stdio_target = subprocess.DEVNULL
     if debug_log_path and not _is_safe_debug_log_path(debug_log_path):
-        logger.warning(
-            f"Ignoring CURATARR_HANDOFF_DEBUG_LOG={debug_log_path!r}: not under an "
-            f"allowed log directory"
-        )
+        logger.warning(f"Ignoring CURATARR_HANDOFF_DEBUG_LOG={debug_log_path!r}: not under an allowed log directory")
         debug_log_path = None
     if debug_log_path:
         try:
-            stdio_target = open(debug_log_path, 'ab')
+            stdio_target = open(debug_log_path, "ab")
         except OSError as e:
             # A debugging convenience must never be able to break the
             # actual swap/rollback it's only meant to observe - fall
@@ -553,10 +563,12 @@ def write_and_launch_handoff_script(
 
     popen_kwargs = dict(
         env=env,
-        stdout=stdio_target, stderr=stdio_target, stdin=subprocess.DEVNULL,
+        stdout=stdio_target,
+        stderr=stdio_target,
+        stdin=subprocess.DEVNULL,
         close_fds=True,
     )
-    if os.name == 'nt':
+    if os.name == "nt":
         # NOT DETACHED_PROCESS - confirmed via real end-to-end testing
         # (see this repo's v2.8.29 PR description) that a
         # powershell.exe launched with DETACHED_PROCESS starts and
@@ -572,12 +584,11 @@ def write_and_launch_handoff_script(
         # denies it outright. CREATE_NO_WINDOW allocates a console but
         # keeps it invisible - PowerShell runs correctly under it, and
         # nothing becomes visible on the user's desktop either way.
-        popen_kwargs['creationflags'] = (
-            getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
-            | getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200) | getattr(
+            subprocess, "CREATE_NO_WINDOW", 0x08000000
         )
     else:
-        popen_kwargs['start_new_session'] = True
+        popen_kwargs["start_new_session"] = True
 
     subprocess.Popen(cmd, **popen_kwargs)
     logger.info(f"Self-update hand-off script launched (script: {script_path})")

@@ -38,7 +38,7 @@ def _stable_metrics_dir(tmp_path, monkeypatch):
     resolved via utils.metrics.get_project_root(), which is entirely
     independent of whatever project_root a given test's Flask app was
     constructed with)."""
-    monkeypatch.setattr('utils.metrics.get_project_root', lambda: str(tmp_path))
+    monkeypatch.setattr("utils.metrics.get_project_root", lambda: str(tmp_path))
     return tmp_path
 
 
@@ -49,32 +49,32 @@ class TestMetricsAuth:
     every other authenticated route (see web/app.py's metrics_endpoint
     docstring)."""
 
-    NON_LOOPBACK_HOST = '0.0.0.0'
-    TOKEN = 'a' * 32
+    NON_LOOPBACK_HOST = "0.0.0.0"
+    TOKEN = "a" * 32
 
     def _client(self, curatarr_web_root, bind_host, monkeypatch, token=None):
         if token is not None:
-            monkeypatch.setenv('CURATARR_AUTH_TOKEN', token)
+            monkeypatch.setenv("CURATARR_AUTH_TOKEN", token)
         else:
-            monkeypatch.delenv('CURATARR_AUTH_TOKEN', raising=False)
-        monkeypatch.delenv('CURATARR_TRUSTED_NETWORK', raising=False)
+            monkeypatch.delenv("CURATARR_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("CURATARR_TRUSTED_NETWORK", raising=False)
         app = create_app(project_root=curatarr_web_root, bind_host=bind_host)
         app.testing = True
         return app.test_client()
 
     def test_metrics_401_without_token_on_non_loopback_bind(self, curatarr_web_root, monkeypatch):
         c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
-        resp = c.get('/metrics')
+        resp = c.get("/metrics")
         assert resp.status_code == 401
 
     def test_metrics_200_with_correct_token_on_non_loopback_bind(self, curatarr_web_root, monkeypatch):
         c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
-        resp = c.get('/metrics', headers={'X-Curatarr-Token': self.TOKEN})
+        resp = c.get("/metrics", headers={"X-Curatarr-Token": self.TOKEN})
         assert resp.status_code == 200
 
     def test_metrics_401_with_wrong_token_on_non_loopback_bind(self, curatarr_web_root, monkeypatch):
         c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
-        resp = c.get('/metrics', headers={'X-Curatarr-Token': 'wrong' * 8})
+        resp = c.get("/metrics", headers={"X-Curatarr-Token": "wrong" * 8})
         assert resp.status_code == 401
 
     def test_metrics_not_in_the_unauthenticated_exemption_list(self):
@@ -82,27 +82,29 @@ class TestMetricsAuth:
         /healthz are the only two routes ever meant to skip the token
         guard (see web/security.py's _TOKEN_EXEMPT_PATHS docstring)."""
         from web.security import _TOKEN_EXEMPT_PATHS
-        assert '/metrics' not in _TOKEN_EXEMPT_PATHS
+
+        assert "/metrics" not in _TOKEN_EXEMPT_PATHS
 
     def test_metrics_reachable_on_loopback_bind_with_no_token(self, curatarr_web_root, monkeypatch):
         """Byte-for-byte unchanged native-install behavior, same as
         every other route - loopback bind never requires a token."""
-        c = self._client(curatarr_web_root, '127.0.0.1', monkeypatch, token=None)
-        resp = c.get('/metrics')
+        c = self._client(curatarr_web_root, "127.0.0.1", monkeypatch, token=None)
+        resp = c.get("/metrics")
         assert resp.status_code == 200
 
 
 class TestMetricsContent:
     def test_returns_prometheus_text_content_type(self, client):
         c, app, root = client
-        resp = c.get('/metrics')
+        resp = c.get("/metrics")
         assert resp.status_code == 200
-        assert 'text/plain' in resp.content_type
+        assert "text/plain" in resp.content_type
 
     def test_includes_build_info_with_current_version(self, client):
         from utils import __version__
+
         c, app, root = client
-        resp = c.get('/metrics')
+        resp = c.get("/metrics")
         body = resp.get_data(as_text=True)
         assert f'curatarr_build_info{{version="{__version__}"}} 1' in body
 
@@ -115,7 +117,7 @@ class TestMetricsContent:
         every test; this just confirms the response still comes back
         successfully with that guard active)."""
         c, app, root = client
-        resp = c.get('/metrics')
+        resp = c.get("/metrics")
         assert resp.status_code == 200
 
     def test_metric_values_change_after_a_simulated_run(self, client):
@@ -132,23 +134,23 @@ class TestMetricsContent:
         never caches in-process state across scrapes."""
         c, app, root = client
 
-        before = c.get('/metrics').get_data(as_text=True)
+        before = c.get("/metrics").get_data(as_text=True)
         assert 'curatarr_recommender_runs_total{engine="movie",outcome="success"}' not in before
 
-        metrics.record_recommender_run('movie', 'success', 42.0)
+        metrics.record_recommender_run("movie", "success", 42.0)
 
-        after = c.get('/metrics').get_data(as_text=True)
+        after = c.get("/metrics").get_data(as_text=True)
         assert 'curatarr_recommender_runs_total{engine="movie",outcome="success"} 1.0' in after
         assert 'curatarr_recommender_run_duration_seconds_sum{engine="movie",outcome="success"} 42.0' in after
 
     def test_metric_values_increment_further_after_a_second_run(self, client):
         c, app, root = client
-        metrics.record_recommender_run('tv', 'success', 3.0)
-        first = c.get('/metrics').get_data(as_text=True)
+        metrics.record_recommender_run("tv", "success", 3.0)
+        first = c.get("/metrics").get_data(as_text=True)
         assert 'curatarr_recommender_runs_total{engine="tv",outcome="success"} 1.0' in first
 
-        metrics.record_recommender_run('tv', 'success', 4.0)
-        second = c.get('/metrics').get_data(as_text=True)
+        metrics.record_recommender_run("tv", "success", 4.0)
+        second = c.get("/metrics").get_data(as_text=True)
         assert 'curatarr_recommender_runs_total{engine="tv",outcome="success"} 2.0' in second
 
 
@@ -156,58 +158,58 @@ class TestStatusJsonAuth:
     """GET /status.json - authenticated readiness detail, same gate as
     /metrics above (not in _TOKEN_EXEMPT_PATHS)."""
 
-    NON_LOOPBACK_HOST = '0.0.0.0'
-    TOKEN = 'b' * 32
+    NON_LOOPBACK_HOST = "0.0.0.0"
+    TOKEN = "b" * 32
 
     def _client(self, curatarr_web_root, bind_host, monkeypatch, token=None):
         if token is not None:
-            monkeypatch.setenv('CURATARR_AUTH_TOKEN', token)
+            monkeypatch.setenv("CURATARR_AUTH_TOKEN", token)
         else:
-            monkeypatch.delenv('CURATARR_AUTH_TOKEN', raising=False)
-        monkeypatch.delenv('CURATARR_TRUSTED_NETWORK', raising=False)
+            monkeypatch.delenv("CURATARR_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("CURATARR_TRUSTED_NETWORK", raising=False)
         app = create_app(project_root=curatarr_web_root, bind_host=bind_host)
         app.testing = True
         return app.test_client()
 
     def test_401_without_token_on_non_loopback_bind(self, curatarr_web_root, monkeypatch):
         c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
-        resp = c.get('/status.json')
+        resp = c.get("/status.json")
         assert resp.status_code == 401
 
     def test_200_with_correct_token_on_non_loopback_bind(self, curatarr_web_root, monkeypatch):
         c = self._client(curatarr_web_root, self.NON_LOOPBACK_HOST, monkeypatch, token=self.TOKEN)
-        resp = c.get('/status.json', headers={'X-Curatarr-Token': self.TOKEN})
+        resp = c.get("/status.json", headers={"X-Curatarr-Token": self.TOKEN})
         assert resp.status_code == 200
 
 
 class TestStatusJsonContent:
     def test_shape_on_a_fresh_install(self, client):
         c, app, root = client
-        resp = c.get('/status.json')
+        resp = c.get("/status.json")
         assert resp.status_code == 200
         payload = resp.get_json()
-        assert payload['config_valid'] is True
-        assert payload['job_running'] is False
-        assert payload['last_run'] is None
-        assert 'version' in payload
+        assert payload["config_valid"] is True
+        assert payload["job_running"] is False
+        assert payload["last_run"] is None
+        assert "version" in payload
 
     def test_reflects_last_run_after_a_log_exists(self, client):
         c, app, root = client
-        log_path = os.path.join(root, 'logs', 'recommendations_alice_20260101_030000.log')
-        with open(log_path, 'w') as f:
-            f.write('Processing alice\nDone\n')
-        resp = c.get('/status.json')
+        log_path = os.path.join(root, "logs", "recommendations_alice_20260101_030000.log")
+        with open(log_path, "w") as f:
+            f.write("Processing alice\nDone\n")
+        resp = c.get("/status.json")
         payload = resp.get_json()
-        assert payload['last_run']['status'] == 'success'
-        assert payload['last_run']['timestamp'] is not None
+        assert payload["last_run"]["status"] == "success"
+        assert payload["last_run"]["timestamp"] is not None
 
     def test_config_invalid_when_config_missing(self, tmp_path):
-        (tmp_path / 'logs').mkdir()
-        (tmp_path / 'recommendations' / 'external').mkdir(parents=True)
+        (tmp_path / "logs").mkdir()
+        (tmp_path / "recommendations" / "external").mkdir(parents=True)
         app = create_app(project_root=str(tmp_path))
         app.testing = True
-        resp = app.test_client().get('/status.json')
-        assert resp.get_json()['config_valid'] is False
+        resp = app.test_client().get("/status.json")
+        assert resp.get_json()["config_valid"] is False
 
     def test_does_not_leak_library_or_hostname_details(self, client):
         """Narrower than /metrics on purpose - only version/config-valid/
@@ -216,10 +218,10 @@ class TestStatusJsonContent:
         appear in the response body if this endpoint were ever widened
         to include raw config)."""
         c, app, root = client
-        resp = c.get('/status.json')
+        resp = c.get("/status.json")
         body = resp.get_data(as_text=True)
-        assert 'not-a-real-radarr-key' not in body
-        assert 'localhost:7878' not in body
+        assert "not-a-real-radarr-key" not in body
+        assert "localhost:7878" not in body
 
 
 class TestHealthzUnchanged:
@@ -230,27 +232,27 @@ class TestHealthzUnchanged:
 
     def test_exact_response_shape_is_version_only(self, client):
         c, app, root = client
-        resp = c.get('/healthz')
+        resp = c.get("/healthz")
         assert resp.status_code == 200
         payload = resp.get_json()
-        assert set(payload.keys()) == {'version'}
+        assert set(payload.keys()) == {"version"}
 
     def test_reachable_without_any_auth_even_non_loopback(self, curatarr_web_root, monkeypatch):
-        monkeypatch.setenv('CURATARR_AUTH_TOKEN', 'c' * 32)
-        monkeypatch.delenv('CURATARR_TRUSTED_NETWORK', raising=False)
-        app = create_app(project_root=curatarr_web_root, bind_host='0.0.0.0')
+        monkeypatch.setenv("CURATARR_AUTH_TOKEN", "c" * 32)
+        monkeypatch.delenv("CURATARR_TRUSTED_NETWORK", raising=False)
+        app = create_app(project_root=curatarr_web_root, bind_host="0.0.0.0")
         app.testing = True
-        resp = app.test_client().get('/healthz')
+        resp = app.test_client().get("/healthz")
         assert resp.status_code == 200
-        assert set(resp.get_json().keys()) == {'version'}
+        assert set(resp.get_json().keys()) == {"version"}
 
     def test_does_not_leak_config_details(self, client):
         c, app, root = client
-        resp = c.get('/healthz')
+        resp = c.get("/healthz")
         body = resp.get_data(as_text=True)
-        assert 'not-a-real-radarr-key' not in body
-        assert 'alice' not in body
-        assert 'Movies' not in body
+        assert "not-a-real-radarr-key" not in body
+        assert "alice" not in body
+        assert "Movies" not in body
 
 
 class TestUnhandledErrorMetric:
@@ -261,22 +263,22 @@ class TestUnhandledErrorMetric:
 
     def test_deliberate_404_is_not_recorded_as_an_unhandled_error(self, client):
         c, app, root = client
-        before = c.get('/metrics').get_data(as_text=True)
-        resp = c.get('/run/stream')  # 404 by design - no job started yet
+        before = c.get("/metrics").get_data(as_text=True)
+        resp = c.get("/run/stream")  # 404 by design - no job started yet
         assert resp.status_code == 404
-        after = c.get('/metrics').get_data(as_text=True)
-        assert before.count('curatarr_unhandled_errors_total') == after.count('curatarr_unhandled_errors_total')
+        after = c.get("/metrics").get_data(as_text=True)
+        assert before.count("curatarr_unhandled_errors_total") == after.count("curatarr_unhandled_errors_total")
         assert 'curatarr_unhandled_errors_total{component="web"}' not in after
 
     def test_genuine_unhandled_exception_is_recorded(self, client, monkeypatch):
         c, app, root = client
 
-        @app.get('/__boom')
+        @app.get("/__boom")
         def _boom():
             raise RuntimeError("simulated unhandled error")
 
         with pytest.raises(RuntimeError):
-            c.get('/__boom')
+            c.get("/__boom")
 
-        text = c.get('/metrics').get_data(as_text=True)
+        text = c.get("/metrics").get_data(as_text=True)
         assert 'curatarr_unhandled_errors_total{component="web"} 1.0' in text

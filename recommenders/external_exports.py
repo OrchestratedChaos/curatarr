@@ -7,22 +7,39 @@ import json
 import logging
 import os
 import sys
+from typing import Any, Dict, List, Optional
+
 import requests
-from typing import Dict, List, Optional, Any
 
 from utils import (
-    CYAN, GREEN, RESET,
-    print_status, log_warning, log_error, clickable_link,
-    get_authenticated_trakt_client, TraktAPIError, TraktAuthError,
-    create_sonarr_client, create_sonarr_client_from, SonarrAPIError,
-    create_radarr_client, create_radarr_client_from, RadarrAPIError,
-    create_mdblist_client, MDBListAPIError,
-    create_simkl_client, SimklAPIError, SimklAuthError,
-    MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV,
-    get_libraries_for_media_type, get_effective_arr_config,
+    CYAN,
+    GREEN,
+    MEDIA_TYPE_MOVIE,
+    MEDIA_TYPE_TV,
+    RESET,
+    MDBListAPIError,
+    RadarrAPIError,
+    SimklAPIError,
+    SimklAuthError,
+    SonarrAPIError,
+    TraktAPIError,
+    TraktAuthError,
+    clickable_link,
+    create_mdblist_client,
+    create_radarr_client,
+    create_radarr_client_from,
+    create_simkl_client,
+    create_sonarr_client,
+    create_sonarr_client_from,
+    get_authenticated_trakt_client,
+    get_effective_arr_config,
+    get_libraries_for_media_type,
+    log_error,
+    log_warning,
+    print_status,
 )
 
-logger = logging.getLogger('curatarr')
+logger = logging.getLogger("curatarr")
 
 # Batch size for Trakt sync operations
 TRAKT_BATCH_SIZE = 100
@@ -48,26 +65,21 @@ def flatten_categorized(categorized: Dict) -> List[Dict]:
     return items
 
 
-def get_imdb_id(tmdb_api_key: str, tmdb_id: int, media_type: str = 'movie') -> Optional[str]:
+def get_imdb_id(tmdb_api_key: str, tmdb_id: int, media_type: str = "movie") -> Optional[str]:
     """Fetch IMDB ID from TMDB external IDs endpoint."""
     try:
-        media = 'movie' if media_type == 'movie' else 'tv'
+        media = "movie" if media_type == "movie" else "tv"
         url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}/external_ids"
-        response = requests.get(url, params={'api_key': tmdb_api_key}, timeout=10)
+        response = requests.get(url, params={"api_key": tmdb_api_key}, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            return data.get('imdb_id')
+            return data.get("imdb_id")
     except (requests.RequestException, KeyError) as e:
         logger.debug(f"Error fetching IMDB ID for TMDB {tmdb_id}: {e}")
     return None
 
 
-def _sync_items_in_batches(
-    items: List[Dict],
-    trakt_client: Any,
-    media_type: str,
-    result_key: str
-) -> int:
+def _sync_items_in_batches(items: List[Dict], trakt_client: Any, media_type: str, result_key: str) -> int:
     """
     Sync items to Trakt in batches with progress display.
 
@@ -85,28 +97,25 @@ def _sync_items_in_batches(
 
     total_added = 0
     for i in range(0, len(items), TRAKT_BATCH_SIZE):
-        batch = items[i:i + TRAKT_BATCH_SIZE]
+        batch = items[i : i + TRAKT_BATCH_SIZE]
         batch_num = (i // TRAKT_BATCH_SIZE) + 1
         total_batches = (len(items) + TRAKT_BATCH_SIZE - 1) // TRAKT_BATCH_SIZE
         sys.stdout.write(f"\r  Syncing {media_type}: batch {batch_num}/{total_batches}")
         sys.stdout.flush()
 
-        if media_type == 'movies':
+        if media_type == "movies":
             result = trakt_client.add_to_history(movies=batch)
         else:
             result = trakt_client.add_to_history(shows=batch)
 
-        total_added += result.get('added', {}).get(result_key, 0)
+        total_added += result.get("added", {}).get(result_key, 0)
 
     print()  # newline after progress
     return total_added
 
 
 def collect_imdb_ids(
-    categorized: Dict,
-    tmdb_api_key: str,
-    media_type: str = 'movie',
-    flatten_func: callable = None
+    categorized: Dict, tmdb_api_key: str, media_type: str = "movie", flatten_func: callable = None
 ) -> List[str]:
     """
     Collect IMDB IDs from categorized items.
@@ -123,17 +132,17 @@ def collect_imdb_ids(
     if flatten_func is None:
         # Inline fallback if no flatten function provided
         items = []
-        for service_items in categorized.get('user_services', {}).values():
+        for service_items in categorized.get("user_services", {}).values():
             items.extend(service_items)
-        for service_items in categorized.get('other_services', {}).values():
+        for service_items in categorized.get("other_services", {}).values():
             items.extend(service_items)
-        items.extend(categorized.get('acquire', []))
+        items.extend(categorized.get("acquire", []))
     else:
         items = flatten_func(categorized)
 
     imdb_ids = []
     for item in items:
-        tmdb_id = item.get('tmdb_id')
+        tmdb_id = item.get("tmdb_id")
         if tmdb_id:
             imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, media_type)
             if imdb_id:
@@ -157,16 +166,16 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
             - combined: All users combined into one list
         trakt.export.plex_users: List of Plex usernames to export (for mapping mode)
     """
-    trakt_config = config.get('trakt', {})
-    export_config = trakt_config.get('export', {})
+    trakt_config = config.get("trakt", {})
+    export_config = trakt_config.get("export", {})
 
     # Check if export is enabled
-    if not trakt_config.get('enabled', False):
+    if not trakt_config.get("enabled", False):
         return
-    if not export_config.get('enabled', True):
+    if not export_config.get("enabled", True):
         return
     # Check if auto_sync is enabled (can still manually export via HTML)
-    if not export_config.get('auto_sync', True):
+    if not export_config.get("auto_sync", True):
         return
 
     # Get authenticated Trakt client
@@ -175,20 +184,20 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         log_warning("Trakt not authenticated - run setup wizard to authenticate")
         return
 
-    list_prefix = export_config.get('list_prefix', 'Curatarr')
+    list_prefix = export_config.get("list_prefix", "Curatarr")
     trakt_username = trakt_client.get_username()
-    user_mode = export_config.get('user_mode', 'mapping')
-    plex_users = export_config.get('plex_users', [])
+    user_mode = export_config.get("user_mode", "mapping")
+    plex_users = export_config.get("plex_users", [])
 
     # Safety check: mapping mode requires explicit plex_users configuration
-    if user_mode == 'mapping':
+    if user_mode == "mapping":
         # Reject empty list, placeholder, or unconfigured
-        invalid_configs = [[], ['YourPlexUsername'], None]
+        invalid_configs = [[], ["YourPlexUsername"], None]
         if plex_users in invalid_configs or not plex_users:
             log_warning(
                 "Trakt export: No plex_users configured.\n"
                 "  Edit config.yml -> trakt.export.plex_users and add YOUR Plex username.\n"
-                "  Example: plex_users: [\"jason\"]\n"
+                '  Example: plex_users: ["jason"]\n'
                 "  This prevents accidentally syncing other users' data to YOUR Trakt account."
             )
             return
@@ -196,13 +205,10 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
     print(f"\n{CYAN}Exporting to Trakt...{RESET}")
 
     # Filter users based on mode
-    if user_mode == 'mapping':
+    if user_mode == "mapping":
         # Only export users in the plex_users list (case-insensitive)
         plex_users_lower = [u.lower() for u in plex_users]
-        users_to_export = [
-            u for u in all_users_data
-            if u['username'].lower() in plex_users_lower
-        ]
+        users_to_export = [u for u in all_users_data if u["username"].lower() in plex_users_lower]
         if not users_to_export:
             log_warning(
                 f"Trakt export: No matching users found. Configured plex_users: {plex_users}\n"
@@ -213,16 +219,12 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         users_to_export = all_users_data
 
     # Handle combined mode - merge all users into one list
-    if user_mode == 'combined':
+    if user_mode == "combined":
         all_movie_imdb_ids = []
         all_show_imdb_ids = []
         for user_data in users_to_export:
-            all_movie_imdb_ids.extend(
-                collect_imdb_ids(user_data['movies_categorized'], tmdb_api_key, 'movie')
-            )
-            all_show_imdb_ids.extend(
-                collect_imdb_ids(user_data['shows_categorized'], tmdb_api_key, 'tv')
-            )
+            all_movie_imdb_ids.extend(collect_imdb_ids(user_data["movies_categorized"], tmdb_api_key, "movie"))
+            all_show_imdb_ids.extend(collect_imdb_ids(user_data["shows_categorized"], tmdb_api_key, "tv"))
         # Deduplicate
         all_movie_imdb_ids = list(dict.fromkeys(all_movie_imdb_ids))
         all_show_imdb_ids = list(dict.fromkeys(all_show_imdb_ids))
@@ -233,7 +235,7 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
                 trakt_client.sync_list(
                     movie_list_name,
                     movies=all_movie_imdb_ids,
-                    description="Combined movie recommendations from Curatarr"
+                    description="Combined movie recommendations from Curatarr",
                 )
                 movie_slug = movie_list_name.lower().replace(" ", "-").replace("_", "-")
                 movie_url = f"https://trakt.tv/users/{trakt_username}/lists/{movie_slug}"
@@ -243,9 +245,7 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
             if all_show_imdb_ids:
                 show_list_name = f"{list_prefix} - TV"
                 trakt_client.sync_list(
-                    show_list_name,
-                    shows=all_show_imdb_ids,
-                    description="Combined TV recommendations from Curatarr"
+                    show_list_name, shows=all_show_imdb_ids, description="Combined TV recommendations from Curatarr"
                 )
                 show_slug = show_list_name.lower().replace(" ", "-").replace("_", "-")
                 show_url = f"https://trakt.tv/users/{trakt_username}/lists/{show_slug}"
@@ -258,13 +258,13 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
 
     # Per-user or mapping mode - separate list per user
     for user_data in users_to_export:
-        display_name = user_data['display_name']
-        movies_categorized = user_data['movies_categorized']
-        shows_categorized = user_data['shows_categorized']
+        display_name = user_data["display_name"]
+        movies_categorized = user_data["movies_categorized"]
+        shows_categorized = user_data["shows_categorized"]
 
         # Collect IMDB IDs using helper
-        movie_imdb_ids = collect_imdb_ids(movies_categorized, tmdb_api_key, 'movie')
-        show_imdb_ids = collect_imdb_ids(shows_categorized, tmdb_api_key, 'tv')
+        movie_imdb_ids = collect_imdb_ids(movies_categorized, tmdb_api_key, "movie")
+        show_imdb_ids = collect_imdb_ids(shows_categorized, tmdb_api_key, "tv")
 
         # Sync to Trakt lists
         try:
@@ -273,7 +273,7 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
                 trakt_client.sync_list(
                     movie_list_name,
                     movies=movie_imdb_ids,
-                    description=f"Movie recommendations for {display_name} from Curatarr"
+                    description=f"Movie recommendations for {display_name} from Curatarr",
                 )
                 movie_slug = movie_list_name.lower().replace(" ", "-").replace("_", "-")
                 movie_url = f"https://trakt.tv/users/{trakt_username}/lists/{movie_slug}"
@@ -285,7 +285,7 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
                 trakt_client.sync_list(
                     show_list_name,
                     shows=show_imdb_ids,
-                    description=f"TV recommendations for {display_name} from Curatarr"
+                    description=f"TV recommendations for {display_name} from Curatarr",
                 )
                 show_slug = show_list_name.lower().replace(" ", "-").replace("_", "-")
                 show_url = f"https://trakt.tv/users/{trakt_username}/lists/{show_slug}"
@@ -296,9 +296,7 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
             log_error(f"Failed to export {display_name} to Trakt: {e}")
 
 
-def _resolve_library_groups(
-    config: Dict, users_to_export: List[Dict], media_type: str
-) -> List[Any]:
+def _resolve_library_groups(config: Dict, users_to_export: List[Dict], media_type: str) -> List[Any]:
     """
     Group users_to_export by library_id and resolve each group's library.
 
@@ -327,7 +325,7 @@ def _resolve_library_groups(
     """
     groups: Dict[Optional[str], List[Dict]] = {}
     for user_data in users_to_export:
-        groups.setdefault(user_data.get('library_id'), []).append(user_data)
+        groups.setdefault(user_data.get("library_id"), []).append(user_data)
 
     resolved = []
     for library_id, group_users in groups.items():
@@ -341,10 +339,7 @@ def _resolve_library_groups(
                 continue
             library = candidates[0]
         else:
-            library = next(
-                (lib for lib in candidates if lib.get('id') == library_id),
-                None
-            )
+            library = next((lib for lib in candidates if lib.get("id") == library_id), None)
             if library is None:
                 log_warning(
                     f"Export: library_id '{library_id}' not found in config - "
@@ -373,12 +368,12 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         sonarr.plex_users: List of Plex usernames to export (for mapping mode)
     """
     logger.debug("export_to_sonarr called")
-    sonarr_config = config.get('sonarr', {})
+    sonarr_config = config.get("sonarr", {})
 
     # Check if Sonarr is enabled and auto_sync is on
-    if not sonarr_config.get('enabled', False):
+    if not sonarr_config.get("enabled", False):
         return
-    if not sonarr_config.get('auto_sync', False):
+    if not sonarr_config.get("auto_sync", False):
         return
 
     # Create Sonarr client
@@ -397,28 +392,25 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         log_error(f"Could not connect to Sonarr: {e}")
         return
 
-    user_mode = sonarr_config.get('user_mode', 'mapping')
-    plex_users = sonarr_config.get('plex_users', [])
+    user_mode = sonarr_config.get("user_mode", "mapping")
+    plex_users = sonarr_config.get("plex_users", [])
 
     # Safety check: mapping mode requires explicit plex_users configuration
-    if user_mode == 'mapping':
-        invalid_configs = [[], ['YourPlexUsername'], None]
+    if user_mode == "mapping":
+        invalid_configs = [[], ["YourPlexUsername"], None]
         if plex_users in invalid_configs or not plex_users:
             log_warning(
                 "Sonarr export: No plex_users configured.\n"
                 "  Edit sonarr.yml -> plex_users and add YOUR Plex username.\n"
-                "  Example: plex_users: [\"jason\"]\n"
+                '  Example: plex_users: ["jason"]\n'
                 "  This prevents accidentally adding other users' recommendations."
             )
             return
 
     # Filter users based on mode
-    if user_mode == 'mapping':
+    if user_mode == "mapping":
         plex_users_lower = [u.lower() for u in plex_users]
-        users_to_export = [
-            u for u in all_users_data
-            if u['username'].lower() in plex_users_lower
-        ]
+        users_to_export = [u for u in all_users_data if u["username"].lower() in plex_users_lower]
         if not users_to_export:
             log_warning(
                 f"Sonarr export: No matching users found. Configured plex_users: {plex_users}\n"
@@ -431,8 +423,8 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
     # Sonarr settings not yet part of the per-library arr schema (Phase 1
     # doesn't cover these - see utils/config.py _ARR_ROUTING_FIELDS); stay
     # global for all libraries until a future phase adds them.
-    append_usernames = sonarr_config.get('append_usernames', False)
-    season_folder = sonarr_config.get('season_folder', True)
+    append_usernames = sonarr_config.get("append_usernames", False)
+    season_folder = sonarr_config.get("season_folder", True)
 
     # Per-library routing (#157 Phase 2): group users by library_id,
     # resolve each group's effective Sonarr instance/routing, and process
@@ -441,26 +433,23 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
 
     for library, group_users in library_groups:
         eff = get_effective_arr_config(config, library)
-        arr_client = create_sonarr_client_from(eff.get('url'), eff.get('api_key'))
+        arr_client = create_sonarr_client_from(eff.get("url"), eff.get("api_key"))
         if not arr_client:
-            log_warning(
-                f"Sonarr export: library '{library['name']}' has no Sonarr instance "
-                "configured - skipping"
-            )
+            log_warning(f"Sonarr export: library '{library['name']}' has no Sonarr instance configured - skipping")
             continue
 
         # Get Sonarr settings for this library
-        root_folder = eff.get('root_folder') or '/tv'
-        quality_profile_name = eff.get('quality_profile') or 'HD-1080p'
-        tag_name = eff.get('tag') or 'Curatarr'
-        monitored = eff.get('monitor', False)
-        search_for_series = eff.get('search', False)
-        series_type = eff.get('series_type') or 'standard'
+        root_folder = eff.get("root_folder") or "/tv"
+        quality_profile_name = eff.get("quality_profile") or "HD-1080p"
+        tag_name = eff.get("tag") or "Curatarr"
+        monitored = eff.get("monitor", False)
+        search_for_series = eff.get("search", False)
+        series_type = eff.get("series_type") or "standard"
 
         # Get quality profile ID
         quality_profile_id = arr_client.get_quality_profile_id(quality_profile_name)
         if not quality_profile_id:
-            available = [p['name'] for p in arr_client.get_quality_profiles()]
+            available = [p["name"] for p in arr_client.get_quality_profiles()]
             log_error(
                 f"Quality profile '{quality_profile_name}' not found for library "
                 f"'{library['name']}'. Available: {available}"
@@ -470,20 +459,17 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         # Validate root folder
         valid_root = arr_client.get_root_folder_path(root_folder)
         if not valid_root:
-            available = [f['path'] for f in arr_client.get_root_folders()]
-            log_error(
-                f"Root folder '{root_folder}' not found for library "
-                f"'{library['name']}'. Available: {available}"
-            )
+            available = [f["path"] for f in arr_client.get_root_folders()]
+            log_error(f"Root folder '{root_folder}' not found for library '{library['name']}'. Available: {available}")
             continue
 
         # Collect all shows to add (handle combined mode)
-        if user_mode == 'combined':
+        if user_mode == "combined":
             all_show_tvdb_ids = []
             for user_data in group_users:
                 # Collect TVDB IDs (flatten nested structure)
-                for show in flatten_categorized(user_data['shows_categorized']):
-                    tvdb_id = show.get('tvdb_id')
+                for show in flatten_categorized(user_data["shows_categorized"]):
+                    tvdb_id = show.get("tvdb_id")
                     if tvdb_id:
                         all_show_tvdb_ids.append(tvdb_id)
             # Deduplicate
@@ -517,14 +503,14 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                 try:
                     arr_client.add_series(
                         tvdb_id=tvdb_id,
-                        title=series_data['title'],
+                        title=series_data["title"],
                         root_folder_path=valid_root,
                         quality_profile_id=quality_profile_id,
                         monitored=monitored,
                         season_folder=season_folder,
                         series_type=series_type,
                         tag_ids=[tag_id],
-                        search_for_missing_episodes=search_for_series
+                        search_for_missing_episodes=search_for_series,
                     )
                     added += 1
                     print(f"  {GREEN}Added: {series_data['title']}{RESET}")
@@ -537,13 +523,13 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
 
         # Per-user or mapping mode
         for user_data in group_users:
-            display_name = user_data['display_name']
-            shows_categorized = user_data['shows_categorized']
+            display_name = user_data["display_name"]
+            shows_categorized = user_data["shows_categorized"]
 
             # Collect TVDB IDs for shows (flatten nested structure)
             show_tvdb_ids = []
             for show in flatten_categorized(shows_categorized):
-                tvdb_id = show.get('tvdb_id')
+                tvdb_id = show.get("tvdb_id")
                 if tvdb_id:
                     show_tvdb_ids.append(tvdb_id)
             # Deduplicate
@@ -578,14 +564,14 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                 try:
                     arr_client.add_series(
                         tvdb_id=tvdb_id,
-                        title=series_data['title'],
+                        title=series_data["title"],
                         root_folder_path=valid_root,
                         quality_profile_id=quality_profile_id,
                         monitored=monitored,
                         season_folder=season_folder,
                         series_type=series_type,
                         tag_ids=[tag_id],
-                        search_for_missing_episodes=search_for_series
+                        search_for_missing_episodes=search_for_series,
                     )
                     added += 1
                     print(f"    {GREEN}Added: {series_data['title']}{RESET}")
@@ -612,12 +598,12 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         radarr.plex_users: List of Plex usernames to export (for mapping mode)
     """
     logger.debug("export_to_radarr called")
-    radarr_config = config.get('radarr', {})
+    radarr_config = config.get("radarr", {})
 
     # Check if Radarr is enabled and auto_sync is on
-    if not radarr_config.get('enabled', False):
+    if not radarr_config.get("enabled", False):
         return
-    if not radarr_config.get('auto_sync', False):
+    if not radarr_config.get("auto_sync", False):
         return
 
     # Create Radarr client
@@ -636,28 +622,25 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         log_error(f"Could not connect to Radarr: {e}")
         return
 
-    user_mode = radarr_config.get('user_mode', 'mapping')
-    plex_users = radarr_config.get('plex_users', [])
+    user_mode = radarr_config.get("user_mode", "mapping")
+    plex_users = radarr_config.get("plex_users", [])
 
     # Safety check: mapping mode requires explicit plex_users configuration
-    if user_mode == 'mapping':
-        invalid_configs = [[], ['YourPlexUsername'], None]
+    if user_mode == "mapping":
+        invalid_configs = [[], ["YourPlexUsername"], None]
         if plex_users in invalid_configs or not plex_users:
             log_warning(
                 "Radarr export: No plex_users configured.\n"
                 "  Edit radarr.yml -> plex_users and add YOUR Plex username.\n"
-                "  Example: plex_users: [\"jason\"]\n"
+                '  Example: plex_users: ["jason"]\n'
                 "  This prevents accidentally adding other users' recommendations."
             )
             return
 
     # Filter users based on mode
-    if user_mode == 'mapping':
+    if user_mode == "mapping":
         plex_users_lower = [u.lower() for u in plex_users]
-        users_to_export = [
-            u for u in all_users_data
-            if u['username'].lower() in plex_users_lower
-        ]
+        users_to_export = [u for u in all_users_data if u["username"].lower() in plex_users_lower]
         if not users_to_export:
             log_warning(
                 f"Radarr export: No matching users found. Configured plex_users: {plex_users}\n"
@@ -670,7 +653,7 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
     # Radarr settings not yet part of the per-library arr schema (Phase 1
     # doesn't cover these - see utils/config.py _ARR_ROUTING_FIELDS); stay
     # global for all libraries until a future phase adds them.
-    append_usernames = radarr_config.get('append_usernames', False)
+    append_usernames = radarr_config.get("append_usernames", False)
 
     # Per-library routing (#157 Phase 2): group users by library_id,
     # resolve each group's effective Radarr instance/routing, and process
@@ -679,26 +662,23 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
 
     for library, group_users in library_groups:
         eff = get_effective_arr_config(config, library)
-        arr_client = create_radarr_client_from(eff.get('url'), eff.get('api_key'))
+        arr_client = create_radarr_client_from(eff.get("url"), eff.get("api_key"))
         if not arr_client:
-            log_warning(
-                f"Radarr export: library '{library['name']}' has no Radarr instance "
-                "configured - skipping"
-            )
+            log_warning(f"Radarr export: library '{library['name']}' has no Radarr instance configured - skipping")
             continue
 
         # Get Radarr settings for this library
-        root_folder = eff.get('root_folder') or '/movies'
-        quality_profile_name = eff.get('quality_profile') or 'HD-1080p'
-        minimum_availability = eff.get('minimum_availability') or 'released'
-        tag_name = eff.get('tag') or 'Curatarr'
-        monitored = eff.get('monitor', False)
-        search_for_movie = eff.get('search', False)
+        root_folder = eff.get("root_folder") or "/movies"
+        quality_profile_name = eff.get("quality_profile") or "HD-1080p"
+        minimum_availability = eff.get("minimum_availability") or "released"
+        tag_name = eff.get("tag") or "Curatarr"
+        monitored = eff.get("monitor", False)
+        search_for_movie = eff.get("search", False)
 
         # Get quality profile ID
         quality_profile_id = arr_client.get_quality_profile_id(quality_profile_name)
         if not quality_profile_id:
-            available = [p['name'] for p in arr_client.get_quality_profiles()]
+            available = [p["name"] for p in arr_client.get_quality_profiles()]
             log_error(
                 f"Quality profile '{quality_profile_name}' not found for library "
                 f"'{library['name']}'. Available: {available}"
@@ -708,20 +688,17 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
         # Validate root folder
         valid_root = arr_client.get_root_folder_path(root_folder)
         if not valid_root:
-            available = [f['path'] for f in arr_client.get_root_folders()]
-            log_error(
-                f"Root folder '{root_folder}' not found for library "
-                f"'{library['name']}'. Available: {available}"
-            )
+            available = [f["path"] for f in arr_client.get_root_folders()]
+            log_error(f"Root folder '{root_folder}' not found for library '{library['name']}'. Available: {available}")
             continue
 
         # Collect all movies to add (handle combined mode)
-        if user_mode == 'combined':
+        if user_mode == "combined":
             all_movie_tmdb_ids = []
             for user_data in group_users:
                 # Collect TMDB IDs (flatten nested structure)
-                for movie in flatten_categorized(user_data['movies_categorized']):
-                    tmdb_id = movie.get('tmdb_id')
+                for movie in flatten_categorized(user_data["movies_categorized"]):
+                    tmdb_id = movie.get("tmdb_id")
                     if tmdb_id:
                         all_movie_tmdb_ids.append(tmdb_id)
             # Deduplicate
@@ -755,13 +732,13 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                 try:
                     arr_client.add_movie(
                         tmdb_id=tmdb_id,
-                        title=movie_data['title'],
+                        title=movie_data["title"],
                         root_folder_path=valid_root,
                         quality_profile_id=quality_profile_id,
                         monitored=monitored,
                         minimum_availability=minimum_availability,
                         tag_ids=[tag_id],
-                        search_for_movie=search_for_movie
+                        search_for_movie=search_for_movie,
                     )
                     added += 1
                     print(f"  {GREEN}Added: {movie_data['title']}{RESET}")
@@ -774,13 +751,13 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
 
         # Per-user or mapping mode
         for user_data in group_users:
-            display_name = user_data['display_name']
-            movies_categorized = user_data['movies_categorized']
+            display_name = user_data["display_name"]
+            movies_categorized = user_data["movies_categorized"]
 
             # Collect TMDB IDs for movies (flatten nested structure)
             movie_tmdb_ids = []
             for movie in flatten_categorized(movies_categorized):
-                tmdb_id = movie.get('tmdb_id')
+                tmdb_id = movie.get("tmdb_id")
                 if tmdb_id:
                     movie_tmdb_ids.append(tmdb_id)
             # Deduplicate
@@ -815,13 +792,13 @@ def export_to_radarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                 try:
                     arr_client.add_movie(
                         tmdb_id=tmdb_id,
-                        title=movie_data['title'],
+                        title=movie_data["title"],
                         root_folder_path=valid_root,
                         quality_profile_id=quality_profile_id,
                         monitored=monitored,
                         minimum_availability=minimum_availability,
                         tag_ids=[tag_id],
-                        search_for_movie=search_for_movie
+                        search_for_movie=search_for_movie,
                     )
                     added += 1
                     print(f"    {GREEN}Added: {movie_data['title']}{RESET}")
@@ -850,12 +827,12 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
         mdblist.replace_existing: Clear list before adding (default: true)
     """
     logger.debug("export_to_mdblist called")
-    mdblist_config = config.get('mdblist', {})
+    mdblist_config = config.get("mdblist", {})
 
     # Check if MDBList is enabled and auto_sync is on
-    if not mdblist_config.get('enabled', False):
+    if not mdblist_config.get("enabled", False):
         return
-    if not mdblist_config.get('auto_sync', False):
+    if not mdblist_config.get("auto_sync", False):
         return
 
     # Create MDBList client
@@ -873,30 +850,27 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
         log_error(f"Could not connect to MDBList: {e}")
         return
 
-    user_mode = mdblist_config.get('user_mode', 'mapping')
-    plex_users = mdblist_config.get('plex_users', [])
-    list_prefix = mdblist_config.get('list_prefix', 'Curatarr')
-    replace_existing = mdblist_config.get('replace_existing', True)
+    user_mode = mdblist_config.get("user_mode", "mapping")
+    plex_users = mdblist_config.get("plex_users", [])
+    list_prefix = mdblist_config.get("list_prefix", "Curatarr")
+    replace_existing = mdblist_config.get("replace_existing", True)
 
     # Safety check: mapping mode requires explicit plex_users configuration
-    if user_mode == 'mapping':
-        invalid_configs = [[], ['YourPlexUsername'], None]
+    if user_mode == "mapping":
+        invalid_configs = [[], ["YourPlexUsername"], None]
         if plex_users in invalid_configs or not plex_users:
             log_warning(
                 "MDBList export: No plex_users configured.\n"
                 "  Edit mdblist.yml -> plex_users and add YOUR Plex username.\n"
-                "  Example: plex_users: [\"jason\"]\n"
+                '  Example: plex_users: ["jason"]\n'
                 "  This prevents accidentally exporting other users' recommendations."
             )
             return
 
     # Filter users based on mode
-    if user_mode == 'mapping':
+    if user_mode == "mapping":
         plex_users_lower = [u.lower() for u in plex_users]
-        users_to_export = [
-            u for u in all_users_data
-            if u['username'].lower() in plex_users_lower
-        ]
+        users_to_export = [u for u in all_users_data if u["username"].lower() in plex_users_lower]
         if not users_to_export:
             log_warning(
                 f"MDBList export: No matching users found. Configured plex_users: {plex_users}\n"
@@ -913,21 +887,21 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
             if isinstance(category_items, dict):
                 for items in category_items.values():
                     for item in items:
-                        if item.get('tmdb_id'):
-                            tmdb_ids.append(item['tmdb_id'])
+                        if item.get("tmdb_id"):
+                            tmdb_ids.append(item["tmdb_id"])
             elif isinstance(category_items, list):
                 for item in category_items:
-                    if item.get('tmdb_id'):
-                        tmdb_ids.append(item['tmdb_id'])
+                    if item.get("tmdb_id"):
+                        tmdb_ids.append(item["tmdb_id"])
         return list(dict.fromkeys(tmdb_ids))
 
     # Handle combined mode
-    if user_mode == 'combined':
+    if user_mode == "combined":
         all_movie_tmdb_ids = []
         all_show_tmdb_ids = []
         for user_data in users_to_export:
-            all_movie_tmdb_ids.extend(collect_tmdb_ids(user_data['movies_categorized']))
-            all_show_tmdb_ids.extend(collect_tmdb_ids(user_data['shows_categorized']))
+            all_movie_tmdb_ids.extend(collect_tmdb_ids(user_data["movies_categorized"]))
+            all_show_tmdb_ids.extend(collect_tmdb_ids(user_data["shows_categorized"]))
         # Deduplicate
         all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
         all_show_tmdb_ids = list(dict.fromkeys(all_show_tmdb_ids))
@@ -937,16 +911,16 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
                 movie_list_name = f"{list_prefix} - Movies"
                 movie_list = mdblist_client.get_or_create_list(movie_list_name)
                 if replace_existing:
-                    mdblist_client.clear_list(movie_list['id'])
-                result = mdblist_client.add_items(movie_list['id'], movies=all_movie_tmdb_ids)
+                    mdblist_client.clear_list(movie_list["id"])
+                result = mdblist_client.add_items(movie_list["id"], movies=all_movie_tmdb_ids)
                 print_status(f"  Combined: {result.get('added', 0)} movies -> MDBList", "success")
 
             if all_show_tmdb_ids:
                 show_list_name = f"{list_prefix} - TV"
                 show_list = mdblist_client.get_or_create_list(show_list_name)
                 if replace_existing:
-                    mdblist_client.clear_list(show_list['id'])
-                result = mdblist_client.add_items(show_list['id'], shows=all_show_tmdb_ids)
+                    mdblist_client.clear_list(show_list["id"])
+                result = mdblist_client.add_items(show_list["id"], shows=all_show_tmdb_ids)
                 print_status(f"  Combined: {result.get('added', 0)} shows -> MDBList", "success")
 
         except MDBListAPIError as e:
@@ -955,9 +929,9 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
 
     # Per-user or mapping mode
     for user_data in users_to_export:
-        display_name = user_data['display_name']
-        movies_categorized = user_data['movies_categorized']
-        shows_categorized = user_data['shows_categorized']
+        display_name = user_data["display_name"]
+        movies_categorized = user_data["movies_categorized"]
+        shows_categorized = user_data["shows_categorized"]
 
         movie_tmdb_ids = collect_tmdb_ids(movies_categorized)
         show_tmdb_ids = collect_tmdb_ids(shows_categorized)
@@ -967,16 +941,16 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
                 movie_list_name = f"{list_prefix} - {display_name} - Movies"
                 movie_list = mdblist_client.get_or_create_list(movie_list_name)
                 if replace_existing:
-                    mdblist_client.clear_list(movie_list['id'])
-                result = mdblist_client.add_items(movie_list['id'], movies=movie_tmdb_ids)
+                    mdblist_client.clear_list(movie_list["id"])
+                result = mdblist_client.add_items(movie_list["id"], movies=movie_tmdb_ids)
                 print_status(f"  {display_name}: {result.get('added', 0)} movies -> MDBList", "success")
 
             if show_tmdb_ids:
                 show_list_name = f"{list_prefix} - {display_name} - TV"
                 show_list = mdblist_client.get_or_create_list(show_list_name)
                 if replace_existing:
-                    mdblist_client.clear_list(show_list['id'])
-                result = mdblist_client.add_items(show_list['id'], shows=show_tmdb_ids)
+                    mdblist_client.clear_list(show_list["id"])
+                result = mdblist_client.add_items(show_list["id"], shows=show_tmdb_ids)
                 print_status(f"  {display_name}: {result.get('added', 0)} shows -> MDBList", "success")
 
         except MDBListAPIError as e:
@@ -997,16 +971,16 @@ def export_to_simkl(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         simkl.export.plex_users: List of Plex usernames to export (for mapping mode)
     """
     logger.debug("export_to_simkl called")
-    simkl_config = config.get('simkl', {})
+    simkl_config = config.get("simkl", {})
 
     # Check if Simkl is enabled
-    if not simkl_config.get('enabled', False):
+    if not simkl_config.get("enabled", False):
         return
 
-    export_config = simkl_config.get('export', {})
-    if not export_config.get('enabled', True):
+    export_config = simkl_config.get("export", {})
+    if not export_config.get("enabled", True):
         return
-    if not export_config.get('auto_sync', False):
+    if not export_config.get("auto_sync", False):
         return
 
     # Create Simkl client
@@ -1025,28 +999,25 @@ def export_to_simkl(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         log_error(f"Could not connect to Simkl: {e}")
         return
 
-    user_mode = export_config.get('user_mode', 'mapping')
-    plex_users = export_config.get('plex_users', [])
+    user_mode = export_config.get("user_mode", "mapping")
+    plex_users = export_config.get("plex_users", [])
 
     # Safety check: mapping mode requires explicit plex_users configuration
-    if user_mode == 'mapping':
-        invalid_configs = [[], ['YourPlexUsername'], None]
+    if user_mode == "mapping":
+        invalid_configs = [[], ["YourPlexUsername"], None]
         if plex_users in invalid_configs or not plex_users:
             log_warning(
                 "Simkl export: No plex_users configured.\n"
                 "  Edit simkl.yml -> export -> plex_users and add YOUR Plex username.\n"
-                "  Example: plex_users: [\"jason\"]\n"
+                '  Example: plex_users: ["jason"]\n'
                 "  This prevents accidentally exporting other users' recommendations."
             )
             return
 
     # Filter users based on mode
-    if user_mode == 'mapping':
+    if user_mode == "mapping":
         plex_users_lower = [u.lower() for u in plex_users]
-        users_to_export = [
-            u for u in all_users_data
-            if u['username'].lower() in plex_users_lower
-        ]
+        users_to_export = [u for u in all_users_data if u["username"].lower() in plex_users_lower]
         if not users_to_export:
             log_warning(
                 f"Simkl export: No matching users found. Configured plex_users: {plex_users}\n"
@@ -1064,20 +1035,20 @@ def export_to_simkl(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
             if isinstance(category_items, dict):
                 for items in category_items.values():
                     for item in items:
-                        if item.get('tmdb_id'):
-                            tmdb_ids.append(item['tmdb_id'])
+                        if item.get("tmdb_id"):
+                            tmdb_ids.append(item["tmdb_id"])
             elif isinstance(category_items, list):
                 for item in category_items:
-                    if item.get('tmdb_id'):
-                        tmdb_ids.append(item['tmdb_id'])
+                    if item.get("tmdb_id"):
+                        tmdb_ids.append(item["tmdb_id"])
         return list(dict.fromkeys(tmdb_ids))
 
     # Collect all recommendations
     all_movie_tmdb_ids = []
     all_show_tmdb_ids = []
     for user_data in users_to_export:
-        all_movie_tmdb_ids.extend(collect_tmdb_ids(user_data['movies_categorized']))
-        all_show_tmdb_ids.extend(collect_tmdb_ids(user_data['shows_categorized']))
+        all_movie_tmdb_ids.extend(collect_tmdb_ids(user_data["movies_categorized"]))
+        all_show_tmdb_ids.extend(collect_tmdb_ids(user_data["shows_categorized"]))
 
     # Deduplicate
     all_movie_tmdb_ids = list(dict.fromkeys(all_movie_tmdb_ids))
@@ -1090,12 +1061,12 @@ def export_to_simkl(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         if all_movie_tmdb_ids:
             movies_data = [{"ids": {"tmdb": tmdb_id}} for tmdb_id in all_movie_tmdb_ids]
             result = simkl_client.add_to_watchlist(movies=movies_data)
-            added_movies = result.get('added', {}).get('movies', 0)
+            added_movies = result.get("added", {}).get("movies", 0)
 
         if all_show_tmdb_ids:
             shows_data = [{"ids": {"tmdb": tmdb_id}} for tmdb_id in all_show_tmdb_ids]
             result = simkl_client.add_to_watchlist(shows=shows_data)
-            added_shows = result.get('added', {}).get('shows', 0)
+            added_shows = result.get("added", {}).get("shows", 0)
 
         print_status(f"  Added {added_movies} movies, {added_shows} shows to Simkl watchlist", "success")
 
@@ -1104,10 +1075,7 @@ def export_to_simkl(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
 
 
 def sync_watch_history_to_trakt(
-    config: Dict,
-    tmdb_api_key: str,
-    users: List[str] = None,
-    load_profile_func: callable = None
+    config: Dict, tmdb_api_key: str, users: List[str] = None, load_profile_func: callable = None
 ) -> None:
     """
     Sync Plex watch history to Trakt.
@@ -1124,13 +1092,13 @@ def sync_watch_history_to_trakt(
         users: Optional list of usernames (defaults to config users list)
         load_profile_func: Function to load user profile from cache
     """
-    trakt_config = config.get('trakt', {})
-    export_config = trakt_config.get('export', {})
+    trakt_config = config.get("trakt", {})
+    export_config = trakt_config.get("export", {})
 
     # Check if auto_sync is enabled
-    if not trakt_config.get('enabled', False):
+    if not trakt_config.get("enabled", False):
         return
-    if not export_config.get('auto_sync', False):
+    if not export_config.get("auto_sync", False):
         return
 
     # Get authenticated Trakt client
@@ -1139,12 +1107,12 @@ def sync_watch_history_to_trakt(
         log_warning("Trakt not authenticated - run setup wizard to authenticate")
         return
 
-    user_mode = export_config.get('user_mode', 'mapping')
-    plex_users = export_config.get('plex_users', [])
+    user_mode = export_config.get("user_mode", "mapping")
+    plex_users = export_config.get("plex_users", [])
 
     # Safety check for mapping mode
-    if user_mode == 'mapping':
-        if not plex_users or plex_users in [[], ['YourPlexUsername']]:
+    if user_mode == "mapping":
+        if not plex_users or plex_users in [[], ["YourPlexUsername"]]:
             log_warning(
                 "Trakt sync: No plex_users configured.\n"
                 "  Edit config.yml -> trakt.export.plex_users and add YOUR Plex username."
@@ -1154,16 +1122,16 @@ def sync_watch_history_to_trakt(
     print(f"\n{CYAN}Syncing Plex watch history to Trakt...{RESET}")
 
     # Get existing Trakt watch history to avoid duplicates
-    existing_movie_imdb = trakt_client.get_watch_history_imdb_ids('movies')
-    existing_show_imdb = trakt_client.get_watch_history_imdb_ids('shows')
+    existing_movie_imdb = trakt_client.get_watch_history_imdb_ids("movies")
+    existing_show_imdb = trakt_client.get_watch_history_imdb_ids("shows")
     print(f"  Already on Trakt: {len(existing_movie_imdb)} movies, {len(existing_show_imdb)} shows")
 
     # Get users to sync
     if users is None:
-        users = [u.strip() for u in config['users']['list'].split(',')]
+        users = [u.strip() for u in config["users"]["list"].split(",")]
 
     # Filter users based on mode
-    if user_mode == 'mapping':
+    if user_mode == "mapping":
         plex_users_lower = [u.lower() for u in plex_users]
         users_to_sync = [u for u in users if u.lower() in plex_users_lower]
     else:
@@ -1182,13 +1150,13 @@ def sync_watch_history_to_trakt(
         return
 
     for username in users_to_sync:
-        movie_profile = load_profile_func(config, username, 'movie')
+        movie_profile = load_profile_func(config, username, "movie")
         if movie_profile:
-            all_movie_tmdb_ids.update(movie_profile.get('tmdb_ids', set()))
+            all_movie_tmdb_ids.update(movie_profile.get("tmdb_ids", set()))
 
-        tv_profile = load_profile_func(config, username, 'tv')
+        tv_profile = load_profile_func(config, username, "tv")
         if tv_profile:
-            all_show_tmdb_ids.update(tv_profile.get('tmdb_ids', set()))
+            all_show_tmdb_ids.update(tv_profile.get("tmdb_ids", set()))
 
     if not all_movie_tmdb_ids and not all_show_tmdb_ids:
         print("  No Plex watch history in cache - run internal recommenders first")
@@ -1197,21 +1165,21 @@ def sync_watch_history_to_trakt(
     # Load cache of already-synced TMDB IDs (avoid re-converting every run)
     TRAKT_SYNC_CACHE_VERSION = 1
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cache_dir = os.path.join(project_root, config.get('cache_dir', 'cache'))
-    sync_cache_file = os.path.join(cache_dir, 'trakt_synced_ids.json')
+    cache_dir = os.path.join(project_root, config.get("cache_dir", "cache"))
+    sync_cache_file = os.path.join(cache_dir, "trakt_synced_ids.json")
     synced_movie_tmdb = set()
     synced_show_tmdb = set()
 
     if os.path.exists(sync_cache_file):
         try:
-            with open(sync_cache_file, 'r') as f:
+            with open(sync_cache_file, "r") as f:
                 sync_cache = json.load(f)
                 # Check cache version
-                if sync_cache.get('version', 0) < TRAKT_SYNC_CACHE_VERSION:
+                if sync_cache.get("version", 0) < TRAKT_SYNC_CACHE_VERSION:
                     print("  Trakt sync cache outdated, rebuilding...")
                 else:
-                    synced_movie_tmdb = set(sync_cache.get('movies', []))
-                    synced_show_tmdb = set(sync_cache.get('shows', []))
+                    synced_movie_tmdb = set(sync_cache.get("movies", []))
+                    synced_show_tmdb = set(sync_cache.get("shows", []))
         except Exception as e:
             logger.debug(f"Error loading Trakt sync cache: {e}")
 
@@ -1245,7 +1213,7 @@ def sync_watch_history_to_trakt(
                 pct = int(i / total_movies * 100)
                 sys.stdout.write(f"\r  Converting movie IDs: {i}/{total_movies} ({pct}%)")
                 sys.stdout.flush()
-            imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'movie')
+            imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, "movie")
             if imdb_id:
                 converted_movies.add(tmdb_id)  # Cache ALL converted
                 if imdb_id not in existing_movie_imdb:
@@ -1261,7 +1229,7 @@ def sync_watch_history_to_trakt(
                 pct = int(i / total_shows * 100)
                 sys.stdout.write(f"\r  Converting show IDs: {i}/{total_shows} ({pct}%)")
                 sys.stdout.flush()
-            imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, 'tv')
+            imdb_id = get_imdb_id(tmdb_api_key, tmdb_id, "tv")
             if imdb_id:
                 converted_shows.add(tmdb_id)  # Cache ALL converted
                 if imdb_id not in existing_show_imdb:
@@ -1272,12 +1240,15 @@ def sync_watch_history_to_trakt(
     synced_movie_tmdb.update(converted_movies)
     synced_show_tmdb.update(converted_shows)
     try:
-        with open(sync_cache_file, 'w') as f:
-            json.dump({
-                'version': TRAKT_SYNC_CACHE_VERSION,
-                'movies': list(synced_movie_tmdb),
-                'shows': list(synced_show_tmdb)
-            }, f)
+        with open(sync_cache_file, "w") as f:
+            json.dump(
+                {
+                    "version": TRAKT_SYNC_CACHE_VERSION,
+                    "movies": list(synced_movie_tmdb),
+                    "shows": list(synced_show_tmdb),
+                },
+                f,
+            )
     except Exception as e:
         logger.debug(f"Error saving Trakt sync cache: {e}")
 
@@ -1289,16 +1260,9 @@ def sync_watch_history_to_trakt(
 
     # Sync to Trakt in batches (avoid timeout with large lists)
     try:
-        total_movies_added = _sync_items_in_batches(
-            new_movie_imdb, trakt_client, 'movies', 'movies'
-        )
-        total_shows_added = _sync_items_in_batches(
-            new_show_imdb, trakt_client, 'shows', 'episodes'
-        )
+        total_movies_added = _sync_items_in_batches(new_movie_imdb, trakt_client, "movies", "movies")
+        total_shows_added = _sync_items_in_batches(new_show_imdb, trakt_client, "shows", "episodes")
 
-        print_status(
-            f"  Synced to Trakt: {total_movies_added} movies, {total_shows_added} shows",
-            "success"
-        )
+        print_status(f"  Synced to Trakt: {total_movies_added} movies, {total_shows_added} shows", "success")
     except (TraktAPIError, TraktAuthError) as e:
         log_error(f"Failed to sync watch history to Trakt: {e}")

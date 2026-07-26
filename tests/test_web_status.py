@@ -11,14 +11,17 @@ import pytest
 import web.status as status_mod
 from web.status import (
     TAIL_BYTES,
-    display_name_safe_slug, find_user_watchlist, get_last_run_status,
-    list_log_files, read_log_tail,
+    display_name_safe_slug,
+    find_user_watchlist,
+    get_last_run_status,
+    list_log_files,
+    read_log_tail,
 )
 
 
 def _write_log(logs_dir, name, content):
     path = os.path.join(str(logs_dir), name)
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return path
 
@@ -27,78 +30,80 @@ class TestGetLastRunStatus:
     """Tests for get_last_run_status()"""
 
     def test_never_run_when_no_logs(self, tmp_path):
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result == {'status': 'never_run', 'timestamp': None, 'log_file': None}
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result == {"status": "never_run", "timestamp": None, "log_file": None}
 
     def test_success_when_no_failure_markers(self, tmp_path):
-        _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', 'Processing alice\nDone\n')
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['status'] == 'success'
-        assert result['log_file'] == 'recommendations_alice_20260101_030000.log'
-        assert result['timestamp'] == datetime(2026, 1, 1, 3, 0, 0)
+        _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "Processing alice\nDone\n")
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "success"
+        assert result["log_file"] == "recommendations_alice_20260101_030000.log"
+        assert result["timestamp"] == datetime(2026, 1, 1, 3, 0, 0)
 
     def test_failed_when_traceback_present(self, tmp_path):
         _write_log(
-            tmp_path, 'recommendations_alice_20260101_030000.log',
-            'Processing alice\nTraceback (most recent call last):\nValueError\n',
+            tmp_path,
+            "recommendations_alice_20260101_030000.log",
+            "Processing alice\nTraceback (most recent call last):\nValueError\n",
         )
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['status'] == 'failed'
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "failed"
 
     def test_failed_when_fatal_error_present(self, tmp_path):
-        _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', 'Fatal error detected\n')
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['status'] == 'failed'
+        _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "Fatal error detected\n")
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "failed"
 
     def test_unknown_when_log_empty(self, tmp_path):
-        _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', '')
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['status'] == 'unknown'
+        _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "")
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "unknown"
 
     def test_picks_newest_log_by_mtime(self, tmp_path):
-        older = _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', 'ok\n')
+        older = _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "ok\n")
         newer = _write_log(
-            tmp_path, 'recommendations_alice_20260102_030000.log',
-            'Traceback (most recent call last):\n',
+            tmp_path,
+            "recommendations_alice_20260102_030000.log",
+            "Traceback (most recent call last):\n",
         )
         os.utime(older, (1, 1))
         os.utime(newer, (100, 100))
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['log_file'] == 'recommendations_alice_20260102_030000.log'
-        assert result['status'] == 'failed'
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["log_file"] == "recommendations_alice_20260102_030000.log"
+        assert result["status"] == "failed"
 
     def test_only_matches_this_users_logs(self, tmp_path):
-        _write_log(tmp_path, 'recommendations_bob_20260101_030000.log', 'ok\n')
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['status'] == 'never_run'
+        _write_log(tmp_path, "recommendations_bob_20260101_030000.log", "ok\n")
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "never_run"
 
     def test_falls_back_to_mtime_for_unparseable_timestamp(self, tmp_path):
         # Month 13 doesn't parse as a real date - status.py should fall
         # back to the file's mtime instead of raising.
-        path = _write_log(tmp_path, 'recommendations_alice_20261301_030000.log', 'ok\n')
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert isinstance(result['timestamp'], datetime)
-        assert result['timestamp'] == datetime.fromtimestamp(os.path.getmtime(path))
+        path = _write_log(tmp_path, "recommendations_alice_20261301_030000.log", "ok\n")
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert isinstance(result["timestamp"], datetime)
+        assert result["timestamp"] == datetime.fromtimestamp(os.path.getmtime(path))
 
     def test_username_with_glob_special_chars_does_not_match_other_users(self, tmp_path):
         # A Plex username of "*" (or containing "?"/"[...]") must not
         # turn the glob pattern into a wildcard that leaks other users'
         # last-run status onto this one's dashboard row.
-        _write_log(tmp_path, 'recommendations_bob_20260101_030000.log', 'ok\n')
-        result = get_last_run_status(str(tmp_path), '*')
-        assert result == {'status': 'never_run', 'timestamp': None, 'log_file': None}
+        _write_log(tmp_path, "recommendations_bob_20260101_030000.log", "ok\n")
+        result = get_last_run_status(str(tmp_path), "*")
+        assert result == {"status": "never_run", "timestamp": None, "log_file": None}
 
     def test_username_with_bracket_glob_chars_does_not_match(self, tmp_path):
-        _write_log(tmp_path, 'recommendations_bob_20260101_030000.log', 'ok\n')
-        result = get_last_run_status(str(tmp_path), '[ab]*')
-        assert result['status'] == 'never_run'
+        _write_log(tmp_path, "recommendations_bob_20260101_030000.log", "ok\n")
+        result = get_last_run_status(str(tmp_path), "[ab]*")
+        assert result["status"] == "never_run"
 
     def test_traceback_marker_within_tail_window_is_detected(self, tmp_path):
-        filler = 'x' * (TAIL_BYTES + 1000)
-        content = filler + '\nTraceback (most recent call last):\nValueError\n'
-        _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', content)
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['status'] == 'failed'
+        filler = "x" * (TAIL_BYTES + 1000)
+        content = filler + "\nTraceback (most recent call last):\nValueError\n"
+        _write_log(tmp_path, "recommendations_alice_20260101_030000.log", content)
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "failed"
 
     def test_traceback_marker_beyond_tail_window_is_not_detected(self, tmp_path):
         # Documents the heuristic's known limitation (per TAIL_BYTES):
@@ -106,10 +111,10 @@ class TestGetLastRunStatus:
         # traceback appearing only earlier than that in a very large log
         # won't flip status to 'failed'. The important thing this
         # asserts is that it doesn't crash on a large file either way.
-        content = 'Traceback (most recent call last):\nValueError\n' + ('x' * (TAIL_BYTES + 1000))
-        _write_log(tmp_path, 'recommendations_alice_20260101_030000.log', content)
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['status'] == 'success'
+        content = "Traceback (most recent call last):\nValueError\n" + ("x" * (TAIL_BYTES + 1000))
+        _write_log(tmp_path, "recommendations_alice_20260101_030000.log", content)
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "success"
 
     def test_getmtime_oserror_falls_back_to_none_timestamp(self, tmp_path, monkeypatch):
         # Unparseable-timestamp filename forces the getmtime() fallback;
@@ -117,128 +122,128 @@ class TestGetLastRunStatus:
         # request) right before that specific call. The first getmtime()
         # call (inside latest_user_log()'s max(key=...) over glob
         # results) must still succeed, so this only fails the second.
-        _write_log(tmp_path, 'recommendations_alice_20261301_030000.log', 'ok\n')
+        _write_log(tmp_path, "recommendations_alice_20261301_030000.log", "ok\n")
         real_getmtime = os.path.getmtime
-        calls = {'n': 0}
+        calls = {"n": 0}
 
         def _flaky(path):
-            calls['n'] += 1
-            if calls['n'] == 1:
+            calls["n"] += 1
+            if calls["n"] == 1:
                 return real_getmtime(path)
-            raise OSError('gone')
+            raise OSError("gone")
 
-        monkeypatch.setattr(status_mod.os.path, 'getmtime', _flaky)
-        result = get_last_run_status(str(tmp_path), 'alice')
-        assert result['timestamp'] is None
+        monkeypatch.setattr(status_mod.os.path, "getmtime", _flaky)
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["timestamp"] is None
 
 
 class TestListLogFiles:
     """Tests for list_log_files()"""
 
     def test_empty_when_dir_missing(self, tmp_path):
-        assert list_log_files(str(tmp_path / 'missing')) == []
+        assert list_log_files(str(tmp_path / "missing")) == []
 
     def test_lists_only_log_files_newest_first(self, tmp_path):
-        a = _write_log(tmp_path, 'a.log', 'a')
-        b = _write_log(tmp_path, 'b.log', 'b')
-        (tmp_path / 'notes.txt').write_text('not a log')
+        a = _write_log(tmp_path, "a.log", "a")
+        b = _write_log(tmp_path, "b.log", "b")
+        (tmp_path / "notes.txt").write_text("not a log")
         os.utime(a, (1, 1))
         os.utime(b, (100, 100))
         result = list_log_files(str(tmp_path))
-        assert [e['name'] for e in result] == ['b.log', 'a.log']
+        assert [e["name"] for e in result] == ["b.log", "a.log"]
 
     def test_skips_file_deleted_mid_scan_instead_of_raising(self, tmp_path, monkeypatch):
-        _write_log(tmp_path, 'gone.log', 'a')
-        _write_log(tmp_path, 'still-here.log', 'b')
+        _write_log(tmp_path, "gone.log", "a")
+        _write_log(tmp_path, "still-here.log", "b")
         real_getsize = os.path.getsize
 
         def _flaky(path):
-            if path.endswith('gone.log'):
-                raise OSError('deleted mid-scan')
+            if path.endswith("gone.log"):
+                raise OSError("deleted mid-scan")
             return real_getsize(path)
 
-        monkeypatch.setattr(status_mod.os.path, 'getsize', _flaky)
+        monkeypatch.setattr(status_mod.os.path, "getsize", _flaky)
         result = list_log_files(str(tmp_path))
-        assert [e['name'] for e in result] == ['still-here.log']
+        assert [e["name"] for e in result] == ["still-here.log"]
 
 
 class TestReadLogTail:
     """Tests for read_log_tail()"""
 
     def test_reads_content(self, tmp_path):
-        _write_log(tmp_path, 'a.log', 'line1\nline2\n')
-        assert read_log_tail(str(tmp_path), 'a.log') == 'line1\nline2'
+        _write_log(tmp_path, "a.log", "line1\nline2\n")
+        assert read_log_tail(str(tmp_path), "a.log") == "line1\nline2"
 
     def test_raises_for_missing_file(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            read_log_tail(str(tmp_path), 'missing.log')
+            read_log_tail(str(tmp_path), "missing.log")
 
     def test_raises_for_path_traversal(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            read_log_tail(str(tmp_path), '../secret.log')
+            read_log_tail(str(tmp_path), "../secret.log")
 
     def test_redacts_secrets(self, tmp_path):
-        _write_log(tmp_path, 'a.log', 'token=abcdef123456\n')
-        result = read_log_tail(str(tmp_path), 'a.log')
-        assert 'abcdef123456' not in result
+        _write_log(tmp_path, "a.log", "token=abcdef123456\n")
+        result = read_log_tail(str(tmp_path), "a.log")
+        assert "abcdef123456" not in result
 
     def test_truncates_to_max_lines(self, tmp_path):
-        content = '\n'.join(f'line{i}' for i in range(10))
-        _write_log(tmp_path, 'a.log', content)
-        result = read_log_tail(str(tmp_path), 'a.log', max_lines=3)
-        assert result.splitlines() == ['line7', 'line8', 'line9']
+        content = "\n".join(f"line{i}" for i in range(10))
+        _write_log(tmp_path, "a.log", content)
+        result = read_log_tail(str(tmp_path), "a.log", max_lines=3)
+        assert result.splitlines() == ["line7", "line8", "line9"]
 
     def test_rejects_non_log_extension(self, tmp_path):
-        (tmp_path / 'config.yml').write_text('plex:\n  token: secret\n', encoding='utf-8')
+        (tmp_path / "config.yml").write_text("plex:\n  token: secret\n", encoding="utf-8")
         with pytest.raises(FileNotFoundError):
-            read_log_tail(str(tmp_path), 'config.yml')
+            read_log_tail(str(tmp_path), "config.yml")
 
     def test_rejects_symlink_escape(self, tmp_path):
-        outside = tmp_path / 'outside'
+        outside = tmp_path / "outside"
         outside.mkdir()
-        (outside / 'secret.log').write_text('TOP SECRET', encoding='utf-8')
-        logs_dir = tmp_path / 'logs'
+        (outside / "secret.log").write_text("TOP SECRET", encoding="utf-8")
+        logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
         try:
-            os.symlink(str(outside / 'secret.log'), str(logs_dir / 'escape.log'))
+            os.symlink(str(outside / "secret.log"), str(logs_dir / "escape.log"))
         except (OSError, NotImplementedError):
-            pytest.skip('symlinks not supported in this environment')
+            pytest.skip("symlinks not supported in this environment")
         with pytest.raises(FileNotFoundError):
-            read_log_tail(str(logs_dir), 'escape.log')
+            read_log_tail(str(logs_dir), "escape.log")
 
 
 class TestDisplayNameSafeSlug:
     """Tests for display_name_safe_slug()"""
 
     def test_uses_display_name_when_configured(self):
-        config = {'users': {'preferences': {'alice': {'display_name': 'Alice A'}}}}
-        assert display_name_safe_slug(config, 'alice') == 'alice_a'
+        config = {"users": {"preferences": {"alice": {"display_name": "Alice A"}}}}
+        assert display_name_safe_slug(config, "alice") == "alice_a"
 
     def test_falls_back_to_username_when_no_display_name(self):
-        config = {'users': {'preferences': {}}}
-        assert display_name_safe_slug(config, 'bob') == 'bob'
+        config = {"users": {"preferences": {}}}
+        assert display_name_safe_slug(config, "bob") == "bob"
 
     def test_handles_none_config(self):
-        assert display_name_safe_slug(None, 'bob') == 'bob'
+        assert display_name_safe_slug(None, "bob") == "bob"
 
 
 class TestFindUserWatchlist:
     """Tests for find_user_watchlist()"""
 
     def test_prefers_per_user_file(self, tmp_path):
-        config = {'users': {'preferences': {'alice': {'display_name': 'Alice A'}}}}
-        (tmp_path / 'alice_a_watchlist.html').write_text('<html></html>')
-        (tmp_path / 'watchlist.html').write_text('<html></html>')
-        result = find_user_watchlist(str(tmp_path), config, 'alice')
-        assert result == 'alice_a_watchlist.html'
+        config = {"users": {"preferences": {"alice": {"display_name": "Alice A"}}}}
+        (tmp_path / "alice_a_watchlist.html").write_text("<html></html>")
+        (tmp_path / "watchlist.html").write_text("<html></html>")
+        result = find_user_watchlist(str(tmp_path), config, "alice")
+        assert result == "alice_a_watchlist.html"
 
     def test_falls_back_to_combined_file(self, tmp_path):
-        config = {'users': {'preferences': {'alice': {'display_name': 'Alice A'}}}}
-        (tmp_path / 'watchlist.html').write_text('<html></html>')
-        result = find_user_watchlist(str(tmp_path), config, 'alice')
-        assert result == 'watchlist.html'
+        config = {"users": {"preferences": {"alice": {"display_name": "Alice A"}}}}
+        (tmp_path / "watchlist.html").write_text("<html></html>")
+        result = find_user_watchlist(str(tmp_path), config, "alice")
+        assert result == "watchlist.html"
 
     def test_returns_none_when_nothing_generated(self, tmp_path):
-        config = {'users': {'preferences': {}}}
-        result = find_user_watchlist(str(tmp_path), config, 'bob')
+        config = {"users": {"preferences": {}}}
+        result = find_user_watchlist(str(tmp_path), config, "bob")
         assert result is None

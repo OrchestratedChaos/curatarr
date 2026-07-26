@@ -85,7 +85,9 @@ import os
 import sys
 
 
-def _suppress_windows_crash_dialogs() -> None:  # pragma: no cover - real Windows API call, same category as _attach_or_setup_console below (not unit-testable on non-Windows CI)
+def _suppress_windows_crash_dialogs() -> (
+    None
+):  # pragma: no cover - real Windows API call, same category as _attach_or_setup_console below (not unit-testable on non-Windows CI)
     """Call SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
     as the very first thing this process does, on every frozen Windows
     invocation - the normal UI launch, the self-update worker, and any
@@ -105,7 +107,7 @@ def _suppress_windows_crash_dialogs() -> None:  # pragma: no cover - real Window
     call) on non-Windows/non-frozen - only meaningful for the real
     frozen Windows build.
     """
-    if os.name != 'nt' or not getattr(sys, 'frozen', False):
+    if os.name != "nt" or not getattr(sys, "frozen", False):
         return
     SEM_FAILCRITICALERRORS = 0x0001
     SEM_NOGPFAULTERRORBOX = 0x0002
@@ -119,7 +121,7 @@ def _debug_requested() -> bool:
     """True if --debug was passed or CURATARR_DEBUG=1 is set - gates
     both _attach_or_setup_console()'s AllocConsole fallback and the log
     level used when logging to file instead."""
-    return '--debug' in sys.argv[1:] or os.environ.get('CURATARR_DEBUG') == '1'
+    return "--debug" in sys.argv[1:] or os.environ.get("CURATARR_DEBUG") == "1"
 
 
 def _boot_log_path() -> str:
@@ -129,7 +131,8 @@ def _boot_log_path() -> str:
     per-user data dir a frozen binary already uses for config/cache/logs
     (see utils.helpers.get_project_root)."""
     from utils import get_project_root
-    return os.path.join(get_project_root(), 'logs', 'curatarr.log')
+
+    return os.path.join(get_project_root(), "logs", "curatarr.log")
 
 
 def _configure_windowed_launch() -> None:
@@ -139,12 +142,14 @@ def _configure_windowed_launch() -> None:
     curatarr_app.py` from an already-open terminal) already have a
     normal, working console.
     """
-    if os.name != 'nt' or not getattr(sys, 'frozen', False):
+    if os.name != "nt" or not getattr(sys, "frozen", False):
         return
     _attach_or_setup_console(_debug_requested())
 
 
-def _attach_or_setup_console(debug: bool) -> None:  # pragma: no cover - real Windows console/ctypes API, exercised by the Windows build test in the release PR, not unit-testable on Linux CI
+def _attach_or_setup_console(
+    debug: bool,
+) -> None:  # pragma: no cover - real Windows console/ctypes API, exercised by the Windows build test in the release PR, not unit-testable on Linux CI
     """Three cases, in order:
 
     1. Launched from an existing cmd/PowerShell: AttachConsole finds
@@ -170,24 +175,24 @@ def _attach_or_setup_console(debug: bool) -> None:  # pragma: no cover - real Wi
 
     if attached:
         for stream_name, handle_name, mode in (
-            ('stdin', 'CONIN$', 'r'),
-            ('stdout', 'CONOUT$', 'w'),
-            ('stderr', 'CONOUT$', 'w'),
+            ("stdin", "CONIN$", "r"),
+            ("stdout", "CONOUT$", "w"),
+            ("stderr", "CONOUT$", "w"),
         ):
             try:
-                setattr(sys, stream_name, open(handle_name, mode, encoding='utf-8', buffering=1))
+                setattr(sys, stream_name, open(handle_name, mode, encoding="utf-8", buffering=1))
             except OSError:
                 pass  # keep whatever sys.stdout/stderr already were
         return
 
     log_path = _boot_log_path()
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    log_file = open(log_path, 'a', encoding='utf-8', buffering=1)
+    log_file = open(log_path, "a", encoding="utf-8", buffering=1)
     sys.stdout = log_file
     sys.stderr = log_file
     logging.basicConfig(
         level=logging.DEBUG if debug else logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
+        format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.StreamHandler(log_file)],
         force=True,
     )
@@ -219,7 +224,7 @@ button and is not meant to be run directly.
 
 
 def _print_usage() -> None:
-    print(_USAGE, end='')
+    print(_USAGE, end="")
 
 
 def _run_one_recommender(engine: str, rest: list) -> None:
@@ -235,12 +240,12 @@ def _run_one_recommender(engine: str, rest: list) -> None:
     __import__("recommenders." + engine) call, so that form would
     silently leave the recommenders package out of the frozen build.
     """
-    sys.argv = [f'curatarr --run-recommender {engine}'] + list(rest)
-    if engine == 'movie':
+    sys.argv = [f"curatarr --run-recommender {engine}"] + list(rest)
+    if engine == "movie":
         from recommenders.movie import main as run
-    elif engine == 'tv':
+    elif engine == "tv":
         from recommenders.tv import main as run
-    elif engine == 'external':
+    elif engine == "external":
         from recommenders.external import main as run
     else:
         print(f"curatarr: unknown recommender engine: {engine}", file=sys.stderr)
@@ -263,9 +268,9 @@ def _run_self_update_cli() -> None:
     the whole job. The freshly-swapped binary is simply THERE on disk,
     ready for the next normal launch.
     """
-    from utils.self_update import SelfUpdateError, NoUpdateAvailableError, perform_self_update
+    from utils.self_update import NoUpdateAvailableError, SelfUpdateError, perform_self_update
 
-    if not getattr(sys, 'frozen', False):
+    if not getattr(sys, "frozen", False):
         print(
             "curatarr: --self-update only applies to a downloaded binary. "
             "Source installs update via ./run.sh or run.ps1 instead.",
@@ -308,7 +313,7 @@ def _launch_web_ui() -> None:
     try:
         from web.app import main
     except ModuleNotFoundError as e:
-        if e.name is not None and (e.name == 'flask' or e.name.startswith('flask.')):
+        if e.name is not None and (e.name == "flask" or e.name.startswith("flask.")):
             print(
                 "curatarr: the web UI needs additional dependencies that "
                 "aren't installed (flask and friends).\n"
@@ -330,15 +335,14 @@ def _dispatch_recommender(argv: list) -> None:
     ['full']. See the module docstring above for why this exists."""
     if not argv:
         print(
-            "curatarr: --run-recommender requires an engine "
-            "(movie, tv, external, full)",
+            "curatarr: --run-recommender requires an engine (movie, tv, external, full)",
             file=sys.stderr,
         )
         sys.exit(2)
 
     engine, rest = argv[0], argv[1:]
 
-    if engine == 'full':
+    if engine == "full":
         # Mirrors run.sh's RUNNING_IN_DOCKER-bypassed core path: no
         # dependency-install / auto-update / setup-wizard / cron-prompt
         # steps - those are source-install-only concerns that don't
@@ -346,30 +350,31 @@ def _dispatch_recommender(argv: list) -> None:
         # external, in sequence. A fatal error in one (sys.exit from
         # run_recommender_main) stops the rest, same as run.sh's own
         # `... || exit 1` after each step.
-        for sub_engine in ('movie', 'tv', 'external'):
+        for sub_engine in ("movie", "tv", "external"):
             _run_one_recommender(sub_engine, [])
         return
 
     _run_one_recommender(engine, rest)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     _suppress_windows_crash_dialogs()
-    if len(sys.argv) > 1 and sys.argv[1] in ('--help', '-h'):
+    if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
         _print_usage()
         sys.exit(0)
-    elif len(sys.argv) > 2 and sys.argv[1] == '--run-recommender':
+    elif len(sys.argv) > 2 and sys.argv[1] == "--run-recommender":
         _dispatch_recommender(sys.argv[2:])
-    elif len(sys.argv) > 1 and sys.argv[1] == '--self-update-worker':
+    elif len(sys.argv) > 1 and sys.argv[1] == "--self-update-worker":
         # DETACHED worker for the web UI's "Update now" button when
         # frozen - see web/update_apply.py's module docstring and this
         # file's own docstring for why a frozen binary dispatches this
         # way instead of re-invoking update_apply.py as a script.
         from web.update_apply import run_self_update_worker
+
         run_self_update_worker(sys.argv[2:])
-    elif len(sys.argv) > 1 and sys.argv[1] == '--self-update':
+    elif len(sys.argv) > 1 and sys.argv[1] == "--self-update":
         _run_self_update_cli()
-    elif len(sys.argv) > 1 and sys.argv[1] == '--version':
+    elif len(sys.argv) > 1 and sys.argv[1] == "--version":
         # Used by utils.self_update.perform_self_update's post-swap
         # readback (see that function's docstring) to confirm the
         # binary now on disk actually IS the version that was just
@@ -382,16 +387,18 @@ if __name__ == '__main__':
         # utils.config.__version__'s own format) with nothing else on
         # stdout, so a caller can compare it directly.
         from utils.config import __version__
+
         print(__version__)
         sys.exit(0)
     else:
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             # Best-effort cleanup of a leftover <exe>.old from a
             # previous self-update swap (see
             # utils/self_update.py's cleanup_stale_old_binary
             # docstring) - runs on every normal frozen startup, not
             # just right after an update.
             from utils.self_update import cleanup_stale_old_binary
+
             cleanup_stale_old_binary()
         _configure_windowed_launch()
         _launch_web_ui()

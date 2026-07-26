@@ -26,9 +26,9 @@ def _is_loopback_address(address) -> bool:
         return True
     host = address[0]
     if isinstance(host, bytes):
-        host = host.decode('ascii', 'ignore')
+        host = host.decode("ascii", "ignore")
     host = str(host)
-    return host in ('127.0.0.1', '::1', 'localhost') or host.startswith('127.')
+    return host in ("127.0.0.1", "::1", "localhost") or host.startswith("127.")
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +73,7 @@ def _block_non_loopback_sockets(monkeypatch):
             )
         return real_connect(self, address, *args, **kwargs)
 
-    monkeypatch.setattr(_socket_module.socket, 'connect', _guarded_connect)
+    monkeypatch.setattr(_socket_module.socket, "connect", _guarded_connect)
 
 
 @pytest.fixture(autouse=True)
@@ -105,10 +105,10 @@ def _no_real_update_check_network(tmp_path_factory, monkeypatch):
     this one for the duration of those tests.
     """
     monkeypatch.setattr(
-        'utils.update_check.get_project_root',
-        lambda: str(tmp_path_factory.mktemp('update_check_cache')),
+        "utils.update_check.get_project_root",
+        lambda: str(tmp_path_factory.mktemp("update_check_cache")),
     )
-    monkeypatch.setattr('utils.update_check._fetch_latest_version', lambda: None)
+    monkeypatch.setattr("utils.update_check._fetch_latest_version", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -126,8 +126,8 @@ def _isolated_update_dismissal_dir(tmp_path_factory, monkeypatch):
     the update-check cache above.
     """
     monkeypatch.setattr(
-        'utils.update_dismissal.get_project_root',
-        lambda: str(tmp_path_factory.mktemp('update_dismissal')),
+        "utils.update_dismissal.get_project_root",
+        lambda: str(tmp_path_factory.mktemp("update_dismissal")),
     )
 
 
@@ -147,11 +147,12 @@ def _isolated_metrics_dir(tmp_path_factory, monkeypatch):
     stable tmp_path, same layering the two fixtures above document.
     """
     monkeypatch.setattr(
-        'utils.metrics.get_project_root',
-        lambda: str(tmp_path_factory.mktemp('metrics_state')),
+        "utils.metrics.get_project_root",
+        lambda: str(tmp_path_factory.mktemp("metrics_state")),
     )
 
-_FAKE_MOVIE_PY = '''\
+
+_FAKE_MOVIE_PY = """\
 import os
 import sys
 import time
@@ -163,26 +164,26 @@ delay = os.environ.get("CURATARR_TEST_SLOW")
 if delay:
     time.sleep(float(delay))
 print("Movie recommendations done")
-'''
+"""
 
 _FAKE_TV_PY = _FAKE_MOVIE_PY.replace("Movie", "TV")
 
-_FAKE_EXTERNAL_PY = '''\
+_FAKE_EXTERNAL_PY = """\
 print("External watchlists starting")
 print("External watchlists done")
-'''
+"""
 
-_FAKE_RUN_SH = '''#!/bin/bash
+_FAKE_RUN_SH = """#!/bin/bash
 echo "full run starting"
 echo "full run done"
-'''
+"""
 
-_FAKE_RUN_PS1 = '''
+_FAKE_RUN_PS1 = """
 Write-Host "full run starting"
 Write-Host "full run done"
-'''
+"""
 
-_CONFIG_YML = '''\
+_CONFIG_YML = """\
 plex:
   url: "http://localhost:32400"
   token: "not-a-real-token"
@@ -218,7 +219,7 @@ libraries:
     name: TV Shows
     section: TV Shows
     media_type: tv
-'''
+"""
 
 
 @pytest.fixture
@@ -231,14 +232,14 @@ def curatarr_web_root(tmp_path):
     or running the real (slow, Plex/TMDB-dependent) recommenders.
     """
     root = tmp_path
-    (root / 'config').mkdir()
-    (root / 'config' / 'config.yml').write_text(_CONFIG_YML, encoding='utf-8')
-    (root / 'logs').mkdir()
-    (root / 'recommendations' / 'external').mkdir(parents=True)
-    (root / 'recommenders').mkdir()
-    (root / 'recommenders' / 'movie.py').write_text(_FAKE_MOVIE_PY, encoding='utf-8')
-    (root / 'recommenders' / 'tv.py').write_text(_FAKE_TV_PY, encoding='utf-8')
-    (root / 'recommenders' / 'external.py').write_text(_FAKE_EXTERNAL_PY, encoding='utf-8')
-    (root / 'run.sh').write_text(_FAKE_RUN_SH, encoding='utf-8')
-    (root / 'run.ps1').write_text(_FAKE_RUN_PS1, encoding='utf-8')
+    (root / "config").mkdir()
+    (root / "config" / "config.yml").write_text(_CONFIG_YML, encoding="utf-8")
+    (root / "logs").mkdir()
+    (root / "recommendations" / "external").mkdir(parents=True)
+    (root / "recommenders").mkdir()
+    (root / "recommenders" / "movie.py").write_text(_FAKE_MOVIE_PY, encoding="utf-8")
+    (root / "recommenders" / "tv.py").write_text(_FAKE_TV_PY, encoding="utf-8")
+    (root / "recommenders" / "external.py").write_text(_FAKE_EXTERNAL_PY, encoding="utf-8")
+    (root / "run.sh").write_text(_FAKE_RUN_SH, encoding="utf-8")
+    (root / "run.ps1").write_text(_FAKE_RUN_PS1, encoding="utf-8")
     return str(root)

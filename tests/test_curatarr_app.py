@@ -41,15 +41,15 @@ class TestCuratarrApp:
         module level, see this module's docstring and
         _launch_web_ui's own) so CLI/cron-only paths (--version,
         --run-recommender, --self-update) never need flask installed."""
-        with patch('web.app.main') as mock_main:
+        with patch("web.app.main") as mock_main:
             curatarr_app._launch_web_ui()
         mock_main.assert_called_once_with()
 
-    @patch('web.app.main')
+    @patch("web.app.main")
     def test_running_as_script_calls_main(self, mock_main):
         """PyInstaller runs this file as __main__ - confirm that path
         calls main() exactly once, matching run-ui.sh / run-ui.ps1."""
-        runpy.run_module('curatarr_app', run_name='__main__')
+        runpy.run_module("curatarr_app", run_name="__main__")
         mock_main.assert_called_once_with()
 
 
@@ -94,32 +94,33 @@ class TestCliPathsDontNeedFlask:
             + "runpy.run_path('curatarr_app.py', run_name='__main__')\n"
         )
         return subprocess.run(
-            [sys.executable, '-c', script],
+            [sys.executable, "-c", script],
             cwd=repo_root,
             capture_output=True,
             text=True,
         )
 
     def test_version_flag_succeeds_with_flask_unimportable(self):
-        result = self._run(['--version'])
+        result = self._run(["--version"])
         from utils.config import __version__
+
         assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
         assert result.stdout.strip() == __version__
 
     def test_help_flag_succeeds_with_flask_unimportable(self):
-        result = self._run(['--help'])
+        result = self._run(["--help"])
         assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
-        assert 'usage: curatarr' in result.stdout
+        assert "usage: curatarr" in result.stdout
 
     def test_run_recommender_dispatch_does_not_need_flask(self):
         """Only checks dispatch reaches _run_one_recommender without
         ModuleNotFoundError on flask - the unknown-engine branch exits
         (2) before touching Plex/network, keeping this a fast,
         deterministic subprocess check."""
-        result = self._run(['--run-recommender', 'bogus'])
+        result = self._run(["--run-recommender", "bogus"])
         assert result.returncode == 2, f"stdout={result.stdout!r} stderr={result.stderr!r}"
-        assert 'ModuleNotFoundError' not in result.stderr
-        assert 'flask' not in result.stderr.lower()
+        assert "ModuleNotFoundError" not in result.stderr
+        assert "flask" not in result.stderr.lower()
 
     def test_normal_launch_gives_actionable_error_not_a_traceback(self):
         """The no-flag (web UI) launch path DOES need flask - but a
@@ -128,8 +129,8 @@ class TestCliPathsDontNeedFlask:
         ModuleNotFoundError traceback."""
         result = self._run([])
         assert result.returncode == 2, f"stdout={result.stdout!r} stderr={result.stderr!r}"
-        assert 'requirements-ui.txt' in result.stderr
-        assert 'Traceback' not in result.stderr
+        assert "requirements-ui.txt" in result.stderr
+        assert "Traceback" not in result.stderr
 
 
 class TestDispatchViaRunpy:
@@ -144,55 +145,58 @@ class TestDispatchViaRunpy:
     (safe, deterministic) not-frozen early-exit path)."""
 
     def test_self_update_worker_flag_dispatches_with_argv(self, monkeypatch):
-        monkeypatch.setattr(sys, 'argv', ['curatarr', '--self-update-worker', '--pid', '1', '--host', 'x', '--port', '2'])
-        with patch('web.update_apply.run_self_update_worker') as mock_worker:
-            runpy.run_module('curatarr_app', run_name='__main__')
-        mock_worker.assert_called_once_with(['--pid', '1', '--host', 'x', '--port', '2'])
+        monkeypatch.setattr(
+            sys, "argv", ["curatarr", "--self-update-worker", "--pid", "1", "--host", "x", "--port", "2"]
+        )
+        with patch("web.update_apply.run_self_update_worker") as mock_worker:
+            runpy.run_module("curatarr_app", run_name="__main__")
+        mock_worker.assert_called_once_with(["--pid", "1", "--host", "x", "--port", "2"])
 
     def test_self_update_flag_dispatches_to_cli_handler(self, monkeypatch, capsys):
         """Not frozen in the test environment - _run_self_update_cli's
         own real (safe, deterministic) not-frozen early-exit path
         proves dispatch reached it, without needing to mock a
         same-module function across a runpy re-exec."""
-        monkeypatch.setattr(sys, 'argv', ['curatarr', '--self-update'])
-        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        monkeypatch.setattr(sys, "argv", ["curatarr", "--self-update"])
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
         with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module('curatarr_app', run_name='__main__')
+            runpy.run_module("curatarr_app", run_name="__main__")
         assert exc_info.value.code == 2
-        assert '--self-update only applies to a downloaded binary' in capsys.readouterr().err
+        assert "--self-update only applies to a downloaded binary" in capsys.readouterr().err
 
     def test_help_flag_prints_usage_and_exits_0(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, 'argv', ['curatarr', '--help'])
+        monkeypatch.setattr(sys, "argv", ["curatarr", "--help"])
         with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module('curatarr_app', run_name='__main__')
+            runpy.run_module("curatarr_app", run_name="__main__")
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
-        assert 'usage: curatarr' in out
-        assert '--run-recommender' in out
+        assert "usage: curatarr" in out
+        assert "--run-recommender" in out
 
     def test_short_h_flag_prints_usage_and_exits_0(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, 'argv', ['curatarr', '-h'])
+        monkeypatch.setattr(sys, "argv", ["curatarr", "-h"])
         with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module('curatarr_app', run_name='__main__')
+            runpy.run_module("curatarr_app", run_name="__main__")
         assert exc_info.value.code == 0
-        assert 'usage: curatarr' in capsys.readouterr().out
+        assert "usage: curatarr" in capsys.readouterr().out
 
     def test_frozen_normal_launch_cleans_up_stale_binary_before_main(self, monkeypatch):
-        monkeypatch.setattr(sys, 'argv', ['curatarr'])
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        with patch('utils.self_update.cleanup_stale_old_binary') as mock_cleanup, \
-                patch('web.app.main') as mock_main, \
-                patch('curatarr_app._configure_windowed_launch'):
-            runpy.run_module('curatarr_app', run_name='__main__')
+        monkeypatch.setattr(sys, "argv", ["curatarr"])
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        with (
+            patch("utils.self_update.cleanup_stale_old_binary") as mock_cleanup,
+            patch("web.app.main") as mock_main,
+            patch("curatarr_app._configure_windowed_launch"),
+        ):
+            runpy.run_module("curatarr_app", run_name="__main__")
         mock_cleanup.assert_called_once_with()
         mock_main.assert_called_once_with()
 
     def test_not_frozen_normal_launch_skips_cleanup(self, monkeypatch):
-        monkeypatch.setattr(sys, 'argv', ['curatarr'])
-        monkeypatch.setattr(sys, 'frozen', False, raising=False)
-        with patch('utils.self_update.cleanup_stale_old_binary') as mock_cleanup, \
-                patch('web.app.main'):
-            runpy.run_module('curatarr_app', run_name='__main__')
+        monkeypatch.setattr(sys, "argv", ["curatarr"])
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        with patch("utils.self_update.cleanup_stale_old_binary") as mock_cleanup, patch("web.app.main"):
+            runpy.run_module("curatarr_app", run_name="__main__")
         mock_cleanup.assert_not_called()
 
 
@@ -204,40 +208,42 @@ class TestRunSelfUpdateCli:
     own logic is tests/test_self_update.py's job."""
 
     def test_not_frozen_prints_clear_message_and_exits_2(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, 'frozen', False, raising=False)
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
         with pytest.raises(SystemExit) as exc_info:
             curatarr_app._run_self_update_cli()
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert '--self-update only applies to a downloaded binary' in err
-        assert 'run.sh' in err or 'run.ps1' in err
+        assert "--self-update only applies to a downloaded binary" in err
+        assert "run.sh" in err or "run.ps1" in err
 
     def test_success_prints_new_version_and_exits_cleanly(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        with patch('utils.self_update.perform_self_update', return_value='2.9.0'):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        with patch("utils.self_update.perform_self_update", return_value="2.9.0"):
             curatarr_app._run_self_update_cli()  # must not raise/exit non-zero
         out = capsys.readouterr().out
-        assert 'v2.9.0' in out
+        assert "v2.9.0" in out
 
     def test_no_update_available_prints_message_and_exits_0(self, monkeypatch, capsys):
         from utils.self_update import NoUpdateAvailableError
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        with patch('utils.self_update.perform_self_update', side_effect=NoUpdateAvailableError('nothing newer')):
+
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        with patch("utils.self_update.perform_self_update", side_effect=NoUpdateAvailableError("nothing newer")):
             with pytest.raises(SystemExit) as exc_info:
                 curatarr_app._run_self_update_cli()
         assert exc_info.value.code == 0
-        assert 'nothing newer' in capsys.readouterr().out
+        assert "nothing newer" in capsys.readouterr().out
 
     def test_verification_failure_prints_error_and_exits_1(self, monkeypatch, capsys):
         from utils.self_update import HashMismatchError
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        with patch('utils.self_update.perform_self_update', side_effect=HashMismatchError('bad hash')):
+
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        with patch("utils.self_update.perform_self_update", side_effect=HashMismatchError("bad hash")):
             with pytest.raises(SystemExit) as exc_info:
                 curatarr_app._run_self_update_cli()
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
-        assert 'bad hash' in err
-        assert 'left unchanged' in err
+        assert "bad hash" in err
+        assert "left unchanged" in err
 
 
 class TestSuppressWindowsCrashDialogs:
@@ -253,35 +259,33 @@ class TestSuppressWindowsCrashDialogs:
     cross-platform."""
 
     def test_noop_when_not_frozen(self, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', False, raising=False)
-        monkeypatch.setattr(os, 'name', 'nt')
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        monkeypatch.setattr(os, "name", "nt")
         curatarr_app._suppress_windows_crash_dialogs()  # must not raise
 
     def test_noop_when_not_windows(self, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        monkeypatch.setattr(os, 'name', 'posix')
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(os, "name", "posix")
         curatarr_app._suppress_windows_crash_dialogs()  # must not raise
 
     def test_calls_set_error_mode_when_frozen_on_windows(self, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        monkeypatch.setattr(os, 'name', 'nt')
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(os, "name", "nt")
         mock_windll = Mock()
-        monkeypatch.setattr(curatarr_app.ctypes, 'windll', mock_windll, raising=False)
+        monkeypatch.setattr(curatarr_app.ctypes, "windll", mock_windll, raising=False)
 
         curatarr_app._suppress_windows_crash_dialogs()
 
         SEM_FAILCRITICALERRORS = 0x0001
         SEM_NOGPFAULTERRORBOX = 0x0002
-        mock_windll.kernel32.SetErrorMode.assert_called_once_with(
-            SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
-        )
+        mock_windll.kernel32.SetErrorMode.assert_called_once_with(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
 
     def test_never_raises_even_if_the_api_call_itself_fails(self, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        monkeypatch.setattr(os, 'name', 'nt')
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(os, "name", "nt")
         mock_windll = Mock()
-        mock_windll.kernel32.SetErrorMode.side_effect = OSError('no such API')
-        monkeypatch.setattr(curatarr_app.ctypes, 'windll', mock_windll, raising=False)
+        mock_windll.kernel32.SetErrorMode.side_effect = OSError("no such API")
+        monkeypatch.setattr(curatarr_app.ctypes, "windll", mock_windll, raising=False)
 
         curatarr_app._suppress_windows_crash_dialogs()  # must not raise
 
@@ -291,18 +295,18 @@ class TestDebugRequested:
     and file-logging level in _attach_or_setup_console()."""
 
     def test_true_when_debug_flag_present(self, monkeypatch):
-        monkeypatch.setattr(sys, 'argv', ['curatarr', '--debug'])
-        monkeypatch.delenv('CURATARR_DEBUG', raising=False)
+        monkeypatch.setattr(sys, "argv", ["curatarr", "--debug"])
+        monkeypatch.delenv("CURATARR_DEBUG", raising=False)
         assert curatarr_app._debug_requested() is True
 
     def test_true_when_env_var_set(self, monkeypatch):
-        monkeypatch.setattr(sys, 'argv', ['curatarr'])
-        monkeypatch.setenv('CURATARR_DEBUG', '1')
+        monkeypatch.setattr(sys, "argv", ["curatarr"])
+        monkeypatch.setenv("CURATARR_DEBUG", "1")
         assert curatarr_app._debug_requested() is True
 
     def test_false_by_default(self, monkeypatch):
-        monkeypatch.setattr(sys, 'argv', ['curatarr'])
-        monkeypatch.delenv('CURATARR_DEBUG', raising=False)
+        monkeypatch.setattr(sys, "argv", ["curatarr"])
+        monkeypatch.delenv("CURATARR_DEBUG", raising=False)
         assert curatarr_app._debug_requested() is False
 
 
@@ -311,9 +315,9 @@ class TestBootLogPath:
     when there's no console to print to."""
 
     def test_joins_project_root_logs_curatarr_log(self, monkeypatch, tmp_path):
-        monkeypatch.setattr('utils.get_project_root', lambda: str(tmp_path))
+        monkeypatch.setattr("utils.get_project_root", lambda: str(tmp_path))
         result = curatarr_app._boot_log_path()
-        assert result == os.path.join(str(tmp_path), 'logs', 'curatarr.log')
+        assert result == os.path.join(str(tmp_path), "logs", "curatarr.log")
 
 
 class TestConfigureWindowedLaunch:
@@ -323,25 +327,25 @@ class TestConfigureWindowedLaunch:
     already have a normal, working console."""
 
     def test_noop_when_not_frozen(self, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', False, raising=False)
-        monkeypatch.setattr(os, 'name', 'nt')
-        with patch('curatarr_app._attach_or_setup_console') as mock_attach:
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        monkeypatch.setattr(os, "name", "nt")
+        with patch("curatarr_app._attach_or_setup_console") as mock_attach:
             curatarr_app._configure_windowed_launch()
         mock_attach.assert_not_called()
 
     def test_noop_when_not_windows(self, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        monkeypatch.setattr(os, 'name', 'posix')
-        with patch('curatarr_app._attach_or_setup_console') as mock_attach:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(os, "name", "posix")
+        with patch("curatarr_app._attach_or_setup_console") as mock_attach:
             curatarr_app._configure_windowed_launch()
         mock_attach.assert_not_called()
 
     def test_dispatches_when_frozen_on_windows(self, monkeypatch):
-        monkeypatch.setattr(sys, 'frozen', True, raising=False)
-        monkeypatch.setattr(os, 'name', 'nt')
-        monkeypatch.setattr(sys, 'argv', ['curatarr'])
-        monkeypatch.delenv('CURATARR_DEBUG', raising=False)
-        with patch('curatarr_app._attach_or_setup_console') as mock_attach:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr(sys, "argv", ["curatarr"])
+        monkeypatch.delenv("CURATARR_DEBUG", raising=False)
+        with patch("curatarr_app._attach_or_setup_console") as mock_attach:
             curatarr_app._configure_windowed_launch()
         mock_attach.assert_called_once_with(False)
 
@@ -354,27 +358,27 @@ class TestRunOneRecommender:
         called = {}
 
         def _fake_main():
-            called['argv'] = list(sys.argv)
+            called["argv"] = list(sys.argv)
 
-        monkeypatch.setattr('recommenders.movie.main', _fake_main)
-        curatarr_app._run_one_recommender('movie', ['alice'])
-        assert called['argv'][1:] == ['alice']
+        monkeypatch.setattr("recommenders.movie.main", _fake_main)
+        curatarr_app._run_one_recommender("movie", ["alice"])
+        assert called["argv"][1:] == ["alice"]
 
     def test_dispatches_tv_engine(self, monkeypatch):
         called = {}
-        monkeypatch.setattr('recommenders.tv.main', lambda: called.setdefault('ran', True))
-        curatarr_app._run_one_recommender('tv', [])
-        assert called.get('ran') is True
+        monkeypatch.setattr("recommenders.tv.main", lambda: called.setdefault("ran", True))
+        curatarr_app._run_one_recommender("tv", [])
+        assert called.get("ran") is True
 
     def test_dispatches_external_engine(self, monkeypatch):
         called = {}
-        monkeypatch.setattr('recommenders.external.main', lambda: called.setdefault('ran', True))
-        curatarr_app._run_one_recommender('external', [])
-        assert called.get('ran') is True
+        monkeypatch.setattr("recommenders.external.main", lambda: called.setdefault("ran", True))
+        curatarr_app._run_one_recommender("external", [])
+        assert called.get("ran") is True
 
     def test_unknown_engine_exits_with_error(self):
         with pytest.raises(SystemExit) as exc_info:
-            curatarr_app._run_one_recommender('bogus', [])
+            curatarr_app._run_one_recommender("bogus", [])
         assert exc_info.value.code == 2
 
 
@@ -389,20 +393,20 @@ class TestDispatchRecommender:
 
     def test_full_engine_runs_movie_tv_external_in_order(self, monkeypatch):
         order = []
-        monkeypatch.setattr('recommenders.movie.main', lambda: order.append('movie'))
-        monkeypatch.setattr('recommenders.tv.main', lambda: order.append('tv'))
-        monkeypatch.setattr('recommenders.external.main', lambda: order.append('external'))
+        monkeypatch.setattr("recommenders.movie.main", lambda: order.append("movie"))
+        monkeypatch.setattr("recommenders.tv.main", lambda: order.append("tv"))
+        monkeypatch.setattr("recommenders.external.main", lambda: order.append("external"))
 
-        curatarr_app._dispatch_recommender(['full'])
+        curatarr_app._dispatch_recommender(["full"])
 
-        assert order == ['movie', 'tv', 'external']
+        assert order == ["movie", "tv", "external"]
 
     def test_single_engine_with_user_passes_user_through(self, monkeypatch):
         called = {}
 
         def _fake_main():
-            called['argv'] = list(sys.argv)
+            called["argv"] = list(sys.argv)
 
-        monkeypatch.setattr('recommenders.movie.main', _fake_main)
-        curatarr_app._dispatch_recommender(['movie', 'alice'])
-        assert called['argv'][1:] == ['alice']
+        monkeypatch.setattr("recommenders.movie.main", _fake_main)
+        curatarr_app._dispatch_recommender(["movie", "alice"])
+        assert called["argv"][1:] == ["alice"]

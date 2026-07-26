@@ -12,15 +12,15 @@ from typing import Dict, List, Optional
 
 from .security import redact, safe_join
 
-_TIMESTAMP_RE = re.compile(r'_(\d{8}_\d{6})\.log$')
+_TIMESTAMP_RE = re.compile(r"_(\d{8}_\d{6})\.log$")
 
 # Lowercased substrings that indicate a recommender run hit an error.
 # This is a heuristic (per the MVP spec), not a guarantee - a run can
 # print warnings along the way and still succeed overall.
 _FAILURE_MARKERS = (
-    'traceback (most recent call last)',
-    'fatal error',
-    'an error occurred',
+    "traceback (most recent call last)",
+    "fatal error",
+    "an error occurred",
 )
 
 # Cap how much of a log file we read for status/display purposes.
@@ -32,7 +32,7 @@ def _parse_timestamp(filename: str) -> Optional[datetime]:
     if not match:
         return None
     try:
-        return datetime.strptime(match.group(1), '%Y%m%d_%H%M%S')
+        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
     except ValueError:
         return None
 
@@ -41,13 +41,13 @@ def _read_tail(path: str, max_bytes: int = TAIL_BYTES) -> str:
     """Best-effort read of up to the last max_bytes of a file as text."""
     try:
         size = os.path.getsize(path)
-        with open(path, 'rb') as f:
+        with open(path, "rb") as f:
             if size > max_bytes:
                 f.seek(size - max_bytes)
             data = f.read()
-        return data.decode('utf-8', errors='replace')
+        return data.decode("utf-8", errors="replace")
     except OSError:
-        return ''
+        return ""
 
 
 def latest_user_log(logs_dir: str, username: str) -> Optional[str]:
@@ -62,7 +62,7 @@ def latest_user_log(logs_dir: str, username: str) -> Optional[str]:
     # e.g. a Plex username of "*" would otherwise match every user's
     # log files instead of just this one, leaking other users' run
     # status onto this user's dashboard row.
-    pattern = os.path.join(logs_dir, f'recommendations_{glob.escape(username)}_*.log')
+    pattern = os.path.join(logs_dir, f"recommendations_{glob.escape(username)}_*.log")
     candidates = glob.glob(pattern)
     if not candidates:
         return None
@@ -79,7 +79,7 @@ def get_last_run_status(logs_dir: str, username: str) -> Dict:
     """
     log_path = latest_user_log(logs_dir, username)
     if not log_path:
-        return {'status': 'never_run', 'timestamp': None, 'log_file': None}
+        return {"status": "never_run", "timestamp": None, "log_file": None}
 
     basename = os.path.basename(log_path)
     timestamp = _parse_timestamp(basename)
@@ -94,13 +94,13 @@ def get_last_run_status(logs_dir: str, username: str) -> Dict:
 
     content = _read_tail(log_path)
     if not content.strip():
-        status = 'unknown'
+        status = "unknown"
     elif any(marker in content.lower() for marker in _FAILURE_MARKERS):
-        status = 'failed'
+        status = "failed"
     else:
-        status = 'success'
+        status = "success"
 
-    return {'status': status, 'timestamp': timestamp, 'log_file': basename}
+    return {"status": status, "timestamp": timestamp, "log_file": basename}
 
 
 def list_log_files(logs_dir: str) -> List[Dict]:
@@ -109,7 +109,7 @@ def list_log_files(logs_dir: str) -> List[Dict]:
         return []
     entries = []
     for name in os.listdir(logs_dir):
-        if not name.endswith('.log'):
+        if not name.endswith(".log"):
             continue
         path = os.path.join(logs_dir, name)
         if not os.path.isfile(path):
@@ -121,8 +121,8 @@ def list_log_files(logs_dir: str) -> List[Dict]:
             # Deleted between listdir() and here (e.g. concurrent log
             # rotation/cleanup) - skip it rather than 500ing /results.
             continue
-        entries.append({'name': name, 'size': size, 'mtime': mtime})
-    entries.sort(key=lambda e: e['mtime'], reverse=True)
+        entries.append({"name": name, "size": size, "mtime": mtime})
+    entries.sort(key=lambda e: e["mtime"], reverse=True)
     return entries
 
 
@@ -131,9 +131,9 @@ def display_name_safe_slug(config: Dict, username: str) -> str:
     display_name (falling back to the username itself), lowercased,
     spaces replaced with underscores.
     """
-    prefs = (config or {}).get('users', {}).get('preferences', {}) or {}
-    display_name = (prefs.get(username) or {}).get('display_name', username)
-    return str(display_name).lower().replace(' ', '_')
+    prefs = (config or {}).get("users", {}).get("preferences", {}) or {}
+    display_name = (prefs.get(username) or {}).get("display_name", username)
+    return str(display_name).lower().replace(" ", "_")
 
 
 def find_user_watchlist(external_dir: str, config: Dict, username: str) -> Optional[str]:
@@ -145,11 +145,11 @@ def find_user_watchlist(external_dir: str, config: Dict, username: str) -> Optio
     Returns None if neither has been generated.
     """
     slug = display_name_safe_slug(config, username)
-    per_user = f'{slug}_watchlist.html'
+    per_user = f"{slug}_watchlist.html"
     if os.path.isfile(os.path.join(external_dir, per_user)):
         return per_user
 
-    combined = 'watchlist.html'
+    combined = "watchlist.html"
     if os.path.isfile(os.path.join(external_dir, combined)):
         return combined
 
@@ -162,11 +162,11 @@ def read_log_tail(logs_dir: str, filename: str, max_lines: int = 500) -> str:
     Raises FileNotFoundError if filename escapes logs_dir, isn't a
     *.log file, or doesn't resolve to a real file.
     """
-    if not filename.endswith('.log'):
+    if not filename.endswith(".log"):
         raise FileNotFoundError(filename)
     path = safe_join(logs_dir, filename)
     if not os.path.isfile(path):
         raise FileNotFoundError(filename)
     content = _read_tail(path)
     lines = content.splitlines()[-max_lines:]
-    return redact('\n'.join(lines))
+    return redact("\n".join(lines))
