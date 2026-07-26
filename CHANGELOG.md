@@ -2,6 +2,53 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.18] - 2026-07-26
+
+### Changed
+
+- **Extracted two byte-identical duplications across the shell install
+  scripts into `scripts/lib/`:**
+  - `scripts/lib/pip-install.sh` (`curatarr_pip_install`) - the
+    "prefer hash-verified lockfile(s), fall back to plain pinned
+    requirements" pip install logic `run.sh` and `run-ui.sh` each
+    implemented independently (their own comments cross-referenced
+    each other's copy). Each script keeps its own success/failure
+    messaging and timing via callback functions - user-visible output
+    is unchanged.
+  - `scripts/lib/colors.sh` - the ANSI colour variables `run.sh` and
+    `setup.sh` each defined byte-identically. `docker-entrypoint.sh`
+    intentionally keeps its own (still byte-identical) RED/YELLOW/NC
+    subset - `.dockerignore` excludes `scripts/` wholesale from the
+    Docker build context, and carving out a negation exception for one
+    3-line file wasn't worth the added build fragility.
+  - `run.sh` is the one script from this pair that IS shipped inside
+    the Docker image (alongside `docker-entrypoint.sh`, even though
+    nothing in the image actually invokes it) - `Dockerfile` now also
+    `COPY`s `scripts/lib/` and `.dockerignore` carries a matching
+    negation, verified with a real `docker build` + container run
+    (previously would have failed with `run.sh: line N:
+    /app/scripts/lib/colors.sh: No such file or directory` if anyone
+    ran it inside the container).
+  - One intentional, minor behavior change: if `run.sh` finds neither
+    `requirements.lock` nor `requirements.txt` at all (previously
+    silent no-op), it now fails clearly with the same
+    "Failed to install Python dependencies" error used for every other
+    install failure, instead of continuing on to fail later with a
+    more confusing error deeper in the app.
+- **Documented (not converged) the 4x version-comparison duplication**
+  (`utils/update_check.py`'s `parse_version()`, `run.sh`'s
+  `version_gt`/`version_ge`, `run-ui.sh`'s inline copy, `run.ps1`'s
+  `ConvertTo-VersionTuple`): genuinely irreducible, for two independent
+  reasons now documented at each site - (1) the Python-floor gate in
+  all three scripts runs before dependencies are installed, so calling
+  into `utils.update_check` (which pulls in `utils/__init__.py`'s
+  ~20 third-party-backed submodule imports) isn't safe on a fresh
+  checkout; (2) that same floor check compares a 3-component runtime
+  version against a 2-component `requirements.lock` floor string, which
+  `parse_version()`'s deliberate exactly-3-component anchoring would
+  reject outright. No functional shell/PowerShell logic changed for
+  this item, comments only.
+
 ## [2.10.17] - 2026-07-26
 
 ### Fixed

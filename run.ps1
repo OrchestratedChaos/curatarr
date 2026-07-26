@@ -170,6 +170,20 @@ function Check-Dependencies {
 # "2.8.21") into an [int[]] tuple. Returns $null if any component isn't a
 # plain integer (mirrors the Python `except ValueError: return None` /
 # `sys.exit(1)` fail-closed behavior this replaces).
+#
+# PowerShell can't share run.sh's bash source, but it CAN shell out to
+# the same canonical Python (utils/update_check.py's parse_version()) -
+# deliberately not done here, for the same two reasons run.sh's
+# version_gt/version_ge document: (1) this is used for the Python-floor
+# gate in Check-Dependencies, which runs BEFORE pip installs anything -
+# invoking Python to import utils.update_check would first execute
+# utils/__init__.py's ~20 third-party-backed submodule imports, which
+# aren't guaranteed installed yet on a fresh checkout; (2) the floor
+# value read out of requirements.lock's `--python-version X.Y` header is
+# 2-component, while parse_version() requires exactly 3 - it would
+# reject that input outright. This function's own variable-length
+# tuple support (see Compare-VersionTuple below) is what makes comparing
+# a 3-component runtime version against that 2-component floor work.
 function ConvertTo-VersionTuple {
     param([string]$VersionString)
 

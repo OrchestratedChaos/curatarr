@@ -15,15 +15,13 @@ set -e
 # match" into an unwanted hard exit for them.
 set -o pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Color codes for output - shared with run.sh (docker-entrypoint.sh
+# keeps its own copy - see scripts/lib/colors.sh's docstring for why).
+source "$SCRIPT_DIR/scripts/lib/colors.sh"
 
 echo -e "${CYAN}===============================================${NC}"
 echo -e "${CYAN}        Curatarr Setup Wizard${NC}"
