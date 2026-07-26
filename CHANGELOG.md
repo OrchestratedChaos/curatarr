@@ -2,6 +2,35 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.25] - 2026-07-26
+
+### Fixed
+
+- **Post-release smoke test's `cosign verify` job raced
+  `.github/workflows/docker.yml`'s image build+push+sign, producing
+  three false-alarm auto-filed issues (#214, #220, #225 - all
+  `MANIFEST_UNKNOWN`, never a real signing problem).**
+  `post-release-smoke-test.yml` is dispatched manually (by
+  `scripts/sign-release-checksums.sh`, after `release.yml`'s own chain
+  finishes) with no ordering relationship to `docker.yml`, a separate
+  workflow independently triggered by the same tag push - its
+  multi-arch (QEMU) build+push+cosign-sign can still be in flight when
+  the smoke test's `cosign verify` step runs. There's no
+  `needs:`/`workflow_run` link between a manually-dispatched workflow
+  and a specific run of a different, independently-triggered one, and
+  even if there were, matching runs by ref would be less reliable than
+  just checking whether the artifact this job actually needs (a signed
+  image manifest) exists yet. Fixed by retrying the exact same `cosign
+  verify` command/flags (identity regexp + OIDC issuer, unchanged) up
+  to 20 times with a 30s sleep (10 minutes total) instead of failing on
+  the first attempt. This never weakens verification: a genuinely
+  unsigned image or wrong signing identity fails identically on every
+  attempt (nothing about that failure is time-dependent), so it still
+  fails for real once the budget is exhausted - retrying only gives the
+  "not published yet" race a chance to resolve itself. Verified the
+  retry/give-up control flow directly (a fake `cosign` that fails twice
+  then succeeds, and one that always fails).
+
 ## [2.10.24] - 2026-07-26
 
 ### Changed

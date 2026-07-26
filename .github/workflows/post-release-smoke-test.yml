@@ -522,6 +522,36 @@ jobs:
   # command docs/DOCKER.md tells operators to run, against the
   # bare-semver tag docker/metadata-action's `type=semver,pattern=
   # {{version}}` produces for a `vX.Y.Z` tag push (no leading 'v').
+  #
+  # Bounded-retry, not a hard dependency on docker.yml (#233 audit
+  # remediation): docker.yml is a *separate* workflow, triggered
+  # independently by the same `vX.Y.Z` tag push that starts release.yml
+  # (this workflow's own trigger chain - see the top-of-file comment -
+  # is release.yml's finalize-checksums job finishing, then a maintainer
+  # manually running scripts/sign-release-checksums.sh, which dispatches
+  # this workflow). There is no `needs:`/`workflow_run` link connecting
+  # a manually `workflow_dispatch`-triggered workflow to a specific run
+  # of a *different*, independently tag-triggered workflow - and even if
+  # there were, correlating "which docker.yml run matches this release"
+  # by ref is strictly less reliable than just checking whether the
+  # actual artifact this job needs (a signed image manifest) exists yet.
+  # docker.yml's multi-arch (QEMU) build+push+cosign-sign can easily
+  # still be in flight when the maintainer's signing step completes
+  # (their manual step has no ordering relationship to docker.yml at
+  # all) - this raced and produced three false-alarm auto-filed issues
+  # (#214, #220, #225) before this fix, always the same MANIFEST_UNKNOWN
+  # shape: the image/signature genuinely wasn't published *yet*, not a
+  # real signing failure.
+  #
+  # Retries the exact same `cosign verify` command/flags (identity
+  # regexp + OIDC issuer) unchanged - this never weakens what "verified"
+  # means. A genuinely unsigned image or one signed by the wrong
+  # identity fails cosign verify identically on every attempt (there is
+  # nothing time-dependent about that failure), so it still fails for
+  # real once MAX_ATTEMPTS is exhausted; only the "not published yet"
+  # race gets a chance to resolve itself first. Bound: 20 attempts x 30s
+  # = 10 minutes, comfortably longer than docker.yml's typical
+  # multi-arch build+push+sign time.
   # -------------------------------------------------------------------
   cosign-verify:
     name: cosign verify published image
@@ -533,13 +563,38 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: cosign verify ghcr.io/orchestratedchaos/curatarr:${{ needs.resolve-inputs.outputs.version }}
+      - name: cosign verify ghcr.io/orchestratedchaos/curatarr:${{ needs.resolve-inputs.outputs.version }} (bounded retry)
         run: |
-          set -euo pipefail
-          cosign verify \
-            --certificate-identity-regexp '^https://github\.com/OrchestratedChaos/curatarr/\.github/workflows/docker\.yml@refs/' \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            "ghcr.io/orchestratedchaos/curatarr:${VERSION}"
+          set -uo pipefail
+
+          IMAGE="ghcr.io/orchestratedchaos/curatarr:${VERSION}"
+          MAX_ATTEMPTS=20
+          SLEEP_SECONDS=30
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            OUTPUT="$(cosign verify \
+              --certificate-identity-regexp '^https://github\.com/OrchestratedChaos/curatarr/\.github/workflows/docker\.yml@refs/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$IMAGE" 2>&1)"
+            STATUS=$?
+
+            if [ "$STATUS" -eq 0 ]; then
+              echo "$OUTPUT"
+              echo "Verified $IMAGE on attempt ${attempt}/${MAX_ATTEMPTS}."
+              exit 0
+            fi
+
+            echo "Attempt ${attempt}/${MAX_ATTEMPTS} failed:"
+            echo "$OUTPUT"
+
+            if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+              echo "::error::cosign verify never succeeded for $IMAGE after $MAX_ATTEMPTS attempts ($((MAX_ATTEMPTS * SLEEP_SECONDS / 60)) minutes). This is either a genuine signature/identity problem, or docker.yml (a separate workflow - see this job's own comment) is taking longer than usual to build+push+sign. See the last attempt's output above."
+              exit 1
+            fi
+
+            echo "docker.yml's build+push+sign may still be in flight - retrying in ${SLEEP_SECONDS}s..."
+            sleep "$SLEEP_SECONDS"
+          done
 
   # -------------------------------------------------------------------
   # Loud failure path. A silent red X on a workflow nobody watches is
