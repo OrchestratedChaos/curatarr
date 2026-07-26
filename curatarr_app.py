@@ -11,8 +11,9 @@ than adding anything here.
 reached only by the no-flag launch path below, rather than imported at
 module level - a CLI/cron-only source install (requirements.txt, no
 requirements-ui.txt - see that file's header) never has flask
-installed, and every other flag (--version, --run-recommender,
---self-update, --self-update-worker) needs to keep working without it.
+installed, and every other flag (--help/-h, --version,
+--run-recommender, --self-update, --self-update-worker) needs to
+keep working without it.
 
 Where a packaged binary reads/writes config/cache/logs: see
 utils.helpers.get_project_root() - when running frozen (this file,
@@ -192,6 +193,35 @@ def _attach_or_setup_console(debug: bool) -> None:  # pragma: no cover - real Wi
     )
 
 
+_USAGE = """usage: curatarr [--help] [--version] [--self-update] [--debug]
+               [--run-recommender {movie,tv,external,full} [USER] [--debug]]
+
+With no arguments, launches the curatarr web UI.
+
+options:
+  --help, -h                    Show this message and exit.
+  --version                     Print the installed version and exit.
+  --self-update                 Download, verify, and apply the latest
+                                 signed release in place (downloaded
+                                 binary only - source installs update via
+                                 ./run.sh or run.ps1 instead).
+  --run-recommender ENGINE [USER]
+                                 Run a single recommender in-process and
+                                 exit: ENGINE is one of movie, tv,
+                                 external, full (movie+tv+external in
+                                 sequence). USER is optional.
+  --debug                       Enable debug logging (combine with any
+                                 of the above, or with no arguments).
+
+--self-update-worker is used internally by the web UI's "Update now"
+button and is not meant to be run directly.
+"""
+
+
+def _print_usage() -> None:
+    print(_USAGE, end='')
+
+
 def _run_one_recommender(engine: str, rest: list) -> None:
     """Run a single recommender's own main() with sys.argv rewritten to
     look like a normal `recommenders/<engine>.py [user] [--debug]`
@@ -325,7 +355,10 @@ def _dispatch_recommender(argv: list) -> None:
 
 if __name__ == '__main__':
     _suppress_windows_crash_dialogs()
-    if len(sys.argv) > 2 and sys.argv[1] == '--run-recommender':
+    if len(sys.argv) > 1 and sys.argv[1] in ('--help', '-h'):
+        _print_usage()
+        sys.exit(0)
+    elif len(sys.argv) > 2 and sys.argv[1] == '--run-recommender':
         _dispatch_recommender(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--self-update-worker':
         # DETACHED worker for the web UI's "Update now" button when

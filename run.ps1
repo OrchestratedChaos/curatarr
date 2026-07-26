@@ -13,6 +13,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# PowerShell 7 introduced $PSNativeCommandUseErrorActionPreference, whose
+# default has varied across 7.x releases. When it is $true, a native
+# command (git, python, etc.) exiting non-zero becomes a *terminating*
+# error under $ErrorActionPreference = "Stop" - aborting this whole
+# script at the point of the call, before the `if ($LASTEXITCODE ...)`
+# checks throughout this file ever get a chance to run. Force it off so
+# every one of those checks behaves identically on Windows PowerShell
+# 5.1 (which doesn't have this variable at all - assigning it here is
+# harmless, it's simply read by nothing there) and PowerShell 7.x. Set
+# once at script scope so it covers every native-command call site in
+# this file, not just one.
+$PSNativeCommandUseErrorActionPreference = $false
+
 # Color functions
 function Write-Cyan { param($msg) Write-Host $msg -ForegroundColor Cyan }
 function Write-Green { param($msg) Write-Host $msg -ForegroundColor Green }

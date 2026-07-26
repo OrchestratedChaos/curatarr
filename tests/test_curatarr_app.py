@@ -106,6 +106,11 @@ class TestCliPathsDontNeedFlask:
         assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
         assert result.stdout.strip() == __version__
 
+    def test_help_flag_succeeds_with_flask_unimportable(self):
+        result = self._run(['--help'])
+        assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        assert 'usage: curatarr' in result.stdout
+
     def test_run_recommender_dispatch_does_not_need_flask(self):
         """Only checks dispatch reaches _run_one_recommender without
         ModuleNotFoundError on flask - the unknown-engine branch exits
@@ -155,6 +160,22 @@ class TestDispatchViaRunpy:
             runpy.run_module('curatarr_app', run_name='__main__')
         assert exc_info.value.code == 2
         assert '--self-update only applies to a downloaded binary' in capsys.readouterr().err
+
+    def test_help_flag_prints_usage_and_exits_0(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, 'argv', ['curatarr', '--help'])
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_module('curatarr_app', run_name='__main__')
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert 'usage: curatarr' in out
+        assert '--run-recommender' in out
+
+    def test_short_h_flag_prints_usage_and_exits_0(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, 'argv', ['curatarr', '-h'])
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_module('curatarr_app', run_name='__main__')
+        assert exc_info.value.code == 0
+        assert 'usage: curatarr' in capsys.readouterr().out
 
     def test_frozen_normal_launch_cleans_up_stale_binary_before_main(self, monkeypatch):
         monkeypatch.setattr(sys, 'argv', ['curatarr'])
