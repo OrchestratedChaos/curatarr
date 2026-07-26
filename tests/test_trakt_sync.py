@@ -1,4 +1,5 @@
-"""Tests for utils/trakt_sync.py"""
+"""Tests for trakt_sync.py (project-root CLI orchestrator - moved out of
+utils/ since it reaches into the domain layer, recommenders.external)."""
 
 from unittest.mock import patch
 
@@ -6,12 +7,12 @@ from unittest.mock import patch
 class TestTraktSyncMain:
     """Tests for trakt_sync main function."""
 
-    @patch("utils.trakt_sync.sync_watch_history_to_trakt")
-    @patch("utils.trakt_sync.get_tmdb_config")
-    @patch("utils.trakt_sync.load_config")
+    @patch("trakt_sync.sync_watch_history_to_trakt")
+    @patch("trakt_sync.get_tmdb_config")
+    @patch("trakt_sync.load_config")
     def test_main_loads_config_and_syncs(self, mock_load, mock_get_tmdb, mock_sync):
         """Test main function loads config and calls sync."""
-        from utils.trakt_sync import main
+        from trakt_sync import main
 
         mock_load.return_value = {"trakt": {"enabled": True}}
         mock_get_tmdb.return_value = {"api_key": "test_key"}
@@ -22,12 +23,12 @@ class TestTraktSyncMain:
         mock_get_tmdb.assert_called_once()
         mock_sync.assert_called_once()
 
-    @patch("utils.trakt_sync.sync_watch_history_to_trakt")
-    @patch("utils.trakt_sync.get_tmdb_config")
-    @patch("utils.trakt_sync.load_config")
+    @patch("trakt_sync.sync_watch_history_to_trakt")
+    @patch("trakt_sync.get_tmdb_config")
+    @patch("trakt_sync.load_config")
     def test_main_passes_correct_args(self, mock_load, mock_get_tmdb, mock_sync):
         """Test main passes correct arguments to sync function."""
-        from utils.trakt_sync import main
+        from trakt_sync import main
 
         config = {"trakt": {"enabled": True}, "plex": {}}
         mock_load.return_value = config

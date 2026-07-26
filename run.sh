@@ -618,7 +618,7 @@ main() {
     # This runs FIRST so both internal and external recommenders benefit
     if [ -f "config/trakt.yml" ] && grep -q "auto_sync: true" config/trakt.yml 2>/dev/null; then
         echo -e "${CYAN}=== Syncing Watch History to Trakt ===${NC}"
-        python3 utils/trakt_sync.py || echo -e "${YELLOW}⚠ Trakt sync skipped${NC}"
+        python3 trakt_sync.py || echo -e "${YELLOW}⚠ Trakt sync skipped${NC}"
         echo ""
     fi
 

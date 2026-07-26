@@ -43,10 +43,10 @@ from recommenders.external_exports import (
 from recommenders.external_output import SERVICE_DISPLAY_NAMES, generate_combined_html, generate_markdown
 from utils import (
     CYAN,
+    DEFAULT_RATING_MULTIPLIERS,
     GREEN,
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
-    RATING_MULTIPLIERS,
     RESET,
     TMDB_ANIMATION_GENRE_ID,
     TMDB_RATE_LIMIT_DELAY,
@@ -601,12 +601,12 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
         user_rating = getattr(item, "userRating", None)
         if user_rating:
             rating_int = max(0, min(10, int(round(user_rating))))
-            rating_mult = RATING_MULTIPLIERS.get(rating_int, 1.0)
+            rating_mult = DEFAULT_RATING_MULTIPLIERS.get(rating_int, 1.0)
         else:
             # Use audience rating as fallback, but with less weight
             audience_rating = getattr(item, "audienceRating", 5.0) or 5.0
             rating_int = max(0, min(10, int(round(audience_rating))))
-            rating_mult = RATING_MULTIPLIERS.get(rating_int, 1.0) * 0.5  # Half weight for audience rating
+            rating_mult = DEFAULT_RATING_MULTIPLIERS.get(rating_int, 1.0) * 0.5  # Half weight for audience rating
 
         # Combined multiplier
         multiplier = rewatch_mult * recency_mult * rating_mult

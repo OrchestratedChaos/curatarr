@@ -1497,7 +1497,7 @@ function Main {
     # This runs FIRST so both internal and external recommenders benefit
     if ((Test-Path "config/trakt.yml") -and (Select-String -Path "config/trakt.yml" -Pattern "auto_sync: true" -Quiet -ErrorAction SilentlyContinue)) {
         Write-Cyan "=== Syncing Watch History to Trakt ==="
-        & $pythonCmd utils/trakt_sync.py
+        & $pythonCmd trakt_sync.py
         if ($LASTEXITCODE -eq 0) {
             Write-Green "OK Trakt sync complete"
         } else {
