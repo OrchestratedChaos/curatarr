@@ -256,6 +256,126 @@ def generate_markdown(
     return output_file
 
 
+def _collect_tmdb_ids_from_categorized(categorized, media_type, imdb_cache, all_imdb_ids, pending_lookups):
+    """Helper to collect TMDB IDs from categorized items."""
+    items = categorized.get("all_items", [])
+    if not items:
+        for service_items in categorized.get("user_services", {}).values():
+            items.extend(service_items)
+        for service_items in categorized.get("other_services", {}).values():
+            items.extend(service_items)
+        items.extend(categorized.get("acquire", []))
+
+    for item in items:
+        tmdb_id = item.get("tmdb_id")
+        if not tmdb_id:
+            continue
+        # Check cache first
+        cache_key = f"{tmdb_id}_{media_type}"
+        if cache_key in imdb_cache:
+            all_imdb_ids[tmdb_id] = imdb_cache[cache_key]
+        elif tmdb_id not in all_imdb_ids and (tmdb_id, media_type) not in [(p[0], p[1]) for p in pending_lookups]:
+            pending_lookups.append((tmdb_id, media_type))
+
+
+def _render_table_flat(
+    items, media_type, user_id, user_services, all_imdb_ids, now, movie_counts, show_counts, total_users
+):
+    """Render HTML table with streaming icons column (score-sorted)"""
+    rows = []
+    counts = movie_counts if media_type == "movie" else show_counts
+    for item in items:
+        tmdb_id = item.get("tmdb_id", "")
+        imdb_id = all_imdb_ids.get(tmdb_id, "")
+        days_listed = (now - datetime.fromisoformat(item["added_date"])).days
+        # Show shared count if more than one user
+        user_count = counts.get(str(tmdb_id), 1)
+        shared_badge = (
+            f'<span class="shared-badge" title="{user_count} of {total_users} users want this">{user_count}/{total_users}</span>'
+            if total_users > 1
+            else ""
+        )
+        # Render streaming icons (with rent/buy fallback)
+        streaming_services = item.get("streaming_services", [])
+        rent_services = item.get("rent_services", [])
+        buy_services = item.get("buy_services", [])
+        streaming_html = render_streaming_icons(
+            streaming_services, user_services, rent_services, buy_services, item["title"]
+        )
+        # Add animated badge if applicable
+        genre_ids = item.get("genre_ids", [])
+        animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ""
+        rows.append(f'''
+                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="{_esc(media_type)}" data-user="{_esc(user_id)}">
+                    <td><input type="checkbox" class="select-item"></td>
+                    <td>{_esc(item["title"])} {animated_badge}{shared_badge}</td>
+                    <td>{_esc(item["year"])}</td>
+                    <td>{item["rating"]:.1f}</td>
+                    <td>{item["score"]:.0%}</td>
+                    <td><div class="streaming-icons">{streaming_html}</div></td>
+                    <td>{days_listed}</td>
+                </tr>''')
+    return "\n".join(rows)
+
+
+def _render_sequels_table(items, user_services, all_imdb_ids):
+    """Render HTML table for missing sequels (Sequel Huntarr)"""
+    rows = []
+    for item in items:
+        tmdb_id = item.get("tmdb_id", "")
+        imdb_id = all_imdb_ids.get(tmdb_id, "")
+        collection_name = item.get("collection_name", "Unknown")
+        owned = item.get("owned_count", 0)
+        total = item.get("total_count", 0)
+        streaming_services = item.get("streaming_services", [])
+        rent_services = item.get("rent_services", [])
+        buy_services = item.get("buy_services", [])
+        streaming_html = render_streaming_icons(
+            streaming_services, user_services, rent_services, buy_services, item["title"]
+        )
+        # Add badges for TV Special and Animated
+        badges = ""
+        if item.get("is_animated"):
+            badges += '<span class="animated-badge">Animated</span>'
+        if item.get("is_tv_movie"):
+            badges += '<span class="tv-special-badge">TV Special</span>'
+        rows.append(f'''
+                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="sequel-huntarr">
+                    <td><input type="checkbox" class="select-item"></td>
+                    <td>{_esc(item["title"])} {badges}</td>
+                    <td>{_esc(item.get("year", ""))}</td>
+                    <td>{_esc(collection_name)}</td>
+                    <td>{owned}/{total}</td>
+                    <td><div class="streaming-icons">{streaming_html}</div></td>
+                </tr>''')
+    return "\n".join(rows)
+
+
+def _render_horizon_table(items, all_imdb_ids):
+    """Render HTML table for upcoming movies (Horizon Huntarr)"""
+    rows = []
+    for item in items:
+        tmdb_id = item.get("tmdb_id", "")
+        imdb_id = all_imdb_ids.get(tmdb_id, "")
+        collection_name = item.get("collection_name", "Unknown")
+        release_date = item.get("release_date", "TBA")
+        status = item.get("status", "Unknown")
+        # Status badge styling
+        status_class = status.lower().replace(" ", "-")
+        # Add animated badge if applicable
+        genre_ids = item.get("genre_ids", [])
+        animated_badge = '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ""
+        rows.append(f'''
+                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="horizon-huntarr">
+                    <td><input type="checkbox" class="select-item"></td>
+                    <td>{_esc(item["title"])} {animated_badge}</td>
+                    <td>{_esc(collection_name)}</td>
+                    <td>{_esc(release_date)}</td>
+                    <td><span class="status-badge {_esc(status_class)}">{_esc(status)}</span></td>
+                </tr>''')
+    return "\n".join(rows)
+
+
 def generate_combined_html(
     all_users_data: List[Dict],
     output_dir: str,
@@ -303,30 +423,13 @@ def generate_combined_html(
     all_imdb_ids = {}  # tmdb_id -> imdb_id
     pending_lookups = []  # [(tmdb_id, media_type), ...]
 
-    def collect_tmdb_ids_from_categorized(categorized, media_type):
-        """Helper to collect TMDB IDs from categorized items."""
-        items = categorized.get("all_items", [])
-        if not items:
-            for service_items in categorized.get("user_services", {}).values():
-                items.extend(service_items)
-            for service_items in categorized.get("other_services", {}).values():
-                items.extend(service_items)
-            items.extend(categorized.get("acquire", []))
-
-        for item in items:
-            tmdb_id = item.get("tmdb_id")
-            if not tmdb_id:
-                continue
-            # Check cache first
-            cache_key = f"{tmdb_id}_{media_type}"
-            if cache_key in imdb_cache:
-                all_imdb_ids[tmdb_id] = imdb_cache[cache_key]
-            elif tmdb_id not in all_imdb_ids and (tmdb_id, media_type) not in [(p[0], p[1]) for p in pending_lookups]:
-                pending_lookups.append((tmdb_id, media_type))
-
     for user_data in all_users_data:
-        collect_tmdb_ids_from_categorized(user_data["movies_categorized"], "movie")
-        collect_tmdb_ids_from_categorized(user_data["shows_categorized"], "tv")
+        _collect_tmdb_ids_from_categorized(
+            user_data["movies_categorized"], "movie", imdb_cache, all_imdb_ids, pending_lookups
+        )
+        _collect_tmdb_ids_from_categorized(
+            user_data["shows_categorized"], "tv", imdb_cache, all_imdb_ids, pending_lookups
+        )
 
     # Also collect from missing sequels (Sequel Huntarr)
     for item in missing_sequels:
@@ -369,103 +472,6 @@ def generate_combined_html(
     else:
         print(f"  {GREEN}All {len(all_imdb_ids)} IMDB IDs from cache{RESET}")
 
-    def render_table_flat(items, media_type, user_id, user_services):
-        """Render HTML table with streaming icons column (score-sorted)"""
-        rows = []
-        counts = movie_counts if media_type == "movie" else show_counts
-        for item in items:
-            tmdb_id = item.get("tmdb_id", "")
-            imdb_id = all_imdb_ids.get(tmdb_id, "")
-            days_listed = (now - datetime.fromisoformat(item["added_date"])).days
-            # Show shared count if more than one user
-            user_count = counts.get(str(tmdb_id), 1)
-            shared_badge = (
-                f'<span class="shared-badge" title="{user_count} of {total_users} users want this">{user_count}/{total_users}</span>'
-                if total_users > 1
-                else ""
-            )
-            # Render streaming icons (with rent/buy fallback)
-            streaming_services = item.get("streaming_services", [])
-            rent_services = item.get("rent_services", [])
-            buy_services = item.get("buy_services", [])
-            streaming_html = render_streaming_icons(
-                streaming_services, user_services, rent_services, buy_services, item["title"]
-            )
-            # Add animated badge if applicable
-            genre_ids = item.get("genre_ids", [])
-            animated_badge = (
-                '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ""
-            )
-            rows.append(f'''
-                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="{_esc(media_type)}" data-user="{_esc(user_id)}">
-                    <td><input type="checkbox" class="select-item"></td>
-                    <td>{_esc(item["title"])} {animated_badge}{shared_badge}</td>
-                    <td>{_esc(item["year"])}</td>
-                    <td>{item["rating"]:.1f}</td>
-                    <td>{item["score"]:.0%}</td>
-                    <td><div class="streaming-icons">{streaming_html}</div></td>
-                    <td>{days_listed}</td>
-                </tr>''')
-        return "\n".join(rows)
-
-    def render_sequels_table(items, user_services):
-        """Render HTML table for missing sequels (Sequel Huntarr)"""
-        rows = []
-        for item in items:
-            tmdb_id = item.get("tmdb_id", "")
-            imdb_id = all_imdb_ids.get(tmdb_id, "")
-            collection_name = item.get("collection_name", "Unknown")
-            owned = item.get("owned_count", 0)
-            total = item.get("total_count", 0)
-            streaming_services = item.get("streaming_services", [])
-            rent_services = item.get("rent_services", [])
-            buy_services = item.get("buy_services", [])
-            streaming_html = render_streaming_icons(
-                streaming_services, user_services, rent_services, buy_services, item["title"]
-            )
-            # Add badges for TV Special and Animated
-            badges = ""
-            if item.get("is_animated"):
-                badges += '<span class="animated-badge">Animated</span>'
-            if item.get("is_tv_movie"):
-                badges += '<span class="tv-special-badge">TV Special</span>'
-            rows.append(f'''
-                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="sequel-huntarr">
-                    <td><input type="checkbox" class="select-item"></td>
-                    <td>{_esc(item["title"])} {badges}</td>
-                    <td>{_esc(item.get("year", ""))}</td>
-                    <td>{_esc(collection_name)}</td>
-                    <td>{owned}/{total}</td>
-                    <td><div class="streaming-icons">{streaming_html}</div></td>
-                </tr>''')
-        return "\n".join(rows)
-
-    def render_horizon_table(items):
-        """Render HTML table for upcoming movies (Horizon Huntarr)"""
-        rows = []
-        for item in items:
-            tmdb_id = item.get("tmdb_id", "")
-            imdb_id = all_imdb_ids.get(tmdb_id, "")
-            collection_name = item.get("collection_name", "Unknown")
-            release_date = item.get("release_date", "TBA")
-            status = item.get("status", "Unknown")
-            # Status badge styling
-            status_class = status.lower().replace(" ", "-")
-            # Add animated badge if applicable
-            genre_ids = item.get("genre_ids", [])
-            animated_badge = (
-                '<span class="animated-badge">Animated</span>' if TMDB_ANIMATION_GENRE_ID in genre_ids else ""
-            )
-            rows.append(f'''
-                <tr data-tmdb="{_esc(tmdb_id)}" data-imdb="{_esc(imdb_id)}" data-type="movie" data-user="horizon-huntarr">
-                    <td><input type="checkbox" class="select-item"></td>
-                    <td>{_esc(item["title"])} {animated_badge}</td>
-                    <td>{_esc(collection_name)}</td>
-                    <td>{_esc(release_date)}</td>
-                    <td><span class="status-badge {_esc(status_class)}">{_esc(status)}</span></td>
-                </tr>''')
-        return "\n".join(rows)
-
     # Build tabs HTML
     tabs_html = ""
     panels_html = ""
@@ -488,13 +494,16 @@ def generate_combined_html(
         all_movies = movies_cat.get("all_items", [])
         if all_movies:
             panel_content += f"<h2>Movies to Watch ({len(all_movies)})</h2>"
+            movies_table_html = _render_table_flat(
+                all_movies, "movie", user_id, user_services, all_imdb_ids, now, movie_counts, show_counts, total_users
+            )
             panel_content += f"""
                 <table>
                     <thead>
                         <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Rating</th><th class="sortable desc">Score</th><th class="sortable">Streaming</th><th class="sortable">Days</th></tr>
                     </thead>
                     <tbody>
-                        {render_table_flat(all_movies, "movie", user_id, user_services)}
+                        {movies_table_html}
                     </tbody>
                 </table>"""
 
@@ -502,13 +511,16 @@ def generate_combined_html(
         all_shows = shows_cat.get("all_items", [])
         if all_shows:
             panel_content += f"<h2>TV Shows to Watch ({len(all_shows)})</h2>"
+            shows_table_html = _render_table_flat(
+                all_shows, "show", user_id, user_services, all_imdb_ids, now, movie_counts, show_counts, total_users
+            )
             panel_content += f"""
                 <table>
                     <thead>
                         <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Rating</th><th class="sortable desc">Score</th><th class="sortable">Streaming</th><th class="sortable">Days</th></tr>
                     </thead>
                     <tbody>
-                        {render_table_flat(all_shows, "show", user_id, user_services)}
+                        {shows_table_html}
                     </tbody>
                 </table>"""
 
@@ -537,7 +549,7 @@ def generate_combined_html(
                     <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Year</th><th class="sortable">Collection</th><th class="sortable">Owned</th><th class="sortable">Streaming</th></tr>
                 </thead>
                 <tbody>
-                    {render_sequels_table(missing_sequels, first_user_services)}
+                    {_render_sequels_table(missing_sequels, first_user_services, all_imdb_ids)}
                 </tbody>
             </table>"""
         panels_html += f'<div class="tab-panel {is_active}" data-user="sequel-huntarr">{sequels_content}</div>\n'
@@ -558,7 +570,7 @@ def generate_combined_html(
                     <tr><th><input type="checkbox" class="select-all-table"></th><th class="sortable">Title</th><th class="sortable">Collection</th><th class="sortable">Release Date</th><th class="sortable">Status</th></tr>
                 </thead>
                 <tbody>
-                    {render_horizon_table(horizon_movies)}
+                    {_render_horizon_table(horizon_movies, all_imdb_ids)}
                 </tbody>
             </table>"""
         panels_html += f'<div class="tab-panel {is_active}" data-user="horizon-huntarr">{horizon_content}</div>\n'

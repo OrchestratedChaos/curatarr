@@ -1921,20 +1921,9 @@ def load_ignore_list(display_name: str) -> Set[str]:
     return set()
 
 
-def process_user(config, plex, username, movie_library=None, tv_library=None):
-    """Process external recommendations for a single user.
-
-    Args:
-        config: Root configuration dictionary
-        plex: Connected PlexServer instance
-        username: Plex username to process
-        movie_library: Optional normalized movie library dict (#157 Phase 3,
-            see utils.config.get_libraries). None keeps the legacy
-            single-library behavior (config['plex'].movie_library).
-        tv_library: Optional normalized tv library dict (#157 Phase 3).
-            None keeps the legacy single-library behavior
-            (config['plex'].tv_library).
-    """
+def _pu_resolve_context(config, username, movie_library, tv_library):
+    """process_user stage: resolve display name/library section names/cache
+    lib-ids for this user (see process_user)."""
     user_prefs = config.get("users", {}).get("preferences", {}).get(username, {})
     display_name = user_prefs.get("display_name", username)
 
@@ -1952,6 +1941,14 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     movie_cache_lib_id = movie_library["id"] if movie_is_multi else None
     tv_cache_lib_id = tv_library["id"] if tv_is_multi else None
 
+    return (user_prefs, display_name, movie_library_name, tv_library_name, movie_cache_lib_id, tv_cache_lib_id)
+
+
+def _pu_load_libraries_and_caches(
+    plex, display_name, movie_library_name, tv_library_name, movie_cache_lib_id, tv_cache_lib_id
+):
+    """process_user stage: fetch current library contents and load this
+    user's existing recommendation caches/ignore list (see process_user)."""
     library_movies = get_library_items(plex, movie_library_name, "movie")
     library_shows = get_library_items(plex, tv_library_name, "show")
 
@@ -1962,6 +1959,14 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     show_cache = load_cache(display_name, "shows", lib_id=tv_cache_lib_id)
     ignore_list = load_ignore_list(display_name)
 
+    return (library_movies, library_shows, movie_cache, show_cache, ignore_list)
+
+
+def _pu_clean_caches(config, movie_cache, show_cache, library_movies, library_shows, ignore_list):
+    """process_user stage: mutate movie_cache/show_cache in place - drop
+    items that fail the configured language filter, are now in the
+    library (acquired), or are on the user's ignore list (see
+    process_user)."""
     # Get language filter from config
     external_config = config.get("external_recommendations", {})
     language_filter = external_config.get("language")
@@ -2018,6 +2023,11 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     if removed_ignored:
         print(f"{YELLOW}Removed {removed_ignored} ignored items{RESET}")
 
+
+def _pu_build_profiles(plex, config, username):
+    """process_user stage: load (or build) this user's movie/show
+    preference profiles, then enhance them with Trakt watch history where
+    applicable (see process_user)."""
     # Load user profiles from cache (FAST) or build from scratch (SLOW)
     # Cache is pre-computed by internal recommenders with proper weighting
     movie_profile = load_user_profile_from_cache(config, username, "movie")
@@ -2049,6 +2059,14 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
         if show_profile:
             show_profile = enhance_profile_with_trakt(show_profile, config, tmdb_api_key, cache_dir, "tv")
 
+    return (movie_profile, show_profile, tmdb_api_key)
+
+
+def _pu_plan_discovery(config, user_prefs, movie_cache, show_cache):
+    """process_user stage: compute each cache's quality-item deficit
+    against its configured limit, the cached-id exclusion sets, and any
+    Trakt watchlist IMDB ids to exclude from discovery (see
+    process_user)."""
     # Find new recommendations using profile-based scoring
     external_config = config.get("external_recommendations", {})
     movie_limit = external_config.get("movie_limit", 50)
@@ -2088,6 +2106,43 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
                     f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist"
                 )
 
+    return (
+        movie_limit,
+        show_limit,
+        min_relevance,
+        exclude_genres,
+        quality_movies,
+        quality_shows,
+        movie_deficit,
+        show_deficit,
+        cached_movie_ids,
+        cached_show_ids,
+        exclude_movie_imdb_ids,
+        exclude_show_imdb_ids,
+    )
+
+
+def _pu_discover_new_content(
+    tmdb_api_key,
+    movie_profile,
+    show_profile,
+    library_movies,
+    library_shows,
+    movie_deficit,
+    show_deficit,
+    quality_movies,
+    quality_shows,
+    exclude_genres,
+    min_relevance,
+    config,
+    exclude_movie_imdb_ids,
+    exclude_show_imdb_ids,
+    cached_movie_ids,
+    cached_show_ids,
+):
+    """process_user stage: discover new movie/show recommendations to fill
+    each cache's deficit (skipped entirely when a cache is already at or
+    above its limit) (see process_user)."""
     # Movie discovery - skip if cache is full, otherwise find deficit items
     if movie_deficit == 0:
         print(f"{GREEN}Movie cache healthy ({len(quality_movies)} quality items), skipping discovery{RESET}")
@@ -2126,6 +2181,26 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
             exclude_cached_ids=cached_show_ids,  # Skip items already in cache
         )
 
+    return (new_movies, new_shows)
+
+
+def _pu_reconcile_caches(
+    movie_cache,
+    show_cache,
+    new_movies,
+    new_shows,
+    movie_limit,
+    show_limit,
+    display_name,
+    movie_cache_lib_id,
+    tv_cache_lib_id,
+    min_relevance,
+):
+    """process_user stage: merge newly-discovered items into the caches
+    (updating scores for items already present), trim each cache back down
+    to its configured limit (keeping the highest-scored items), persist
+    both caches, then build the final threshold-filtered, limit-backfilled
+    movie/show lists for this run's output (see process_user)."""
     # Merge with existing cache - UPDATE scores for existing items, ADD new ones
     for movie in new_movies:
         tmdb_id = str(movie["tmdb_id"])
@@ -2227,6 +2302,13 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
         f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance * 100)}% threshold){RESET}"
     )
 
+    return (movies_list, shows_list)
+
+
+def _pu_categorize_and_stamp(config, movies_list, shows_list, tmdb_api_key, movie_library, tv_library):
+    """process_user stage: categorize the final movie/show lists by
+    streaming-service availability and stamp each item with its source
+    library id (#157 Phase 3 provenance) (see process_user)."""
     # Get household streaming services from top-level config
     user_services = config.get("streaming_services", [])
 
@@ -2243,6 +2325,12 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     _stamp_library_id(movies_categorized, movie_item_library_id)
     _stamp_library_id(shows_categorized, tv_item_library_id)
 
+    return (movies_categorized, shows_categorized, user_services)
+
+
+def _pu_finalize_output(username, display_name, movies_categorized, shows_categorized):
+    """process_user stage: write this user's markdown recommendations file
+    and print the final per-user summary (see process_user)."""
     # Generate markdown per user
     project_root = get_project_root()
     output_dir = os.path.join(project_root, "recommendations", "external")
@@ -2262,6 +2350,86 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
 
     print(f"{GREEN}Processed: {total_movies} movies, {total_shows} shows{RESET}")
     print(f"\nExternal recommendation process completed for {display_name}!")
+
+
+def process_user(config, plex, username, movie_library=None, tv_library=None):
+    """Process external recommendations for a single user.
+
+    Args:
+        config: Root configuration dictionary
+        plex: Connected PlexServer instance
+        username: Plex username to process
+        movie_library: Optional normalized movie library dict (#157 Phase 3,
+            see utils.config.get_libraries). None keeps the legacy
+            single-library behavior (config['plex'].movie_library).
+        tv_library: Optional normalized tv library dict (#157 Phase 3).
+            None keeps the legacy single-library behavior
+            (config['plex'].tv_library).
+    """
+    user_prefs, display_name, movie_library_name, tv_library_name, movie_cache_lib_id, tv_cache_lib_id = (
+        _pu_resolve_context(config, username, movie_library, tv_library)
+    )
+
+    library_movies, library_shows, movie_cache, show_cache, ignore_list = _pu_load_libraries_and_caches(
+        plex, display_name, movie_library_name, tv_library_name, movie_cache_lib_id, tv_cache_lib_id
+    )
+
+    _pu_clean_caches(config, movie_cache, show_cache, library_movies, library_shows, ignore_list)
+
+    movie_profile, show_profile, tmdb_api_key = _pu_build_profiles(plex, config, username)
+
+    (
+        movie_limit,
+        show_limit,
+        min_relevance,
+        exclude_genres,
+        quality_movies,
+        quality_shows,
+        movie_deficit,
+        show_deficit,
+        cached_movie_ids,
+        cached_show_ids,
+        exclude_movie_imdb_ids,
+        exclude_show_imdb_ids,
+    ) = _pu_plan_discovery(config, user_prefs, movie_cache, show_cache)
+
+    new_movies, new_shows = _pu_discover_new_content(
+        tmdb_api_key,
+        movie_profile,
+        show_profile,
+        library_movies,
+        library_shows,
+        movie_deficit,
+        show_deficit,
+        quality_movies,
+        quality_shows,
+        exclude_genres,
+        min_relevance,
+        config,
+        exclude_movie_imdb_ids,
+        exclude_show_imdb_ids,
+        cached_movie_ids,
+        cached_show_ids,
+    )
+
+    movies_list, shows_list = _pu_reconcile_caches(
+        movie_cache,
+        show_cache,
+        new_movies,
+        new_shows,
+        movie_limit,
+        show_limit,
+        display_name,
+        movie_cache_lib_id,
+        tv_cache_lib_id,
+        min_relevance,
+    )
+
+    movies_categorized, shows_categorized, user_services = _pu_categorize_and_stamp(
+        config, movies_list, shows_list, tmdb_api_key, movie_library, tv_library
+    )
+
+    _pu_finalize_output(username, display_name, movies_categorized, shows_categorized)
 
     # Return data for combined HTML generation and Trakt sync.
     #

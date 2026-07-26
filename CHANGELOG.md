@@ -2,6 +2,56 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.28] - 2026-07-26
+
+### Changed
+
+- **Audit remediation batch E (PR3): hoisted nested helpers and split
+  `process_user`.** `generate_combined_html`
+  (`recommenders/external_render.py`) defined 4 helper functions INSIDE
+  itself (`collect_tmdb_ids_from_categorized`, `render_table_flat`,
+  `render_sequels_table`, `render_horizon_table`) - hoisted to module level
+  (now `_collect_tmdb_ids_from_categorized`/`_render_table_flat`/
+  `_render_sequels_table`/`_render_horizon_table`, matching this file's
+  existing underscore-prefix convention for internal helpers), taking
+  their previously-closure-captured variables (`imdb_cache`,
+  `all_imdb_ids`, `pending_lookups`, `now`, `movie_counts`, `show_counts`,
+  `total_users`) as explicit parameters instead.
+
+  `process_user` (`recommenders/external.py`, ~373 lines, 44 branches but
+  shallow/linear nesting) split into 9 named pipeline stages
+  (`_pu_resolve_context`, `_pu_load_libraries_and_caches`,
+  `_pu_clean_caches`, `_pu_build_profiles`, `_pu_plan_discovery`,
+  `_pu_discover_new_content`, `_pu_reconcile_caches`,
+  `_pu_categorize_and_stamp`, `_pu_finalize_output`), called in the exact
+  original order - existing tests assert on mocked dependencies' call
+  order (e.g. movie library/cache operations before tv), so stage
+  boundaries were chosen to never reorder a call relative to another.
+  `process_user`'s own signature and return contract are unchanged.
+
+  Evaluated but **skipped** two other audit-flagged candidates, per the
+  audit's own "skip and report if not reviewable" guidance:
+  `find_similar_content_with_profile` (~249 lines) has a discovery loop
+  with genuine cross-iteration mutable state (`quality_recs`, `seen_ids`,
+  `scored_cache`, early-exit counters) - splitting it out is materially
+  riskier than `process_user`'s linear pipeline and not attempted here.
+  `export_to_sonarr`/`export_to_radarr` (~230/227 lines) are structurally
+  parallel but not simple 1:1 substitutions - they use different exception
+  types (`SonarrAPIError`/`RadarrAPIError`), different client methods
+  (`get_series()`/`get_movies()`), different id fields (`tvdb_id`/
+  `tmdb_id`), and non-overlapping per-service settings
+  (`season_folder`/`series_type` vs `minimum_availability`) - factoring
+  the shared part safely would need a real abstraction layer, a
+  substantially bigger and harder-to-review diff than the rest of this
+  batch.
+
+  Verified behavior-preserving: `tests/harness.py` byte-identical
+  `PYTHONHASHSEED=0` output (this batch doesn't touch scoring, re-checked
+  anyway); a synthetic watchlist page byte-identical before/after; a full
+  `pyinstaller curatarr.spec` build + running the resulting frozen binary.
+  Added 11 new tests for the hoisted/extracted functions (2448 passed, up
+  from 2437).
+
 ## [2.10.27] - 2026-07-26
 
 ### Changed

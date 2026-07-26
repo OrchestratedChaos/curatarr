@@ -10,12 +10,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from recommenders.external_render import (
     SERVICE_SHORT_NAMES,
+    _collect_tmdb_ids_from_categorized,
     _generate_html_template,
     _html_body_header,
     _html_head_and_style,
     _html_script,
     _html_tabs_and_panels,
     _load_imdb_cache,
+    _render_horizon_table,
+    _render_sequels_table,
+    _render_table_flat,
     _save_imdb_cache,
     generate_combined_html,
     generate_markdown,
@@ -1102,3 +1106,110 @@ class TestGenerateHtmlTemplateHelpers:
         )
         actual = _generate_html_template(tabs_html, panels_html, now)
         assert actual == expected
+
+
+class TestHoistedGenerateCombinedHtmlHelpers:
+    """Tests for the 4 helpers generate_combined_html used to define as
+    nested closures (collect_tmdb_ids_from_categorized, render_table_flat,
+    render_sequels_table, render_horizon_table) - hoisted to module level
+    (now underscore-prefixed) so they're reachable/testable in isolation."""
+
+    def test_collect_tmdb_ids_from_categorized_uses_cache_hit(self):
+        imdb_cache = {"123_movie": "tt000123"}
+        all_imdb_ids = {}
+        pending_lookups = []
+        categorized = {"all_items": [{"tmdb_id": 123, "title": "Cached Movie"}]}
+
+        _collect_tmdb_ids_from_categorized(categorized, "movie", imdb_cache, all_imdb_ids, pending_lookups)
+
+        assert all_imdb_ids == {123: "tt000123"}
+        assert pending_lookups == []
+
+    def test_collect_tmdb_ids_from_categorized_queues_cache_miss(self):
+        imdb_cache = {}
+        all_imdb_ids = {}
+        pending_lookups = []
+        categorized = {"all_items": [{"tmdb_id": 456, "title": "New Movie"}]}
+
+        _collect_tmdb_ids_from_categorized(categorized, "movie", imdb_cache, all_imdb_ids, pending_lookups)
+
+        assert all_imdb_ids == {}
+        assert pending_lookups == [(456, "movie")]
+
+    def test_collect_tmdb_ids_from_categorized_falls_back_to_service_buckets(self):
+        """When all_items is empty, falls back to user_services/other_services/acquire."""
+        imdb_cache = {}
+        all_imdb_ids = {}
+        pending_lookups = []
+        categorized = {
+            "all_items": [],
+            "user_services": {"netflix": [{"tmdb_id": 789, "title": "Bucketed Movie"}]},
+            "other_services": {},
+            "acquire": [],
+        }
+
+        _collect_tmdb_ids_from_categorized(categorized, "movie", imdb_cache, all_imdb_ids, pending_lookups)
+
+        assert pending_lookups == [(789, "movie")]
+
+    def test_render_table_flat_produces_row_with_tmdb_and_score(self):
+        items = [
+            {
+                "tmdb_id": 111,
+                "title": "Some Movie",
+                "year": "2022",
+                "rating": 7.0,
+                "score": 0.8,
+                "added_date": "2024-01-01T00:00:00",
+                "streaming_services": [],
+                "genre_ids": [],
+            }
+        ]
+        result = _render_table_flat(
+            items,
+            "movie",
+            "user1",
+            [],
+            all_imdb_ids={111: "tt000111"},
+            now=datetime(2024, 1, 2, 0, 0),
+            movie_counts={},
+            show_counts={},
+            total_users=1,
+        )
+        assert 'data-tmdb="111"' in result
+        assert 'data-imdb="tt000111"' in result
+        assert "Some Movie" in result
+        assert "80%" in result
+
+    def test_render_sequels_table_produces_row_with_collection(self):
+        items = [
+            {
+                "tmdb_id": 222,
+                "title": "Sequel Movie",
+                "year": "2023",
+                "collection_name": "Big Franchise",
+                "owned_count": 2,
+                "total_count": 5,
+                "streaming_services": [],
+            }
+        ]
+        result = _render_sequels_table(items, [], all_imdb_ids={222: "tt000222"})
+        assert 'data-tmdb="222"' in result
+        assert "Big Franchise" in result
+        assert "2/5" in result
+
+    def test_render_horizon_table_produces_row_with_status_badge(self):
+        items = [
+            {
+                "tmdb_id": 333,
+                "title": "Upcoming Movie",
+                "collection_name": "Future Franchise",
+                "release_date": "2027-01-01",
+                "status": "Post Production",
+                "genre_ids": [],
+            }
+        ]
+        result = _render_horizon_table(items, all_imdb_ids={333: "tt000333"})
+        assert 'data-tmdb="333"' in result
+        assert "Future Franchise" in result
+        assert 'status-badge post-production">Post Production</span>' in result
