@@ -2,6 +2,73 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.23] - 2026-07-26
+
+### Fixed
+
+- **`tuning.yml`'s `movies:`/`tv:` settings were silently ignored for
+  most of the options documented there - YOUR RECOMMENDATIONS WILL
+  LOOK DIFFERENT after upgrading if you'd customized any of these.**
+  `recommenders/base.py` (and `recommenders/movie.py`'s
+  `show_director`) read `randomize_recommendations`, `quality_filters`
+  (`min_rating`/`min_vote_count`), scoring `weights`,
+  `normalize_counters`, and every `show_*` display option
+  (`show_summary`/`show_cast`/`show_director`/`show_genres`/
+  `show_language`/`show_rating`/`show_imdb_link`) from the root
+  `general:` section (or, for `weights`/`quality_filters`, straight
+  off the config root) instead of the documented `movies:`/`tv:`
+  section `config/tuning.example.yml` actually tells you to put them
+  in - so none of these ever took effect no matter what you set in
+  `tuning.yml`. A parallel, correctly-wired resolution function
+  (`utils/config.py`'s `adapt_config_for_media_type()`) already existed
+  and computed the right values, but nothing in the actual
+  recommendation-generation path ever used its output - it was
+  effectively dead code as far as `movies:`/`tv:` overrides go. Fixed
+  by reading each of these from the media-specific section first,
+  falling back to the old `general:`/root-level key so any install
+  that (for whatever undocumented reason) had these set there keeps
+  behaving exactly as before. Concretely, this means:
+  - If you set `quality_filters.min_rating`/`min_vote_count` under
+    `movies:`/`tv:`, low-rated/low-vote-count titles that were
+    slipping through before will now actually be filtered out.
+  - If you set `randomize_recommendations: false`, your recommendation
+    order will now stay stable run-to-run instead of being reshuffled
+    every time.
+  - If you turned on `show_cast`/`show_director`/`show_language`/
+    `show_rating`/`show_imdb_link`/`show_summary` (several default to
+    off unless explicitly enabled), those fields will now actually
+    appear in the printed recommendation output - they were silently
+    missing before regardless of this setting.
+  - Custom scoring `weights` under `movies:`/`tv:` now actually change
+    how recommendations are ranked, instead of always using the
+    built-in defaults.
+  Added test coverage (`tests/test_base.py`, `tests/test_movie.py`)
+  asserting the resolved runtime attribute matches what's set in the
+  media-specific section, plus the pre-existing general-level fallback
+  behavior for back-compat installs.
+
+### Added
+
+- **`utils/scoring.py`'s `select_tiered_recommendations()` now accepts
+  an optional `rng: random.Random` parameter.** Purely additive -
+  default (`None`) preserves the exact existing behavior of drawing
+  from the module-level, process-global `random` (still unseeded by
+  default in production). Lets tests/tooling pass an explicitly seeded
+  `random.Random(seed)` for reproducible selection without touching
+  global interpreter state.
+- **`tests/harness.py` + `tests/test_harness.py`: a committed,
+  reusable deterministic harness** for verifying scoring/pipeline
+  refactors don't silently change output. Loads fully-synthetic, pinned
+  fixtures (`tests/fixtures/scoring_harness/` - shaped like
+  `cache/all_movies_cache.json` and the user-profile dict built from
+  `cache/watched_cache_plex_<user>.json`, but with invented titles/
+  cast/director/keyword names; no real Plex data, usernames, or watch
+  history), forces a from-scratch score recompute (never the
+  `profile_hash` cache-hit shortcut), seeds the RNG explicitly, and is
+  meant to run under `PYTHONHASHSEED` pinned as belt-and-braces. Run
+  twice with the same seed/hash-seed, output is byte-identical
+  (asserted in `tests/test_harness.py`).
+
 ## [2.10.22] - 2026-07-26
 
 ### Added

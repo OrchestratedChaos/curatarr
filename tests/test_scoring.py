@@ -675,6 +675,48 @@ class TestSelectTieredRecommendations:
         result = select_tiered_recommendations(items, 10)
         assert len(result) == 10
 
+    def test_seeded_rng_is_deterministic(self):
+        """A seeded random.Random passed via `rng` must produce
+        byte-identical selection across repeated calls (deterministic
+        harness requirement) without touching the process-global
+        `random` module state."""
+        items = [{"similarity_score": 1.0 - i * 0.01, "title": f"Item{i}"} for i in range(100)]
+
+        import random as random_module
+
+        result_a = select_tiered_recommendations(items, 20, rng=random_module.Random(42))
+        result_b = select_tiered_recommendations(items, 20, rng=random_module.Random(42))
+
+        assert [r["title"] for r in result_a] == [r["title"] for r in result_b]
+
+    def test_different_seeds_can_differ(self):
+        """Sanity check that the seed actually drives the diverse/wildcard
+        picks (i.e. this isn't accidentally a no-op)."""
+        items = [{"similarity_score": 1.0 - i * 0.01, "title": f"Item{i}"} for i in range(100)]
+
+        import random as random_module
+
+        results = {
+            seed: tuple(r["title"] for r in select_tiered_recommendations(items, 20, rng=random_module.Random(seed)))
+            for seed in range(10)
+        }
+        assert len(set(results.values())) > 1
+
+    def test_omitting_rng_uses_module_level_random(self):
+        """Default (no `rng` passed) must preserve pre-existing behavior:
+        draws from the module-level `random`, so seeding the module-level
+        random module directly still makes two calls identical."""
+        items = [{"similarity_score": 1.0 - i * 0.01, "title": f"Item{i}"} for i in range(100)]
+
+        import random as random_module
+
+        random_module.seed(7)
+        result_a = select_tiered_recommendations(items, 20)
+        random_module.seed(7)
+        result_b = select_tiered_recommendations(items, 20)
+
+        assert [r["title"] for r in result_a] == [r["title"] for r in result_b]
+
 
 class TestPopularityDampening:
     """Tests for popularity dampening in calculate_similarity_score."""

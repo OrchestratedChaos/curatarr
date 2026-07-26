@@ -143,7 +143,11 @@ class PlexMovieRecommender(BaseRecommender):
         self.synced_movie_ids = set()
         self.cached_unwatched_movies = []
         self.plex_watched_rating_keys = set()
-        self.show_director = self.config.get("general", {}).get("show_director", False)
+        # movies.show_director: is the documented location (config/tuning.example.yml);
+        # fall back to the legacy root-level general.show_director for back-compat.
+        self.show_director = self.media_config.get(
+            "show_director", self.config.get("general", {}).get("show_director", False)
+        )
 
         # Create movie cache
         self.movie_cache = MovieCache(self.cache_dir, recommender=self)

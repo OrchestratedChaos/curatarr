@@ -436,6 +436,22 @@ class BaseRecommender(ABC):
         general_config = self.config.get("general", {})
         self.debug = general_config.get("debug", False)
 
+        # Media-specific section (movies:/tv: in tuning.yml) - the
+        # documented, web-UI-writable location for display options,
+        # randomize_recommendations, normalize_counters, quality_filters,
+        # and weights (see config/tuning.example.yml). Historically this
+        # class read all of these from `general_config` above instead,
+        # which meant a user's movies:/tv: overrides were silently never
+        # applied - randomize_recommendations, quality_filters, and
+        # several display options resolved to their code-level defaults
+        # no matter what was configured (see CHANGELOG). Every read below checks
+        # media_config first and falls back to the old general_config/
+        # root-level read so back-compat installs that (for whatever
+        # undocumented reason) set these under general: or root level
+        # keep behaving exactly as before.
+        media_section = "movies" if self.media_type == "movie" else "tv"
+        self.media_config = self.config.get(media_section, self.config.get(media_section.upper(), {})) or {}
+
         print(f"{YELLOW}Checking Cache...{RESET}")
         tmdb_config = get_tmdb_config(self.config)
         self.use_tmdb_keywords = tmdb_config["use_keywords"]
@@ -461,14 +477,18 @@ class BaseRecommender(ABC):
         # Collection target is 50 movies / 20 TV, so generate 100 / 40 candidates
         default_limit = 100 if self.media_type == "movie" else 40
         self.limit_plex_results = general_config.get("limit_plex_results", default_limit)
-        self.randomize_recommendations = general_config.get("randomize_recommendations", True)
-        self.normalize_counters = general_config.get("normalize_counters", True)
-        self.show_summary = general_config.get("show_summary", False)
-        self.show_genres = general_config.get("show_genres", True)
-        self.show_cast = general_config.get("show_cast", False)
-        self.show_language = general_config.get("show_language", False)
-        self.show_rating = general_config.get("show_rating", False)
-        self.show_imdb_link = general_config.get("show_imdb_link", False)
+        self.randomize_recommendations = self.media_config.get(
+            "randomize_recommendations", general_config.get("randomize_recommendations", True)
+        )
+        self.normalize_counters = self.media_config.get(
+            "normalize_counters", general_config.get("normalize_counters", True)
+        )
+        self.show_summary = self.media_config.get("show_summary", general_config.get("show_summary", False))
+        self.show_genres = self.media_config.get("show_genres", general_config.get("show_genres", True))
+        self.show_cast = self.media_config.get("show_cast", general_config.get("show_cast", False))
+        self.show_language = self.media_config.get("show_language", general_config.get("show_language", False))
+        self.show_rating = self.media_config.get("show_rating", general_config.get("show_rating", False))
+        self.show_imdb_link = self.media_config.get("show_imdb_link", general_config.get("show_imdb_link", False))
 
         # Load excluded genres
         exclude_genre_str = general_config.get("exclude_genre", "")
@@ -479,8 +499,10 @@ class BaseRecommender(ABC):
         # Load user preferences
         self.user_preferences = self.config.get("users", {}).get("preferences", {}) or {}
 
-        # Load weights
-        weights_config = self.config.get("weights", {})
+        # Load weights - movies:/tv: weights: (documented location, see
+        # config/tuning.example.yml) take priority over the legacy
+        # root-level `weights` key some back-compat installs/tests still use.
+        weights_config = self.media_config.get("weights", self.config.get("weights", {}))
         self.weights = self._load_weights(weights_config)
 
         # Validate weights sum
@@ -720,8 +742,10 @@ class BaseRecommender(ABC):
         # Get user-specific excluded genres
         excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
 
-        # Get quality filters from config
-        quality_filters = self.config.get("quality_filters", {})
+        # Get quality filters from config - movies:/tv: quality_filters: is
+        # the documented location (config/tuning.example.yml); fall back to
+        # the legacy root-level key for back-compat installs/tests.
+        quality_filters = self.media_config.get("quality_filters", self.config.get("quality_filters", {}))
         min_rating = quality_filters.get("min_rating", 0.0)
         min_vote_count = quality_filters.get("min_vote_count", 0)
 
