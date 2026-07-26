@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import field_error %}
 {% block title %}Settings - Curatarr{% endblock %}
 {% block content %}
 <h1>Settings / Tuning</h1>
@@ -36,7 +37,7 @@
           {% endfor %}
         </select>
       </label>
-      {% if errors[svc ~ '_user_mode'] %}<p class="field-error">{{ errors[svc ~ '_user_mode'] }}</p>{% endif %}
+      {{ field_error(errors, svc ~ '_user_mode') }}
       <label>Plex users to sync (comma-separated, used when user mode is "mapping")
         <input type="text" name="{{ svc }}_plex_users" value="{{ sync_safety[svc].plex_users }}">
       </label>
@@ -51,15 +52,15 @@
     <label>Actor <input type="text" name="movies_weight_actor" value="{{ movies.weights.actor }}"></label>
     <label>Keyword <input type="text" name="movies_weight_keyword" value="{{ movies.weights.keyword }}"></label>
     {% for f in ['movies_weight_genre', 'movies_weight_director', 'movies_weight_actor', 'movies_weight_keyword', 'movies_weights'] %}
-      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+      {{ field_error(errors, f) }}
     {% endfor %}
 
     <label>Result limit <input type="text" name="movies_limit_results" value="{{ movies.limit_results }}"></label>
-    {% if errors.movies_limit_results %}<p class="field-error">{{ errors.movies_limit_results }}</p>{% endif %}
+    {{ field_error(errors, 'movies_limit_results') }}
     <label>Min TMDB rating <input type="text" name="movies_min_rating" value="{{ movies.min_rating }}"></label>
-    {% if errors.movies_min_rating %}<p class="field-error">{{ errors.movies_min_rating }}</p>{% endif %}
+    {{ field_error(errors, 'movies_min_rating') }}
     <label>Min vote count <input type="text" name="movies_min_vote_count" value="{{ movies.min_vote_count }}"></label>
-    {% if errors.movies_min_vote_count %}<p class="field-error">{{ errors.movies_min_vote_count }}</p>{% endif %}
+    {{ field_error(errors, 'movies_min_vote_count') }}
   </fieldset>
 
   <fieldset>
@@ -69,15 +70,15 @@
     <label>Actor <input type="text" name="tv_weight_actor" value="{{ tv.weights.actor }}"></label>
     <label>Keyword <input type="text" name="tv_weight_keyword" value="{{ tv.weights.keyword }}"></label>
     {% for f in ['tv_weight_genre', 'tv_weight_studio', 'tv_weight_actor', 'tv_weight_keyword', 'tv_weights'] %}
-      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+      {{ field_error(errors, f) }}
     {% endfor %}
 
     <label>Result limit <input type="text" name="tv_limit_results" value="{{ tv.limit_results }}"></label>
-    {% if errors.tv_limit_results %}<p class="field-error">{{ errors.tv_limit_results }}</p>{% endif %}
+    {{ field_error(errors, 'tv_limit_results') }}
     <label>Min TMDB rating <input type="text" name="tv_min_rating" value="{{ tv.min_rating }}"></label>
-    {% if errors.tv_min_rating %}<p class="field-error">{{ errors.tv_min_rating }}</p>{% endif %}
+    {{ field_error(errors, 'tv_min_rating') }}
     <label>Min vote count <input type="text" name="tv_min_vote_count" value="{{ tv.min_vote_count }}"></label>
-    {% if errors.tv_min_vote_count %}<p class="field-error">{{ errors.tv_min_vote_count }}</p>{% endif %}
+    {{ field_error(errors, 'tv_min_vote_count') }}
   </fieldset>
 
   <fieldset>
@@ -89,7 +90,7 @@
     <label>181-365 days <input type="text" name="recency_days_181_365" value="{{ recency.days_181_365 }}"></label>
     <label>365+ days <input type="text" name="recency_days_365_plus" value="{{ recency.days_365_plus }}"></label>
     {% for f in ['recency_days_0_30', 'recency_days_31_90', 'recency_days_91_180', 'recency_days_181_365', 'recency_days_365_plus'] %}
-      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+      {{ field_error(errors, f) }}
     {% endfor %}
   </fieldset>
 
@@ -101,7 +102,7 @@
     <label>2 star <input type="text" name="rating_star_2" value="{{ rating_multipliers.star_2 }}"></label>
     <label>1 star <input type="text" name="rating_star_1" value="{{ rating_multipliers.star_1 }}"></label>
     {% for f in ['rating_star_5', 'rating_star_4', 'rating_star_3', 'rating_star_2', 'rating_star_1'] %}
-      {% if errors[f] %}<p class="field-error">{{ errors[f] }}</p>{% endif %}
+      {{ field_error(errors, f) }}
     {% endfor %}
   </fieldset>
 
@@ -112,33 +113,33 @@
     <h3>Bad ratings</h3>
     <label><input type="checkbox" name="negsig_bad_ratings_enabled" {% if negative_signals.bad_ratings_enabled %}checked{% endif %}> Enabled</label>
     <label>Threshold (Plex 0-10 scale) <input type="text" name="negsig_bad_ratings_threshold" value="{{ negative_signals.bad_ratings_threshold }}"></label>
-    {% if errors.negsig_bad_ratings_threshold %}<p class="field-error">{{ errors.negsig_bad_ratings_threshold }}</p>{% endif %}
+    {{ field_error(errors, 'negsig_bad_ratings_threshold') }}
     <label>Cap penalty <input type="text" name="negsig_bad_ratings_cap_penalty" value="{{ negative_signals.bad_ratings_cap_penalty }}"></label>
-    {% if errors.negsig_bad_ratings_cap_penalty %}<p class="field-error">{{ errors.negsig_bad_ratings_cap_penalty }}</p>{% endif %}
+    {{ field_error(errors, 'negsig_bad_ratings_cap_penalty') }}
 
     <h3>Dropped shows</h3>
     <label><input type="checkbox" name="negsig_dropped_enabled" {% if negative_signals.dropped_enabled %}checked{% endif %}> Enabled</label>
     <label>Min episodes watched <input type="text" name="negsig_dropped_min_episodes" value="{{ negative_signals.dropped_min_episodes }}"></label>
-    {% if errors.negsig_dropped_min_episodes %}<p class="field-error">{{ errors.negsig_dropped_min_episodes }}</p>{% endif %}
+    {{ field_error(errors, 'negsig_dropped_min_episodes') }}
     <label>Max completion percent <input type="text" name="negsig_dropped_max_completion" value="{{ negative_signals.dropped_max_completion }}"></label>
-    {% if errors.negsig_dropped_max_completion %}<p class="field-error">{{ errors.negsig_dropped_max_completion }}</p>{% endif %}
+    {{ field_error(errors, 'negsig_dropped_max_completion') }}
     <label>Penalty multiplier <input type="text" name="negsig_dropped_penalty_multiplier" value="{{ negative_signals.dropped_penalty_multiplier }}"></label>
-    {% if errors.negsig_dropped_penalty_multiplier %}<p class="field-error">{{ errors.negsig_dropped_penalty_multiplier }}</p>{% endif %}
+    {{ field_error(errors, 'negsig_dropped_penalty_multiplier') }}
   </fieldset>
 
   <fieldset>
     <legend>External recommendations</legend>
     <label><input type="checkbox" name="ext_enabled" {% if external.enabled %}checked{% endif %}> Enabled</label>
     <label>Movie limit <input type="text" name="ext_movie_limit" value="{{ external.movie_limit }}"></label>
-    {% if errors.ext_movie_limit %}<p class="field-error">{{ errors.ext_movie_limit }}</p>{% endif %}
+    {{ field_error(errors, 'ext_movie_limit') }}
     <label>Show limit <input type="text" name="ext_show_limit" value="{{ external.show_limit }}"></label>
-    {% if errors.ext_show_limit %}<p class="field-error">{{ errors.ext_show_limit }}</p>{% endif %}
+    {{ field_error(errors, 'ext_show_limit') }}
     <label>Min relevance score (0-1) <input type="text" name="ext_min_relevance_score" value="{{ external.min_relevance_score }}"></label>
-    {% if errors.ext_min_relevance_score %}<p class="field-error">{{ errors.ext_min_relevance_score }}</p>{% endif %}
+    {{ field_error(errors, 'ext_min_relevance_score') }}
     <label>Min votes <input type="text" name="ext_min_votes" value="{{ external.min_votes }}"></label>
-    {% if errors.ext_min_votes %}<p class="field-error">{{ errors.ext_min_votes }}</p>{% endif %}
+    {{ field_error(errors, 'ext_min_votes') }}
     <label>Max discovery iterations <input type="text" name="ext_max_iterations" value="{{ external.max_iterations }}"></label>
-    {% if errors.ext_max_iterations %}<p class="field-error">{{ errors.ext_max_iterations }}</p>{% endif %}
+    {{ field_error(errors, 'ext_max_iterations') }}
     <label>Language filter (ISO 639-1, blank = any) <input type="text" name="ext_language" value="{{ external.language }}"></label>
     <label><input type="checkbox" name="ext_auto_open_html" {% if external.auto_open_html %}checked{% endif %}> Auto-open watchlist HTML after generation</label>
   </fieldset>
@@ -160,10 +161,10 @@
         {% endfor %}
       </select>
     </label>
-    {% if errors.general_update_mode %}<p class="field-error">{{ errors.general_update_mode }}</p>{% endif %}
+    {{ field_error(errors, 'general_update_mode') }}
     <label><input type="checkbox" name="general_plex_only" {% if general.plex_only %}checked{% endif %}> Plex-only (only recommend from Plex library)</label>
     <label>Log retention days <input type="text" name="general_log_retention_days" value="{{ general.log_retention_days }}"></label>
-    {% if errors.general_log_retention_days %}<p class="field-error">{{ errors.general_log_retention_days }}</p>{% endif %}
+    {{ field_error(errors, 'general_log_retention_days') }}
   </fieldset>
 
   <fieldset>
@@ -175,7 +176,7 @@
         {% endfor %}
       </select>
     </label>
-    {% if errors.logging_level %}<p class="field-error">{{ errors.logging_level }}</p>{% endif %}
+    {{ field_error(errors, 'logging_level') }}
   </fieldset>
 
   <button type="submit">Save</button>

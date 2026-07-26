@@ -2,6 +2,72 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.29] - 2026-07-26
+
+### Changed
+
+- **Audit remediation batch F (PR1): web/ layer structure.**
+
+  `web/config_app.py` (~1246 lines - four near-identical view/parse/apply
+  CRUD screens plus one dispatcher) split into one module per screen,
+  each registering its own routes: `config_connections.py` (Setup /
+  Connections + the Test Connection endpoint), `config_users.py`,
+  `config_libraries.py` (#157 Phase 4), `config_settings.py`. The shared
+  `_commit_modules` save orchestration moved to `config_io.py` (renamed
+  `commit_modules`, alongside the `validate_merge`/`save_module` it
+  wraps) rather than staying in `config_app.py`, since keeping a shared
+  helper split behind per-screen modules that imported it back from the
+  dispatcher would have created an import cycle (`config_app` ->
+  `config_connections` -> `config_app`); `USER_MODE_CHOICES` (shared by
+  the Connections and Settings screens) moved there too. `config_app.py`
+  is now a ~15-line dispatcher: four imports, four calls.
+  `tests/test_web_config_connections.py`'s one test that reached into
+  `config_app`'s internals (patching `validate_merge` to simulate a merge
+  failure) now patches it on `config_io` instead, matching where the
+  code actually lives.
+
+  `utils/plex.py` (~1283 lines) split into the Plex API adapter (this
+  file - connection setup, watch-history fetches, collection CRUD) and
+  `utils/plex_policy.py` (new - content-rating hierarchy constants,
+  `get_max_rating_for_user`, `is_rating_allowed`, and
+  `apply_user_label_restrictions`, i.e. Curatarr's own rating/label
+  policy rather than "how do we talk to Plex"). `plex_policy` imports
+  from `plex` (its `_capped_get`/`_capped_put` HTTP helpers) - never the
+  reverse, so there's no import cycle; verified via a clean
+  `import utils.plex; import utils.plex_policy` before committing to this
+  direction. `utils/__init__.py`'s barrel re-exports the same five names
+  from their new home; every caller that imports them by name (directly
+  or via `from utils import ...`) is unaffected since Python resolves
+  those by name, not by which submodule originally defined them - the
+  two direct `from utils.plex import ...` call sites
+  (`web/config_app.py`, `tests/test_plex.py`) and the handful of
+  `@patch("utils.plex.MyPlexAccount"/"utils.plex.requests...")` targets
+  inside `tests/test_plex.py`'s `TestApplyUserLabelRestrictions` were
+  updated to point at `utils.plex_policy` instead. PyInstaller build
+  and a running frozen binary's `/config/*` routes were both verified
+  after the split (see RELEASING.md's own "renames have broken the
+  frozen build before" history).
+
+  While touching `utils/__init__.py`: its `__all__` was missing 31 of the
+  names it already imports (config/tmdb/trakt/plex constants and
+  functions ruff's F401 could only see as "unused" because they weren't
+  declared re-exported) - added to `__all__`, none removed, so the
+  now-redundant `"utils/__init__.py" = ["F401"]` per-file-ignore in
+  `ruff.toml` was also removed (see batch I / PR3 for the rest of the
+  lint pass).
+
+  Added one Jinja macro, `field_error(errors, name)`
+  (`web/templates/_macros.html`), replacing 41 hand-repeated
+  `{% if errors.X %}<p class="field-error">{{ errors.X }}</p>{% endif %}`
+  blocks (including the dynamic-key ones, e.g.
+  `errors['name_' ~ loop.index0]`) across all four `config_*.html`
+  templates - the first `{% macro %}` in this codebase.
+
+  Docstring coverage brought to parity with the rest of the codebase for
+  every module touched above: every route handler, every `_view`/
+  `_parse_*_form`/`_apply_*` function, and `config_io.commit_modules` now
+  has one explaining what it does and why, not filler.
+
 ## [2.10.28] - 2026-07-26
 
 ### Changed

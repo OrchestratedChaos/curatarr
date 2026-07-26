@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import field_error %}
 {% block title %}Users - Curatarr{% endblock %}
 {% block content %}
 <h1>Users</h1>
@@ -15,8 +16,7 @@
   are keyed only by username (preferences.<user>.exclude_genres/
   max_rating/streaming_services). When #157 lands, this table gains a
   library-selector dimension per user - see the NOTE in
-  web/config_app.py's Users screen section for where that shape change
-  is contained.
+  web/config_users.py for where that shape change is contained.
 -->
 
 <form method="post" action="{{ url_for('config_users_save') }}" class="config-form">
@@ -50,9 +50,7 @@
             <option value="{{ choice }}" {% if u.max_rating == choice %}selected{% endif %}>{{ choice }}</option>
             {% endfor %}
           </select>
-          {% if errors['max_rating_' ~ loop.index0] %}
-          <p class="field-error">{{ errors['max_rating_' ~ loop.index0] }}</p>
-          {% endif %}
+          {{ field_error(errors, 'max_rating_' ~ loop.index0) }}
         </td>
         <td><input type="text" name="streaming_services_{{ loop.index0 }}" value="{{ u.streaming_services }}" placeholder="netflix, hulu"></td>
         <td><label><input type="checkbox" name="remove_{{ loop.index0 }}"> remove</label></td>
@@ -69,7 +67,7 @@
     <label>Plex username
       <input type="text" name="new_username" value="{{ new_username }}" placeholder="plex_username">
     </label>
-    {% if errors.new_username %}<p class="field-error">{{ errors.new_username }}</p>{% endif %}
+    {{ field_error(errors, 'new_username') }}
   </fieldset>
 
   <button type="submit">Save</button>

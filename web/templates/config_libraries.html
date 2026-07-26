@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import field_error %}
 {% block title %}Libraries - Curatarr{% endblock %}
 {% block content %}
 <h1>Libraries</h1>
@@ -46,11 +47,11 @@
         <td>
           <input type="hidden" name="library_id_{{ loop.index0 }}" value="{{ lib.id }}">
           <input type="text" name="name_{{ loop.index0 }}" value="{{ lib.name }}">
-          {% if errors['name_' ~ loop.index0] %}<p class="field-error">{{ errors['name_' ~ loop.index0] }}</p>{% endif %}
+          {{ field_error(errors, 'name_' ~ loop.index0) }}
         </td>
         <td>
           <input type="text" name="section_{{ loop.index0 }}" value="{{ lib.section }}">
-          {% if errors['section_' ~ loop.index0] %}<p class="field-error">{{ errors['section_' ~ loop.index0] }}</p>{% endif %}
+          {{ field_error(errors, 'section_' ~ loop.index0) }}
         </td>
         <td>
           <select name="media_type_{{ loop.index0 }}">
@@ -58,7 +59,7 @@
             <option value="{{ choice }}" {% if lib.media_type == choice %}selected{% endif %}>{{ choice }}</option>
             {% endfor %}
           </select>
-          {% if errors['media_type_' ~ loop.index0] %}<p class="field-error">{{ errors['media_type_' ~ loop.index0] }}</p>{% endif %}
+          {{ field_error(errors, 'media_type_' ~ loop.index0) }}
         </td>
         <td><input type="text" name="arr_{{ loop.index0 }}_root_folder" value="{{ lib.arr.root_folder }}" placeholder="(use global)"></td>
         <td><input type="text" name="arr_{{ loop.index0 }}_quality_profile" value="{{ lib.arr.quality_profile }}" placeholder="(use global)"></td>
@@ -70,7 +71,7 @@
         <td><input type="checkbox" name="arr_{{ loop.index0 }}_season_folder" {% if lib.arr.season_folder %}checked{% endif %}></td>
         <td>
           <input type="text" name="instance_url_{{ loop.index0 }}" value="{{ lib.instance_url }}" placeholder="(use global Sonarr/Radarr)">
-          {% if errors['instance_url_' ~ loop.index0] %}<p class="field-error">{{ errors['instance_url_' ~ loop.index0] }}</p>{% endif %}
+          {{ field_error(errors, 'instance_url_' ~ loop.index0) }}
         </td>
         <td>
           <span class="muted">{{ lib.instance_api_key_status }}</span>
@@ -90,11 +91,11 @@
     <label>Name
       <input type="text" name="new_name" value="{{ new_name }}" placeholder="Kids Movies">
     </label>
-    {% if errors.new_name %}<p class="field-error">{{ errors.new_name }}</p>{% endif %}
+    {{ field_error(errors, 'new_name') }}
     <label>Plex section
       <input type="text" name="new_section" value="{{ new_section }}" placeholder="Kids Movies">
     </label>
-    {% if errors.new_section %}<p class="field-error">{{ errors.new_section }}</p>{% endif %}
+    {{ field_error(errors, 'new_section') }}
     <label>Media type
       <select name="new_media_type">
         {% for choice in media_type_choices %}
@@ -102,7 +103,7 @@
         {% endfor %}
       </select>
     </label>
-    {% if errors.new_media_type %}<p class="field-error">{{ errors.new_media_type }}</p>{% endif %}
+    {{ field_error(errors, 'new_media_type') }}
     <p class="muted">Routing (folder/quality/tag/instance) and monitor/search can be filled in after adding.</p>
   </fieldset>
 

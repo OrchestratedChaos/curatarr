@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import field_error %}
 {% block title %}Connections - Curatarr{% endblock %}
 {% block content %}
 <h1>Setup / Connections</h1>
@@ -17,7 +18,7 @@
     <label>Server URL
       <input type="text" name="plex_url" value="{{ plex.url }}" placeholder="http://localhost:32400">
     </label>
-    {% if errors.plex_url %}<p class="field-error">{{ errors.plex_url }}</p>{% endif %}
+    {{ field_error(errors, 'plex_url') }}
 
     <label>Token ({{ plex.token_status }})
       <input type="password" name="plex_token" placeholder="Leave blank to keep existing" autocomplete="off">
@@ -49,7 +50,7 @@
     <label>URL
       <input type="text" name="tautulli_url" value="{{ tautulli.url }}" placeholder="http://localhost:8181">
     </label>
-    {% if errors.tautulli_url %}<p class="field-error">{{ errors.tautulli_url }}</p>{% endif %}
+    {{ field_error(errors, 'tautulli_url') }}
     <label>API key ({{ tautulli.api_key_status }})
       <input type="password" name="tautulli_api_key" placeholder="Leave blank to keep existing" autocomplete="off">
     </label>
@@ -64,7 +65,7 @@
     <label>URL
       <input type="text" name="sonarr_url" value="{{ sonarr.url }}" placeholder="http://localhost:8989">
     </label>
-    {% if errors.sonarr_url %}<p class="field-error">{{ errors.sonarr_url }}</p>{% endif %}
+    {{ field_error(errors, 'sonarr_url') }}
     <label>API key ({{ sonarr.api_key_status }})
       <input type="password" name="sonarr_api_key" placeholder="Leave blank to keep existing" autocomplete="off">
     </label>
@@ -81,7 +82,7 @@
         {% endfor %}
       </select>
     </label>
-    {% if errors.sonarr_user_mode %}<p class="field-error">{{ errors.sonarr_user_mode }}</p>{% endif %}
+    {{ field_error(errors, 'sonarr_user_mode') }}
     <label>Plex users to sync (comma-separated)
       <input type="text" name="sonarr_plex_users" value="{{ sonarr.plex_users }}">
     </label>
@@ -93,7 +94,7 @@
     <label>URL
       <input type="text" name="radarr_url" value="{{ radarr.url }}" placeholder="http://localhost:7878">
     </label>
-    {% if errors.radarr_url %}<p class="field-error">{{ errors.radarr_url }}</p>{% endif %}
+    {{ field_error(errors, 'radarr_url') }}
     <label>API key ({{ radarr.api_key_status }})
       <input type="password" name="radarr_api_key" placeholder="Leave blank to keep existing" autocomplete="off">
     </label>
@@ -110,7 +111,7 @@
         {% endfor %}
       </select>
     </label>
-    {% if errors.radarr_user_mode %}<p class="field-error">{{ errors.radarr_user_mode }}</p>{% endif %}
+    {{ field_error(errors, 'radarr_user_mode') }}
     <label>Plex users to sync (comma-separated)
       <input type="text" name="radarr_plex_users" value="{{ radarr.plex_users }}">
     </label>
@@ -122,7 +123,7 @@
     <label>Client ID
       <input type="text" name="trakt_client_id" value="{{ trakt.client_id }}">
     </label>
-    {% if errors.trakt_client_id %}<p class="field-error">{{ errors.trakt_client_id }}</p>{% endif %}
+    {{ field_error(errors, 'trakt_client_id') }}
     <label>Client secret ({{ trakt.client_secret_status }})
       <input type="password" name="trakt_client_secret" placeholder="Leave blank to keep existing" autocomplete="off">
     </label>
@@ -144,7 +145,7 @@
         {% endfor %}
       </select>
     </label>
-    {% if errors.trakt_user_mode %}<p class="field-error">{{ errors.trakt_user_mode }}</p>{% endif %}
+    {{ field_error(errors, 'trakt_user_mode') }}
     <label>Plex users to sync (comma-separated)
       <input type="text" name="trakt_plex_users" value="{{ trakt.plex_users }}">
     </label>

@@ -326,10 +326,16 @@ class TestConnectionsTestEndpoint:
         """M4: a merge that fails the pre-write dry-run must not write
         ANY of the module files for this save."""
         c, app, root = client
-        import web.config_app as config_app_mod
+        # commit_modules (called by every config screen's *_save route)
+        # and the validate_merge it wraps both live in web.config_io as
+        # of the audit remediation batch F/I, PR1(a) config_app.py split
+        # - patching validate_merge there is what actually intercepts the
+        # call commit_modules makes, regardless of which screen's route
+        # triggered it.
+        import web.config_io as config_io_mod
 
         monkeypatch.setattr(
-            config_app_mod,
+            config_io_mod,
             "validate_merge",
             lambda project_root, modules: "simulated merge failure",
         )

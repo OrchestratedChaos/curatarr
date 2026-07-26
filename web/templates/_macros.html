@@ -1,0 +1,19 @@
+{# Shared Jinja macros for the config_*.html screens (audit remediation
+   batch F/I, PR1(c)) - before this, every field-level error message was
+   the same hand-repeated
+
+     {% if errors.name %}<p class="field-error">{{ errors.name }}</p>{% endif %}
+
+   line, 41 times across config_connections/users/libraries/settings.html,
+   with zero {% macro %} anywhere else in the codebase. field_error()
+   below is the one place that markup lives now.
+
+   Leading underscore matches this codebase's own Python convention for
+   "internal, not a standalone page" (contrast with the un-prefixed
+   base.html/dashboard.html/etc., which ARE meant to be rendered/extended
+   directly) - Flask/Jinja has no separate "partial" naming convention of
+   its own to defer to here. #}
+
+{% macro field_error(errors, name) -%}
+{%- if errors[name] %}<p class="field-error">{{ errors[name] }}</p>{% endif -%}
+{%- endmacro %}

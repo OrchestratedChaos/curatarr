@@ -8,8 +8,8 @@ credentials can reach the service, it never writes/adds/removes
 anything.
 
 Each test_* function takes raw candidate values (not the saved config)
-so a user can check a URL/token before saving it. web/config_app.py is
-responsible for merging a blank "keep existing secret" submission with
+so a user can check a URL/token before saving it. web/config_connections.py
+is responsible for merging a blank "keep existing secret" submission with
 the already-saved value before calling in here.
 """
 

@@ -11,8 +11,15 @@ out - untouched keys, comments, and ordering all survive.
 Writes are atomic: dumped to a temp file in the same directory, then
 os.replace()'d over the target, so a crash mid-write (or a validation
 bug that slips through) never leaves a half-written config file behind.
+
+Also the home for commit_modules (the validate-then-save-every-module
+orchestration every config screen's *_save route calls through) and any
+other constant/helper shared by more than one of those screens
+(USER_MODE_CHOICES below) - see web/config_app.py's docstring for the
+full per-screen module layout this is a sibling of.
 """
 
+import logging
 import os
 import shutil
 import tempfile
@@ -22,6 +29,16 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
 from utils.helpers import harden_file_permissions
+
+logger = logging.getLogger("curatarr")
+
+# 'mapping' (default) / 'per_user' / 'combined' - the three
+# plex_users-to-*arr-account sync-safety modes shared by the
+# Connections and Settings screens (web/config_connections.py,
+# web/config_settings.py) - one place to change the choice set both
+# screens' user_mode <select> options and server-side validate_choice
+# calls read from.
+USER_MODE_CHOICES = ("mapping", "per_user", "combined")
 
 # Matches the plain-yaml.dump() formatting the rest of the codebase
 # already produces (utils/migrate_config.py, config.example.yml, etc.):
@@ -116,7 +133,8 @@ def ensure_section(parent: CommentedMap, key: str) -> CommentedMap:
     since the key already exists (with a None value) - the very next
     ``parent[key]['field'] = ...`` would then raise TypeError on the
     None. Any hand-edited or partially-migrated config file can produce
-    this shape, so every _apply_* writer in web/config_app.py goes
+    this shape, so every _apply_* writer across web/config_connections.py,
+    config_users.py, config_libraries.py, and config_settings.py goes
     through this helper instead of setdefault() before mutating a
     sub-section, so a null section becomes an empty mapping instead of
     a 500 (and a half-written save, since sibling sections already
@@ -169,6 +187,35 @@ def validate_merge(project_root: str, modules: Dict[str, CommentedMap]) -> Optio
     return None
 
 
+def commit_modules(project_root: str, modules: Dict[str, CommentedMap]) -> Optional[str]:
+    """Validate *modules* (module-file-name -> CommentedMap to write) via
+    a dry-run merge (validate_merge above) BEFORE writing anything for
+    real, then save every module. Field-level validation (weights sum,
+    URLs, choices - see config_validate.py) happens even earlier, before
+    this is ever called, which is what actually prevents most bad input
+    from being considered at all. This is the second, defense-in-depth
+    check: it catches a value that's individually well-typed but still
+    breaks utils.load_config's merge some other way - and catches it on
+    a throwaway temp copy, so a bad save can never reach the real config
+    files (nor leave some of a multi-file save applied and others not).
+
+    Shared by every config screen's *_save route (web/config_connections.py,
+    web/config_users.py, web/config_libraries.py, web/config_settings.py)
+    - lives here rather than in any one of them since none of those
+    screens owns it more than another.
+
+    Returns an error message (and writes nothing) if the dry-run merge
+    fails, else None once every module in *modules* has been saved.
+    """
+    error = validate_merge(project_root, modules)
+    if error:
+        logger.error(f"Config merge validation failed - nothing saved: {error}")
+        return error
+    for name, data in modules.items():
+        save_module(module_path(project_root, name), data)
+    return None
+
+
 def is_secret_field(key: str) -> bool:
     return key in SECRET_KEYS
 
@@ -205,8 +252,8 @@ def existing_library_secret(core: CommentedMap, library_id: Optional[str]) -> st
     brand new library row being added this submission) or has no
     instance api_key configured.
 
-    Used by web.config_app's Libraries screen (_apply_libraries /
-    _libraries_view) so a blank instance_api_key submission keeps
+    Used by web.config_libraries (_apply_libraries / _libraries_view) so
+    a blank instance_api_key submission keeps
     whatever secret was already saved for that specific library row -
     matched by its immutable id, not by list position, since rows can
     be reordered/added/removed within the same submission.
