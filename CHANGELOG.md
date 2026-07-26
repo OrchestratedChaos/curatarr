@@ -2,6 +2,37 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.20] - 2026-07-26
+
+### Changed
+
+- **Audit remediation: eliminated duplicated cache/recommender code**
+  (batch 2, PR B). Four hand-rolled JSON cache implementations
+  (`recommenders/external.py`'s `load_cache`/`save_cache`,
+  `load_huntarr_cache`/`save_huntarr_cache`,
+  `load_horizon_cache`/`save_horizon_cache`, and
+  `recommenders/external_render.py`'s `_load_imdb_cache`/`_save_imdb_cache`)
+  now route through the shared `utils/cache.py` helpers
+  (`load_json_cache`/`save_json_cache`) instead of duplicating
+  open/json.load/json.dump by hand - the huntarr/horizon caches also
+  gain `curatarr_cache_lookups_total` hit/miss metrics as a result,
+  previously invisible. Existing on-disk cache files verified to still
+  load correctly (version/staleness semantics unchanged - only the
+  raw I/O plumbing moved). `_load_imdb_cache`'s bare
+  `except (...): pass` (silently swallowing write failures) now logs
+  via the shared helper instead of hiding the error.
+- **`collect_tmdb_ids` deduplicated** in `recommenders/external_sync.py`
+  - was defined identically inside both `export_to_mdblist` and
+  `export_to_simkl`; hoisted to one module-level function.
+- **`_calculate_rating_multiplier`, `_save_cache`, and
+  `_print_similarity_breakdown` deduplicated** between
+  `recommenders/movie.py` and `recommenders/tv.py` - identical (or
+  differing only by the `self.media_type` literal) implementations
+  hoisted onto `recommenders/base.py`'s `BaseRecommender`.
+  `_print_similarity_breakdown` is no longer `@abstractmethod` (now a
+  concrete shared implementation); `BaseRecommender` still can't be
+  instantiated directly since other abstract methods remain.
+
 ## [2.10.19] - 2026-07-26
 
 ### Added

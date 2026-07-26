@@ -69,12 +69,14 @@ from utils import (
     get_tmdb_keywords,
     get_trakt_discovery_candidates,
     load_config,
+    load_json_cache,
     log_error,
     log_warning,
     normalize_genre,
     normalize_user_profile,
     record_recommender_run,
     record_unhandled_error,
+    save_json_cache,
     smart_open_html,
 )
 
@@ -823,18 +825,13 @@ HUNTARR_CACHE_VERSION = SEQUEL_HUNTARR_CACHE_VERSION
 
 def load_huntarr_cache(cache_path: str, stale_days: int = 7) -> Dict:
     """Load Huntarr cache from disk."""
-    try:
-        if os.path.exists(cache_path):
-            with open(cache_path, "r") as f:
-                cache = json.load(f)
-                if cache.get("version") == HUNTARR_CACHE_VERSION:
-                    # Check staleness
-                    cached_at = cache.get("cached_at", 0)
-                    age_days = (time.time() - cached_at) / 86400
-                    if age_days < stale_days:
-                        return cache
-    except (json.JSONDecodeError, IOError) as e:
-        logger.debug(f"Could not load Huntarr cache: {e}")
+    cache = load_json_cache(cache_path)
+    if cache and cache.get("version") == HUNTARR_CACHE_VERSION:
+        # Check staleness
+        cached_at = cache.get("cached_at", 0)
+        age_days = (time.time() - cached_at) / 86400
+        if age_days < stale_days:
+            return cache
     return {}
 
 
@@ -842,12 +839,8 @@ def save_huntarr_cache(cache_path: str, cache: Dict) -> None:
     """Save Huntarr cache to disk."""
     cache["version"] = HUNTARR_CACHE_VERSION
     cache["cached_at"] = time.time()
-    try:
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, "w") as f:
-            json.dump(cache, f)
-    except IOError as e:
-        log_warning(f"Could not save Huntarr cache: {e}")
+    if not save_json_cache(cache_path, cache):
+        log_warning("Could not save Huntarr cache")
 
 
 def find_missing_sequels(
@@ -1175,17 +1168,12 @@ def get_movie_status(tmdb_api_key: str, tmdb_id: int) -> Tuple[str, str]:
 
 def load_horizon_cache(cache_path: str, stale_days: int = 7) -> Dict:
     """Load Horizon Huntarr cache from disk."""
-    try:
-        if os.path.exists(cache_path):
-            with open(cache_path, "r") as f:
-                cache = json.load(f)
-                if cache.get("version") == HORIZON_HUNTARR_CACHE_VERSION:
-                    cached_at = cache.get("cached_at", 0)
-                    age_days = (time.time() - cached_at) / 86400
-                    if age_days < stale_days:
-                        return cache
-    except (json.JSONDecodeError, IOError) as e:
-        logger.debug(f"Could not load Horizon Huntarr cache: {e}")
+    cache = load_json_cache(cache_path)
+    if cache and cache.get("version") == HORIZON_HUNTARR_CACHE_VERSION:
+        cached_at = cache.get("cached_at", 0)
+        age_days = (time.time() - cached_at) / 86400
+        if age_days < stale_days:
+            return cache
     return {}
 
 
@@ -1193,12 +1181,8 @@ def save_horizon_cache(cache_path: str, cache: Dict) -> None:
     """Save Horizon Huntarr cache to disk."""
     cache["version"] = HORIZON_HUNTARR_CACHE_VERSION
     cache["cached_at"] = time.time()
-    try:
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, "w") as f:
-            json.dump(cache, f)
-    except IOError as e:
-        log_warning(f"Could not save Horizon Huntarr cache: {e}")
+    if not save_json_cache(cache_path, cache):
+        log_warning("Could not save Horizon Huntarr cache")
 
 
 def find_horizon_movies(tmdb_api_key: str, plex: Any, library_name: str, stale_days: int = 7) -> List[Dict]:
@@ -1856,37 +1840,35 @@ def load_cache(display_name: str, media_type: str, lib_id: Optional[str] = None)
     lib_prefix = f"{lib_id}_" if lib_id else ""
     cache_file = os.path.join(cache_dir, f"external_recs_{lib_prefix}{safe_name}_{media_type}.json")
 
-    if os.path.exists(cache_file):
-        with open(cache_file, "r") as f:
-            cache = json.load(f)
+    cache = load_json_cache(cache_file)
+    if cache is not None:
+        # Check cache version - invalidate old format
+        cache_version = cache.get("version", 0)
+        if cache_version < EXTERNAL_RECS_CACHE_VERSION:
+            print(f"  {YELLOW}External recs cache outdated (v{cache_version}), rebuilding...{RESET}")
+            return {}
 
-            # Check cache version - invalidate old format
-            cache_version = cache.get("version", 0)
-            if cache_version < EXTERNAL_RECS_CACHE_VERSION:
-                print(f"  {YELLOW}External recs cache outdated (v{cache_version}), rebuilding...{RESET}")
-                return {}
+        items = cache.get("items", {})
 
-            items = cache.get("items", {})
+        # Add tmdb_id to items that don't have it (backwards compatibility)
+        for tmdb_id_str, item in items.items():
+            if "tmdb_id" not in item:
+                item["tmdb_id"] = int(tmdb_id_str)
 
-            # Add tmdb_id to items that don't have it (backwards compatibility)
-            for tmdb_id_str, item in items.items():
-                if "tmdb_id" not in item:
-                    item["tmdb_id"] = int(tmdb_id_str)
+        # Filter out items without enough votes (match score filtering happens at output)
+        filtered = {}
+        removed_count = 0
+        for tmdb_id_str, item in items.items():
+            vote_count = item.get("vote_count", 0)  # Missing vote_count = needs re-fetch
+            if vote_count >= MIN_VOTE_COUNT:
+                filtered[tmdb_id_str] = item
+            else:
+                removed_count += 1
 
-            # Filter out items without enough votes (match score filtering happens at output)
-            filtered = {}
-            removed_count = 0
-            for tmdb_id_str, item in items.items():
-                vote_count = item.get("vote_count", 0)  # Missing vote_count = needs re-fetch
-                if vote_count >= MIN_VOTE_COUNT:
-                    filtered[tmdb_id_str] = item
-                else:
-                    removed_count += 1
+        if removed_count > 0:
+            print(f"  Filtered {removed_count} cached items with < {MIN_VOTE_COUNT} votes")
 
-            if removed_count > 0:
-                print(f"  Filtered {removed_count} cached items with < {MIN_VOTE_COUNT} votes")
-
-            return filtered
+        return filtered
     return {}
 
 
@@ -1906,8 +1888,8 @@ def save_cache(display_name: str, media_type: str, cache_data: Dict, lib_id: Opt
     cache_file = os.path.join(cache_dir, f"external_recs_{lib_prefix}{safe_name}_{media_type}.json")
 
     versioned_cache = {"version": EXTERNAL_RECS_CACHE_VERSION, "items": cache_data}
-    with open(cache_file, "w") as f:
-        json.dump(versioned_cache, f, indent=2)
+    if not save_json_cache(cache_file, versioned_cache):
+        log_warning(f"Could not save external recs cache for {display_name} ({media_type})")
 
 
 def _stamp_library_id(categorized: Dict, library_id: Optional[str]) -> None:

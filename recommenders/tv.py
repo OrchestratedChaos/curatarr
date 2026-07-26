@@ -15,16 +15,7 @@ from utils import (
     COLLECTION_BONUS_BASE,
     COLLECTION_BONUS_CAP,
     COLLECTION_BONUS_LOG_FACTOR,
-    DEFAULT_NEGATIVE_THRESHOLD,
     GREEN,
-    RATING_MULTIPLIER_2_STAR,
-    RATING_MULTIPLIER_3_STAR,
-    RATING_MULTIPLIER_4_STAR,
-    RATING_MULTIPLIER_5_STAR,
-    RATING_MULTIPLIER_UNRATED,
-    RATING_TIER_3_STAR,
-    RATING_TIER_4_STAR,
-    RATING_TIER_5_STAR,
     RED,
     RESET,
     TOP_CAST_COUNT,
@@ -42,7 +33,6 @@ from utils import (
     fetch_show_completion_data,
     fetch_tautulli_show_watched_data,
     format_media_output,
-    get_negative_multiplier,
     get_plex_account_ids,
     get_project_root,
     get_watched_show_count,
@@ -50,7 +40,6 @@ from utils import (
     log_error,
     log_warning,
     merge_show_watched_data,
-    print_similarity_breakdown,
     process_counters_from_cache,
     run_recommender_main,
     setup_log_file,
@@ -226,44 +215,7 @@ class PlexTVRecommender(BaseRecommender):
         # Use shared utility function
         return get_watched_show_count(self.config, users_to_check)
 
-    def _calculate_rating_multiplier(self, user_rating):
-        """Calculate rating multiplier based on user's star rating (0-10 scale in Plex)
-
-        With negative signals enabled, low ratings (0-3) return negative multipliers
-        to penalize similar content instead of weakly preferring it.
-
-        Rating scale (negative signals enabled):
-        - 9-10 (5 stars): 1.0x weight - love it, strong preference
-        - 7-8 (4 stars): 0.75x weight - like it, moderate preference
-        - 5-6 (3 stars): 0.5x weight - neutral, weak preference
-        - 4 (2 stars): 0.25x weight - dislike, very weak preference
-        - 0-3 (1-1.5 stars): NEGATIVE weight - hate it, penalize similar content
-        - None/0 (unrated): 0.6x weight - default, slightly lower than neutral
-        """
-        if not user_rating or user_rating == 0:
-            return RATING_MULTIPLIER_UNRATED
-
-        rating_int = int(round(user_rating))
-
-        # Check if negative signals are enabled
-        ns_config = self.config.get("negative_signals", {})
-        bad_ratings_config = ns_config.get("bad_ratings", {})
-        ns_enabled = ns_config.get("enabled", True) and bad_ratings_config.get("enabled", True)
-        threshold = bad_ratings_config.get("threshold", DEFAULT_NEGATIVE_THRESHOLD)
-
-        # Return negative multiplier for low ratings if enabled
-        if ns_enabled and rating_int <= threshold:
-            return get_negative_multiplier(rating_int)
-
-        # Positive multipliers for higher ratings
-        if user_rating >= RATING_TIER_5_STAR:
-            return RATING_MULTIPLIER_5_STAR
-        elif user_rating >= RATING_TIER_4_STAR:
-            return RATING_MULTIPLIER_4_STAR
-        elif user_rating >= RATING_TIER_3_STAR:
-            return RATING_MULTIPLIER_3_STAR
-        else:
-            return RATING_MULTIPLIER_2_STAR
+    # _calculate_rating_multiplier() inherited from BaseRecommender
 
     def _get_plex_account_ids(self):
         """Get Plex account IDs for configured users with flexible name matching"""
@@ -433,8 +385,7 @@ class PlexTVRecommender(BaseRecommender):
         """Save watched show cache using base class utility."""
         self._do_save_watched_cache()
 
-    def _save_cache(self):
-        self._save_watched_cache()
+    # _save_cache() inherited from BaseRecommender
 
     def _get_media_cache(self):
         """Return the show cache instance."""
@@ -586,11 +537,8 @@ class PlexTVRecommender(BaseRecommender):
 
         return score, breakdown
 
-    def _print_similarity_breakdown(self, show_info: Dict, score: float, breakdown: Dict):
-        """Print detailed breakdown of similarity score calculation"""
-        print_similarity_breakdown(show_info, score, breakdown, "tv")
-
-    # get_recommendations() and manage_plex_labels() are inherited from BaseRecommender
+    # _print_similarity_breakdown(), get_recommendations() and
+    # manage_plex_labels() are inherited from BaseRecommender
 
 
 # ------------------------------------------------------------------------
