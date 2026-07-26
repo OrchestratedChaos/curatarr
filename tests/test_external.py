@@ -28,6 +28,8 @@ from recommenders.external import (
     _empty_categorized,
     _merge_categorized,
     _merge_user_runs,
+    _pu_plan_discovery,
+    _pu_resolve_context,
     _stamp_library_id,
     categorize_by_streaming_service,
     discover_popular_by_genre,
@@ -4736,3 +4738,91 @@ class TestEarlyTermination:
 
         # Should reset to 0
         assert consecutive_zero_iterations == 0
+
+
+class TestProcessUserResolveContext:
+    """Tests for _pu_resolve_context() - one of process_user's named
+    pipeline stages (#audit remediation batch E, PR3)."""
+
+    def test_legacy_config_resolves_section_names_and_none_lib_ids(self):
+        config = {"plex": {"movie_library": "Movies", "tv_library": "TV Shows"}, "users": {"preferences": {}}}
+        (
+            user_prefs,
+            display_name,
+            movie_library_name,
+            tv_library_name,
+            movie_cache_lib_id,
+            tv_cache_lib_id,
+        ) = _pu_resolve_context(config, "alice", None, None)
+
+        assert user_prefs == {}
+        assert display_name == "alice"
+        assert movie_library_name == "Movies"
+        assert tv_library_name == "TV Shows"
+        assert movie_cache_lib_id is None
+        assert tv_cache_lib_id is None
+
+    def test_display_name_prefers_configured_preference(self):
+        config = {
+            "plex": {"movie_library": "Movies", "tv_library": "TV Shows"},
+            "users": {"preferences": {"alice": {"display_name": "Alice A."}}},
+        }
+        user_prefs, display_name, *_ = _pu_resolve_context(config, "alice", None, None)
+        assert display_name == "Alice A."
+        assert user_prefs == {"display_name": "Alice A."}
+
+    @patch("recommenders.external.get_libraries_for_media_type")
+    def test_multi_library_qualifies_cache_lib_id(self, mock_get_libs):
+        mock_get_libs.return_value = [Mock(), Mock()]  # 2 libraries -> "is_multi"
+        config = {"plex": {}, "users": {"preferences": {}}}
+        movie_library = {"id": "movies-4k", "section": "Movies 4K"}
+        tv_library = {"id": "tv-shows", "section": "TV Shows"}
+
+        *_rest, movie_cache_lib_id, tv_cache_lib_id = _pu_resolve_context(config, "alice", movie_library, tv_library)
+
+        assert movie_cache_lib_id == "movies-4k"
+        assert tv_cache_lib_id == "tv-shows"
+
+
+class TestProcessUserPlanDiscovery:
+    """Tests for _pu_plan_discovery() - one of process_user's named
+    pipeline stages (#audit remediation batch E, PR3)."""
+
+    def test_healthy_cache_has_zero_deficit(self):
+        config = {
+            "external_recommendations": {"movie_limit": 2, "show_limit": 2, "min_relevance_score": 0.5},
+            "trakt": {},
+        }
+        movie_cache = {"1": {"score": 0.9}, "2": {"score": 0.8}}
+        show_cache = {}
+
+        result = _pu_plan_discovery(config, {}, movie_cache, show_cache)
+        (
+            movie_limit,
+            show_limit,
+            min_relevance,
+            exclude_genres,
+            quality_movies,
+            quality_shows,
+            movie_deficit,
+            show_deficit,
+            cached_movie_ids,
+            cached_show_ids,
+            exclude_movie_imdb_ids,
+            exclude_show_imdb_ids,
+        ) = result
+
+        assert movie_deficit == 0
+        assert show_deficit == 2
+        assert len(quality_movies) == 2
+        assert cached_movie_ids == {1, 2}
+        assert exclude_genres == []
+        assert exclude_movie_imdb_ids == set()
+        assert exclude_show_imdb_ids == set()
+
+    def test_excluded_genres_from_user_prefs(self):
+        config = {"external_recommendations": {"movie_limit": 5, "show_limit": 5}, "trakt": {}}
+        user_prefs = {"exclude_genres": ["Horror"]}
+
+        result = _pu_plan_discovery(config, user_prefs, {}, {})
+        assert result[3] == ["Horror"]
