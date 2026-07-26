@@ -25,6 +25,11 @@
 
 set -e
 
+# Kept as its own copy rather than sourcing scripts/lib/colors.sh
+# (which run.sh/setup.sh share): .dockerignore excludes scripts/
+# wholesale from the build context (app code only, no dev tooling -
+# see that file), so sharing this 3-line subset here isn't worth
+# carving a negation exception into it.
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'

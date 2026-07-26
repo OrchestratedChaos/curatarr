@@ -26,16 +26,17 @@ for arg in "$@"; do
     esac
 done
 
-# Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
 # Get script directory (absolute path)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Color codes for output - shared with setup.sh (docker-entrypoint.sh
+# keeps its own copy - see scripts/lib/colors.sh's docstring for why).
+source "$SCRIPT_DIR/scripts/lib/colors.sh"
+
+# Shared "hash-verified lockfile, fall back to plain requirements" pip
+# install helper - also used by run-ui.sh.
+source "$SCRIPT_DIR/scripts/lib/pip-install.sh"
 
 # Trust anchor for signed release verification. Fingerprint is pinned in
 # this script (not just in the allowed_signers file) so a tampered
@@ -100,7 +101,7 @@ check_and_install_dependencies() {
     fi
     echo -e "${GREEN}✓ pip3 found${NC}"
 
-    # Install Python dependencies from the fully-hashed lock file
+    # Install Python dependencies - prefer the fully-hashed lock file
     # (requirements.lock, generated from requirements.txt - see the
     # comment at the top of that file). `--require-hashes` makes pip
     # refuse to install anything whose downloaded artifact doesn't match
@@ -113,36 +114,42 @@ check_and_install_dependencies() {
     # interpreter/platform combo can trip that up even when the floor
     # check above passed), fall back to the normal pinned install from
     # requirements.txt with a clear warning rather than hard-failing the
-    # whole update. Hashed stays the primary, preferred path.
+    # whole update. Hashed stays the primary, preferred path. The actual
+    # pip3 invocation/fallback is shared with run-ui.sh - see
+    # scripts/lib/pip-install.sh (curatarr_pip_install); this only keeps
+    # its own messaging, via the callbacks below, so wording/timing stay
+    # exactly as before.
+    _run_sh_pip_fallback_reason=""
+    _run_sh_on_hash_fail() {
+        echo -e "${YELLOW}⚠ Hash-verified install failed (hash/platform mismatch?)${NC}"
+        echo -e "${YELLOW}  Falling back to a normal pinned install from requirements.txt${NC}"
+        echo -e "${YELLOW}  (no hash verification for this run). See RELEASING.md if this${NC}"
+        echo -e "${YELLOW}  persists.${NC}"
+        _run_sh_pip_fallback_reason="hash_fail"
+    }
+    _run_sh_on_no_lock() {
+        if [ -f "requirements.txt" ]; then
+            echo -e "${YELLOW}requirements.lock not found, falling back to requirements.txt (no hash verification)${NC}"
+        fi
+        _run_sh_pip_fallback_reason="no_lock"
+    }
+
     if [ -f "requirements.lock" ]; then
         echo -e "${CYAN}Installing Python dependencies (hash-verified)...${NC}"
-        if pip3 install --require-hashes -r requirements.lock --quiet; then
+    fi
+
+    if curatarr_pip_install "requirements.lock" "requirements.txt" _run_sh_on_hash_fail _run_sh_on_no_lock; then
+        if [ "$CURATARR_PIP_INSTALL_MODE" = "hash-verified" ]; then
             echo -e "${GREEN}✓ All dependencies installed (hash-verified)${NC}"
+        elif [ "$_run_sh_pip_fallback_reason" = "hash_fail" ]; then
+            echo -e "${GREEN}✓ All dependencies installed (fallback, unhashed)${NC}"
         else
-            echo -e "${YELLOW}⚠ Hash-verified install failed (hash/platform mismatch?)${NC}"
-            echo -e "${YELLOW}  Falling back to a normal pinned install from requirements.txt${NC}"
-            echo -e "${YELLOW}  (no hash verification for this run). See RELEASING.md if this${NC}"
-            echo -e "${YELLOW}  persists.${NC}"
-            if [ -f "requirements.txt" ]; then
-                pip3 install -r requirements.txt --quiet || {
-                    echo -e "${RED}❌ Failed to install Python dependencies${NC}"
-                    echo "Try running manually: pip3 install -r requirements.txt"
-                    exit 1
-                }
-                echo -e "${GREEN}✓ All dependencies installed (fallback, unhashed)${NC}"
-            else
-                echo -e "${RED}❌ Failed to install Python dependencies${NC}"
-                exit 1
-            fi
+            echo -e "${GREEN}✓ All dependencies installed${NC}"
         fi
-    elif [ -f "requirements.txt" ]; then
-        echo -e "${YELLOW}requirements.lock not found, falling back to requirements.txt (no hash verification)${NC}"
-        pip3 install -r requirements.txt --quiet || {
-            echo -e "${RED}❌ Failed to install Python dependencies${NC}"
-            echo "Try running manually: pip3 install -r requirements.txt"
-            exit 1
-        }
-        echo -e "${GREEN}✓ All dependencies installed${NC}"
+    else
+        echo -e "${RED}❌ Failed to install Python dependencies${NC}"
+        echo "Try running manually: pip3 install -r requirements.txt"
+        exit 1
     fi
 
     echo ""
@@ -152,6 +159,28 @@ check_and_install_dependencies() {
 # AUTO-UPDATE FROM GITHUB (SSH-signed release tags only)
 # ------------------------------------------------------------------------
 
+# version_gt A B / version_ge A B: intentionally NOT calling into
+# utils/update_check.py's parse_version() (audited as duplicate logic -
+# see PR history) despite that being the app's canonical version
+# parser. Two independent reasons it can't be reused here:
+#   1. version_ge is called from check_and_install_dependencies() BEFORE
+#      pip installs anything (the Python-floor gate has to run before
+#      requirements.lock/.txt are installed, by design - see that
+#      function). `from utils.update_check import parse_version` would
+#      first execute utils/__init__.py, which unconditionally imports
+#      ~20 submodules (yaml/requests/plexapi/cryptography-backed) - on
+#      a fresh checkout with no deps installed yet, that import would
+#      fail with exactly the class of error this gate exists to avoid.
+#   2. Even post-install, parse_version() requires EXACTLY 3 dotted
+#      components (its own anchoring is deliberate - see that
+#      function's docstring). The Python-floor comparison here compares
+#      a 3-component runtime version (e.g. "3.12.1") against a
+#      2-component floor string pulled from requirements.lock's own
+#      `--python-version X.Y` header (e.g. "3.10") - parse_version would
+#      reject the 2-component side outright. The looser parser below
+#      relies on Python's own tuple comparison short-circuiting on the
+#      first differing element, which is what makes comparing
+#      different-length tuples work correctly here.
 # version_gt A B: succeeds (exit 0) if dotted version A is strictly
 # greater than dotted version B. Pure-python so behavior is identical on
 # macOS/Linux regardless of whether `sort -V` is available.

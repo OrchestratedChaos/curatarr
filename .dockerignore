@@ -25,6 +25,13 @@ pytest.ini
 .coverage
 build-requirements.txt
 scripts/
+# ...except scripts/lib/ - shared shell helpers (colors.sh,
+# pip-install.sh) that run.sh itself now sources (see Dockerfile's own
+# COPY for this - run.sh is one of the two app-code files intentionally
+# still copied into the image below, so its own runtime dependencies
+# have to come with it).
+!scripts/lib/
+!scripts/lib/*
 
 # Python cache / venvs
 __pycache__/

@@ -93,6 +93,13 @@ COPY recommenders/ recommenders/
 COPY utils/ utils/
 COPY web/ web/
 COPY run.sh docker-entrypoint.sh ./
+# run.sh now sources scripts/lib/colors.sh and scripts/lib/pip-install.sh
+# (shared with run-ui.sh/setup.sh, host-side-only otherwise - see the
+# 2.10.18 audit-remediation pass) - it needs its own copy of those
+# alongside it even though nothing in this image actually invokes
+# run.sh itself (see .dockerignore's negation for why scripts/ as a
+# whole otherwise stays excluded).
+COPY scripts/lib/ scripts/lib/
 RUN sed -i 's/\r$//' run.sh docker-entrypoint.sh && \
     chmod +x run.sh docker-entrypoint.sh
 
