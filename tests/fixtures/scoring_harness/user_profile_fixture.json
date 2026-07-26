@@ -1,0 +1,66 @@
+{
+  "actors": {
+    "Actor 03 Fixture": 8,
+    "Actor 05 Fixture": 5,
+    "Actor 09 Fixture": 1,
+    "Actor 13 Fixture": 7,
+    "Actor 18 Fixture": 8,
+    "Actor 22 Fixture": 7,
+    "Actor 23 Fixture": 3,
+    "Actor 28 Fixture": 4,
+    "Actor 33 Fixture": 1,
+    "Actor 38 Fixture": 7,
+    "Actor 42 Fixture": 1,
+    "Actor 45 Fixture": 1,
+    "Actor 46 Fixture": 8,
+    "Actor 49 Fixture": 4,
+    "Actor 50 Fixture": 4
+  },
+  "directors": {
+    "Director A. Placeholder": 1,
+    "Director B. Placeholder": 3,
+    "Director C. Placeholder": 3,
+    "Director F. Placeholder": 4,
+    "Director G. Placeholder": 6,
+    "Director N. Placeholder": 3,
+    "Director O. Placeholder": 5,
+    "Director R. Placeholder": 6
+  },
+  "genres": {
+    "Action": 7,
+    "Comedy": 5,
+    "Drama": 11,
+    "Fantasy": 3,
+    "Horror": 1,
+    "Mystery": 4,
+    "Science Fiction": 14,
+    "Thriller": 9
+  },
+  "keywords": {
+    "buddy cop": 3,
+    "coming of age": 7,
+    "cult": 5,
+    "dystopia": 2,
+    "found family": 5,
+    "heist": 3,
+    "heist gone wrong": 2,
+    "mentor and student": 6,
+    "monster": 7,
+    "prophecy": 4,
+    "rebellion": 5,
+    "redemption": 8,
+    "revenge": 4,
+    "road trip": 1,
+    "secret identity": 10,
+    "small town": 3,
+    "space opera": 1,
+    "supernatural": 8,
+    "time travel": 3,
+    "underdog": 1
+  },
+  "languages": {
+    "en": 40,
+    "fr": 6,
+    "ja": 3
+  }
+}

@@ -1,0 +1,2868 @@
+{
+  "cache_version": 4,
+  "last_updated": "2026-01-01T00:00:00+00:00",
+  "library_count": 60,
+  "movies": {
+    "500000": {
+      "cached_score": null,
+      "cast": [
+        "Actor 39 Fixture",
+        "Actor 02 Fixture",
+        "Actor 04 Fixture",
+        "Actor 03 Fixture",
+        "Actor 34 Fixture",
+        "Actor 38 Fixture",
+        "Actor 56 Fixture",
+        "Actor 50 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director F. Placeholder"
+      ],
+      "genres": [
+        "Family",
+        "Animation",
+        "Horror",
+        "Comedy",
+        "Adventure"
+      ],
+      "imdb_id": "tt9000000",
+      "language": "fr",
+      "plex_rating_key": 500000,
+      "profile_hash": null,
+      "rating": 3.2,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Wilds 0.",
+      "title": "Quiet Wilds 0",
+      "tmdb_id": 900000,
+      "tmdb_keywords": [
+        "ghost",
+        "survival",
+        "sword and sorcery",
+        "redemption",
+        "prophecy",
+        "arranged marriage",
+        "coming of age",
+        "undercover agent",
+        "secret identity",
+        "small town",
+        "treasure hunt",
+        "supernatural"
+      ],
+      "vote_count": 14186,
+      "year": 2001
+    },
+    "500001": {
+      "cached_score": null,
+      "cast": [
+        "Actor 12 Fixture",
+        "Actor 10 Fixture",
+        "Actor 05 Fixture",
+        "Actor 28 Fixture",
+        "Actor 33 Fixture",
+        "Actor 02 Fixture",
+        "Actor 22 Fixture",
+        "Actor 31 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director N. Placeholder"
+      ],
+      "genres": [
+        "Science Fiction",
+        "Drama",
+        "Western",
+        "Romance",
+        "Mystery"
+      ],
+      "imdb_id": "tt9000001",
+      "language": "fr",
+      "plex_rating_key": 500001,
+      "profile_hash": null,
+      "rating": 7.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Endless Harbor 1.",
+      "title": "Endless Harbor 1",
+      "tmdb_id": 900001,
+      "tmdb_keywords": [
+        "undercover agent",
+        "post-apocalyptic",
+        "underdog",
+        "arranged marriage",
+        "monster",
+        "artificial intelligence",
+        "heist",
+        "space opera"
+      ],
+      "vote_count": 4957,
+      "year": 1986
+    },
+    "500002": {
+      "cached_score": null,
+      "cast": [
+        "Actor 12 Fixture",
+        "Actor 07 Fixture",
+        "Actor 50 Fixture",
+        "Actor 14 Fixture",
+        "Actor 13 Fixture",
+        "Actor 17 Fixture",
+        "Actor 29 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director T. Placeholder"
+      ],
+      "genres": [
+        "Animation",
+        "Western",
+        "Mystery",
+        "Action"
+      ],
+      "imdb_id": "tt9000002",
+      "language": "de",
+      "plex_rating_key": 500002,
+      "profile_hash": null,
+      "rating": 6.2,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Hidden Echo 2.",
+      "title": "Hidden Echo 2",
+      "tmdb_id": 900002,
+      "tmdb_keywords": [
+        "parallel universe",
+        "epidemic",
+        "curse",
+        "undercover agent",
+        "redemption",
+        "time travel",
+        "double agent",
+        "artificial intelligence",
+        "prophecy",
+        "isolated community",
+        "space opera"
+      ],
+      "vote_count": 3938,
+      "year": 2003
+    },
+    "500003": {
+      "cached_score": null,
+      "cast": [
+        "Actor 56 Fixture",
+        "Actor 10 Fixture",
+        "Actor 38 Fixture",
+        "Actor 21 Fixture",
+        "Actor 41 Fixture",
+        "Actor 18 Fixture",
+        "Actor 55 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director G. Placeholder",
+        "Director J. Placeholder"
+      ],
+      "genres": [
+        "Adventure",
+        "Western",
+        "History"
+      ],
+      "imdb_id": "tt9000003",
+      "language": "ko",
+      "plex_rating_key": 500003,
+      "profile_hash": null,
+      "rating": 5.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Harbor 3.",
+      "title": "Quiet Harbor 3",
+      "tmdb_id": 900003,
+      "tmdb_keywords": [
+        "revenge",
+        "coming of age",
+        "secret identity",
+        "found family",
+        "witness protection",
+        "time travel",
+        "heist gone wrong",
+        "betrayal"
+      ],
+      "vote_count": 4946,
+      "year": 1988
+    },
+    "500004": {
+      "cached_score": null,
+      "cast": [
+        "Actor 56 Fixture",
+        "Actor 24 Fixture",
+        "Actor 58 Fixture",
+        "Actor 59 Fixture",
+        "Actor 16 Fixture",
+        "Actor 53 Fixture",
+        "Actor 19 Fixture",
+        "Actor 09 Fixture",
+        "Actor 40 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director S. Placeholder"
+      ],
+      "genres": [
+        "Romance",
+        "Action"
+      ],
+      "imdb_id": "tt9000004",
+      "language": "es",
+      "plex_rating_key": 500004,
+      "profile_hash": null,
+      "rating": 4.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Forgotten Harbor 4.",
+      "title": "Forgotten Harbor 4",
+      "tmdb_id": 900004,
+      "tmdb_keywords": [
+        "treasure hunt",
+        "small town",
+        "haunted house",
+        "mentor and student",
+        "found family",
+        "space opera",
+        "survival",
+        "undercover agent",
+        "supernatural",
+        "artificial intelligence",
+        "cult",
+        "heist",
+        "underdog"
+      ],
+      "vote_count": 10735,
+      "year": 2003
+    },
+    "500005": {
+      "cached_score": null,
+      "cast": [
+        "Actor 23 Fixture",
+        "Actor 50 Fixture",
+        "Actor 52 Fixture",
+        "Actor 51 Fixture",
+        "Actor 21 Fixture",
+        "Actor 29 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director P. Placeholder"
+      ],
+      "genres": [
+        "Thriller",
+        "History",
+        "Action",
+        "War",
+        "Animation"
+      ],
+      "imdb_id": "tt9000005",
+      "language": "fr",
+      "plex_rating_key": 500005,
+      "profile_hash": null,
+      "rating": 7.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Meridian 5.",
+      "title": "Silent Meridian 5",
+      "tmdb_id": 900005,
+      "tmdb_keywords": [
+        "heist gone wrong",
+        "redemption",
+        "artificial intelligence",
+        "coming of age",
+        "mentor and student",
+        "arranged marriage",
+        "underdog",
+        "supernatural",
+        "undercover agent",
+        "found family",
+        "prophecy",
+        "epidemic",
+        "heist"
+      ],
+      "vote_count": 11838,
+      "year": 1993
+    },
+    "500006": {
+      "cached_score": null,
+      "cast": [
+        "Actor 35 Fixture",
+        "Actor 18 Fixture",
+        "Actor 32 Fixture",
+        "Actor 53 Fixture",
+        "Actor 27 Fixture",
+        "Actor 47 Fixture",
+        "Actor 41 Fixture",
+        "Actor 49 Fixture",
+        "Actor 51 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director J. Placeholder",
+        "Director N. Placeholder"
+      ],
+      "genres": [
+        "Documentary",
+        "War"
+      ],
+      "imdb_id": "tt9000006",
+      "language": "es",
+      "plex_rating_key": 500006,
+      "profile_hash": null,
+      "rating": 4.7,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Signal 6.",
+      "title": "Broken Signal 6",
+      "tmdb_id": 900006,
+      "tmdb_keywords": [
+        "epidemic",
+        "supernatural",
+        "isolated community",
+        "buddy cop",
+        "parallel universe",
+        "courtroom drama",
+        "artificial intelligence",
+        "heist",
+        "dystopia",
+        "mentor and student",
+        "road trip",
+        "undercover agent"
+      ],
+      "vote_count": 342,
+      "year": 2023
+    },
+    "500007": {
+      "cached_score": null,
+      "cast": [
+        "Actor 19 Fixture",
+        "Actor 55 Fixture",
+        "Actor 41 Fixture",
+        "Actor 16 Fixture",
+        "Actor 20 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director M. Placeholder",
+        "Director C. Placeholder"
+      ],
+      "genres": [
+        "Horror",
+        "Fantasy",
+        "Adventure",
+        "Music"
+      ],
+      "imdb_id": "tt9000007",
+      "language": "de",
+      "plex_rating_key": 500007,
+      "profile_hash": null,
+      "rating": 6.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Lantern 7.",
+      "title": "Silent Lantern 7",
+      "tmdb_id": 900007,
+      "tmdb_keywords": [
+        "found family",
+        "double agent",
+        "heist",
+        "haunted house",
+        "underdog",
+        "coming of age",
+        "courtroom drama",
+        "chosen one"
+      ],
+      "vote_count": 6980,
+      "year": 1993
+    },
+    "500008": {
+      "cached_score": null,
+      "cast": [
+        "Actor 58 Fixture",
+        "Actor 39 Fixture",
+        "Actor 23 Fixture",
+        "Actor 56 Fixture",
+        "Actor 26 Fixture",
+        "Actor 24 Fixture",
+        "Actor 13 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director A. Placeholder"
+      ],
+      "genres": [
+        "Science Fiction",
+        "Fantasy",
+        "Documentary",
+        "Comedy",
+        "Thriller"
+      ],
+      "imdb_id": "tt9000008",
+      "language": "es",
+      "plex_rating_key": 500008,
+      "profile_hash": null,
+      "rating": 5.4,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Echo 8.",
+      "title": "Silent Echo 8",
+      "tmdb_id": 900008,
+      "tmdb_keywords": [
+        "road trip",
+        "double agent",
+        "ghost",
+        "sword and sorcery",
+        "redemption",
+        "heist",
+        "isolated community"
+      ],
+      "vote_count": 8572,
+      "year": 2013
+    },
+    "500009": {
+      "cached_score": null,
+      "cast": [
+        "Actor 40 Fixture",
+        "Actor 45 Fixture",
+        "Actor 49 Fixture",
+        "Actor 17 Fixture",
+        "Actor 39 Fixture",
+        "Actor 15 Fixture",
+        "Actor 22 Fixture",
+        "Actor 37 Fixture",
+        "Actor 43 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director E. Placeholder"
+      ],
+      "genres": [
+        "Mystery",
+        "Crime",
+        "Animation",
+        "Family",
+        "Western"
+      ],
+      "imdb_id": "tt9000009",
+      "language": "fr",
+      "plex_rating_key": 500009,
+      "profile_hash": null,
+      "rating": 3.0,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Last Meridian 9.",
+      "title": "Last Meridian 9",
+      "tmdb_id": 900009,
+      "tmdb_keywords": [
+        "double agent",
+        "arranged marriage",
+        "found family",
+        "witness protection",
+        "time travel",
+        "survival",
+        "coming of age",
+        "prophecy"
+      ],
+      "vote_count": 17513,
+      "year": 2004
+    },
+    "500010": {
+      "cached_score": null,
+      "cast": [
+        "Actor 47 Fixture",
+        "Actor 02 Fixture",
+        "Actor 28 Fixture",
+        "Actor 44 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director P. Placeholder"
+      ],
+      "genres": [
+        "Thriller",
+        "Mystery"
+      ],
+      "imdb_id": "tt9000010",
+      "language": "es",
+      "plex_rating_key": 500010,
+      "profile_hash": null,
+      "rating": 6.5,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Forgotten Meridian 10.",
+      "title": "Forgotten Meridian 10",
+      "tmdb_id": 900010,
+      "tmdb_keywords": [
+        "prophecy",
+        "artificial intelligence",
+        "treasure hunt",
+        "survival",
+        "cult",
+        "isolated community",
+        "rebellion",
+        "redemption",
+        "heist gone wrong",
+        "conspiracy"
+      ],
+      "vote_count": 18324,
+      "year": 2011
+    },
+    "500011": {
+      "cached_score": null,
+      "cast": [
+        "Actor 54 Fixture",
+        "Actor 26 Fixture",
+        "Actor 42 Fixture",
+        "Actor 46 Fixture",
+        "Actor 31 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director F. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Animation",
+        "Music"
+      ],
+      "imdb_id": "tt9000011",
+      "language": "fr",
+      "plex_rating_key": 500011,
+      "profile_hash": null,
+      "rating": 8.1,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Hidden Compass 11.",
+      "title": "Hidden Compass 11",
+      "tmdb_id": 900011,
+      "tmdb_keywords": [
+        "undercover agent",
+        "treasure hunt",
+        "isolated community",
+        "supernatural",
+        "small town",
+        "witness protection",
+        "rebellion",
+        "found family"
+      ],
+      "vote_count": 4818,
+      "year": 1986
+    },
+    "500012": {
+      "cached_score": null,
+      "cast": [
+        "Actor 14 Fixture",
+        "Actor 45 Fixture",
+        "Actor 38 Fixture",
+        "Actor 02 Fixture",
+        "Actor 30 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director T. Placeholder",
+        "Director H. Placeholder"
+      ],
+      "genres": [
+        "Adventure",
+        "History",
+        "Western",
+        "Animation"
+      ],
+      "imdb_id": "tt9000012",
+      "language": "de",
+      "plex_rating_key": 500012,
+      "profile_hash": null,
+      "rating": 6.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Crimson Horizon 12.",
+      "title": "Crimson Horizon 12",
+      "tmdb_id": 900012,
+      "tmdb_keywords": [
+        "treasure hunt",
+        "secret identity",
+        "time travel",
+        "prophecy",
+        "cult",
+        "mentor and student",
+        "supernatural",
+        "haunted house",
+        "heist gone wrong"
+      ],
+      "vote_count": 13956,
+      "year": 2015
+    },
+    "500013": {
+      "cached_score": null,
+      "cast": [
+        "Actor 24 Fixture",
+        "Actor 26 Fixture",
+        "Actor 59 Fixture",
+        "Actor 30 Fixture",
+        "Actor 39 Fixture",
+        "Actor 16 Fixture",
+        "Actor 49 Fixture",
+        "Actor 41 Fixture",
+        "Actor 46 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director R. Placeholder",
+        "Director D. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "Documentary",
+        "Animation"
+      ],
+      "imdb_id": "tt9000013",
+      "language": "fr",
+      "plex_rating_key": 500013,
+      "profile_hash": null,
+      "rating": 8.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Last Wilds 13.",
+      "title": "Last Wilds 13",
+      "tmdb_id": 900013,
+      "tmdb_keywords": [
+        "treasure hunt",
+        "epidemic",
+        "rebellion",
+        "mentor and student",
+        "cult",
+        "alien invasion",
+        "underdog",
+        "redemption",
+        "secret identity",
+        "amnesia",
+        "witness protection",
+        "undercover agent",
+        "betrayal",
+        "buddy cop"
+      ],
+      "vote_count": 210,
+      "year": 1997
+    },
+    "500014": {
+      "cached_score": null,
+      "cast": [
+        "Actor 27 Fixture",
+        "Actor 24 Fixture",
+        "Actor 30 Fixture",
+        "Actor 34 Fixture",
+        "Actor 07 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director E. Placeholder",
+        "Director A. Placeholder"
+      ],
+      "genres": [
+        "Fantasy",
+        "Animation",
+        "Adventure"
+      ],
+      "imdb_id": "tt9000014",
+      "language": "en",
+      "plex_rating_key": 500014,
+      "profile_hash": null,
+      "rating": 7.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Meridian 14.",
+      "title": "Quiet Meridian 14",
+      "tmdb_id": 900014,
+      "tmdb_keywords": [
+        "amnesia",
+        "parallel universe",
+        "heist gone wrong",
+        "curse",
+        "alien invasion",
+        "witness protection",
+        "small town",
+        "survival",
+        "arranged marriage",
+        "dystopia"
+      ],
+      "vote_count": 9001,
+      "year": 2021
+    },
+    "500015": {
+      "cached_score": null,
+      "cast": [
+        "Actor 15 Fixture",
+        "Actor 34 Fixture",
+        "Actor 30 Fixture",
+        "Actor 44 Fixture",
+        "Actor 52 Fixture",
+        "Actor 05 Fixture",
+        "Actor 26 Fixture",
+        "Actor 13 Fixture",
+        "Actor 24 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director K. Placeholder",
+        "Director T. Placeholder"
+      ],
+      "genres": [
+        "Family",
+        "Thriller",
+        "Science Fiction",
+        "Horror"
+      ],
+      "imdb_id": "tt9000015",
+      "language": "ko",
+      "plex_rating_key": 500015,
+      "profile_hash": null,
+      "rating": 3.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Lantern 15.",
+      "title": "Silent Lantern 15",
+      "tmdb_id": 900015,
+      "tmdb_keywords": [
+        "survival",
+        "rebellion",
+        "epidemic",
+        "sword and sorcery",
+        "witness protection",
+        "heist gone wrong",
+        "revenge",
+        "isolated community",
+        "heist",
+        "buddy cop",
+        "small town",
+        "dystopia"
+      ],
+      "vote_count": 17692,
+      "year": 1988
+    },
+    "500016": {
+      "cached_score": null,
+      "cast": [
+        "Actor 37 Fixture",
+        "Actor 30 Fixture",
+        "Actor 46 Fixture",
+        "Actor 28 Fixture",
+        "Actor 13 Fixture",
+        "Actor 02 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director I. Placeholder"
+      ],
+      "genres": [
+        "Crime",
+        "Adventure",
+        "Fantasy",
+        "Thriller",
+        "Mystery"
+      ],
+      "imdb_id": "tt9000016",
+      "language": "de",
+      "plex_rating_key": 500016,
+      "profile_hash": null,
+      "rating": 6.8,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Wilds 16.",
+      "title": "Broken Wilds 16",
+      "tmdb_id": 900016,
+      "tmdb_keywords": [
+        "coming of age",
+        "betrayal",
+        "rebellion",
+        "buddy cop",
+        "time travel",
+        "monster",
+        "isolated community",
+        "double agent",
+        "cult",
+        "secret identity",
+        "alien invasion",
+        "ghost"
+      ],
+      "vote_count": 15697,
+      "year": 2024
+    },
+    "500017": {
+      "cached_score": null,
+      "cast": [
+        "Actor 27 Fixture",
+        "Actor 36 Fixture",
+        "Actor 34 Fixture",
+        "Actor 48 Fixture",
+        "Actor 10 Fixture",
+        "Actor 57 Fixture",
+        "Actor 31 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director C. Placeholder",
+        "Director T. Placeholder"
+      ],
+      "genres": [
+        "Animation",
+        "Drama",
+        "Music"
+      ],
+      "imdb_id": "tt9000017",
+      "language": "fr",
+      "plex_rating_key": 500017,
+      "profile_hash": null,
+      "rating": 5.4,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Endless Compass 17.",
+      "title": "Endless Compass 17",
+      "tmdb_id": 900017,
+      "tmdb_keywords": [
+        "road trip",
+        "undercover agent",
+        "chosen one",
+        "space opera",
+        "arranged marriage",
+        "rebellion"
+      ],
+      "vote_count": 4892,
+      "year": 2000
+    },
+    "500018": {
+      "cached_score": null,
+      "cast": [
+        "Actor 13 Fixture",
+        "Actor 14 Fixture",
+        "Actor 35 Fixture",
+        "Actor 03 Fixture",
+        "Actor 12 Fixture",
+        "Actor 53 Fixture",
+        "Actor 50 Fixture",
+        "Actor 00 Fixture",
+        "Actor 56 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director B. Placeholder"
+      ],
+      "genres": [
+        "Fantasy",
+        "Western"
+      ],
+      "imdb_id": "tt9000018",
+      "language": "ko",
+      "plex_rating_key": 500018,
+      "profile_hash": null,
+      "rating": 3.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Echo 18.",
+      "title": "Quiet Echo 18",
+      "tmdb_id": 900018,
+      "tmdb_keywords": [
+        "supernatural",
+        "haunted house",
+        "time travel",
+        "coming of age",
+        "heist",
+        "underdog",
+        "space opera",
+        "ghost",
+        "prophecy",
+        "betrayal"
+      ],
+      "vote_count": 3312,
+      "year": 2023
+    },
+    "500019": {
+      "cached_score": null,
+      "cast": [
+        "Actor 14 Fixture",
+        "Actor 52 Fixture",
+        "Actor 40 Fixture",
+        "Actor 10 Fixture",
+        "Actor 53 Fixture",
+        "Actor 58 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director H. Placeholder",
+        "Director A. Placeholder"
+      ],
+      "genres": [
+        "Crime",
+        "Romance",
+        "War",
+        "Western",
+        "Comedy"
+      ],
+      "imdb_id": "tt9000019",
+      "language": "ja",
+      "plex_rating_key": 500019,
+      "profile_hash": null,
+      "rating": 5.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Compass 19.",
+      "title": "Quiet Compass 19",
+      "tmdb_id": 900019,
+      "tmdb_keywords": [
+        "rebellion",
+        "monster",
+        "arranged marriage",
+        "sword and sorcery",
+        "post-apocalyptic",
+        "ghost",
+        "betrayal",
+        "underdog",
+        "coming of age",
+        "alien invasion",
+        "road trip"
+      ],
+      "vote_count": 16890,
+      "year": 2024
+    },
+    "500020": {
+      "cached_score": null,
+      "cast": [
+        "Actor 23 Fixture",
+        "Actor 21 Fixture",
+        "Actor 19 Fixture",
+        "Actor 50 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director A. Placeholder",
+        "Director F. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "War",
+        "Music"
+      ],
+      "imdb_id": "tt9000020",
+      "language": "ja",
+      "plex_rating_key": 500020,
+      "profile_hash": null,
+      "rating": 8.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Forgotten Echo 20.",
+      "title": "Forgotten Echo 20",
+      "tmdb_id": 900020,
+      "tmdb_keywords": [
+        "double agent",
+        "supernatural",
+        "rebellion",
+        "sword and sorcery",
+        "parallel universe",
+        "prophecy",
+        "found family",
+        "cult"
+      ],
+      "vote_count": 9785,
+      "year": 2011
+    },
+    "500021": {
+      "cached_score": null,
+      "cast": [
+        "Actor 43 Fixture",
+        "Actor 20 Fixture",
+        "Actor 14 Fixture",
+        "Actor 51 Fixture",
+        "Actor 25 Fixture",
+        "Actor 00 Fixture",
+        "Actor 58 Fixture",
+        "Actor 05 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director F. Placeholder",
+        "Director J. Placeholder"
+      ],
+      "genres": [
+        "Mystery",
+        "Romance",
+        "Western",
+        "Drama"
+      ],
+      "imdb_id": "tt9000021",
+      "language": "en",
+      "plex_rating_key": 500021,
+      "profile_hash": null,
+      "rating": 6.0,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Lantern 21.",
+      "title": "Broken Lantern 21",
+      "tmdb_id": 900021,
+      "tmdb_keywords": [
+        "treasure hunt",
+        "buddy cop",
+        "witness protection",
+        "double agent",
+        "conspiracy",
+        "road trip"
+      ],
+      "vote_count": 14909,
+      "year": 1989
+    },
+    "500022": {
+      "cached_score": null,
+      "cast": [
+        "Actor 18 Fixture",
+        "Actor 14 Fixture",
+        "Actor 42 Fixture",
+        "Actor 30 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director B. Placeholder"
+      ],
+      "genres": [
+        "War",
+        "Documentary",
+        "Mystery"
+      ],
+      "imdb_id": "tt9000022",
+      "language": "ja",
+      "plex_rating_key": 500022,
+      "profile_hash": null,
+      "rating": 5.1,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Crimson Harbor 22.",
+      "title": "Crimson Harbor 22",
+      "tmdb_id": 900022,
+      "tmdb_keywords": [
+        "found family",
+        "redemption",
+        "artificial intelligence",
+        "courtroom drama",
+        "arranged marriage",
+        "supernatural",
+        "heist",
+        "prophecy",
+        "epidemic",
+        "alien invasion",
+        "secret identity",
+        "betrayal"
+      ],
+      "vote_count": 17077,
+      "year": 2012
+    },
+    "500023": {
+      "cached_score": null,
+      "cast": [
+        "Actor 12 Fixture",
+        "Actor 45 Fixture",
+        "Actor 42 Fixture",
+        "Actor 02 Fixture",
+        "Actor 58 Fixture",
+        "Actor 22 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director S. Placeholder"
+      ],
+      "genres": [
+        "Horror",
+        "Music",
+        "Crime",
+        "Science Fiction",
+        "Romance"
+      ],
+      "imdb_id": "tt9000023",
+      "language": "es",
+      "plex_rating_key": 500023,
+      "profile_hash": null,
+      "rating": 6.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Wilds 23.",
+      "title": "Quiet Wilds 23",
+      "tmdb_id": 900023,
+      "tmdb_keywords": [
+        "amnesia",
+        "revenge",
+        "betrayal",
+        "witness protection",
+        "road trip",
+        "isolated community",
+        "survival",
+        "found family",
+        "arranged marriage",
+        "treasure hunt",
+        "cult",
+        "heist gone wrong",
+        "chosen one"
+      ],
+      "vote_count": 2959,
+      "year": 1987
+    },
+    "500024": {
+      "cached_score": null,
+      "cast": [
+        "Actor 28 Fixture",
+        "Actor 03 Fixture",
+        "Actor 13 Fixture",
+        "Actor 37 Fixture",
+        "Actor 05 Fixture",
+        "Actor 09 Fixture",
+        "Actor 33 Fixture",
+        "Actor 25 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director S. Placeholder"
+      ],
+      "genres": [
+        "Romance",
+        "Adventure",
+        "War"
+      ],
+      "imdb_id": "tt9000024",
+      "language": "de",
+      "plex_rating_key": 500024,
+      "profile_hash": null,
+      "rating": 3.8,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Horizon 24.",
+      "title": "Broken Horizon 24",
+      "tmdb_id": 900024,
+      "tmdb_keywords": [
+        "betrayal",
+        "survival",
+        "conspiracy",
+        "curse",
+        "road trip",
+        "secret identity",
+        "time travel"
+      ],
+      "vote_count": 338,
+      "year": 2018
+    },
+    "500025": {
+      "cached_score": null,
+      "cast": [
+        "Actor 16 Fixture",
+        "Actor 29 Fixture",
+        "Actor 50 Fixture",
+        "Actor 27 Fixture",
+        "Actor 55 Fixture",
+        "Actor 35 Fixture",
+        "Actor 08 Fixture",
+        "Actor 25 Fixture",
+        "Actor 23 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director H. Placeholder"
+      ],
+      "genres": [
+        "Thriller",
+        "Fantasy",
+        "Horror",
+        "Romance"
+      ],
+      "imdb_id": "tt9000025",
+      "language": "es",
+      "plex_rating_key": 500025,
+      "profile_hash": null,
+      "rating": 7.4,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Crimson Meridian 25.",
+      "title": "Crimson Meridian 25",
+      "tmdb_id": 900025,
+      "tmdb_keywords": [
+        "arranged marriage",
+        "undercover agent",
+        "underdog",
+        "witness protection",
+        "dystopia",
+        "haunted house",
+        "betrayal",
+        "post-apocalyptic",
+        "revenge",
+        "time travel"
+      ],
+      "vote_count": 17426,
+      "year": 1990
+    },
+    "500026": {
+      "cached_score": null,
+      "cast": [
+        "Actor 06 Fixture",
+        "Actor 35 Fixture",
+        "Actor 36 Fixture",
+        "Actor 21 Fixture",
+        "Actor 49 Fixture",
+        "Actor 19 Fixture",
+        "Actor 17 Fixture",
+        "Actor 38 Fixture",
+        "Actor 22 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director B. Placeholder"
+      ],
+      "genres": [
+        "Animation",
+        "Comedy",
+        "Adventure",
+        "Fantasy"
+      ],
+      "imdb_id": "tt9000026",
+      "language": "ja",
+      "plex_rating_key": 500026,
+      "profile_hash": null,
+      "rating": 8.1,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Harbor 26.",
+      "title": "Silent Harbor 26",
+      "tmdb_id": 900026,
+      "tmdb_keywords": [
+        "small town",
+        "witness protection",
+        "supernatural",
+        "parallel universe",
+        "artificial intelligence",
+        "betrayal",
+        "haunted house",
+        "found family",
+        "heist gone wrong"
+      ],
+      "vote_count": 17241,
+      "year": 1995
+    },
+    "500027": {
+      "cached_score": null,
+      "cast": [
+        "Actor 01 Fixture",
+        "Actor 14 Fixture",
+        "Actor 02 Fixture",
+        "Actor 16 Fixture",
+        "Actor 45 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director O. Placeholder",
+        "Director D. Placeholder"
+      ],
+      "genres": [
+        "Western",
+        "Documentary"
+      ],
+      "imdb_id": "tt9000027",
+      "language": "ko",
+      "plex_rating_key": 500027,
+      "profile_hash": null,
+      "rating": 6.8,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Distant Meridian 27.",
+      "title": "Distant Meridian 27",
+      "tmdb_id": 900027,
+      "tmdb_keywords": [
+        "double agent",
+        "coming of age",
+        "secret identity",
+        "space opera",
+        "rebellion",
+        "haunted house"
+      ],
+      "vote_count": 6652,
+      "year": 2021
+    },
+    "500028": {
+      "cached_score": null,
+      "cast": [
+        "Actor 28 Fixture",
+        "Actor 05 Fixture",
+        "Actor 51 Fixture",
+        "Actor 53 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director O. Placeholder"
+      ],
+      "genres": [
+        "Animation",
+        "Drama",
+        "Adventure"
+      ],
+      "imdb_id": "tt9000028",
+      "language": "en",
+      "plex_rating_key": 500028,
+      "profile_hash": null,
+      "rating": 4.7,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Crimson Frontier 28.",
+      "title": "Crimson Frontier 28",
+      "tmdb_id": 900028,
+      "tmdb_keywords": [
+        "prophecy",
+        "ghost",
+        "underdog",
+        "post-apocalyptic",
+        "small town",
+        "found family",
+        "isolated community",
+        "conspiracy",
+        "heist",
+        "heist gone wrong"
+      ],
+      "vote_count": 5360,
+      "year": 1990
+    },
+    "500029": {
+      "cached_score": null,
+      "cast": [
+        "Actor 23 Fixture",
+        "Actor 51 Fixture",
+        "Actor 16 Fixture",
+        "Actor 06 Fixture",
+        "Actor 43 Fixture",
+        "Actor 39 Fixture",
+        "Actor 38 Fixture",
+        "Actor 27 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director N. Placeholder",
+        "Director H. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "Mystery",
+        "Thriller",
+        "Romance",
+        "History"
+      ],
+      "imdb_id": "tt9000029",
+      "language": "de",
+      "plex_rating_key": 500029,
+      "profile_hash": null,
+      "rating": 4.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Endless Compass 29.",
+      "title": "Endless Compass 29",
+      "tmdb_id": 900029,
+      "tmdb_keywords": [
+        "space opera",
+        "sword and sorcery",
+        "witness protection",
+        "courtroom drama",
+        "curse",
+        "rebellion",
+        "dystopia",
+        "coming of age",
+        "heist",
+        "isolated community",
+        "mentor and student",
+        "chosen one"
+      ],
+      "vote_count": 8167,
+      "year": 1993
+    },
+    "500030": {
+      "cached_score": null,
+      "cast": [
+        "Actor 54 Fixture",
+        "Actor 21 Fixture",
+        "Actor 27 Fixture",
+        "Actor 57 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director N. Placeholder"
+      ],
+      "genres": [
+        "Animation",
+        "History"
+      ],
+      "imdb_id": "tt9000030",
+      "language": "es",
+      "plex_rating_key": 500030,
+      "profile_hash": null,
+      "rating": 6.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Hidden Compass 30.",
+      "title": "Hidden Compass 30",
+      "tmdb_id": 900030,
+      "tmdb_keywords": [
+        "prophecy",
+        "post-apocalyptic",
+        "cult",
+        "secret identity",
+        "ghost",
+        "chosen one",
+        "haunted house",
+        "monster",
+        "revenge",
+        "isolated community",
+        "heist gone wrong",
+        "arranged marriage"
+      ],
+      "vote_count": 17443,
+      "year": 2025
+    },
+    "500031": {
+      "cached_score": null,
+      "cast": [
+        "Actor 02 Fixture",
+        "Actor 51 Fixture",
+        "Actor 05 Fixture",
+        "Actor 44 Fixture",
+        "Actor 50 Fixture",
+        "Actor 32 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director S. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "Fantasy"
+      ],
+      "imdb_id": "tt9000031",
+      "language": "ja",
+      "plex_rating_key": 500031,
+      "profile_hash": null,
+      "rating": 4.4,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Shattered Meridian 31.",
+      "title": "Shattered Meridian 31",
+      "tmdb_id": 900031,
+      "tmdb_keywords": [
+        "heist gone wrong",
+        "parallel universe",
+        "double agent",
+        "undercover agent",
+        "chosen one",
+        "conspiracy",
+        "isolated community",
+        "buddy cop",
+        "arranged marriage",
+        "amnesia",
+        "time travel",
+        "curse"
+      ],
+      "vote_count": 1128,
+      "year": 2018
+    },
+    "500032": {
+      "cached_score": null,
+      "cast": [
+        "Actor 19 Fixture",
+        "Actor 25 Fixture",
+        "Actor 57 Fixture",
+        "Actor 17 Fixture",
+        "Actor 26 Fixture",
+        "Actor 48 Fixture",
+        "Actor 15 Fixture",
+        "Actor 18 Fixture",
+        "Actor 04 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director I. Placeholder"
+      ],
+      "genres": [
+        "Romance",
+        "Fantasy"
+      ],
+      "imdb_id": "tt9000032",
+      "language": "fr",
+      "plex_rating_key": 500032,
+      "profile_hash": null,
+      "rating": 4.4,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Horizon 32.",
+      "title": "Silent Horizon 32",
+      "tmdb_id": 900032,
+      "tmdb_keywords": [
+        "prophecy",
+        "rebellion",
+        "undercover agent",
+        "arranged marriage",
+        "conspiracy",
+        "time travel",
+        "chosen one",
+        "betrayal",
+        "found family"
+      ],
+      "vote_count": 10461,
+      "year": 2007
+    },
+    "500033": {
+      "cached_score": null,
+      "cast": [
+        "Actor 20 Fixture",
+        "Actor 30 Fixture",
+        "Actor 53 Fixture",
+        "Actor 32 Fixture",
+        "Actor 56 Fixture",
+        "Actor 47 Fixture",
+        "Actor 58 Fixture",
+        "Actor 04 Fixture",
+        "Actor 07 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director F. Placeholder"
+      ],
+      "genres": [
+        "Music",
+        "Adventure",
+        "Fantasy",
+        "Mystery",
+        "History"
+      ],
+      "imdb_id": "tt9000033",
+      "language": "es",
+      "plex_rating_key": 500033,
+      "profile_hash": null,
+      "rating": 3.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Endless Lantern 33.",
+      "title": "Endless Lantern 33",
+      "tmdb_id": 900033,
+      "tmdb_keywords": [
+        "cult",
+        "small town",
+        "alien invasion",
+        "post-apocalyptic",
+        "epidemic",
+        "space opera",
+        "betrayal",
+        "revenge"
+      ],
+      "vote_count": 14151,
+      "year": 1990
+    },
+    "500034": {
+      "cached_score": null,
+      "cast": [
+        "Actor 41 Fixture",
+        "Actor 16 Fixture",
+        "Actor 28 Fixture",
+        "Actor 48 Fixture",
+        "Actor 21 Fixture",
+        "Actor 01 Fixture",
+        "Actor 35 Fixture",
+        "Actor 44 Fixture",
+        "Actor 06 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director R. Placeholder",
+        "Director J. Placeholder"
+      ],
+      "genres": [
+        "War",
+        "Thriller",
+        "Action"
+      ],
+      "imdb_id": "tt9000034",
+      "language": "ko",
+      "plex_rating_key": 500034,
+      "profile_hash": null,
+      "rating": 5.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Wilds 34.",
+      "title": "Broken Wilds 34",
+      "tmdb_id": 900034,
+      "tmdb_keywords": [
+        "space opera",
+        "artificial intelligence",
+        "small town",
+        "coming of age",
+        "betrayal",
+        "arranged marriage",
+        "epidemic",
+        "monster",
+        "parallel universe",
+        "witness protection",
+        "treasure hunt"
+      ],
+      "vote_count": 2131,
+      "year": 2009
+    },
+    "500035": {
+      "cached_score": null,
+      "cast": [
+        "Actor 15 Fixture",
+        "Actor 49 Fixture",
+        "Actor 48 Fixture",
+        "Actor 53 Fixture",
+        "Actor 54 Fixture",
+        "Actor 14 Fixture",
+        "Actor 31 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director N. Placeholder",
+        "Director D. Placeholder"
+      ],
+      "genres": [
+        "Fantasy",
+        "Comedy",
+        "War",
+        "Documentary",
+        "History"
+      ],
+      "imdb_id": "tt9000035",
+      "language": "fr",
+      "plex_rating_key": 500035,
+      "profile_hash": null,
+      "rating": 4.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Distant Compass 35.",
+      "title": "Distant Compass 35",
+      "tmdb_id": 900035,
+      "tmdb_keywords": [
+        "prophecy",
+        "buddy cop",
+        "betrayal",
+        "heist gone wrong",
+        "space opera",
+        "chosen one",
+        "amnesia",
+        "rebellion"
+      ],
+      "vote_count": 3804,
+      "year": 2010
+    },
+    "500036": {
+      "cached_score": null,
+      "cast": [
+        "Actor 50 Fixture",
+        "Actor 27 Fixture",
+        "Actor 38 Fixture",
+        "Actor 54 Fixture",
+        "Actor 53 Fixture",
+        "Actor 21 Fixture",
+        "Actor 05 Fixture",
+        "Actor 16 Fixture",
+        "Actor 48 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director P. Placeholder",
+        "Director G. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "Horror",
+        "Science Fiction"
+      ],
+      "imdb_id": "tt9000036",
+      "language": "en",
+      "plex_rating_key": 500036,
+      "profile_hash": null,
+      "rating": 4.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Last Echo 36.",
+      "title": "Last Echo 36",
+      "tmdb_id": 900036,
+      "tmdb_keywords": [
+        "time travel",
+        "post-apocalyptic",
+        "space opera",
+        "treasure hunt",
+        "heist gone wrong",
+        "haunted house"
+      ],
+      "vote_count": 18149,
+      "year": 2016
+    },
+    "500037": {
+      "cached_score": null,
+      "cast": [
+        "Actor 59 Fixture",
+        "Actor 14 Fixture",
+        "Actor 52 Fixture",
+        "Actor 51 Fixture",
+        "Actor 02 Fixture",
+        "Actor 55 Fixture",
+        "Actor 50 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director A. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "Western",
+        "History",
+        "Thriller",
+        "Fantasy"
+      ],
+      "imdb_id": "tt9000037",
+      "language": "de",
+      "plex_rating_key": 500037,
+      "profile_hash": null,
+      "rating": 6.5,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Harbor 37.",
+      "title": "Silent Harbor 37",
+      "tmdb_id": 900037,
+      "tmdb_keywords": [
+        "dystopia",
+        "amnesia",
+        "witness protection",
+        "revenge",
+        "heist gone wrong",
+        "monster",
+        "found family",
+        "alien invasion",
+        "conspiracy",
+        "double agent",
+        "haunted house",
+        "space opera",
+        "sword and sorcery",
+        "treasure hunt"
+      ],
+      "vote_count": 922,
+      "year": 2003
+    },
+    "500038": {
+      "cached_score": null,
+      "cast": [
+        "Actor 39 Fixture",
+        "Actor 43 Fixture",
+        "Actor 23 Fixture",
+        "Actor 59 Fixture",
+        "Actor 21 Fixture",
+        "Actor 52 Fixture",
+        "Actor 20 Fixture",
+        "Actor 30 Fixture",
+        "Actor 06 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director C. Placeholder"
+      ],
+      "genres": [
+        "Horror",
+        "History"
+      ],
+      "imdb_id": "tt9000038",
+      "language": "de",
+      "plex_rating_key": 500038,
+      "profile_hash": null,
+      "rating": 8.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Crimson Lantern 38.",
+      "title": "Crimson Lantern 38",
+      "tmdb_id": 900038,
+      "tmdb_keywords": [
+        "heist gone wrong",
+        "survival",
+        "sword and sorcery",
+        "revenge",
+        "dystopia",
+        "road trip",
+        "haunted house"
+      ],
+      "vote_count": 17447,
+      "year": 1997
+    },
+    "500039": {
+      "cached_score": null,
+      "cast": [
+        "Actor 49 Fixture",
+        "Actor 05 Fixture",
+        "Actor 57 Fixture",
+        "Actor 14 Fixture",
+        "Actor 21 Fixture",
+        "Actor 28 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director L. Placeholder"
+      ],
+      "genres": [
+        "Drama",
+        "Science Fiction"
+      ],
+      "imdb_id": "tt9000039",
+      "language": "es",
+      "plex_rating_key": 500039,
+      "profile_hash": null,
+      "rating": 8.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Lantern 39.",
+      "title": "Silent Lantern 39",
+      "tmdb_id": 900039,
+      "tmdb_keywords": [
+        "road trip",
+        "sword and sorcery",
+        "supernatural",
+        "rebellion",
+        "artificial intelligence",
+        "underdog",
+        "undercover agent",
+        "small town",
+        "post-apocalyptic",
+        "survival"
+      ],
+      "vote_count": 19247,
+      "year": 2024
+    },
+    "500040": {
+      "cached_score": null,
+      "cast": [
+        "Actor 54 Fixture",
+        "Actor 32 Fixture",
+        "Actor 08 Fixture",
+        "Actor 06 Fixture",
+        "Actor 38 Fixture",
+        "Actor 52 Fixture",
+        "Actor 03 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director C. Placeholder",
+        "Director A. Placeholder"
+      ],
+      "genres": [
+        "Thriller",
+        "Romance",
+        "Action",
+        "Animation",
+        "Documentary"
+      ],
+      "imdb_id": "tt9000040",
+      "language": "en",
+      "plex_rating_key": 500040,
+      "profile_hash": null,
+      "rating": 5.1,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Last Harbor 40.",
+      "title": "Last Harbor 40",
+      "tmdb_id": 900040,
+      "tmdb_keywords": [
+        "prophecy",
+        "double agent",
+        "heist",
+        "redemption",
+        "rebellion",
+        "artificial intelligence",
+        "post-apocalyptic"
+      ],
+      "vote_count": 7691,
+      "year": 2002
+    },
+    "500041": {
+      "cached_score": null,
+      "cast": [
+        "Actor 02 Fixture",
+        "Actor 36 Fixture",
+        "Actor 40 Fixture",
+        "Actor 58 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director J. Placeholder"
+      ],
+      "genres": [
+        "Science Fiction",
+        "Comedy",
+        "Crime",
+        "History",
+        "Music"
+      ],
+      "imdb_id": "tt9000041",
+      "language": "ko",
+      "plex_rating_key": 500041,
+      "profile_hash": null,
+      "rating": 4.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Signal 41.",
+      "title": "Broken Signal 41",
+      "tmdb_id": 900041,
+      "tmdb_keywords": [
+        "chosen one",
+        "monster",
+        "betrayal",
+        "dystopia",
+        "space opera",
+        "arranged marriage",
+        "undercover agent",
+        "heist"
+      ],
+      "vote_count": 13829,
+      "year": 2022
+    },
+    "500042": {
+      "cached_score": null,
+      "cast": [
+        "Actor 18 Fixture",
+        "Actor 47 Fixture",
+        "Actor 33 Fixture",
+        "Actor 26 Fixture",
+        "Actor 31 Fixture",
+        "Actor 55 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director M. Placeholder"
+      ],
+      "genres": [
+        "Animation",
+        "Adventure",
+        "Western",
+        "Romance"
+      ],
+      "imdb_id": "tt9000042",
+      "language": "ja",
+      "plex_rating_key": 500042,
+      "profile_hash": null,
+      "rating": 6.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Wilds 42.",
+      "title": "Silent Wilds 42",
+      "tmdb_id": 900042,
+      "tmdb_keywords": [
+        "epidemic",
+        "mentor and student",
+        "cult",
+        "supernatural",
+        "coming of age",
+        "space opera",
+        "secret identity",
+        "heist gone wrong",
+        "ghost",
+        "treasure hunt",
+        "underdog",
+        "rebellion",
+        "monster"
+      ],
+      "vote_count": 11250,
+      "year": 1993
+    },
+    "500043": {
+      "cached_score": null,
+      "cast": [
+        "Actor 24 Fixture",
+        "Actor 19 Fixture",
+        "Actor 21 Fixture",
+        "Actor 31 Fixture",
+        "Actor 55 Fixture",
+        "Actor 25 Fixture",
+        "Actor 59 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director I. Placeholder"
+      ],
+      "genres": [
+        "Thriller",
+        "Crime",
+        "Horror",
+        "War"
+      ],
+      "imdb_id": "tt9000043",
+      "language": "fr",
+      "plex_rating_key": 500043,
+      "profile_hash": null,
+      "rating": 5.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Forgotten Harbor 43.",
+      "title": "Forgotten Harbor 43",
+      "tmdb_id": 900043,
+      "tmdb_keywords": [
+        "treasure hunt",
+        "curse",
+        "coming of age",
+        "undercover agent",
+        "ghost",
+        "rebellion",
+        "witness protection",
+        "secret identity",
+        "cult",
+        "conspiracy",
+        "prophecy",
+        "small town",
+        "time travel"
+      ],
+      "vote_count": 8617,
+      "year": 1999
+    },
+    "500044": {
+      "cached_score": null,
+      "cast": [
+        "Actor 25 Fixture",
+        "Actor 04 Fixture",
+        "Actor 43 Fixture",
+        "Actor 35 Fixture",
+        "Actor 02 Fixture",
+        "Actor 55 Fixture",
+        "Actor 28 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director D. Placeholder"
+      ],
+      "genres": [
+        "Fantasy",
+        "Music",
+        "Science Fiction",
+        "Mystery"
+      ],
+      "imdb_id": "tt9000044",
+      "language": "en",
+      "plex_rating_key": 500044,
+      "profile_hash": null,
+      "rating": 6.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Distant Compass 44.",
+      "title": "Distant Compass 44",
+      "tmdb_id": 900044,
+      "tmdb_keywords": [
+        "heist",
+        "curse",
+        "redemption",
+        "underdog",
+        "time travel",
+        "road trip",
+        "survival"
+      ],
+      "vote_count": 6145,
+      "year": 2001
+    },
+    "500045": {
+      "cached_score": null,
+      "cast": [
+        "Actor 39 Fixture",
+        "Actor 17 Fixture",
+        "Actor 44 Fixture",
+        "Actor 42 Fixture",
+        "Actor 20 Fixture",
+        "Actor 32 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director E. Placeholder",
+        "Director P. Placeholder"
+      ],
+      "genres": [
+        "Romance",
+        "Action",
+        "Animation",
+        "Mystery",
+        "Music"
+      ],
+      "imdb_id": "tt9000045",
+      "language": "de",
+      "plex_rating_key": 500045,
+      "profile_hash": null,
+      "rating": 6.8,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Forgotten Lantern 45.",
+      "title": "Forgotten Lantern 45",
+      "tmdb_id": 900045,
+      "tmdb_keywords": [
+        "monster",
+        "ghost",
+        "isolated community",
+        "revenge",
+        "chosen one",
+        "undercover agent",
+        "prophecy",
+        "haunted house",
+        "road trip",
+        "double agent",
+        "conspiracy",
+        "dystopia",
+        "sword and sorcery",
+        "cult"
+      ],
+      "vote_count": 6448,
+      "year": 1997
+    },
+    "500046": {
+      "cached_score": null,
+      "cast": [
+        "Actor 01 Fixture",
+        "Actor 40 Fixture",
+        "Actor 09 Fixture",
+        "Actor 06 Fixture",
+        "Actor 29 Fixture",
+        "Actor 18 Fixture",
+        "Actor 38 Fixture",
+        "Actor 00 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director E. Placeholder",
+        "Director M. Placeholder"
+      ],
+      "genres": [
+        "Horror",
+        "Fantasy",
+        "Western",
+        "Romance",
+        "Family"
+      ],
+      "imdb_id": "tt9000046",
+      "language": "de",
+      "plex_rating_key": 500046,
+      "profile_hash": null,
+      "rating": 6.0,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Crimson Compass 46.",
+      "title": "Crimson Compass 46",
+      "tmdb_id": 900046,
+      "tmdb_keywords": [
+        "found family",
+        "prophecy",
+        "conspiracy",
+        "curse",
+        "mentor and student",
+        "undercover agent",
+        "redemption",
+        "rebellion",
+        "buddy cop",
+        "double agent",
+        "epidemic"
+      ],
+      "vote_count": 903,
+      "year": 1993
+    },
+    "500047": {
+      "cached_score": null,
+      "cast": [
+        "Actor 15 Fixture",
+        "Actor 14 Fixture",
+        "Actor 04 Fixture",
+        "Actor 27 Fixture",
+        "Actor 44 Fixture",
+        "Actor 13 Fixture",
+        "Actor 09 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director O. Placeholder",
+        "Director M. Placeholder"
+      ],
+      "genres": [
+        "Mystery",
+        "War",
+        "Western",
+        "Drama"
+      ],
+      "imdb_id": "tt9000047",
+      "language": "fr",
+      "plex_rating_key": 500047,
+      "profile_hash": null,
+      "rating": 3.5,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Shattered Signal 47.",
+      "title": "Shattered Signal 47",
+      "tmdb_id": 900047,
+      "tmdb_keywords": [
+        "arranged marriage",
+        "small town",
+        "conspiracy",
+        "monster",
+        "undercover agent",
+        "alien invasion",
+        "curse",
+        "revenge",
+        "artificial intelligence",
+        "ghost",
+        "post-apocalyptic",
+        "double agent",
+        "isolated community"
+      ],
+      "vote_count": 1510,
+      "year": 2001
+    },
+    "500048": {
+      "cached_score": null,
+      "cast": [
+        "Actor 45 Fixture",
+        "Actor 34 Fixture",
+        "Actor 58 Fixture",
+        "Actor 55 Fixture",
+        "Actor 14 Fixture",
+        "Actor 31 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director Q. Placeholder"
+      ],
+      "genres": [
+        "Fantasy",
+        "Documentary"
+      ],
+      "imdb_id": "tt9000048",
+      "language": "es",
+      "plex_rating_key": 500048,
+      "profile_hash": null,
+      "rating": 5.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Frontier 48.",
+      "title": "Quiet Frontier 48",
+      "tmdb_id": 900048,
+      "tmdb_keywords": [
+        "revenge",
+        "isolated community",
+        "betrayal",
+        "curse",
+        "alien invasion",
+        "monster",
+        "haunted house",
+        "double agent",
+        "prophecy",
+        "buddy cop",
+        "survival",
+        "underdog"
+      ],
+      "vote_count": 8345,
+      "year": 2007
+    },
+    "500049": {
+      "cached_score": null,
+      "cast": [
+        "Actor 56 Fixture",
+        "Actor 49 Fixture",
+        "Actor 37 Fixture",
+        "Actor 17 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director J. Placeholder",
+        "Director A. Placeholder"
+      ],
+      "genres": [
+        "Drama",
+        "Thriller"
+      ],
+      "imdb_id": "tt9000049",
+      "language": "en",
+      "plex_rating_key": 500049,
+      "profile_hash": null,
+      "rating": 6.7,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Echo 49.",
+      "title": "Silent Echo 49",
+      "tmdb_id": 900049,
+      "tmdb_keywords": [
+        "treasure hunt",
+        "small town",
+        "artificial intelligence",
+        "rebellion",
+        "conspiracy",
+        "heist"
+      ],
+      "vote_count": 13034,
+      "year": 2022
+    },
+    "500050": {
+      "cached_score": null,
+      "cast": [
+        "Actor 44 Fixture",
+        "Actor 40 Fixture",
+        "Actor 19 Fixture",
+        "Actor 04 Fixture",
+        "Actor 14 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director B. Placeholder",
+        "Director J. Placeholder"
+      ],
+      "genres": [
+        "Romance",
+        "Crime",
+        "Adventure",
+        "Animation",
+        "Documentary"
+      ],
+      "imdb_id": "tt9000050",
+      "language": "de",
+      "plex_rating_key": 500050,
+      "profile_hash": null,
+      "rating": 7.7,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Forgotten Wilds 50.",
+      "title": "Forgotten Wilds 50",
+      "tmdb_id": 900050,
+      "tmdb_keywords": [
+        "haunted house",
+        "arranged marriage",
+        "redemption",
+        "coming of age",
+        "supernatural",
+        "buddy cop",
+        "artificial intelligence",
+        "parallel universe",
+        "underdog"
+      ],
+      "vote_count": 16630,
+      "year": 1992
+    },
+    "500051": {
+      "cached_score": null,
+      "cast": [
+        "Actor 07 Fixture",
+        "Actor 55 Fixture",
+        "Actor 31 Fixture",
+        "Actor 38 Fixture",
+        "Actor 27 Fixture",
+        "Actor 14 Fixture",
+        "Actor 22 Fixture",
+        "Actor 01 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director K. Placeholder"
+      ],
+      "genres": [
+        "Animation",
+        "Thriller",
+        "Crime",
+        "Mystery",
+        "Romance"
+      ],
+      "imdb_id": "tt9000051",
+      "language": "fr",
+      "plex_rating_key": 500051,
+      "profile_hash": null,
+      "rating": 8.3,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Shattered Echo 51.",
+      "title": "Shattered Echo 51",
+      "tmdb_id": 900051,
+      "tmdb_keywords": [
+        "courtroom drama",
+        "survival",
+        "supernatural",
+        "time travel",
+        "alien invasion",
+        "treasure hunt",
+        "epidemic",
+        "heist gone wrong",
+        "post-apocalyptic",
+        "dystopia",
+        "betrayal"
+      ],
+      "vote_count": 17894,
+      "year": 1990
+    },
+    "500052": {
+      "cached_score": null,
+      "cast": [
+        "Actor 33 Fixture",
+        "Actor 16 Fixture",
+        "Actor 19 Fixture",
+        "Actor 51 Fixture",
+        "Actor 39 Fixture",
+        "Actor 22 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director E. Placeholder",
+        "Director L. Placeholder"
+      ],
+      "genres": [
+        "Action",
+        "Science Fiction"
+      ],
+      "imdb_id": "tt9000052",
+      "language": "de",
+      "plex_rating_key": 500052,
+      "profile_hash": null,
+      "rating": 7.4,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Harbor 52.",
+      "title": "Broken Harbor 52",
+      "tmdb_id": 900052,
+      "tmdb_keywords": [
+        "time travel",
+        "arranged marriage",
+        "redemption",
+        "amnesia",
+        "conspiracy",
+        "undercover agent",
+        "post-apocalyptic",
+        "coming of age",
+        "courtroom drama",
+        "haunted house",
+        "heist"
+      ],
+      "vote_count": 3299,
+      "year": 2008
+    },
+    "500053": {
+      "cached_score": null,
+      "cast": [
+        "Actor 25 Fixture",
+        "Actor 39 Fixture",
+        "Actor 56 Fixture",
+        "Actor 57 Fixture",
+        "Actor 08 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director K. Placeholder",
+        "Director F. Placeholder"
+      ],
+      "genres": [
+        "Science Fiction",
+        "Animation",
+        "Adventure",
+        "Comedy"
+      ],
+      "imdb_id": "tt9000053",
+      "language": "de",
+      "plex_rating_key": 500053,
+      "profile_hash": null,
+      "rating": 6.2,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Silent Harbor 53.",
+      "title": "Silent Harbor 53",
+      "tmdb_id": 900053,
+      "tmdb_keywords": [
+        "haunted house",
+        "alien invasion",
+        "underdog",
+        "sword and sorcery",
+        "undercover agent",
+        "space opera",
+        "arranged marriage",
+        "curse",
+        "amnesia",
+        "heist",
+        "road trip",
+        "mentor and student"
+      ],
+      "vote_count": 17997,
+      "year": 2015
+    },
+    "500054": {
+      "cached_score": null,
+      "cast": [
+        "Actor 27 Fixture",
+        "Actor 20 Fixture",
+        "Actor 41 Fixture",
+        "Actor 36 Fixture",
+        "Actor 38 Fixture",
+        "Actor 28 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director O. Placeholder",
+        "Director S. Placeholder"
+      ],
+      "genres": [
+        "War",
+        "Romance"
+      ],
+      "imdb_id": "tt9000054",
+      "language": "ko",
+      "plex_rating_key": 500054,
+      "profile_hash": null,
+      "rating": 8.4,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Distant Ember 54.",
+      "title": "Distant Ember 54",
+      "tmdb_id": 900054,
+      "tmdb_keywords": [
+        "space opera",
+        "witness protection",
+        "supernatural",
+        "road trip",
+        "amnesia",
+        "treasure hunt",
+        "sword and sorcery",
+        "arranged marriage",
+        "secret identity",
+        "courtroom drama",
+        "found family"
+      ],
+      "vote_count": 7201,
+      "year": 2018
+    },
+    "500055": {
+      "cached_score": null,
+      "cast": [
+        "Actor 17 Fixture",
+        "Actor 05 Fixture",
+        "Actor 32 Fixture",
+        "Actor 59 Fixture",
+        "Actor 09 Fixture",
+        "Actor 51 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director N. Placeholder"
+      ],
+      "genres": [
+        "Comedy",
+        "Family",
+        "History"
+      ],
+      "imdb_id": "tt9000055",
+      "language": "ko",
+      "plex_rating_key": 500055,
+      "profile_hash": null,
+      "rating": 8.9,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Broken Frontier 55.",
+      "title": "Broken Frontier 55",
+      "tmdb_id": 900055,
+      "tmdb_keywords": [
+        "road trip",
+        "rebellion",
+        "witness protection",
+        "conspiracy",
+        "isolated community",
+        "treasure hunt",
+        "courtroom drama",
+        "buddy cop"
+      ],
+      "vote_count": 13479,
+      "year": 1994
+    },
+    "500056": {
+      "cached_score": null,
+      "cast": [
+        "Actor 53 Fixture",
+        "Actor 28 Fixture",
+        "Actor 24 Fixture",
+        "Actor 31 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director E. Placeholder"
+      ],
+      "genres": [
+        "Documentary",
+        "Adventure",
+        "Horror",
+        "Animation"
+      ],
+      "imdb_id": "tt9000056",
+      "language": "ko",
+      "plex_rating_key": 500056,
+      "profile_hash": null,
+      "rating": 4.1,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Crimson Frontier 56.",
+      "title": "Crimson Frontier 56",
+      "tmdb_id": 900056,
+      "tmdb_keywords": [
+        "heist",
+        "prophecy",
+        "witness protection",
+        "heist gone wrong",
+        "parallel universe",
+        "found family",
+        "space opera",
+        "small town"
+      ],
+      "vote_count": 8392,
+      "year": 1988
+    },
+    "500057": {
+      "cached_score": null,
+      "cast": [
+        "Actor 55 Fixture",
+        "Actor 11 Fixture",
+        "Actor 10 Fixture",
+        "Actor 36 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director G. Placeholder"
+      ],
+      "genres": [
+        "Fantasy",
+        "Romance",
+        "Mystery",
+        "Animation"
+      ],
+      "imdb_id": "tt9000057",
+      "language": "es",
+      "plex_rating_key": 500057,
+      "profile_hash": null,
+      "rating": 8.1,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Hidden Frontier 57.",
+      "title": "Hidden Frontier 57",
+      "tmdb_id": 900057,
+      "tmdb_keywords": [
+        "ghost",
+        "betrayal",
+        "artificial intelligence",
+        "found family",
+        "mentor and student",
+        "small town",
+        "alien invasion",
+        "courtroom drama",
+        "isolated community",
+        "cult",
+        "post-apocalyptic"
+      ],
+      "vote_count": 4702,
+      "year": 2006
+    },
+    "500058": {
+      "cached_score": null,
+      "cast": [
+        "Actor 47 Fixture",
+        "Actor 14 Fixture",
+        "Actor 55 Fixture",
+        "Actor 24 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director I. Placeholder"
+      ],
+      "genres": [
+        "Romance",
+        "Crime",
+        "Science Fiction",
+        "Animation",
+        "Fantasy"
+      ],
+      "imdb_id": "tt9000058",
+      "language": "ja",
+      "plex_rating_key": 500058,
+      "profile_hash": null,
+      "rating": 5.7,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Distant Ember 58.",
+      "title": "Distant Ember 58",
+      "tmdb_id": 900058,
+      "tmdb_keywords": [
+        "haunted house",
+        "monster",
+        "treasure hunt",
+        "coming of age",
+        "alien invasion",
+        "rebellion"
+      ],
+      "vote_count": 4000,
+      "year": 2012
+    },
+    "500059": {
+      "cached_score": null,
+      "cast": [
+        "Actor 31 Fixture",
+        "Actor 44 Fixture",
+        "Actor 24 Fixture",
+        "Actor 03 Fixture",
+        "Actor 17 Fixture",
+        "Actor 52 Fixture",
+        "Actor 42 Fixture",
+        "Actor 25 Fixture"
+      ],
+      "collection_id": null,
+      "collection_name": null,
+      "directors": [
+        "Director D. Placeholder"
+      ],
+      "genres": [
+        "Action",
+        "Horror",
+        "Family",
+        "Documentary"
+      ],
+      "imdb_id": "tt9000059",
+      "language": "ko",
+      "plex_rating_key": 500059,
+      "profile_hash": null,
+      "rating": 4.6,
+      "ratings": {},
+      "score_breakdown": null,
+      "similarity_score": null,
+      "summary": "A synthetic fixture summary for Quiet Compass 59.",
+      "title": "Quiet Compass 59",
+      "tmdb_id": 900059,
+      "tmdb_keywords": [
+        "treasure hunt",
+        "conspiracy",
+        "double agent",
+        "space opera",
+        "heist",
+        "mentor and student",
+        "small town",
+        "sword and sorcery",
+        "chosen one",
+        "prophecy",
+        "time travel",
+        "ghost",
+        "isolated community",
+        "monster"
+      ],
+      "vote_count": 19334,
+      "year": 2012
+    }
+  }
+}

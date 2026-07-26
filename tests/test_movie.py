@@ -284,6 +284,86 @@ class TestPlexMovieRecommenderWeights:
         assert "director" in recommender.weights
         assert "actor" in recommender.weights
 
+    @patch("recommenders.movie.MovieCache")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movies_section_weights_override_legacy_root_weights(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache
+    ):
+        """movies.weights (documented location) must win over the
+        legacy root-level 'weights' key some back-compat configs still have."""
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "weights": {"genre": 0.9, "actor": 0.1},
+            "movies": {"weights": {"genre": 0.15, "actor": 0.15, "director": 0.05, "keyword": 0.65}},
+        }
+        mock_users.return_value = {"plex_users": ["user1"], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_cache.return_value = Mock(cache={"movies": {}})
+
+        recommender = PlexMovieRecommender("/path/to/config.yml")
+
+        assert recommender.weights["genre"] == 0.15
+        assert recommender.weights["actor"] == 0.15
+
+
+class TestPlexMovieRecommenderShowDirector:
+    """Tests for movies.show_director (config/tuning.example.yml's
+    documented location) must be honored, not silently ignored in favor of
+    the legacy general.show_director key."""
+
+    @patch("recommenders.movie.MovieCache")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movies_section_show_director_overrides_general_default(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache
+    ):
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "movies": {"show_director": True},
+            "weights": {"genre": 0.3, "director": 0.2, "actor": 0.2, "language": 0.1, "keyword": 0.2},
+        }
+        mock_users.return_value = {"plex_users": ["user1"], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_cache.return_value = Mock(cache={"movies": {}})
+
+        recommender = PlexMovieRecommender("/path/to/config.yml")
+
+        assert recommender.show_director is True
+
+    @patch("recommenders.movie.MovieCache")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_general_level_show_director_still_honored_when_no_movies_section(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache
+    ):
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {"show_director": True},
+            "weights": {"genre": 0.3, "director": 0.2, "actor": 0.2, "language": 0.1, "keyword": 0.2},
+        }
+        mock_users.return_value = {"plex_users": ["user1"], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_cache.return_value = Mock(cache={"movies": {}})
+
+        recommender = PlexMovieRecommender("/path/to/config.yml")
+
+        assert recommender.show_director is True
+
 
 class TestPlexMovieRecommenderLibraryMethods:
     """Tests for PlexMovieRecommender library methods."""

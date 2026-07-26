@@ -541,6 +541,198 @@ class TestBaseRecommenderInit:
         mock_warn.assert_called()
 
 
+class TestBaseRecommenderMediaSectionConfig:
+    """Tests for movies:/tv: media-specific config (config/tuning.yml)
+    must actually be honored by BaseRecommender, not silently ignored in
+    favor of the (almost always absent) root-level/general: keys of the
+    same name. Covers the resolved *runtime* attribute, not just that
+    adapt_config_for_media_type() computes the right value somewhere
+    unused - see utils/config.py's adapt_config_for_media_type() and its
+    docstring for the parallel (and, before this fix, disconnected)
+    resolution path."""
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movies_section_randomize_recommendations_overrides_general_default(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "movies": {"randomize_recommendations": False},
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+
+        assert recommender.randomize_recommendations is False
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_tv_section_randomize_recommendations_overrides_general_default(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "tv": {"randomize_recommendations": False},
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteTVRecommender("/path/to/config.yml")
+
+        assert recommender.randomize_recommendations is False
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_general_level_randomize_recommendations_still_honored_when_no_media_section(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        """Back-compat: an install with no movies:/tv: section at all (or
+        one that doesn't set this key) keeps reading the legacy
+        general.randomize_recommendations override."""
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {"randomize_recommendations": False},
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+
+        assert recommender.randomize_recommendations is False
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movies_section_quality_filters_resolved_into_media_config(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "movies": {"quality_filters": {"min_rating": 5.0, "min_vote_count": 15}},
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+
+        assert recommender.media_config["quality_filters"] == {"min_rating": 5.0, "min_vote_count": 15}
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_movies_section_quality_filters_excludes_low_rated(self, mock_excl):
+        """Same assertion as TestGetRecommendationsBranches.test_quality_filter_excludes_low_rated,
+        but with quality_filters set at its documented movies: location
+        instead of legacy config['quality_filters'] - proves
+        get_recommendations() actually reads the media-specific section."""
+        items = {
+            "1": {"title": "Good", "rating": 8.0, "vote_count": 500, "genres": []},
+            "2": {"title": "Bad", "rating": 2.0, "vote_count": 5, "genres": []},
+        }
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {"movies": items}
+        media_cache._save_cache = Mock()
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = set()
+        recommender.profile_hash = "hash1"
+        recommender.exclude_genres = []
+        recommender.user_preferences = {}
+        recommender.randomize_recommendations = False
+        recommender.media_config = {"quality_filters": {"min_rating": 5.0, "min_vote_count": 100}}
+
+        result = recommender.get_recommendations()
+
+        titles = [i["title"] for i in result["plex_recommendations"]]
+        assert "Bad" not in titles
+        assert "Good" in titles
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movies_section_display_options_override_general_defaults(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "movies": {
+                "show_summary": True,
+                "show_cast": True,
+                "show_language": True,
+                "show_rating": True,
+                "show_imdb_link": True,
+                "show_genres": False,
+                "normalize_counters": False,
+            },
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+
+        assert recommender.show_summary is True
+        assert recommender.show_cast is True
+        assert recommender.show_language is True
+        assert recommender.show_rating is True
+        assert recommender.show_imdb_link is True
+        assert recommender.show_genres is False
+        assert recommender.normalize_counters is False
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movies_section_weights_override_legacy_root_weights(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            # Legacy root-level 'weights' - should be shadowed by movies.weights below.
+            "weights": {"genre": 0.9, "actor": 0.1},
+            "movies": {"weights": {"genre": 0.1, "actor": 0.9}},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        class WeightsEchoRecommender(ConcreteRecommender):
+            def _load_weights(self, weights_config):
+                return weights_config
+
+        recommender = WeightsEchoRecommender("/path/to/config.yml")
+
+        assert recommender.weights == {"genre": 0.1, "actor": 0.9}
+
+
 class TestBaseRecommenderCacheDirResolution:
     """Tests for BaseRecommender's cache_dir setup (recommenders/base.py).
 

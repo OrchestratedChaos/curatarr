@@ -727,6 +727,7 @@ def select_tiered_recommendations(
     safe_percent: float = 0.6,
     diverse_percent: float = 0.3,
     wildcard_percent: float = 0.1,
+    rng: Optional[random.Random] = None,
 ) -> List[Dict]:
     """
     Select recommendations using a tiered approach for variety.
@@ -742,12 +743,20 @@ def select_tiered_recommendations(
         safe_percent: Percentage of limit for safe picks (default 0.6)
         diverse_percent: Percentage of limit for diverse picks (default 0.3)
         wildcard_percent: Percentage of limit for wildcard picks (default 0.1)
+        rng: Optional random.Random instance to draw the diverse/wildcard
+            picks from. Additive/backward-compatible - defaults to None,
+            which preserves the existing behavior of drawing from the
+            module-level `random` (and therefore the process-global seed,
+            unseeded by default). Pass a seeded `random.Random(seed)` for
+            reproducible selection (see tests/harness.py).
 
     Returns:
         List of selected items with tier diversity
     """
     if not scored_items:
         return []
+
+    rng = rng or random
 
     total = len(scored_items)
 
@@ -779,7 +788,7 @@ def select_tiered_recommendations(
     if diverse_pool and diverse_count > 0:
         available_diverse = min(diverse_count, len(diverse_pool))
         if len(diverse_pool) > available_diverse:
-            diverse_picks = random.sample(diverse_pool, available_diverse)
+            diverse_picks = rng.sample(diverse_pool, available_diverse)
         else:
             diverse_picks = diverse_pool[:]
         selected.extend(diverse_picks)
@@ -788,7 +797,7 @@ def select_tiered_recommendations(
     if wildcard_pool and wildcard_count > 0:
         available_wildcard = min(wildcard_count, len(wildcard_pool))
         if len(wildcard_pool) > available_wildcard:
-            wildcard_picks = random.sample(wildcard_pool, available_wildcard)
+            wildcard_picks = rng.sample(wildcard_pool, available_wildcard)
         else:
             wildcard_picks = wildcard_pool[:]
         selected.extend(wildcard_picks)
