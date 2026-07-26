@@ -19,7 +19,10 @@ violation). Re-exported here unchanged so every existing
 import hmac
 import os
 import re
+import threading
+import time
 
+from utils.display import log_warning
 from utils.redact import REDACTED, redact, redact_lines
 
 __all__ = [
@@ -226,6 +229,17 @@ def _is_loopback_bind(host: str) -> bool:
 #   way).
 _TOKEN_EXEMPT_PATHS = frozenset({"/login", "/healthz"})
 
+# Also exempt: the login page's own static assets (style.css etc, under
+# Flask's default static_url_path - web/app.py's Flask(__name__) never
+# sets a custom static_url_path). Without this, a non-loopback bind
+# 401s the login page's own CSS/JS before the browser has ever had a
+# chance to obtain the token cookie. These assets disclose nothing
+# (no config, no secrets - just the UI's own stylesheet/script), the
+# same risk profile as /login itself. Deliberately just this one
+# prefix, not a broader exemption - every other path still requires
+# the token.
+_TOKEN_EXEMPT_STATIC_PREFIX = "/static/"
+
 
 def _request_token(request) -> str:
     """Pull the caller-supplied token out of *request*, checking (in
@@ -253,6 +267,125 @@ def _valid_token(supplied: str) -> bool:
     if len(expected) < MIN_AUTH_TOKEN_LENGTH or not supplied:
         return False
     return hmac.compare_digest(supplied, expected)
+
+
+# Opt-in ack that this process is deployed behind a reverse proxy the
+# operator controls and trusts to set X-Forwarded-Proto accurately -
+# unset by default. See _request_is_secure below.
+TRUST_PROXY_PROTO_ENV_VAR = "CURATARR_TRUST_PROXY_PROTO"
+
+
+def _request_is_secure(request) -> bool:
+    """True if *request* arrived over TLS - either directly
+    (request.is_secure, i.e. the connection Werkzeug itself terminated
+    was HTTPS - never true for web/app.py's plain app.run(), by design)
+    or, only when the operator has explicitly set
+    CURATARR_TRUST_PROXY_PROTO=true, via a reverse proxy's
+    X-Forwarded-Proto: https header. Self-hosters commonly run this
+    app behind a TLS-terminating reverse proxy (nginx, Caddy, Traefik,
+    ...), where request.is_secure is always False - Werkzeug only ever
+    sees the proxy's own plain-HTTP hop to it.
+
+    X-Forwarded-Proto is a plain, unauthenticated request header any
+    direct caller can set to whatever they like - trusting it
+    unconditionally would let a caller who reaches this process
+    directly (bypassing the proxy entirely - e.g. on the same LAN)
+    simply lie their way into Secure-cookie treatment. Requiring the
+    explicit opt-in keeps every existing install (no proxy in front -
+    see web/app.py's default 127.0.0.1 bind) byte-for-byte unchanged,
+    and makes the ones that DO enable it trust only their OWN proxy's
+    header, a deliberate operator decision, not an arbitrary caller's.
+
+    Takes the LAST comma-separated value (nearest hop to this
+    process) if the header somehow contains more than one - a
+    single-hop trust model, matching the single explicit opt-in above:
+    only the proxy immediately in front of this process is trusted to
+    have appended its own accurate value, not whatever a client further
+    upstream may have prepended.
+    """
+    if request.is_secure:
+        return True
+    if os.environ.get(TRUST_PROXY_PROTO_ENV_VAR, "").strip().lower() != "true":
+        return False
+    forwarded = request.headers.get("X-Forwarded-Proto", "")
+    if not forwarded:
+        return False
+    return forwarded.split(",")[-1].strip().lower() == "https"
+
+
+# ---------------------------------------------------------------------------
+# Login rate limiting (POST /login only - see login_submit in
+# register_token_auth below).
+#
+# Policy: at most _LOGIN_MAX_ATTEMPTS failed attempts per source IP
+# within a rolling _LOGIN_WINDOW_SECONDS window; a locked-out IP is
+# rejected outright (without even checking the supplied token, so
+# hammering the endpoint while locked out can't extend the lockout -
+# see _is_locked_out). This is NEVER permanent: it's a rolling window,
+# not a persistent ban - the oldest recorded failure ages out of the
+# window on its own, and the IP regains the ability to try again
+# without any operator intervention (no admin unlock, no restart
+# needed). A single successful login immediately clears that IP's
+# history (see _clear_login_failures). Every failed attempt (locked-out
+# or not) is logged via log_warning - never the supplied token itself,
+# only the source IP - see login_submit.
+#
+# Intentionally in-process/in-memory, no new dependency (flask-limiter
+# is not already a requirement - see requirements-ui.txt): web/app.py's
+# main() and web/docker_server.py both run this as one long-lived
+# process (or one container) for the life of the server, so a plain
+# dict scoped to that process lifetime is sufficient. Resets on
+# restart - acceptable, since restarting the process already requires
+# whatever access restarting it requires. Guarded by a lock because
+# both app.run(threaded=True) (web/app.py) and the Docker waitress
+# server (web/docker_server.py) serve requests concurrently.
+# ---------------------------------------------------------------------------
+
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 60
+
+_login_failures_lock = threading.Lock()
+_login_failures = {}  # {ip: [monotonic timestamp, ...]} of FAILED attempts only
+
+
+def _client_ip(request) -> str:
+    """Source IP bucket for login rate limiting - the immediate peer
+    address only (request.remote_addr), never X-Forwarded-For (that
+    header is exactly as spoofable as X-Forwarded-Proto - see
+    _request_is_secure above - and there's no equivalent opt-in for it
+    here). Behind a reverse proxy every client therefore shares one
+    bucket (the proxy's own address); that's an acceptable
+    simplification; it just means the rate limit is enforced
+    proxy-wide rather than per real client in that deployment, never
+    less strict than intended."""
+    return request.remote_addr or "unknown"
+
+
+def _prune_locked(ip: str, now: float) -> list:
+    """Attempts for *ip* still inside the rolling window, as of *now*
+    (a time.monotonic() reading) - must be called with
+    _login_failures_lock held."""
+    attempts = [t for t in _login_failures.get(ip, []) if now - t < _LOGIN_WINDOW_SECONDS]
+    _login_failures[ip] = attempts
+    return attempts
+
+
+def _is_locked_out(ip: str) -> bool:
+    with _login_failures_lock:
+        return len(_prune_locked(ip, time.monotonic())) >= _LOGIN_MAX_ATTEMPTS
+
+
+def _record_login_failure(ip: str) -> None:
+    with _login_failures_lock:
+        now = time.monotonic()
+        attempts = _prune_locked(ip, now)
+        attempts.append(now)
+        _login_failures[ip] = attempts
+
+
+def _clear_login_failures(ip: str) -> None:
+    with _login_failures_lock:
+        _login_failures.pop(ip, None)
 
 
 def register_token_auth(app, bind_host: str) -> None:
@@ -293,9 +426,16 @@ def register_token_auth(app, bind_host: str) -> None:
 
     @app.post("/login")
     def login_submit():
+        ip = _client_ip(request)
+        if _is_locked_out(ip):
+            log_warning(f"Login rejected for {ip} - too many failed attempts")
+            return redirect("/login?error=locked", code=303)
         supplied = request.form.get("token", "")
         if not _valid_token(supplied):
+            _record_login_failure(ip)
+            log_warning(f"Failed login attempt from {ip}")
             return redirect("/login?error=1", code=303)
+        _clear_login_failures(ip)
         response = make_response(redirect("/", code=303))
         response.set_cookie(
             AUTH_TOKEN_COOKIE_NAME,
@@ -303,10 +443,14 @@ def register_token_auth(app, bind_host: str) -> None:
             httponly=True,
             samesite="Strict",
             path="/",
-            # No secure=True: this app is served over plain HTTP on a
-            # LAN by design (see docs/DOCKER.md) - Secure would make the
-            # browser silently refuse to ever send the cookie back on
-            # any request, with no HTTPS path to switch to instead.
+            # Secure only when the request actually arrived over TLS
+            # (directly, or via a trusted reverse proxy's
+            # X-Forwarded-Proto - see _request_is_secure) - this app is
+            # also commonly served over plain HTTP on a LAN by design
+            # (see docs/DOCKER.md), where Secure would make the browser
+            # silently refuse to ever send the cookie back, with no
+            # HTTPS path to switch to instead.
+            secure=_request_is_secure(request),
         )
         return response
 
@@ -319,7 +463,7 @@ def register_token_auth(app, bind_host: str) -> None:
 
     @app.before_request
     def _token_auth_guard():
-        if request.path in _TOKEN_EXEMPT_PATHS:
+        if request.path in _TOKEN_EXEMPT_PATHS or request.path.startswith(_TOKEN_EXEMPT_STATIC_PREFIX):
             return
         if not _valid_token(_request_token(request)):
             abort(401)
