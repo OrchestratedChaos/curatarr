@@ -40,6 +40,22 @@ class BaseAPIClient:
     rate_limit_delay: float = 0.1
     request_timeout: int = 30
 
+    # Bounds a 429 (rate-limited) retry loop in _send_with_retries.
+    # 0 (default) preserves every existing subclass's behavior exactly
+    # (Radarr/Sonarr/Tautulli/MDBList never retried a 429, and don't
+    # call _send_with_retries at all - they use _make_request_to_url,
+    # unchanged here). Clients that DO need it (TraktClient/SimklClient
+    # - both talk to a real rate-limited cloud API, unlike the others'
+    # local network services) set this explicitly.
+    max_429_retries: int = 0
+
+    # Ceiling on how long a single 429 retry will ever sleep for,
+    # regardless of what the server's Retry-After header asks for -
+    # that header is server-controlled input, and a compromised/
+    # misbehaving endpoint could otherwise stall this process for an
+    # arbitrary/huge amount of time.
+    max_retry_after_seconds: int = 60
+
     def __init__(self):
         """Initialize base client state."""
         self._last_request_time = 0
@@ -50,6 +66,54 @@ class BaseAPIClient:
         if elapsed < self.rate_limit_delay:
             time.sleep(self.rate_limit_delay - elapsed)
         self._last_request_time = time.time()
+
+    def _send_with_retries(
+        self,
+        method: str,
+        url: str,
+        data: Optional[Dict] = None,
+        params: Optional[Dict] = None,
+        headers: Optional[Dict] = None,
+    ) -> requests.Response:
+        """Issue a rate-limited request with a bounded 429 (rate
+        limited) retry loop, honoring the server's Retry-After header
+        (capped at max_retry_after_seconds).
+
+        Returns the raw response whatever its status code - unlike
+        _make_request_to_url this never raises on a 4xx/5xx and never
+        runs the redirect-following/response-size-cap pipeline, so a
+        caller that needs to inspect the response before deciding how
+        to handle an error (e.g. TraktClient retrying with a refreshed
+        OAuth token on 401, which a raised exception here would
+        prevent) can do so itself. Callers that just want the shared
+        error-handling pipeline should use _make_request_to_url
+        instead - this only owns the rate-limit/429-retry loop.
+        """
+        response = None
+        for attempt in range(self.max_429_retries + 1):
+            self._rate_limit()
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=data,
+                params=params,
+                timeout=self.request_timeout,
+                allow_redirects=False,
+            )
+
+            if response.status_code != 429 or attempt == self.max_429_retries:
+                break
+
+            retry_after = min(
+                int(response.headers.get("Retry-After", 1)),
+                self.max_retry_after_seconds,
+            )
+            logger.warning(
+                f"{self.api_name} rate limited, waiting {retry_after}s (retry {attempt + 1}/{self.max_429_retries})"
+            )
+            time.sleep(retry_after)
+        return response
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests. Override in subclass."""

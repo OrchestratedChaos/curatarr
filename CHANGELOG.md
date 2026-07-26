@@ -2,6 +2,36 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.21] - 2026-07-26
+
+### Changed
+
+- **Audit remediation: API client consolidation** (batch 2, PR C).
+  `TraktClient` and `SimklClient` now subclass `utils/api_client.py`'s
+  `BaseAPIClient` (`sonarr.py`/`tautulli.py`/`mdblist.py`/`radarr.py`
+  already did) instead of hand-rolling their own near-identical
+  `_rate_limit()` and 429-retry-with-backoff loop. `BaseAPIClient`
+  gained a new `_send_with_retries()` primitive (rate limiting + a
+  bounded, `Retry-After`-honoring 429 retry loop, opt-in via
+  `max_429_retries`/`max_retry_after_seconds` - default 0 retries, so
+  `_make_request_to_url` and every existing subclass built on it are
+  completely unchanged) that both clients now call, while keeping
+  their own status-code handling local (Trakt's security-sensitive
+  OAuth-refresh-on-401 retry, Simkl's 401/404 mapping) - migration
+  only, no behavior change. Verified against the real, live Trakt API
+  (not just mocks): identical response before/after for
+  `get_username()`/`get_trending()`.
+  `utils/tmdb.py`'s `fetch_tmdb_with_retry` was evaluated but left
+  as a documented third implementation: it's function-based (no
+  client instance to attach `BaseAPIClient` to without inventing a new
+  `TMDBClient` class and touching every call site across the
+  codebase) and its 429 backoff is linear (`2*(attempt+1)` seconds)
+  rather than `Retry-After`-header-driven like the shared path -
+  forcing it through would either change its effective backoff timing
+  or require a second retry style option, both a bigger structural
+  change and more regression risk than this migration's scope
+  justifies.
+
 ## [2.10.20] - 2026-07-26
 
 ### Changed
