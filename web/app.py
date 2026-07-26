@@ -82,7 +82,7 @@ SSE_HEARTBEAT_SECONDS = 15.0
 
 # Applied to served watchlist HTML (see results_watchlist()). Primary
 # XSS defense is escaping at generation time (recommenders/
-# external_output.py); this is defense-in-depth so that even a gap
+# external_render.py); this is defense-in-depth so that even a gap
 # there can't turn into a same-origin script able to reach this app's
 # own state-changing endpoints via object embeds / cross-frame tricks.
 # script-src still needs 'unsafe-inline' since the watchlist page's own
@@ -537,7 +537,7 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
         response = send_from_directory(external_dir, filename)
         if filename.endswith(".html"):
             # Defense-in-depth on top of the escaping fix in
-            # recommenders/external_output.py (TMDB-derived fields are
+            # recommenders/external_render.py (TMDB-derived fields are
             # HTML-escaped at generation time now) - even a future gap
             # there shouldn't be able to turn into a script that can
             # drive this app's own state-changing endpoints.

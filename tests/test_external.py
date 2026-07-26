@@ -780,7 +780,7 @@ class TestExportToTraktAutoSync:
         result = export_to_trakt(config, [], "api_key")
         assert result is None
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_skips_when_not_authenticated(self, mock_get_auth_client):
         """Test export skips when client not authenticated."""
         mock_get_auth_client.return_value = None  # Not authenticated
@@ -800,7 +800,7 @@ class TestExportToTraktAutoSync:
 class TestExportToTraktUserMode:
     """Tests for export_to_trakt user_mode configuration."""
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_requires_valid_plex_users(self, mock_get_auth_client):
         """Test that mapping mode requires configured plex_users.
 
@@ -830,7 +830,7 @@ class TestExportToTraktUserMode:
         result = export_to_trakt(config, [], "api_key")
         assert result is None
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_rejects_empty_plex_users(self, mock_get_auth_client):
         """Test that mapping mode rejects empty plex_users list.
 
@@ -853,7 +853,7 @@ class TestExportToTraktUserMode:
         result = export_to_trakt(config, [], "api_key")
         assert result is None
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_filters_users(self, mock_get_auth_client):
         """Test that mapping mode only exports specified users."""
         mock_client = Mock()
@@ -896,7 +896,7 @@ class TestExportToTraktUserMode:
         call_args_list = [str(call) for call in mock_client.sync_list.call_args_list]
         assert not any("Guest" in args for args in call_args_list)
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_case_insensitive(self, mock_get_auth_client):
         """Test that mapping mode matches usernames case-insensitively."""
         mock_client = Mock()
@@ -930,8 +930,8 @@ class TestExportToTraktUserMode:
         export_to_trakt(config, all_users_data, "api_key")
         # No warning should have been logged about missing users
 
-    @patch("recommenders.external_exports.collect_imdb_ids")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.collect_imdb_ids")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_combined_mode_merges_all_users(self, mock_get_auth_client, mock_collect_ids):
         """Test that combined mode creates single merged list."""
         mock_client = Mock()
@@ -977,7 +977,7 @@ class TestExportToTraktUserMode:
         # List name should be "Curatarr - Movies" not "Curatarr - User1 - Movies"
         assert "Curatarr - Movies" == call_args[0][0]
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_per_user_mode_exports_all(self, mock_get_auth_client):
         """Test that per_user mode exports all users."""
         mock_client = Mock()
@@ -2809,6 +2809,63 @@ class TestProcessUserLibraryProvenance:
         show_item = result["shows_categorized"]["other_services"]["Netflix"][0]
         assert movie_item["library_id"] == "movies-4k"
         assert show_item["library_id"] == "tv-shows"
+
+
+class TestMainMissingTmdbApiKey:
+    """Tests for main()'s upfront TMDB API key check.
+
+    Unlike movie.py/tv.py (where a missing key just degrades scoring -
+    every use there is guarded with `if tmdb_api_key`), this module has
+    no degraded mode: every candidate it discovers comes from TMDB, so a
+    missing key must fail fast with an actionable message rather than
+    silently producing an empty/broken watchlist (fetch_tmdb_with_retry
+    swallows every TMDB failure into a bare None by design)."""
+
+    @patch("recommenders.external.log_error")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.load_config")
+    @patch("recommenders.external.get_project_root")
+    @patch("sys.argv", ["external.py"])
+    def test_missing_api_key_exits_with_actionable_message(
+        self, mock_root, mock_load_config, mock_get_tmdb, mock_log_error
+    ):
+        mock_root.return_value = "/fake/root"
+        mock_load_config.return_value = {
+            "plex": {"url": "http://x", "token": "y"},
+            "users": {"list": "alice"},
+        }
+        mock_get_tmdb.return_value = {"api_key": None, "use_keywords": True}
+
+        from recommenders.external import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+        logged = " ".join(call.args[0] for call in mock_log_error.call_args_list)
+        assert "TMDB" in logged
+        assert "themoviedb.org" in logged
+
+    @patch("recommenders.external.log_error")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.load_config")
+    @patch("recommenders.external.get_project_root")
+    @patch("sys.argv", ["external.py"])
+    def test_empty_string_api_key_also_exits(self, mock_root, mock_load_config, mock_get_tmdb, mock_log_error):
+        """An empty string (e.g. an un-filled config.example.yml placeholder
+        left blank) is exactly as unusable as None - same fail-fast path."""
+        mock_root.return_value = "/fake/root"
+        mock_load_config.return_value = {
+            "plex": {"url": "http://x", "token": "y"},
+            "users": {"list": "alice"},
+        }
+        mock_get_tmdb.return_value = {"api_key": "", "use_keywords": True}
+
+        from recommenders.external import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
 
 
 class TestMainLibraryResolution:

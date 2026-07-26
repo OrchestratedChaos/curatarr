@@ -1,4 +1,4 @@
-"""Tests for recommenders/external_output.py - HTML generation and streaming icons"""
+"""Tests for recommenders/external_render.py - HTML generation and streaming icons"""
 
 import os
 import sys
@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from recommenders.external_output import (
+from recommenders.external_render import (
     SERVICE_SHORT_NAMES,
     _load_imdb_cache,
     _save_imdb_cache,
@@ -771,7 +771,7 @@ class TestImdbCache:
 
     def test_save_swallows_ioerror(self):
         """A cache directory that can't be created shouldn't crash the run."""
-        with patch("recommenders.external_output.os.makedirs", side_effect=IOError("disk full")):
+        with patch("recommenders.external_render.os.makedirs", side_effect=IOError("disk full")):
             _save_imdb_cache("/some/path/imdb_ids_cache.json", {"a": "b"})  # should not raise
 
     def test_new_lookup_fetches_and_persists_cache(self):

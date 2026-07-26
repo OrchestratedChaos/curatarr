@@ -11,7 +11,7 @@ from typing import Dict, List
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.18"
+__version__ = "2.10.19"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus

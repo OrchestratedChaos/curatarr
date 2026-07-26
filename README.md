@@ -814,6 +814,33 @@ git pull origin main
 
 ---
 
+## Development
+
+### Running Tests
+
+The real recipe is [.github/workflows/tests.yml](.github/workflows/tests.yml)
+(what actually runs on every push/PR); the short version:
+
+```bash
+python -m pip install --upgrade pip
+pip install --require-hashes -r requirements.lock -r requirements-ui.lock -r requirements-docker.lock
+pip install pytest pytest-cov pip-audit
+
+pytest tests/ -v --tb=short --cov=. --cov-report=term-missing --cov-fail-under=85
+```
+
+Lint/format (also CI-enforced - `ruff format --check` blocks merges,
+`ruff check`/`mypy` are advisory-only for now):
+
+```bash
+pip install ruff mypy
+ruff format --check .
+ruff check .
+mypy .
+```
+
+---
+
 ## Contributing
 
 ### Feature Requests

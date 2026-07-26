@@ -1,4 +1,4 @@
-"""Tests for recommenders/external_exports.py - Export functionality"""
+"""Tests for recommenders/external_sync.py - Export functionality"""
 
 import json
 import os
@@ -10,7 +10,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from recommenders.external_exports import (
+from recommenders.external_sync import (
     MDBListAPIError,
     RadarrAPIError,
     SimklAPIError,
@@ -113,7 +113,7 @@ class TestFlattenCategorized:
 class TestGetImdbId:
     """Tests for get_imdb_id function"""
 
-    @patch("recommenders.external_exports.requests.get")
+    @patch("recommenders.external_sync.requests.get")
     def test_returns_imdb_id_for_movie(self, mock_get):
         """Test returns IMDB ID for movie."""
         mock_response = Mock()
@@ -126,7 +126,7 @@ class TestGetImdbId:
         assert result == "tt1234567"
         assert "movie/12345/external_ids" in mock_get.call_args[0][0]
 
-    @patch("recommenders.external_exports.requests.get")
+    @patch("recommenders.external_sync.requests.get")
     def test_returns_imdb_id_for_tv(self, mock_get):
         """Test returns IMDB ID for TV show."""
         mock_response = Mock()
@@ -139,7 +139,7 @@ class TestGetImdbId:
         assert result == "tt9876543"
         assert "tv/54321/external_ids" in mock_get.call_args[0][0]
 
-    @patch("recommenders.external_exports.requests.get")
+    @patch("recommenders.external_sync.requests.get")
     def test_returns_none_on_api_error(self, mock_get):
         """Test returns None on API error."""
         mock_response = Mock()
@@ -150,7 +150,7 @@ class TestGetImdbId:
 
         assert result is None
 
-    @patch("recommenders.external_exports.requests.get")
+    @patch("recommenders.external_sync.requests.get")
     def test_returns_none_on_request_exception(self, mock_get):
         """Test returns None on requests exception."""
         mock_get.side_effect = requests.RequestException("Network error")
@@ -159,7 +159,7 @@ class TestGetImdbId:
 
         assert result is None
 
-    @patch("recommenders.external_exports.requests.get")
+    @patch("recommenders.external_sync.requests.get")
     def test_returns_none_when_no_imdb_id(self, mock_get):
         """Test returns None when response has no imdb_id."""
         mock_response = Mock()
@@ -175,7 +175,7 @@ class TestGetImdbId:
 class TestCollectImdbIds:
     """Tests for collect_imdb_ids function"""
 
-    @patch("recommenders.external_exports.get_imdb_id")
+    @patch("recommenders.external_sync.get_imdb_id")
     def test_collects_ids_from_categorized(self, mock_get_imdb):
         """Test collects IMDB IDs from categorized items."""
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
@@ -191,7 +191,7 @@ class TestCollectImdbIds:
         assert "tt111" in result
         assert "tt222" in result
 
-    @patch("recommenders.external_exports.get_imdb_id")
+    @patch("recommenders.external_sync.get_imdb_id")
     def test_collects_ids_from_acquire(self, mock_get_imdb):
         """Test collects IMDB IDs from acquire items."""
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
@@ -202,7 +202,7 @@ class TestCollectImdbIds:
 
         assert "tt333" in result
 
-    @patch("recommenders.external_exports.get_imdb_id")
+    @patch("recommenders.external_sync.get_imdb_id")
     def test_skips_items_without_tmdb_id(self, mock_get_imdb):
         """Test skips items without tmdb_id."""
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
@@ -214,7 +214,7 @@ class TestCollectImdbIds:
         assert result == []
         mock_get_imdb.assert_not_called()
 
-    @patch("recommenders.external_exports.get_imdb_id")
+    @patch("recommenders.external_sync.get_imdb_id")
     def test_skips_failed_lookups(self, mock_get_imdb):
         """Test skips items where IMDB lookup fails."""
         mock_get_imdb.return_value = None
@@ -269,7 +269,7 @@ class TestExportToRadarr:
 
         export_to_radarr(config, all_users_data, "api_key")
 
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_skips_when_no_client(self, mock_create):
         """Test skips when client creation fails."""
         mock_create.return_value = None
@@ -300,8 +300,8 @@ def _mock_radarr_client():
 class TestExportToRadarrPerLibraryRouting:
     """Tests for #157 Phase 2: per-library Radarr export routing"""
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_single_library_no_library_id_matches_legacy_routing(self, mock_create, mock_create_from):
         """No library_id on recs -> routes via the single synthesized/global library,
         producing identical routing to the pre-Phase-2 flat-config flow."""
@@ -348,8 +348,8 @@ class TestExportToRadarrPerLibraryRouting:
         assert kwargs["minimum_availability"] == "released"
         assert kwargs["search_for_movie"] is True
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_two_library_ids_build_two_clients_with_own_routing(self, mock_create, mock_create_from):
         """Recs tagged with two different library_ids route through two independently
         -resolved clients, each with its own root_folder/quality_profile/tag."""
@@ -413,8 +413,8 @@ class TestExportToRadarrPerLibraryRouting:
         assert kids_kwargs["quality_profile_id"] == "qp-SD"
         assert kids_kwargs["tag_ids"] == ["tag-Curatarr-Kids"]
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_library_instance_override_with_field_fallback(self, mock_create, mock_create_from):
         """Per-library arr.instance overrides url/api_key; omitted arr.* fields
         fall back to the global radarr block."""
@@ -459,8 +459,8 @@ class TestExportToRadarrPerLibraryRouting:
         # Instance override used to build the per-library client
         mock_create_from.assert_called_once_with("http://kids-radarr:7878", "kids-key")
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_combined_mode_add_skip_exists_and_fail_paths(self, mock_create, mock_create_from):
         """Combined mode's add/skip/exists/fail loop (distinct from the
         per-user loop's equivalent, tested separately above)."""
@@ -500,8 +500,8 @@ class TestExportToRadarrPerLibraryRouting:
         attempted = [c.kwargs["tmdb_id"] for c in client.add_movie.call_args_list]
         assert attempted == [3, 4]
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_combined_mode_no_movies_prints_info_and_skips(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         client = _mock_radarr_client()
@@ -538,7 +538,7 @@ class TestExportToSonarr:
 
         export_to_sonarr(config, all_users_data, "api_key")
 
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_skips_when_no_client(self, mock_create):
         """Test skips when client creation fails."""
         mock_create.return_value = None
@@ -569,8 +569,8 @@ def _mock_sonarr_client():
 class TestExportToSonarrPerLibraryRouting:
     """Tests for #157 Phase 2: per-library Sonarr export routing"""
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_single_library_no_library_id_matches_legacy_routing(self, mock_create, mock_create_from):
         """No library_id on recs -> routes via the single synthesized/global library,
         producing identical routing to the pre-Phase-2 flat-config flow."""
@@ -619,8 +619,8 @@ class TestExportToSonarrPerLibraryRouting:
         assert kwargs["season_folder"] is True
         assert kwargs["series_type"] == "standard"
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_two_library_ids_build_two_clients_with_own_routing(self, mock_create, mock_create_from):
         """Recs tagged with two different library_ids route through two independently
         -resolved clients, each with its own root_folder/quality_profile/tag."""
@@ -684,8 +684,8 @@ class TestExportToSonarrPerLibraryRouting:
         assert anime_kwargs["quality_profile_id"] == "qp-4K"
         assert anime_kwargs["tag_ids"] == ["tag-Curatarr-Anime"]
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_library_instance_override_with_field_fallback(self, mock_create, mock_create_from):
         """Per-library arr.instance overrides url/api_key; omitted arr.* fields
         fall back to the global sonarr block."""
@@ -736,8 +736,8 @@ class TestExportToSonarrPerLibraryRouting:
         assert kwargs["quality_profile_id"] == "qp-HD-1080p"  # falls back to global
         assert kwargs["tag_ids"] == ["tag-Curatarr"]  # falls back to global
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_combined_mode_add_skip_exists_and_fail_paths(self, mock_create, mock_create_from):
         """Combined mode's add/skip/exists/fail loop (distinct from the
         per-user loop's equivalent, tested separately above)."""
@@ -777,8 +777,8 @@ class TestExportToSonarrPerLibraryRouting:
         attempted = [c.kwargs["tvdb_id"] for c in client.add_series.call_args_list]
         assert attempted == [3, 4]
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_combined_mode_no_shows_prints_info_and_skips(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         client = _mock_sonarr_client()
@@ -804,8 +804,8 @@ class TestResolveLibraryGroupsMediaTypeAware:
     library_id belonging to the wrong media type can never leak into the
     wrong *arr's routing (e.g. a tv library id building a Radarr client)."""
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_tv_library_id_skipped_by_radarr_export(self, mock_create, mock_create_from):
         """A tv library_id never resolves in export_to_radarr's grouping -
         no Radarr client is built for it."""
@@ -837,8 +837,8 @@ class TestResolveLibraryGroupsMediaTypeAware:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_movie_library_id_skipped_by_sonarr_export(self, mock_create, mock_create_from):
         """A movie library_id never resolves in export_to_sonarr's grouping -
         no Sonarr client is built for it."""
@@ -870,8 +870,8 @@ class TestResolveLibraryGroupsMediaTypeAware:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_movie_library_id_still_routes_by_radarr_export(self, mock_create, mock_create_from):
         """Sanity check paired with the skip test above: a correctly-typed
         movie library_id still resolves and routes normally."""
@@ -924,7 +924,7 @@ class TestExportToMdblist:
 
         export_to_mdblist(config, all_users_data, "api_key")
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_skips_when_no_client(self, mock_create):
         """Test skips when client creation fails."""
         mock_create.return_value = None
@@ -959,7 +959,7 @@ class TestExportToSimkl:
 
         export_to_simkl(config, all_users_data, "api_key")
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_skips_when_no_client(self, mock_create):
         """Test skips when client creation fails."""
         mock_create.return_value = None
@@ -974,7 +974,7 @@ class TestResolveLibraryGroupsDirect:
     """Direct unit tests for _resolve_library_groups (#157 Phase 2/3.5
     per-library *arr export routing/grouping)."""
 
-    @patch("recommenders.external_exports.get_libraries_for_media_type")
+    @patch("recommenders.external_sync.get_libraries_for_media_type")
     def test_no_library_id_uses_first_candidate(self, mock_get_libs):
         movie_lib = {"id": "movies", "name": "Movies", "media_type": "movie"}
         mock_get_libs.return_value = [movie_lib]
@@ -984,8 +984,8 @@ class TestResolveLibraryGroupsDirect:
 
         assert result == [(movie_lib, users)]
 
-    @patch("recommenders.external_exports.log_warning")
-    @patch("recommenders.external_exports.get_libraries_for_media_type", return_value=[])
+    @patch("recommenders.external_sync.log_warning")
+    @patch("recommenders.external_sync.get_libraries_for_media_type", return_value=[])
     def test_no_library_id_and_no_candidates_drops_group(self, mock_get_libs, mock_warn):
         users = [{"username": "alice"}]
 
@@ -994,7 +994,7 @@ class TestResolveLibraryGroupsDirect:
         assert result == []
         mock_warn.assert_called_once()
 
-    @patch("recommenders.external_exports.get_libraries_for_media_type")
+    @patch("recommenders.external_sync.get_libraries_for_media_type")
     def test_explicit_library_id_resolves_matching_library(self, mock_get_libs):
         movies = {"id": "movies", "name": "Movies", "media_type": "movie"}
         movies_4k = {"id": "movies-4k", "name": "Movies 4K", "media_type": "movie"}
@@ -1005,8 +1005,8 @@ class TestResolveLibraryGroupsDirect:
 
         assert result == [(movies_4k, users)]
 
-    @patch("recommenders.external_exports.log_warning")
-    @patch("recommenders.external_exports.get_libraries_for_media_type")
+    @patch("recommenders.external_sync.log_warning")
+    @patch("recommenders.external_sync.get_libraries_for_media_type")
     def test_unknown_library_id_drops_group(self, mock_get_libs, mock_warn):
         movies = {"id": "movies", "name": "Movies", "media_type": "movie"}
         mock_get_libs.return_value = [movies]
@@ -1017,7 +1017,7 @@ class TestResolveLibraryGroupsDirect:
         assert result == []
         mock_warn.assert_called_once()
 
-    @patch("recommenders.external_exports.get_libraries_for_media_type")
+    @patch("recommenders.external_sync.get_libraries_for_media_type")
     def test_multiple_groups_resolved_independently(self, mock_get_libs):
         movies = {"id": "movies", "name": "Movies", "media_type": "movie"}
         movies_4k = {"id": "movies-4k", "name": "Movies 4K", "media_type": "movie"}
@@ -1039,7 +1039,7 @@ class TestCollectImdbIdsAdditional:
     """Additional collect_imdb_ids branches not covered above:
     other_services in the inline fallback, and an explicit flatten_func."""
 
-    @patch("recommenders.external_exports.get_imdb_id")
+    @patch("recommenders.external_sync.get_imdb_id")
     def test_collects_ids_from_other_services_inline_fallback(self, mock_get_imdb):
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
         categorized = {
@@ -1052,7 +1052,7 @@ class TestCollectImdbIdsAdditional:
 
         assert result == ["tt444"]
 
-    @patch("recommenders.external_exports.get_imdb_id")
+    @patch("recommenders.external_sync.get_imdb_id")
     def test_uses_provided_flatten_func(self, mock_get_imdb):
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
         categorized = {"anything": "goes"}
@@ -1127,7 +1127,7 @@ class TestExportToTraktLogic:
     payload building, and error handling) - previously only the
     disabled/skip-path branches were covered."""
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_no_client_warns_and_returns(self, mock_get_client):
         mock_get_client.return_value = None
         config = {"trakt": {"enabled": True}}
@@ -1136,7 +1136,7 @@ class TestExportToTraktLogic:
 
         mock_get_client.assert_called_once()
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_no_plex_users_warns_and_returns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -1146,7 +1146,7 @@ class TestExportToTraktLogic:
 
         client.sync_list.assert_not_called()
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_placeholder_plex_users_warns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -1156,7 +1156,7 @@ class TestExportToTraktLogic:
 
         client.sync_list.assert_not_called()
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_no_matching_users_warns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -1167,8 +1167,8 @@ class TestExportToTraktLogic:
 
         client.sync_list.assert_not_called()
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_syncs_matched_user_movies_and_shows(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client(username="jasontv")
         mock_get_client.return_value = client
@@ -1205,8 +1205,8 @@ class TestExportToTraktLogic:
         assert show_call.args[0] == "MyRecs - Jason - TV"
         assert show_call.kwargs["shows"] == ["tt2"]
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_skips_show_sync_when_no_show_ids(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -1226,8 +1226,8 @@ class TestExportToTraktLogic:
         client.sync_list.assert_called_once()
         assert client.sync_list.call_args.args[0] == "Curatarr - Jason - Movies"
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_combined_mode_merges_and_dedups_across_users(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client(username="jasontv")
         mock_get_client.return_value = client
@@ -1262,8 +1262,8 @@ class TestExportToTraktLogic:
         assert show_call.args[0] == "Fam - TV"
         assert show_call.kwargs["shows"] == ["tt3"]
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_per_user_sync_error_logged_and_next_user_continues(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -1290,8 +1290,8 @@ class TestExportToTraktLogic:
 
         assert client.sync_list.call_count == 2
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_combined_mode_error_logged_not_raised(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -1316,8 +1316,8 @@ class TestExportToRadarrNonCombinedMode:
     non-combined branch) - previously untested beyond the disabled/skip
     paths and the combined-mode per-library routing tests."""
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_mapping_mode_no_plex_users_warns_and_returns(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         config = {"radarr": {"enabled": True, "auto_sync": True, "user_mode": "mapping", "plex_users": []}}
@@ -1326,8 +1326,8 @@ class TestExportToRadarrNonCombinedMode:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_mapping_mode_no_matching_users_warns(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         config = {"radarr": {"enabled": True, "auto_sync": True, "user_mode": "mapping", "plex_users": ["jason"]}}
@@ -1337,8 +1337,8 @@ class TestExportToRadarrNonCombinedMode:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_connect_failure_logs_and_returns(self, mock_create, mock_create_from):
         client = _mock_radarr_client()
         client.test_connection.side_effect = RadarrAPIError("down")
@@ -1349,8 +1349,8 @@ class TestExportToRadarrNonCombinedMode:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_per_user_mode_add_skip_exists_and_fail_paths(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         client = _mock_radarr_client()
@@ -1397,8 +1397,8 @@ class TestExportToRadarrNonCombinedMode:
         attempted = [c.kwargs["tmdb_id"] for c in client.add_movie.call_args_list]
         assert attempted == [3, 4]
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_per_user_mode_skips_user_with_no_movies(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         client = _mock_radarr_client()
@@ -1417,8 +1417,8 @@ class TestExportToRadarrNonCombinedMode:
         client.get_or_create_tag.assert_not_called()
         client.add_movie.assert_not_called()
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_append_usernames_true_uses_per_user_tag(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         client = _mock_radarr_client()
@@ -1444,8 +1444,8 @@ class TestExportToRadarrNonCombinedMode:
 
         client.get_or_create_tag.assert_called_once_with("Curatarr-Jason")
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_multiple_users_each_processed_independently(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         client = _mock_radarr_client()
@@ -1468,8 +1468,8 @@ class TestExportToRadarrNonCombinedMode:
 
         assert client.add_movie.call_count == 2
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_quality_profile_not_found_skips_library(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         client = _mock_radarr_client()
@@ -1492,8 +1492,8 @@ class TestExportToRadarrNonCombinedMode:
 
         client.add_movie.assert_not_called()
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_root_folder_not_found_skips_library(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         client = _mock_radarr_client()
@@ -1514,8 +1514,8 @@ class TestExportToRadarrNonCombinedMode:
 
         client.add_movie.assert_not_called()
 
-    @patch("recommenders.external_exports.create_radarr_client_from")
-    @patch("recommenders.external_exports.create_radarr_client")
+    @patch("recommenders.external_sync.create_radarr_client_from")
+    @patch("recommenders.external_sync.create_radarr_client")
     def test_no_arr_client_for_library_warns_and_skips(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_radarr_client()
         mock_create_from.return_value = None
@@ -1536,8 +1536,8 @@ class TestExportToSonarrNonCombinedMode:
     non-combined branch) - previously untested beyond the disabled/skip
     paths and the combined-mode per-library routing tests."""
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_mapping_mode_no_plex_users_warns_and_returns(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         config = {"sonarr": {"enabled": True, "auto_sync": True, "user_mode": "mapping", "plex_users": []}}
@@ -1546,8 +1546,8 @@ class TestExportToSonarrNonCombinedMode:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_mapping_mode_no_matching_users_warns(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         config = {"sonarr": {"enabled": True, "auto_sync": True, "user_mode": "mapping", "plex_users": ["jason"]}}
@@ -1557,8 +1557,8 @@ class TestExportToSonarrNonCombinedMode:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_connect_failure_logs_and_returns(self, mock_create, mock_create_from):
         client = _mock_sonarr_client()
         client.test_connection.side_effect = SonarrAPIError("down")
@@ -1569,8 +1569,8 @@ class TestExportToSonarrNonCombinedMode:
 
         mock_create_from.assert_not_called()
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_per_user_mode_add_skip_exists_and_fail_paths(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         client = _mock_sonarr_client()
@@ -1617,8 +1617,8 @@ class TestExportToSonarrNonCombinedMode:
         attempted = [c.kwargs["tvdb_id"] for c in client.add_series.call_args_list]
         assert attempted == [3, 4]
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_per_user_mode_skips_user_with_no_shows(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         client = _mock_sonarr_client()
@@ -1637,8 +1637,8 @@ class TestExportToSonarrNonCombinedMode:
         client.get_or_create_tag.assert_not_called()
         client.add_series.assert_not_called()
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_append_usernames_true_uses_per_user_tag(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         client = _mock_sonarr_client()
@@ -1664,8 +1664,8 @@ class TestExportToSonarrNonCombinedMode:
 
         client.get_or_create_tag.assert_called_once_with("Curatarr-Jason")
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_multiple_users_each_processed_independently(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         client = _mock_sonarr_client()
@@ -1688,8 +1688,8 @@ class TestExportToSonarrNonCombinedMode:
 
         assert client.add_series.call_count == 2
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_quality_profile_not_found_skips_library(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         client = _mock_sonarr_client()
@@ -1712,8 +1712,8 @@ class TestExportToSonarrNonCombinedMode:
 
         client.add_series.assert_not_called()
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_root_folder_not_found_skips_library(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         client = _mock_sonarr_client()
@@ -1734,8 +1734,8 @@ class TestExportToSonarrNonCombinedMode:
 
         client.add_series.assert_not_called()
 
-    @patch("recommenders.external_exports.create_sonarr_client_from")
-    @patch("recommenders.external_exports.create_sonarr_client")
+    @patch("recommenders.external_sync.create_sonarr_client_from")
+    @patch("recommenders.external_sync.create_sonarr_client")
     def test_no_arr_client_for_library_warns_and_skips(self, mock_create, mock_create_from):
         mock_create.return_value = _mock_sonarr_client()
         mock_create_from.return_value = None
@@ -1765,7 +1765,7 @@ class TestExportToMdblistLogic:
     """Tests for export_to_mdblist's real logic - previously only the
     disabled/skip-path branches were covered."""
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_connection_error_logs_and_returns(self, mock_create):
         client = _mock_mdblist_client()
         client.get_user_info.side_effect = MDBListAPIError("bad token")
@@ -1776,7 +1776,7 @@ class TestExportToMdblistLogic:
 
         client.get_or_create_list.assert_not_called()
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_mapping_mode_no_plex_users_warns(self, mock_create):
         client = _mock_mdblist_client()
         mock_create.return_value = client
@@ -1786,7 +1786,7 @@ class TestExportToMdblistLogic:
 
         client.get_or_create_list.assert_not_called()
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_mapping_mode_no_matching_users_warns(self, mock_create):
         client = _mock_mdblist_client()
         mock_create.return_value = client
@@ -1797,7 +1797,7 @@ class TestExportToMdblistLogic:
 
         client.get_or_create_list.assert_not_called()
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_per_user_mode_creates_lists_clears_and_adds(self, mock_create):
         client = _mock_mdblist_client()
         client.get_or_create_list.side_effect = None
@@ -1823,7 +1823,7 @@ class TestExportToMdblistLogic:
         client.add_items.assert_any_call(55, movies=[1])
         client.add_items.assert_any_call(55, shows=[2])
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_replace_existing_false_skips_clear(self, mock_create):
         client = _mock_mdblist_client()
         client.get_or_create_list.side_effect = None
@@ -1843,7 +1843,7 @@ class TestExportToMdblistLogic:
 
         client.clear_list.assert_not_called()
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_combined_mode_merges_and_dedups(self, mock_create):
         client = _mock_mdblist_client()
         client.get_or_create_list.side_effect = None
@@ -1874,7 +1874,7 @@ class TestExportToMdblistLogic:
         client.get_or_create_list.assert_called_once_with("Fam - Movies")
         client.add_items.assert_called_once_with(9, movies=[1, 2])
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_combined_mode_shows_branch_and_error_handling(self, mock_create):
         """Combined mode's shows branch (movies branch covered above) and
         the combined-mode MDBListAPIError catch."""
@@ -1897,7 +1897,7 @@ class TestExportToMdblistLogic:
 
         client.get_or_create_list.assert_called_once_with("Fam - TV")
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_skips_movies_and_shows_when_empty(self, mock_create):
         client = _mock_mdblist_client()
         mock_create.return_value = client
@@ -1915,7 +1915,7 @@ class TestExportToMdblistLogic:
 
         client.get_or_create_list.assert_not_called()
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_per_user_error_logged_and_continues(self, mock_create):
         client = _mock_mdblist_client()
         client.get_or_create_list.side_effect = [MDBListAPIError("boom"), {"id": 2, "name": "x"}]
@@ -1940,7 +1940,7 @@ class TestExportToMdblistLogic:
 
         assert client.get_or_create_list.call_count == 2
 
-    @patch("recommenders.external_exports.create_mdblist_client")
+    @patch("recommenders.external_sync.create_mdblist_client")
     def test_collect_tmdb_ids_handles_nested_dict_and_flat_categories(self, mock_create):
         """The local collect_tmdb_ids helper walks both dict-of-lists and
         flat-list category shapes and dedups."""
@@ -1979,7 +1979,7 @@ class TestExportToSimklLogic:
     """Tests for export_to_simkl's real logic - previously only the
     disabled/skip-path branches were covered."""
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_connection_returns_false_logs_error_and_returns(self, mock_create):
         client = _mock_simkl_client()
         client.test_connection.return_value = False
@@ -1990,7 +1990,7 @@ class TestExportToSimklLogic:
 
         client.add_to_watchlist.assert_not_called()
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_connection_raises_error_logs_and_returns(self, mock_create):
         client = _mock_simkl_client()
         client.test_connection.side_effect = SimklAuthError("expired token")
@@ -2001,7 +2001,7 @@ class TestExportToSimklLogic:
 
         client.add_to_watchlist.assert_not_called()
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_mapping_mode_no_plex_users_warns(self, mock_create):
         client = _mock_simkl_client()
         mock_create.return_value = client
@@ -2016,7 +2016,7 @@ class TestExportToSimklLogic:
 
         client.add_to_watchlist.assert_not_called()
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_mapping_mode_no_matching_users_warns(self, mock_create):
         client = _mock_simkl_client()
         mock_create.return_value = client
@@ -2032,7 +2032,7 @@ class TestExportToSimklLogic:
 
         client.add_to_watchlist.assert_not_called()
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_builds_payload_and_adds_to_watchlist(self, mock_create):
         client = _mock_simkl_client()
         client.add_to_watchlist.return_value = {"added": {"movies": 2, "shows": 1}}
@@ -2059,7 +2059,7 @@ class TestExportToSimklLogic:
         shows_call = client.add_to_watchlist.call_args_list[1]
         assert shows_call.kwargs["shows"] == [{"ids": {"tmdb": 10}}]
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_skips_movies_call_when_no_movie_ids(self, mock_create):
         client = _mock_simkl_client()
         client.add_to_watchlist.return_value = {"added": {"shows": 1}}
@@ -2079,7 +2079,7 @@ class TestExportToSimklLogic:
         client.add_to_watchlist.assert_called_once()
         assert "movies" not in client.add_to_watchlist.call_args.kwargs
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_skips_shows_call_when_no_show_ids(self, mock_create):
         client = _mock_simkl_client()
         client.add_to_watchlist.return_value = {"added": {"movies": 1}}
@@ -2099,7 +2099,7 @@ class TestExportToSimklLogic:
         client.add_to_watchlist.assert_called_once()
         assert "shows" not in client.add_to_watchlist.call_args.kwargs
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_collect_tmdb_ids_handles_nested_dict_categories(self, mock_create):
         """Simkl's local collect_tmdb_ids helper walks the dict-of-lists
         category shape (user_services/other_services), not just flat lists."""
@@ -2124,7 +2124,7 @@ class TestExportToSimklLogic:
 
         client.add_to_watchlist.assert_called_once_with(movies=[{"ids": {"tmdb": 1}}, {"ids": {"tmdb": 2}}])
 
-    @patch("recommenders.external_exports.create_simkl_client")
+    @patch("recommenders.external_sync.create_simkl_client")
     def test_error_during_add_logs_error_not_raised(self, mock_create):
         client = _mock_simkl_client()
         client.add_to_watchlist.side_effect = SimklAPIError("rate limited")
@@ -2157,14 +2157,14 @@ class TestSyncWatchHistoryToTrakt:
 
         sync_watch_history_to_trakt(config, "tmdb-key")
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_no_client_warns_and_returns(self, mock_get_client):
         mock_get_client.return_value = None
         config = {"trakt": {"enabled": True, "export": {"auto_sync": True}}}
 
         sync_watch_history_to_trakt(config, "tmdb-key")
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_mapping_mode_no_plex_users_warns_and_returns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -2174,7 +2174,7 @@ class TestSyncWatchHistoryToTrakt:
 
         client.get_watch_history_imdb_ids.assert_not_called()
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_no_load_profile_func_prints_and_returns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -2184,7 +2184,7 @@ class TestSyncWatchHistoryToTrakt:
 
         client.add_to_history.assert_not_called()
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_no_matching_users_after_mapping_filter_warns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -2196,7 +2196,7 @@ class TestSyncWatchHistoryToTrakt:
 
         client.add_to_history.assert_not_called()
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_no_watch_history_in_cache_prints_and_returns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -2207,7 +2207,7 @@ class TestSyncWatchHistoryToTrakt:
 
         client.add_to_history.assert_not_called()
 
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_users_default_from_config_when_not_provided(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -2223,8 +2223,8 @@ class TestSyncWatchHistoryToTrakt:
         called_users = {c.args[1] for c in load_profile_func.call_args_list}
         assert called_users == {"jason", "alex"}
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_syncs_new_items_and_writes_cache(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         client.add_to_history.side_effect = [{"added": {"movies": 1}}, {"added": {"episodes": 1}}]
@@ -2252,8 +2252,8 @@ class TestSyncWatchHistoryToTrakt:
         assert data["movies"] == [100]
         assert data["shows"] == [200]
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_already_synced_ids_skipped_using_cache(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
@@ -2274,8 +2274,8 @@ class TestSyncWatchHistoryToTrakt:
         mock_get_imdb.assert_not_called()
         client.add_to_history.assert_not_called()
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_outdated_cache_version_ignored_reconverts_all(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         client.add_to_history.return_value = {"added": {"movies": 1}}
@@ -2297,8 +2297,8 @@ class TestSyncWatchHistoryToTrakt:
 
         mock_get_imdb.assert_called_once_with("tmdb-key", 100, "movie")
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_items_already_on_trakt_not_resynced_but_cached(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         client.get_watch_history_imdb_ids.side_effect = lambda mt: {"tt100"} if mt == "movies" else set()
@@ -2316,8 +2316,8 @@ class TestSyncWatchHistoryToTrakt:
 
         client.add_to_history.assert_not_called()
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_batch_sync_error_logged_not_raised(self, mock_get_client, mock_get_imdb):
         client = _mock_trakt_client()
         client.add_to_history.side_effect = TraktAPIError("rate limited")
@@ -2333,8 +2333,8 @@ class TestSyncWatchHistoryToTrakt:
 
         sync_watch_history_to_trakt(config, "tmdb-key", users=["jason"], load_profile_func=load_profile_func)
 
-    @patch("recommenders.external_exports.get_imdb_id")
-    @patch("recommenders.external_exports.get_authenticated_trakt_client")
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_corrupt_cache_file_ignored_rebuilds(self, mock_get_client, mock_get_imdb):
         """A cache file that isn't valid JSON is logged and ignored rather
         than crashing the sync."""
