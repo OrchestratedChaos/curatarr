@@ -2,6 +2,32 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.26] - 2026-07-26
+
+### Changed
+
+- **Audit remediation batch E (PR1): split `calculate_similarity_score`
+  (`utils/scoring.py`) out of one ~414-line function with 51 branch
+  statements and nesting to depth 6-7 into named, independently testable
+  helpers.** One helper per scoring dimension -
+  `_score_genre_component`/`_score_director_component`/
+  `_score_studio_component`/`_score_actor_component`/
+  `_score_language_component`/`_score_keyword_component` (the latter two
+  each also carry their dimension's embedded TF-IDF rarity penalty, via a
+  new shared `_tfidf_threshold` helper) - plus
+  `_apply_active_weight_redistribution` and `_apply_popularity_dampening`
+  for the two cross-dimension passes. The five independent tuning
+  flags/thresholds (`normalize_counters`, `use_fuzzy_keywords`,
+  `use_tfidf`, `tfidf_penalty_threshold`, `use_popularity_dampening`,
+  `popularity_threshold`) collapse into one frozen `ScoringOptions`
+  dataclass; the public function keeps accepting the original individual
+  keyword arguments unchanged (existing callers/tests untouched) and now
+  also accepts an optional `options=` that takes precedence when given.
+  Verified behavior-preserving via `tests/harness.py`: byte-identical
+  `PYTHONHASHSEED=0` output before/after across the full fixture set,
+  plus 36 new tests for the extracted helpers (2431 passed, up from
+  2395). No public signature or return contract changed.
+
 ## [2.10.25] - 2026-07-26
 
 ### Fixed

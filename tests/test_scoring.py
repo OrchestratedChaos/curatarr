@@ -2,10 +2,24 @@
 Tests for utils/scoring.py - Scoring and similarity functions.
 """
 
+import dataclasses
+from collections import Counter
+
 import pytest
 
 from utils.scoring import (
+    ScoringOptions,
+    _apply_active_weight_redistribution,
+    _apply_popularity_dampening,
+    _normalize_user_genre_counts,
     _redistribute_weights,
+    _score_actor_component,
+    _score_director_component,
+    _score_genre_component,
+    _score_keyword_component,
+    _score_language_component,
+    _score_studio_component,
+    _tfidf_threshold,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
@@ -769,3 +783,312 @@ class TestPopularityDampening:
             content, profile, use_popularity_dampening=True, popularity_threshold=50000
         )
         assert breakdown.get("popularity_dampening", 1.0) >= 0.90
+
+
+class TestScoringOptions:
+    """Tests for the ScoringOptions dataclass (PR: collapsed tuning flags)."""
+
+    def test_defaults_match_calculate_similarity_score_defaults(self):
+        """ScoringOptions()'s defaults must match calculate_similarity_score()'s
+        pre-existing individual-kwarg defaults exactly."""
+        options = ScoringOptions()
+        assert options.normalize_counters is True
+        assert options.use_fuzzy_keywords is True
+        assert options.use_tfidf is True
+        assert options.tfidf_penalty_threshold == 0.15
+        assert options.use_popularity_dampening is True
+        assert options.popularity_threshold == 50000
+
+    def test_frozen(self):
+        """ScoringOptions is frozen - instances must be immutable."""
+        options = ScoringOptions()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            options.use_tfidf = False
+
+    def test_individual_kwargs_still_work_without_options(self):
+        """Existing call style (no options=) is unaffected - same result as
+        passing the equivalent explicit ScoringOptions()."""
+        content = {"genres": ["action"]}
+        profile = {"genres": {"action": 5}}
+        score_default, _ = calculate_similarity_score(content, profile)
+        score_via_options, _ = calculate_similarity_score(content, profile, options=ScoringOptions())
+        assert score_default == score_via_options
+
+    def test_options_takes_precedence_over_individual_kwargs(self):
+        """When both options= and individual kwargs are given, options wins."""
+        content = {"genres": ["horror"], "vote_count": 500000}
+        profile = {"genres": {"action": 10}}
+
+        score_options_no_dampening, _ = calculate_similarity_score(
+            content, profile, options=ScoringOptions(use_popularity_dampening=False), use_popularity_dampening=True
+        )
+        score_kwarg_no_dampening, _ = calculate_similarity_score(content, profile, use_popularity_dampening=False)
+        assert score_options_no_dampening == score_kwarg_no_dampening
+
+
+class TestTfidfThreshold:
+    """Tests for _tfidf_threshold() - shared TF-IDF rarity threshold helper."""
+
+    def test_disabled_returns_zero(self):
+        options = ScoringOptions(use_tfidf=False)
+        assert _tfidf_threshold({}, "genres", 100, options) == 0
+
+    def test_computes_from_max_count_when_not_precomputed(self):
+        options = ScoringOptions(use_tfidf=True, tfidf_penalty_threshold=0.2)
+        assert _tfidf_threshold({}, "genres", 100, options) == 20.0
+
+    def test_prefers_precomputed_thresholds(self):
+        options = ScoringOptions(use_tfidf=True, tfidf_penalty_threshold=0.2)
+        user_profile = {"_tfidf_thresholds": {"genres": 42}}
+        assert _tfidf_threshold(user_profile, "genres", 100, options) == 42
+
+
+class TestNormalizeUserGenreCounts:
+    """Tests for _normalize_user_genre_counts()."""
+
+    def test_collapses_variant_names(self):
+        counter = Counter({"sci-fi": 5, "science fiction": 3})
+        normalized, max_count = _normalize_user_genre_counts(counter)
+        assert normalized["science fiction"] == 5
+        assert max_count == 5
+
+    def test_empty_counter_defaults_max_to_one(self):
+        normalized, max_count = _normalize_user_genre_counts(Counter())
+        assert normalized == {}
+        assert max_count == 1
+
+
+class TestScoreGenreComponent:
+    """Tests for _score_genre_component() - the genre scoring dimension."""
+
+    def test_matching_genre_scores_positive(self):
+        user_genres = Counter({"action": 10})
+        normalized, max_count = _normalize_user_genre_counts(user_genres)
+        options = ScoringOptions()
+        threshold = _tfidf_threshold({}, "genres", max_count, options)
+        final, penalty, details = _score_genre_component(
+            {"action"}, user_genres, normalized, max_count, 0.25, threshold, options
+        )
+        assert final > 0
+        assert penalty == 0
+        assert len(details) == 1
+        assert "count" in details[0]
+
+    def test_no_content_genres_scores_zero(self):
+        options = ScoringOptions()
+        final, penalty, details = _score_genre_component(set(), Counter(), {}, 1, 0.25, 0, options)
+        assert (final, penalty, details) == (0.0, 0.0, [])
+
+    def test_negative_signal_penalizes(self):
+        user_genres = Counter({"horror": -5})
+        normalized, max_count = _normalize_user_genre_counts(user_genres)
+        options = ScoringOptions()
+        final, penalty, details = _score_genre_component(
+            {"horror"}, user_genres, normalized, max_count, 0.25, 0, options
+        )
+        assert "NEGATIVE" in details[0]
+
+    def test_tfidf_rarity_penalty_applied(self):
+        """A genre the user has but rarely (below the TF-IDF threshold) is
+        penalized rather than scored positively."""
+        user_genres = Counter({"action": 1, "comedy": 100})
+        normalized, max_count = _normalize_user_genre_counts(user_genres)
+        options = ScoringOptions(use_tfidf=True, tfidf_penalty_threshold=0.5)
+        threshold = _tfidf_threshold({}, "genres", max_count, options)
+        final, penalty, details = _score_genre_component(
+            {"action"}, user_genres, normalized, max_count, 0.25, threshold, options
+        )
+        assert penalty > 0
+        assert "TF-IDF" in details[0]
+
+
+class TestScoreDirectorComponent:
+    """Tests for _score_director_component() - movies-only dimension."""
+
+    def test_matching_director_scores_positive(self):
+        user_prefs = {"directors": Counter({"Jane Doe": 5})}
+        options = ScoringOptions()
+        final, penalty, details = _score_director_component(["Jane Doe"], user_prefs, {"directors": 5}, 0.15, options)
+        assert final > 0
+        assert details
+
+    def test_no_directors_scores_zero(self):
+        options = ScoringOptions()
+        final, penalty, details = _score_director_component(
+            [], {"directors": Counter()}, {"directors": 1}, 0.15, options
+        )
+        assert (final, penalty, details) == (0.0, 0.0, [])
+
+    def test_case_insensitive_match_via_lower_fallback(self):
+        user_prefs = {"directors": Counter({"Jane Doe": 5})}
+        options = ScoringOptions()
+        final, penalty, details = _score_director_component(["jane doe"], user_prefs, {"directors": 5}, 0.15, options)
+        assert final > 0
+
+    def test_negative_signal_penalizes(self):
+        user_prefs = {"directors": Counter({"Bad Director": -3})}
+        options = ScoringOptions()
+        final, penalty, details = _score_director_component(
+            ["Bad Director"], user_prefs, {"directors": 3}, 0.15, options
+        )
+        assert penalty > 0
+        assert "NEGATIVE" in details[0]
+
+
+class TestScoreStudioComponent:
+    """Tests for _score_studio_component() - TV-only dimension."""
+
+    def test_matching_studio_scores_positive(self):
+        user_prefs = {"studios": Counter({"hbo": 5})}
+        options = ScoringOptions()
+        final, penalty, detail = _score_studio_component("HBO", user_prefs, {"studios": 5}, 0.15, options)
+        assert final > 0
+        assert detail is not None
+
+    def test_no_studio_scores_zero(self):
+        options = ScoringOptions()
+        final, penalty, detail = _score_studio_component("N/A", {"studios": Counter()}, {"studios": 1}, 0.15, options)
+        assert (final, penalty, detail) == (0.0, 0.0, None)
+
+    def test_list_of_studios_accepted(self):
+        user_prefs = {"studios": Counter({"hbo": 5, "amc": 2})}
+        options = ScoringOptions()
+        final, penalty, detail = _score_studio_component(["HBO", "AMC"], user_prefs, {"studios": 5}, 0.15, options)
+        assert final > 0
+
+    def test_detail_reflects_last_studio_processed(self):
+        """score_breakdown['details']['studio'] is a single string
+        (assignment, not append) - the helper must match that: detail is
+        whichever studio in the list was processed last, not the first."""
+        user_prefs = {"studios": Counter({"hbo": 5, "amc": 2})}
+        options = ScoringOptions()
+        _final, _penalty, detail = _score_studio_component(["HBO", "AMC"], user_prefs, {"studios": 5}, 0.15, options)
+        assert detail.startswith("AMC")
+
+
+class TestScoreActorComponent:
+    """Tests for _score_actor_component()."""
+
+    def test_matching_actor_scores_positive(self):
+        user_prefs = {"actors": Counter({"Tom Hanks": 8})}
+        options = ScoringOptions()
+        final, penalty, details = _score_actor_component(["Tom Hanks"], user_prefs, {"actors": 8}, 0.20, options)
+        assert final > 0
+        assert details
+
+    def test_no_cast_scores_zero(self):
+        options = ScoringOptions()
+        final, penalty, details = _score_actor_component([], {"actors": Counter()}, {"actors": 1}, 0.20, options)
+        assert (final, penalty, details) == (0.0, 0.0, [])
+
+    def test_negative_signal_penalizes(self):
+        user_prefs = {"actors": Counter({"Bad Actor": -4})}
+        options = ScoringOptions()
+        final, penalty, details = _score_actor_component(["Bad Actor"], user_prefs, {"actors": 4}, 0.20, options)
+        assert penalty > 0
+        assert "NEGATIVE" in details[0]
+
+
+class TestScoreLanguageComponent:
+    """Tests for _score_language_component()."""
+
+    def test_matching_language_scores_positive(self):
+        user_prefs = {"languages": Counter({"en": 10})}
+        options = ScoringOptions()
+        final, detail = _score_language_component("en", user_prefs, {"languages": 10}, 0.05, options)
+        assert final > 0
+        assert detail is not None
+
+    def test_na_language_scores_zero(self):
+        options = ScoringOptions()
+        final, detail = _score_language_component("N/A", {"languages": Counter()}, {"languages": 1}, 0.05, options)
+        assert (final, detail) == (0.0, None)
+
+    def test_unseen_language_scores_zero(self):
+        user_prefs = {"languages": Counter({"en": 10})}
+        options = ScoringOptions()
+        final, detail = _score_language_component("fr", user_prefs, {"languages": 10}, 0.05, options)
+        assert (final, detail) == (0.0, None)
+
+
+class TestScoreKeywordComponent:
+    """Tests for _score_keyword_component()."""
+
+    def test_matching_keyword_scores_positive(self):
+        user_prefs = {"keywords": Counter({"superhero": 10})}
+        options = ScoringOptions()
+        threshold = _tfidf_threshold({}, "keywords", 10, options)
+        final, penalty, details = _score_keyword_component(
+            ["superhero"], user_prefs, {"keywords": 10}, 0.45, threshold, options
+        )
+        assert final > 0
+        assert details
+
+    def test_no_keywords_scores_zero(self):
+        options = ScoringOptions()
+        final, penalty, details = _score_keyword_component(
+            [], {"keywords": Counter()}, {"keywords": 1}, 0.45, 0, options
+        )
+        assert (final, penalty, details) == (0.0, 0.0, [])
+
+    def test_fuzzy_match_used_when_no_exact_match(self):
+        user_prefs = {"keywords": Counter({"space opera": 10})}
+        options = ScoringOptions(use_fuzzy_keywords=True)
+        threshold = _tfidf_threshold({}, "keywords", 10, options)
+        final, penalty, details = _score_keyword_component(
+            ["space"], user_prefs, {"keywords": 10}, 0.45, threshold, options
+        )
+        assert final > 0
+
+    def test_fuzzy_disabled_no_match(self):
+        user_prefs = {"keywords": Counter({"space opera": 10})}
+        options = ScoringOptions(use_fuzzy_keywords=False, use_tfidf=False)
+        final, penalty, details = _score_keyword_component(["space"], user_prefs, {"keywords": 10}, 0.45, 0, options)
+        assert final == 0.0
+
+
+class TestApplyActiveWeightRedistribution:
+    """Tests for _apply_active_weight_redistribution() - the per-item
+    weight redistribution pass (distinct from _redistribute_weights)."""
+
+    def test_redistributes_zero_scoring_dimension_weight(self):
+        component_scores = {"genre": 0.2, "director": 0.0, "studio": 0.0, "actor": 0.0, "language": 0.0, "keyword": 0.0}
+        effective_weights = {
+            "genre": 0.25,
+            "director": 0.15,
+            "studio": 0,
+            "actor": 0.20,
+            "language": 0.05,
+            "keyword": 0.45,
+        }
+        score = _apply_active_weight_redistribution(0.2, component_scores, effective_weights)
+        assert score > 0.2
+
+    def test_no_redistribution_when_all_active(self):
+        component_scores = {"genre": 0.1, "director": 0.1, "studio": 0, "actor": 0.1, "language": 0.1, "keyword": 0.1}
+        effective_weights = {"genre": 0.2, "director": 0.2, "studio": 0, "actor": 0.2, "language": 0.2, "keyword": 0.2}
+        score = _apply_active_weight_redistribution(0.5, component_scores, effective_weights)
+        assert score == pytest.approx(0.5)
+
+
+class TestApplyPopularityDampeningHelper:
+    """Tests for _apply_popularity_dampening() (see also TestPopularityDampening
+    above, which exercises the same behavior through the public function)."""
+
+    def test_disabled_returns_unchanged(self):
+        options = ScoringOptions(use_popularity_dampening=False)
+        score, dampening = _apply_popularity_dampening(0.8, {"vote_count": 1000000}, options)
+        assert score == 0.8
+        assert dampening is None
+
+    def test_below_threshold_no_dampening(self):
+        options = ScoringOptions(use_popularity_dampening=True, popularity_threshold=50000)
+        score, dampening = _apply_popularity_dampening(0.8, {"vote_count": 1000}, options)
+        assert score == 0.8
+        assert dampening is None
+
+    def test_above_threshold_dampens(self):
+        options = ScoringOptions(use_popularity_dampening=True, popularity_threshold=50000)
+        score, dampening = _apply_popularity_dampening(0.8, {"vote_count": 500000}, options)
+        assert score < 0.8
+        assert dampening is not None
