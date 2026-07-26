@@ -461,7 +461,14 @@ show_cron_info() {
 }
 
 setup_cron_job() {
-    CRON_CMD="0 3 * * * cd $SCRIPT_DIR && ./run.sh >> logs/daily-run.log 2>&1"
+    # Each run gets its own timestamped log file (evaluated by the shell
+    # at cron-fire time, not here) instead of a single ever-growing append
+    # file - an append-only log's mtime is refreshed on every write, so
+    # cleanup_old_logs()'s age-based retention could never delete it.
+    # The backslash-percent sequences below are crontab(5) escaping so
+    # cron passes a literal % through to `date` (at cron-fire time) instead
+    # of treating an unescaped % as a stdin separator.
+    CRON_CMD="0 3 * * * cd $SCRIPT_DIR && ./run.sh >> logs/daily-run_\$(date +\%Y\%m\%d_\%H\%M\%S).log 2>&1"
 
     # Check if cron entry already exists
     if crontab -l 2>/dev/null | grep -q "$SCRIPT_DIR/run.sh"; then

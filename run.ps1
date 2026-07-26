@@ -1480,12 +1480,25 @@ function Main {
         Start-SetupWizard -pythonCmd $pythonCmd
     }
 
-    # Step 4: Create logs directory
+    # Step 4: Sync Plex watch history to Trakt (if enabled)
+    # This runs FIRST so both internal and external recommenders benefit
+    if ((Test-Path "config/trakt.yml") -and (Select-String -Path "config/trakt.yml" -Pattern "auto_sync: true" -Quiet -ErrorAction SilentlyContinue)) {
+        Write-Cyan "=== Syncing Watch History to Trakt ==="
+        & $pythonCmd utils/trakt_sync.py
+        if ($LASTEXITCODE -eq 0) {
+            Write-Green "OK Trakt sync complete"
+        } else {
+            Write-Yellow "! Trakt sync skipped"
+        }
+        Write-Host ""
+    }
+
+    # Step 5: Create logs directory
     if (-not (Test-Path "logs")) {
         New-Item -ItemType Directory -Path "logs" | Out-Null
     }
 
-    # Step 5: Run recommendations
+    # Step 6: Run recommendations
     Write-Cyan "=== Running Recommendations ==="
     Write-Host ""
 
@@ -1509,7 +1522,7 @@ function Main {
     }
     Write-Host ""
 
-    # Step 6: Generate external recommendations (watchlist)
+    # Step 7: Generate external recommendations (watchlist)
     Write-Cyan "=== Generating External Watchlists ==="
     & $pythonCmd recommenders/external.py
     if ($LASTEXITCODE -eq 0) {
@@ -1519,7 +1532,7 @@ function Main {
     }
     Write-Host ""
 
-    # Step 7: Scheduled task setup (first run only)
+    # Step 8: Scheduled task setup (first run only)
     if ($isFirstRun) {
         Setup-Schedule
     }

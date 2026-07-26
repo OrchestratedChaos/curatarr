@@ -2,6 +2,70 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.9] - 2026-07-25
+
+### Fixed
+
+- **Windows users' Trakt watch-history sync was silently never running.**
+  `run.sh` syncs Plex watch history to Trakt before generating
+  recommendations when `config/trakt.yml` has `auto_sync: true` - the
+  setup wizard asks Windows users this same question and saves their
+  answer via `run.ps1`, but `run.ps1` had no equivalent step at all, so
+  the saved answer was never honored. Added the matching step to
+  `run.ps1`'s `Main` function in the same position run.sh runs it
+  (before recommendations, so both internal and external recommenders
+  benefit).
+- **An append-only log could grow forever and was structurally
+  unremovable by its own cleanup.** `run.sh`'s optional cron job
+  redirected output with `>> logs/daily-run.log 2>&1` - a single file
+  every run appends to, with no cap. `cleanup_old_logs()` only removes
+  `.log` files by mtime, but an append-only file's mtime is refreshed
+  on every write, so it could never cross the retention threshold.
+  `run.sh`'s generated cron command now writes each run to its own
+  timestamped log file instead, and `cleanup_old_logs()` also
+  force-truncates (in place, so an already-appending process just
+  keeps writing from the new end-of-file) any `.log` file over a new
+  `MAX_LOG_FILE_BYTES` cap regardless of mtime, as a safety net for
+  any other append-only logging setup (docker-compose cron, an
+  external scheduler, etc.).
+- **Cache writes could be corrupted by a mid-write crash or a
+  concurrent writer.** `utils/cache.py`'s save functions truncated and
+  wrote the target file directly - a process dying mid-write, or two
+  processes sharing the same `./cache` volume (docker-compose runs a
+  `curatarr` and a `curatarr-recommend` service), could leave a
+  truncated/corrupt file that then silently forces a full re-scan.
+  Switched to write-temp-then-`os.replace()`, matching the pattern
+  already used by `web/config_io.py` and `utils/metrics.py`.
+- Corrected `README.md`'s documented default for
+  `min_relevance_score` (was `0.25`, actual shipped default is `0.65`
+  - matches `config/tuning.example.yml` and every code default).
+- Rewrote the README's Contributing section to describe the actual
+  policy - external PRs are closed automatically
+  (`.github/workflows/auto-close-prs.yml`), it previously invited PRs
+  against `main`.
+- `utils/plex.py` and `utils/tmdb.py` now use the `PLEX_REQUEST_TIMEOUT`
+  / `TMDB_REQUEST_TIMEOUT` constants (already defined in
+  `utils/config.py` but never wired up) instead of hardcoded literal
+  timeouts; the one deliberately-longer Plex call (large watch-history
+  page fetch) got its own named `PLEX_LONG_REQUEST_TIMEOUT` constant
+  instead of an unexplained `timeout=60`. No effective timeout values
+  changed.
+- Added debug-level logging to previously-silent `except: pass` blocks
+  in `web/job_runner.py` and `utils/self_update.py` so a real failure
+  in these paths leaves a trace instead of vanishing - `self_update.py`
+  is integrity-sensitive, so a swallowed `OSError` there was exactly
+  the kind of bug that could hide silently. No control flow changed;
+  the exceptions are still swallowed.
+
+### Removed
+
+- Deleted dead function `balance_genres_proportionally` in
+  `recommenders/external.py` (verified zero callers repo-wide).
+
+### Chore
+
+- Added `.venv/` to `.gitignore` (was untracked but not ignored).
+
 ## [2.10.8] - 2026-07-25
 
 ### Added

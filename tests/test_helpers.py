@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
+from utils.config import MAX_LOG_FILE_BYTES
 from utils.helpers import (
     normalize_title, map_path, cleanup_old_logs, compute_profile_hash,
     get_project_root, migrate_legacy_cache_dir, no_window_kwargs,
@@ -287,6 +288,49 @@ class TestCleanupOldLogs:
 
             assert not os.path.exists(old_log)
             assert os.path.exists(new_log)
+
+    def test_truncates_oversized_append_only_log(self):
+        """An append-only log's mtime is refreshed on every write, so it
+        can never age past retention_days - proves the size-based cap
+        catches what the mtime check structurally cannot."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            huge_log = os.path.join(tmpdir, "daily-run.log")
+            with open(huge_log, 'wb') as f:
+                f.write(b"x" * (MAX_LOG_FILE_BYTES + 1))
+
+            # Freshly written - mtime is "now", nowhere near the
+            # retention_days cutoff.
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            assert os.path.exists(huge_log)
+            assert os.path.getsize(huge_log) == 0
+
+    def test_keeps_log_under_size_cap(self):
+        """A log under the cap is left alone by the size check (mtime
+        rules still apply as normal)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            small_log = os.path.join(tmpdir, "daily-run.log")
+            with open(small_log, 'wb') as f:
+                f.write(b"x" * 100)
+
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            assert os.path.exists(small_log)
+            assert os.path.getsize(small_log) == 100
+
+    @patch('utils.helpers.os.path.getsize')
+    def test_handles_size_check_error(self, mock_getsize):
+        """Errors while checking/truncating for size are handled
+        gracefully, matching the existing per-file error handling."""
+        mock_getsize.side_effect = OSError("stat failed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "test.log")
+            with open(log_path, 'w') as f:
+                f.write("log content")
+
+            # Should not raise
+            cleanup_old_logs(tmpdir, retention_days=7)
 
 
 class TestComputeProfileHash:

@@ -22,6 +22,7 @@ this long-lived Flask server process itself, so the stdout-hijacking/
 sys.exit() behavior above stays safe.
 """
 
+import logging
 import os
 import queue
 import signal
@@ -34,6 +35,8 @@ from typing import Dict, List, Optional
 from utils.helpers import no_window_kwargs
 
 from .security import redact
+
+logger = logging.getLogger('curatarr')
 
 ENGINES = ('full', 'movie', 'tv', 'external')
 
@@ -80,7 +83,7 @@ def _safe_queue_put(q: "queue.Queue", item) -> None:
         try:
             q.get_nowait()
         except queue.Empty:
-            pass
+            logger.debug("_safe_queue_put: queue was full but emptied itself under race - nothing to drop")
         try:
             q.put_nowait(item)
         except queue.Full:
@@ -218,8 +221,8 @@ class JobManager:
     def _remove_lock(self) -> None:
         try:
             os.remove(self._lock_path())
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug(f"_remove_lock: could not remove lockfile {self._lock_path()}: {exc}")
 
     def _foreign_run_in_progress(self) -> bool:
         """True if a lockfile left by a *different* process points at a
@@ -398,8 +401,8 @@ class JobManager:
             if log_file is not None:
                 try:
                     log_file.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Error closing job log file: {exc}")
             # Always reap the child, even on the failure path above -
             # otherwise a log-open failure (or any other exception
             # raised before Popen.wait() ran) leaves it a zombie.
@@ -431,6 +434,6 @@ class JobManager:
                 job.process.terminate()
             else:
                 os.killpg(os.getpgid(job.process.pid), signal.SIGTERM)
-        except (ProcessLookupError, OSError):
-            pass
+        except (ProcessLookupError, OSError) as exc:
+            logger.debug(f"Could not terminate job process {job.process.pid}: {exc}")
         self._remove_lock()

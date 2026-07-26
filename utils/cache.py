@@ -7,12 +7,34 @@ import os
 import json
 import copy
 import logging
+import tempfile
 from datetime import datetime
 from typing import Dict, Optional
 
 from .config import CACHE_VERSION, check_cache_version
 from .display import log_warning
 from .metrics import record_cache_lookup
+
+
+def _atomic_write_json(cache_path: str, data: Dict, **json_kwargs) -> None:
+    """Write-to-temp-then-os.replace() so a reader never sees a partially
+    written or truncated file - whether this process dies mid-write, or
+    two processes race on the same cache file (docker-compose runs a
+    `curatarr` and a `curatarr-recommend` service against the same
+    shared ./cache volume). Same pattern used by web/config_io.py's
+    config writer.
+    """
+    directory = os.path.dirname(cache_path) or '.'
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix='.tmp-', suffix='.json', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, **json_kwargs)
+        os.replace(tmp_path, cache_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 def save_json_cache(cache_path: str, data: Dict, cache_version: int = None) -> bool:
@@ -30,8 +52,7 @@ def save_json_cache(cache_path: str, data: Dict, cache_version: int = None) -> b
     try:
         if cache_version is not None:
             data['cache_version'] = cache_version
-        with open(cache_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+        _atomic_write_json(cache_path, data, indent=4, ensure_ascii=False)
         return True
     except Exception as e:
         logging.error(f"Error saving cache to {cache_path}: {e}")
@@ -106,8 +127,7 @@ def save_media_cache(cache_path: str, cache_data: Dict, media_key: str = 'movies
         True on success, False on failure
     """
     try:
-        with open(cache_path, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, indent=4, ensure_ascii=False)
+        _atomic_write_json(cache_path, cache_data, indent=4, ensure_ascii=False)
         return True
     except Exception as e:
         log_warning(f"Error saving {media_key} cache: {e}")
@@ -161,8 +181,7 @@ def save_watched_cache(
             'last_updated': datetime.now().isoformat()
         }
 
-        with open(cache_path, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, indent=4, ensure_ascii=False)
+        _atomic_write_json(cache_path, cache_data, indent=4, ensure_ascii=False)
 
         logging.debug(f"Saved watched cache: {watched_count} {media_type}s, {len(watched_ids)} IDs")
         return True

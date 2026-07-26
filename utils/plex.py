@@ -19,6 +19,7 @@ logger = logging.getLogger('curatarr')
 
 from plexapi.myplex import MyPlexAccount
 
+from .config import PLEX_REQUEST_TIMEOUT, PLEX_LONG_REQUEST_TIMEOUT
 from .display import GREEN, YELLOW, RED, RESET, log_warning, log_error
 from .helpers import normalize_title, read_response_capped
 from .metrics import record_api_call
@@ -132,7 +133,7 @@ def get_plex_account_ids(config: Dict, users_to_match: List[str]) -> List[str]:
             f"{config['plex']['url']}/accounts",
             headers={'X-Plex-Token': config['plex']['token']},
             verify=_resolve_verify_ssl(config),
-            timeout=30
+            timeout=PLEX_REQUEST_TIMEOUT
         )
         response.raise_for_status()
         root = ET.fromstring(response.content)
@@ -222,7 +223,7 @@ def get_watched_movie_count(config: Dict, users_to_check: List[str]) -> int:
                 url,
                 headers={'X-Plex-Token': config['plex']['token']},
                 verify=_resolve_verify_ssl(config),
-                timeout=30,
+                timeout=PLEX_REQUEST_TIMEOUT,
             )
             root = ET.fromstring(response.content)
 
@@ -262,7 +263,7 @@ def get_watched_show_count(config: Dict, users_to_check: List[str]) -> int:
                 url,
                 headers={'X-Plex-Token': config['plex']['token']},
                 verify=_resolve_verify_ssl(config),
-                timeout=30,
+                timeout=PLEX_REQUEST_TIMEOUT,
             )
             root = ET.fromstring(response.content)
 
@@ -328,7 +329,7 @@ def fetch_plex_watch_history_movies(config: Dict, account_ids: List[str], movies
                         params=params,
                         headers={'X-Plex-Token': token},
                         verify=_resolve_verify_ssl(config),
-                        timeout=30,
+                        timeout=PLEX_REQUEST_TIMEOUT,
                     )
                     response.raise_for_status()
 
@@ -405,7 +406,7 @@ def fetch_plex_watch_history_shows(
                 params=params,
                 headers={'X-Plex-Token': config['plex']['token']},
                 verify=_resolve_verify_ssl(config),
-                timeout=30,
+                timeout=PLEX_REQUEST_TIMEOUT,
             )
             response.raise_for_status()
 
@@ -479,11 +480,14 @@ def fetch_show_completion_data(
         }
 
         try:
+            # This history/all page can return up to 10000 items
+            # (X-Plex-Container-Size above) - larger than a typical Plex
+            # call, so it gets the longer of the two timeouts.
             response = _capped_get(
                 url, params=params,
                 headers={'X-Plex-Token': config['plex']['token']},
                 verify=_resolve_verify_ssl(config),
-                timeout=60
+                timeout=PLEX_LONG_REQUEST_TIMEOUT
             )
             response.raise_for_status()
             root = ET.fromstring(response.content)
@@ -611,7 +615,7 @@ def fetch_watch_history_with_tmdb(plex: Any, config: Dict, account_ids: List[str
                 params=params,
                 headers={'X-Plex-Token': config['plex']['token']},
                 verify=_resolve_verify_ssl(config),
-                timeout=30,
+                timeout=PLEX_REQUEST_TIMEOUT,
             )
             if response.status_code != 200:
                 continue
@@ -1188,7 +1192,7 @@ def apply_user_label_restrictions(
 
         # Fetch all users via direct API (works for both shared and managed users)
         users_url = "https://plex.tv/api/users"
-        response = _capped_get(users_url, headers={'X-Plex-Token': plex_token}, timeout=30)
+        response = _capped_get(users_url, headers={'X-Plex-Token': plex_token}, timeout=PLEX_REQUEST_TIMEOUT)
         response.raise_for_status()
 
         # Parse XML response to get user IDs and names
@@ -1265,7 +1269,7 @@ def apply_user_label_restrictions(
                     update_url,
                     params=params,
                     headers={'X-Plex-Token': plex_token},
-                    timeout=30,
+                    timeout=PLEX_REQUEST_TIMEOUT,
                 )
                 put_response.raise_for_status()
                 print(f"{GREEN}Applied exclusions for {username}: hiding labels {exclude_labels}{RESET}")
