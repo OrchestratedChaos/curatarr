@@ -66,6 +66,12 @@ All notable changes to Curatarr will be documented in this file.
 
 - Added `.venv/` to `.gitignore` (was untracked but not ignored).
 
+## [2.10.10] - 2026-07-25
+
+### Changed
+
+- **Added direct test coverage for Sequel Huntarr (`find_missing_sequels`) and Horizon Huntarr (`find_horizon_movies`) in `recommenders/external.py`** - both functions were previously only ever referenced via `@patch('recommenders.external.find_missing_sequels'/'find_horizon_movies')` in `tests/test_external.py`, so their real gap-finding, caching, and TV-special-reconciliation logic never actually ran under CI. Added 41 new tests that mock only the TMDB HTTP boundary (`requests.get`) and the Plex library/guid scan, so the real branching logic executes: library-access failure, empty library, cache hit vs. miss, missing/failed collection lookups, fully-owned and no-released-movies skip paths, unreleased-date heuristics, live `Canceled`/`Released` status overrides, sort order, cache-save shape, and Sequel Huntarr's TV-special reconciliation (TMDB-guid, normalized-title, grandparent-title-combo, and title-suffix matching, plus not-found/search-failure/section-failure paths). `recommenders/external.py` coverage: 55% -> 73% (both target functions individually now fully covered bar one apparently-unreachable defensive line). Surfaced but deliberately left unfixed (out of scope for this pass, flagged for follow-up): when Sequel Huntarr's shared cache exists but is partial (a movie was added to the library after Sequel Huntarr's last run), `find_horizon_movies`'s cache-reuse branch trusts `movie_collections` wholesale instead of diffing against it the way `find_missing_sequels` does, so a legitimately-owned movie's collection is silently never (re)checked for upcoming releases until Sequel Huntarr happens to run again.
+
 ## [2.10.8] - 2026-07-25
 
 ### Added

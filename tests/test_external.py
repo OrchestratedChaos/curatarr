@@ -3,7 +3,7 @@
 import pytest
 import requests
 from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import tempfile
 import json
@@ -36,6 +36,9 @@ from recommenders.external import (
     EXTERNAL_RECS_CACHE_VERSION,
     get_movie_genre_ids,
     TV_MOVIE_GENRE_ID,
+    TMDB_ANIMATION_GENRE_ID,
+    find_missing_sequels,
+    find_horizon_movies,
     is_thin_profile,
     discover_popular_by_genre,
     THIN_PROFILE_THRESHOLD,
@@ -1225,6 +1228,925 @@ class TestGetMovieStatus:
         status, release_date = get_movie_status('api_key', 12345)
         assert status == 'Unknown'
         assert release_date == ''
+
+
+# -- Shared helpers for TestFindMissingSequels / TestFindHorizonMovies -----
+# Both functions' only real I/O is requests.get (TMDB) and the Plex
+# library.section()/item.guids scan - everything else (gap detection,
+# caching, sorting, TV-special reconciliation) is real logic under test.
+
+def _tmdb_movie_detail_response(belongs_to_collection=None, status=None, release_date=None):
+    """Fake requests.Response for GET /movie/{id}. The same TMDB endpoint
+    backs both collection-membership discovery (belongs_to_collection) and
+    get_movie_status's live status re-check (status/release_date) - a
+    single response can carry whichever field(s) a given test needs since
+    each caller only reads its own field via .get()."""
+    data = {}
+    if belongs_to_collection is not None:
+        data['belongs_to_collection'] = belongs_to_collection
+    if status is not None:
+        data['status'] = status
+    if release_date is not None:
+        data['release_date'] = release_date
+    resp = Mock()
+    resp.status_code = 200
+    resp.json.return_value = data
+    return resp
+
+
+def _tmdb_collection_detail_response(collection_id, name, parts):
+    resp = Mock()
+    resp.status_code = 200
+    resp.json.return_value = {'id': collection_id, 'name': name, 'parts': parts}
+    return resp
+
+
+def _tmdb_providers_detail_response(streaming_ids=None, rent_ids=None, buy_ids=None):
+    resp = Mock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        'results': {
+            'US': {
+                'flatrate': [{'provider_id': pid} for pid in (streaming_ids or [])],
+                'rent': [{'provider_id': pid} for pid in (rent_ids or [])],
+                'buy': [{'provider_id': pid} for pid in (buy_ids or [])],
+            }
+        }
+    }
+    return resp
+
+
+def _tmdb_404_response():
+    resp = Mock()
+    resp.status_code = 404
+    return resp
+
+
+def _strict_get_dispatcher(url_map):
+    """requests.get side_effect that routes by exact URL. Raises loudly on
+    any URL not in url_map instead of silently returning a fabricated
+    MagicMock, so an unexpected (or missing) TMDB call fails the test
+    instead of making up data."""
+    def _fake_get(url, params=None, timeout=None):
+        if url not in url_map:
+            raise AssertionError(f'Unexpected TMDB URL requested by test: {url}')
+        return url_map[url]
+    return _fake_get
+
+
+def _guid_mock(tmdb_id):
+    guid = Mock()
+    guid.id = f'tmdb://{tmdb_id}'
+    return guid
+
+
+def _library_item(tmdb_id=None, malformed_guid=False):
+    """Fake plexapi library item. find_missing_sequels/find_horizon_movies
+    only ever read item.guids[*].id when scanning a library."""
+    item = Mock()
+    if malformed_guid:
+        item.guids = [Mock(id='tmdb://not-a-number')]
+    elif tmdb_id is None:
+        item.guids = []
+    else:
+        item.guids = [_guid_mock(tmdb_id)]
+    return item
+
+
+def _plex_with_libraries(movie_items, library_map=None, movie_library='Movies'):
+    """Fake PlexServer: plex.library.section(movie_library) returns a
+    section wrapping movie_items; any other library name is looked up in
+    library_map (e.g. Sequel Huntarr's TV-specials library)."""
+    movie_section = Mock()
+    movie_section.all.return_value = movie_items
+    sections = {movie_library: movie_section}
+    if library_map:
+        sections.update(library_map)
+
+    def _section(name):
+        if name in sections:
+            return sections[name]
+        raise Exception(f'no such test library configured: {name}')
+
+    plex = Mock()
+    plex.library.section.side_effect = _section
+    return plex
+
+
+# Dates relative to "now" so these tests never rot as the calendar moves on.
+_FUTURE_DATE = (datetime.now() + timedelta(days=3650)).strftime('%Y-%m-%d')
+_PAST_DATE = (datetime.now() - timedelta(days=3650)).strftime('%Y-%m-%d')
+
+
+class TestFindMissingSequels:
+    """Tests for find_missing_sequels ('Sequel Huntarr' discovery). Only
+    the TMDB HTTP boundary and the Plex library/guid scan are mocked - the
+    real gap-finding, caching, and TV-special reconciliation logic runs
+    for real."""
+
+    def setup_method(self):
+        from recommenders import external
+        external._watch_provider_cache.clear()
+
+    def test_library_access_failure_returns_empty_list(self, tmp_path):
+        plex = Mock()
+        plex.library.section.side_effect = Exception('plex unreachable')
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_empty_library_returns_empty_list_without_network_calls(self, tmp_path):
+        plex = _plex_with_libraries([])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_cache_hit_reuses_cached_missing_sequels_and_refilters_user_services(self, tmp_path):
+        import time
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
+        (cache_dir / 'huntarr_cache.json').write_text(json.dumps({
+            'version': HUNTARR_CACHE_VERSION,
+            'cached_at': time.time(),
+            'library_tmdb_ids': [1],
+            'movie_collections': {}, 'collection_details': {},
+            'missing_sequels': [
+                {'tmdb_id': 2, 'title': 'Sequel', 'streaming_services': ['netflix', 'hulu'],
+                 'on_user_services': []},
+            ],
+        }))
+        plex = _plex_with_libraries([_library_item(1)])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', ['netflix'])
+
+        mock_get.assert_not_called()
+        assert len(result) == 1
+        assert result[0]['on_user_services'] == ['netflix']
+
+    def test_movie_without_collection_membership_produces_no_gap(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert result == []
+
+    def test_finds_missing_sequel_with_streaming_and_genre_flags(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Test Collection', [
+                    {'id': 1, 'title': 'Part One', 'release_date': _PAST_DATE, 'genre_ids': [18]},
+                    {'id': 2, 'title': 'Part Two', 'release_date': _PAST_DATE,
+                     'genre_ids': [TMDB_ANIMATION_GENRE_ID, TV_MOVIE_GENRE_ID]},
+                ]),
+            'https://api.themoviedb.org/3/movie/2/watch/providers': _tmdb_providers_detail_response(
+                streaming_ids=[8, 337]),  # netflix, disney_plus
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', '', ['netflix'])
+
+        assert len(result) == 1
+        missing = result[0]
+        assert missing['tmdb_id'] == 2
+        assert missing['collection_name'] == 'Test Collection'
+        assert missing['owned_count'] == 1
+        assert missing['total_count'] == 2
+        assert 'netflix' in missing['streaming_services']
+        assert missing['on_user_services'] == ['netflix']
+        assert missing['is_tv_movie'] is True
+        assert missing['is_animated'] is True
+
+    def test_collection_fully_owned_produces_no_gap(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1), _library_item(2)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Full Collection', [
+                    {'id': 1, 'title': 'One', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Two', 'release_date': _PAST_DATE, 'genre_ids': []},
+                ]),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert result == []
+
+    def test_collection_with_no_released_movies_is_skipped(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Unreleased Collection', [
+                    {'id': 1, 'title': 'One', 'release_date': '', 'genre_ids': []},
+                    {'id': 2, 'title': 'Two', 'release_date': '', 'genre_ids': []},
+                ]),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)) as mock_get:
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert result == []
+        assert mock_get.call_count == 2  # movie/1 lookup + collection/100 - never reaches watch/providers
+
+    def test_collection_detail_fetch_failure_is_skipped(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_404_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert result == []
+
+    def test_uses_cached_movie_collection_mapping_and_collection_details(self, tmp_path):
+        import time
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
+        (cache_dir / 'huntarr_cache.json').write_text(json.dumps({
+            'version': HUNTARR_CACHE_VERSION,
+            'cached_at': time.time(),
+            # Deliberately mismatched vs. current library so this exercises
+            # the "rebuild, but reuse movie_collections/collection_details"
+            # path rather than the top-level cache-hit shortcut.
+            'library_tmdb_ids': [],
+            'movie_collections': {'1': 100},
+            'collection_details': {
+                '100': {
+                    'collection_id': 100,
+                    'collection_name': 'Cached Collection',
+                    'movies': [
+                        {'tmdb_id': 1, 'title': 'One', 'year': '2020',
+                         'release_date': _PAST_DATE, 'genre_ids': []},
+                        {'tmdb_id': 2, 'title': 'Two', 'year': '2021',
+                         'release_date': _PAST_DATE, 'genre_ids': []},
+                    ],
+                },
+            },
+            'missing_sequels': [],
+        }))
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/2/watch/providers': _tmdb_providers_detail_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)) as mock_get:
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+        # Neither movie/1's collection id nor collection/100's details were
+        # re-fetched - both came straight from the cache.
+        assert mock_get.call_count == 1
+
+    def test_collection_id_lookup_handles_non_200_and_request_exception(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1), _library_item(2)])
+
+        def _fake_get(url, params=None, timeout=None):
+            if url == 'https://api.themoviedb.org/3/movie/1':
+                resp = Mock()
+                resp.status_code = 500
+                return resp
+            if url == 'https://api.themoviedb.org/3/movie/2':
+                raise requests.RequestException('network blip')
+            raise AssertionError(f'unexpected url {url}')
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_fake_get):
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert result == []
+
+    def test_items_with_malformed_or_missing_tmdb_guid_are_ignored(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(malformed_guid=True), _library_item(tmdb_id=None)])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_saves_cache_with_expected_shape_after_fresh_scan(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Saved Collection', [
+                    {'id': 1, 'title': 'One', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Two', 'release_date': _PAST_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/2/watch/providers': _tmdb_providers_detail_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            find_missing_sequels('key', plex, 'Movies', '', [])
+
+        saved = json.loads((tmp_path / 'cache' / 'huntarr_cache.json').read_text())
+        assert saved['version'] == HUNTARR_CACHE_VERSION
+        assert saved['library_tmdb_ids'] == [1]
+        assert saved['movie_collections']['1'] == 100
+        assert '100' in saved['collection_details']
+        assert saved['missing_sequels'][0]['tmdb_id'] == 2
+
+    def test_sorts_missing_sequels_by_collection_name_then_release_date(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1), _library_item(3)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/movie/3': _tmdb_movie_detail_response(belongs_to_collection={'id': 200}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Beta Collection', [
+                    {'id': 1, 'title': 'B1', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'B2', 'release_date': _PAST_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/collection/200': _tmdb_collection_detail_response(
+                200, 'Alpha Collection', [
+                    {'id': 3, 'title': 'A1', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 4, 'title': 'A2', 'release_date': _PAST_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/2/watch/providers': _tmdb_providers_detail_response(),
+            'https://api.themoviedb.org/3/movie/4/watch/providers': _tmdb_providers_detail_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert [m['collection_name'] for m in result] == ['Alpha Collection', 'Beta Collection']
+
+    # -- TV special (specials-stored-as-episodes) reconciliation --------
+
+    def _tv_special_setup(self, tv_search_results):
+        """One owned regular movie + one missing TV-special (genre 10770)
+        in the same collection; tv_search_results is returned for every
+        Plex TV-library search() call."""
+        tv_section = Mock()
+        tv_section.search.return_value = tv_search_results
+        plex = _plex_with_libraries([_library_item(1)], library_map={'TV Shows': tv_section})
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Special Collection', [
+                    {'id': 1, 'title': 'Owned Movie', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Holiday Special', 'release_date': _PAST_DATE,
+                     'genre_ids': [TV_MOVIE_GENRE_ID]},
+                ]),
+            'https://api.themoviedb.org/3/movie/2/watch/providers': _tmdb_providers_detail_response(),
+        }
+        return plex, url_map, tv_section
+
+    def test_tv_special_removed_when_matched_by_tmdb_guid(self, tmp_path):
+        episode = Mock()
+        episode.guids = [Mock(id='tmdb://2')]
+        episode.title = 'Something Else Entirely'
+        plex, url_map, tv_section = self._tv_special_setup([episode])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert result == []
+        tv_section.search.assert_called()
+
+    def test_tv_special_removed_when_matched_by_normalized_title(self, tmp_path):
+        episode = Mock(spec=['guids', 'title'])
+        episode.guids = []
+        episode.title = 'Holiday Special!'
+        plex, url_map, _ = self._tv_special_setup([episode])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert result == []
+
+    def test_tv_special_removed_when_matched_by_grandparent_title_combo(self, tmp_path):
+        episode = Mock()
+        episode.guids = []
+        episode.title = 'Mission Marvel'
+        episode.grandparentTitle = 'Phineas And Ferb'
+        plex, url_map, _ = self._tv_special_setup([episode])
+        # This match is on the combined "show + episode" name, so give the
+        # collection's TV special that combined title.
+        url_map['https://api.themoviedb.org/3/collection/100'] = _tmdb_collection_detail_response(
+            100, 'Special Collection', [
+                {'id': 1, 'title': 'Owned Movie', 'release_date': _PAST_DATE, 'genre_ids': []},
+                {'id': 2, 'title': 'Phineas And Ferb Mission Marvel', 'release_date': _PAST_DATE,
+                 'genre_ids': [TV_MOVIE_GENRE_ID]},
+            ])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert result == []
+
+    def test_tv_special_removed_when_episode_title_is_suffix_of_movie_title(self, tmp_path):
+        episode = Mock()
+        episode.guids = []
+        episode.title = 'Holiday Special'
+        episode.grandparentTitle = 'Some Other Show'
+        plex, url_map, _ = self._tv_special_setup([episode])
+        url_map['https://api.themoviedb.org/3/collection/100'] = _tmdb_collection_detail_response(
+            100, 'Special Collection', [
+                {'id': 1, 'title': 'Owned Movie', 'release_date': _PAST_DATE, 'genre_ids': []},
+                {'id': 2, 'title': 'The Great Holiday Special', 'release_date': _PAST_DATE,
+                 'genre_ids': [TV_MOVIE_GENRE_ID]},
+            ])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert result == []
+
+    def test_tv_special_not_found_in_tv_library_remains_in_results(self, tmp_path):
+        episode = Mock()
+        episode.guids = []
+        episode.title = 'Totally Unrelated'
+        episode.grandparentTitle = 'Another Show'
+        plex, url_map, _ = self._tv_special_setup([episode])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+
+    def test_tv_episode_with_malformed_tmdb_guid_is_ignored(self, tmp_path):
+        episode = Mock()
+        episode.guids = [Mock(id='tmdb://not-a-number')]
+        episode.title = 'Totally Unrelated'
+        episode.grandparentTitle = 'Another Show'
+        plex, url_map, _ = self._tv_special_setup([episode])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+
+    def test_tv_library_search_exception_is_swallowed_movie_remains(self, tmp_path):
+        plex, url_map, tv_section = self._tv_special_setup([])
+        tv_section.search.side_effect = Exception('search backend down')
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+
+    def test_tv_library_section_access_failure_logs_warning_and_keeps_movie(self, tmp_path):
+        movie_section = Mock()
+        movie_section.all.return_value = [_library_item(1)]
+        plex = Mock()
+
+        def _section(name):
+            if name == 'TV Shows':
+                raise Exception('no such library')
+            return movie_section
+        plex.library.section.side_effect = _section
+
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Special Collection', [
+                    {'id': 1, 'title': 'Owned Movie', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Holiday Special', 'release_date': _PAST_DATE,
+                     'genre_ids': [TV_MOVIE_GENRE_ID]},
+                ]),
+            'https://api.themoviedb.org/3/movie/2/watch/providers': _tmdb_providers_detail_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', 'TV Shows', [])
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+
+    def test_empty_tv_library_name_skips_tv_reconciliation_entirely(self, tmp_path):
+        plex, url_map, _ = self._tv_special_setup([])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_missing_sequels('key', plex, 'Movies', '', [])
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+        plex.library.section.assert_called_once_with('Movies')
+
+
+class TestFindHorizonMovies:
+    """Tests for find_horizon_movies ('Horizon Huntarr' discovery). Only
+    the TMDB HTTP boundary and the Plex library/guid scan are mocked - the
+    real unreleased-movie detection, status re-check, and cache-reuse
+    logic runs for real."""
+
+    def test_library_access_failure_returns_empty_list(self, tmp_path):
+        plex = Mock()
+        plex.library.section.side_effect = Exception('plex unreachable')
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_empty_library_returns_empty_list_without_network_calls(self, tmp_path):
+        plex = _plex_with_libraries([])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_cache_hit_returns_cached_horizon_movies_without_recompute(self, tmp_path):
+        import time
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
+        (cache_dir / 'horizon_huntarr_cache.json').write_text(json.dumps({
+            'version': HORIZON_HUNTARR_CACHE_VERSION,
+            'cached_at': time.time(),
+            'library_tmdb_ids': [1],
+            'horizon_movies': [{'tmdb_id': 2, 'title': 'Cached Upcoming', 'status': 'Planned'}],
+        }))
+        plex = _plex_with_libraries([_library_item(1)])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        mock_get.assert_not_called()
+        assert result == [{'tmdb_id': 2, 'title': 'Cached Upcoming', 'status': 'Planned'}]
+
+    def test_builds_collection_data_fresh_when_no_sequel_cache(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Fresh Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Upcoming', 'release_date': _FUTURE_DATE, 'genre_ids': [12]},
+                ]),
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(
+                status='In Production', release_date=_FUTURE_DATE),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+        assert result[0]['status'] == 'In Production'
+        assert result[0]['release_date'] == _FUTURE_DATE
+        assert result[0]['genre_ids'] == [12]
+
+    def test_movie_without_collection_membership_produces_no_horizon_movies(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+
+    def test_items_with_malformed_or_missing_tmdb_guid_are_ignored(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(malformed_guid=True), _library_item(tmdb_id=None)])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_collection_detail_fetch_failure_is_skipped(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_404_response(),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+
+    def test_duplicate_library_items_reuse_movie_collections_entry_mid_scan(self, tmp_path):
+        """Two Plex items resolving to the same tmdb_id (e.g. a duplicate
+        library entry) - the second one must reuse the movie_collections
+        entry the first one just populated rather than re-fetching it."""
+        plex = _plex_with_libraries([_library_item(1), _library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Duplicate Item Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                ]),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)) as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+        assert mock_get.call_count == 2  # movie/1 id lookup once + collection/100 once
+
+    def test_collection_id_lookup_handles_non_200_and_request_exception(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1), _library_item(2)])
+
+        def _fake_get(url, params=None, timeout=None):
+            if url == 'https://api.themoviedb.org/3/movie/1':
+                resp = Mock()
+                resp.status_code = 500
+                return resp
+            if url == 'https://api.themoviedb.org/3/movie/2':
+                raise requests.RequestException('network blip')
+            raise AssertionError(f'unexpected url {url}')
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_fake_get):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+
+    def test_reuses_sequel_cache_mapping_skips_id_and_detail_lookups(self, tmp_path):
+        import time
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
+        (cache_dir / 'huntarr_cache.json').write_text(json.dumps({
+            'version': HUNTARR_CACHE_VERSION,
+            'cached_at': time.time(),
+            'movie_collections': {'1': 100},
+            'collection_details': {
+                '100': {
+                    'collection_id': 100,
+                    'collection_name': 'Reused Collection',
+                    'movies': [
+                        {'tmdb_id': 1, 'title': 'Owned', 'year': '2020',
+                         'release_date': _PAST_DATE, 'genre_ids': []},
+                        {'tmdb_id': 2, 'title': 'Upcoming', 'year': '', 'release_date': '', 'genre_ids': []},
+                    ],
+                },
+            },
+            'missing_sequels': [],
+        }))
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(status='Planned'),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)) as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert len(result) == 1
+        assert result[0]['tmdb_id'] == 2
+        assert result[0]['status'] == 'Planned'
+        assert result[0]['collection_name'] == 'Reused Collection'
+        # Only the live status re-check happened - collection membership
+        # and collection details both came from the sequel cache.
+        assert mock_get.call_count == 1
+
+    def test_owned_movies_are_never_candidates_even_with_future_release_date(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1), _library_item(3)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/movie/3': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Owned Collection', [
+                    {'id': 1, 'title': 'One', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 3, 'title': 'Three', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+
+    def test_past_release_date_is_treated_as_released_no_status_call(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Past Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Already Out', 'release_date': _PAST_DATE, 'genre_ids': []},
+                ]),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)) as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+        assert mock_get.call_count == 2  # movie/1 id lookup + collection/100 only
+
+    def test_future_release_date_but_live_status_released_is_skipped(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Stale Date Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Actually Out Already', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(
+                status='Released', release_date=_PAST_DATE),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+
+    def test_canceled_status_is_skipped(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Canceled Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Never Happening', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(status='Canceled'),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+
+    def test_in_production_status_included_with_tba_fallback_for_missing_release_date(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'In Production Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Coming Soon', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(status='In Production'),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert len(result) == 1
+        assert result[0]['status'] == 'In Production'
+        assert result[0]['release_date'] == 'TBA'
+
+    def test_sorts_by_collection_name_before_status_priority(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1), _library_item(3)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/movie/3': _tmdb_movie_detail_response(belongs_to_collection={'id': 200}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Beta Collection', [
+                    {'id': 1, 'title': 'Owned B', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Beta Upcoming', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/collection/200': _tmdb_collection_detail_response(
+                200, 'Alpha Collection', [
+                    {'id': 3, 'title': 'Owned A', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 4, 'title': 'Alpha Upcoming', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            # Beta's candidate has a higher-priority status than Alpha's,
+            # but collection name must still win the sort.
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(status='Post Production'),
+            'https://api.themoviedb.org/3/movie/4': _tmdb_movie_detail_response(status='Rumored'),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert [m['collection_name'] for m in result] == ['Alpha Collection', 'Beta Collection']
+
+    def test_sorts_by_status_priority_within_same_collection(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Mixed Status Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Rumored One', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                    {'id': 3, 'title': 'Post Production One', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                    {'id': 4, 'title': 'Planned One', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(status='Rumored'),
+            'https://api.themoviedb.org/3/movie/3': _tmdb_movie_detail_response(status='Post Production'),
+            'https://api.themoviedb.org/3/movie/4': _tmdb_movie_detail_response(status='Planned'),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert [m['status'] for m in result] == ['Post Production', 'Planned', 'Rumored']
+
+    def test_saves_cache_with_expected_shape_after_fresh_scan(self, tmp_path):
+        plex = _plex_with_libraries([_library_item(1)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/1': _tmdb_movie_detail_response(belongs_to_collection={'id': 100}),
+            'https://api.themoviedb.org/3/collection/100': _tmdb_collection_detail_response(
+                100, 'Saved Horizon Collection', [
+                    {'id': 1, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 2, 'title': 'Upcoming', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/2': _tmdb_movie_detail_response(status='Planned'),
+        }
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
+            find_horizon_movies('key', plex, 'Movies')
+
+        saved = json.loads((tmp_path / 'cache' / 'horizon_huntarr_cache.json').read_text())
+        assert saved['version'] == HORIZON_HUNTARR_CACHE_VERSION
+        assert saved['library_tmdb_ids'] == [1]
+        assert saved['horizon_movies'][0]['tmdb_id'] == 2
+
+    def test_stale_partial_sequel_cache_silently_misses_newly_owned_movie_collection(self, tmp_path):
+        """Documents surprising behavior found while writing this coverage
+        (NOT fixed here - recommenders/external.py is out of scope for
+        this change). When the Sequel Huntarr cache exists but is PARTIAL
+        (e.g. the user added a new movie to Plex after Sequel Huntarr's
+        last run, so its tmdb_id was never recorded in movie_collections),
+        find_horizon_movies's cache-reuse branch trusts movie_collections
+        wholesale and never attempts to discover the new movie's
+        collection - unlike find_missing_sequels, which diffs against
+        movie_collections and fetches only the still-uncached ids. Net
+        effect: a legitimately-owned movie's upcoming sequel is silently
+        never surfaced, with zero network calls even attempted, until
+        Sequel Huntarr happens to run again and refresh the shared
+        cache."""
+        import time
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
+        (cache_dir / 'huntarr_cache.json').write_text(json.dumps({
+            'version': HUNTARR_CACHE_VERSION,
+            'cached_at': time.time(),
+            # Non-empty, but describes a movie/collection unrelated to (and
+            # no longer even owned by) the current library - simulating a
+            # cache populated before movie tmdb_id=5 was ever added to Plex.
+            'movie_collections': {'999': 500},
+            'collection_details': {},
+            'missing_sequels': [],
+        }))
+        # The real, current Plex library owns tmdb_id=5, which does belong
+        # to a collection with a genuine upcoming sequel - but the code
+        # never finds out, because 5 isn't a key in movie_collections.
+        plex = _plex_with_libraries([_library_item(5)])
+
+        with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
+             patch('recommenders.external.requests.get') as mock_get:
+            result = find_horizon_movies('key', plex, 'Movies')
+
+        assert result == []
+        mock_get.assert_not_called()
 
 
 class TestCategorizeByStreamingServiceAllItems:
