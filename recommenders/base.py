@@ -25,7 +25,16 @@ from plexapi.myplex import MyPlexAccount
 from utils import (
     CACHE_VERSION,
     CYAN,
+    DEFAULT_NEGATIVE_THRESHOLD,
     GREEN,
+    RATING_MULTIPLIER_2_STAR,
+    RATING_MULTIPLIER_3_STAR,
+    RATING_MULTIPLIER_4_STAR,
+    RATING_MULTIPLIER_5_STAR,
+    RATING_MULTIPLIER_UNRATED,
+    RATING_TIER_3_STAR,
+    RATING_TIER_4_STAR,
+    RATING_TIER_5_STAR,
     RED,
     RESET,
     TIER_DIVERSE_PERCENT,
@@ -50,6 +59,7 @@ from utils import (
     get_libraries_for_media_type,
     get_library_imdb_ids,
     get_max_rating_for_user,
+    get_negative_multiplier,
     get_project_root,
     get_tmdb_config,
     get_tmdb_id_for_item,
@@ -61,6 +71,7 @@ from utils import (
     log_error,
     log_warning,
     migrate_legacy_cache_dir,
+    print_similarity_breakdown,
     process_counters_from_cache,
     remove_labels_from_items,
     save_media_cache,
@@ -491,6 +502,45 @@ class BaseRecommender(ABC):
             Dict of weight names to values
         """
         pass
+
+    def _calculate_rating_multiplier(self, user_rating):
+        """Calculate rating multiplier based on user's star rating (0-10 scale in Plex)
+
+        With negative signals enabled, low ratings (0-3) return negative multipliers
+        to penalize similar content instead of weakly preferring it.
+
+        Rating scale (negative signals enabled):
+        - 9-10 (5 stars): 1.0x weight - love it, strong preference
+        - 7-8 (4 stars): 0.75x weight - like it, moderate preference
+        - 5-6 (3 stars): 0.5x weight - neutral, weak preference
+        - 4 (2 stars): 0.25x weight - dislike, very weak preference
+        - 0-3 (1-1.5 stars): NEGATIVE weight - hate it, penalize similar content
+        - None/0 (unrated): 0.6x weight - default, slightly lower than neutral
+        """
+        if not user_rating or user_rating == 0:
+            return RATING_MULTIPLIER_UNRATED
+
+        rating_int = int(round(user_rating))
+
+        # Check if negative signals are enabled
+        ns_config = self.config.get("negative_signals", {})
+        bad_ratings_config = ns_config.get("bad_ratings", {})
+        ns_enabled = ns_config.get("enabled", True) and bad_ratings_config.get("enabled", True)
+        threshold = bad_ratings_config.get("threshold", DEFAULT_NEGATIVE_THRESHOLD)
+
+        # Return negative multiplier for low ratings if enabled
+        if ns_enabled and rating_int <= threshold:
+            return get_negative_multiplier(rating_int)
+
+        # Positive multipliers for higher ratings
+        if user_rating >= RATING_TIER_5_STAR:
+            return RATING_MULTIPLIER_5_STAR
+        elif user_rating >= RATING_TIER_4_STAR:
+            return RATING_MULTIPLIER_4_STAR
+        elif user_rating >= RATING_TIER_3_STAR:
+            return RATING_MULTIPLIER_3_STAR
+        else:
+            return RATING_MULTIPLIER_2_STAR
 
     def _cache_library_prefix(self) -> str:
         """
@@ -1163,10 +1213,15 @@ class BaseRecommender(ABC):
         """Calculate similarity score for an item."""
         pass
 
-    @abstractmethod
     def _print_similarity_breakdown(self, item_info: Dict, score: float, breakdown: Dict):
-        """Print detailed breakdown of similarity score."""
-        pass
+        """Print detailed breakdown of similarity score calculation.
+
+        Concrete for both media types (movie.py/tv.py previously
+        duplicated this, differing only in the media_type literal
+        passed through to the shared print_similarity_breakdown
+        formatter - self.media_type already carries that).
+        """
+        print_similarity_breakdown(item_info, score, breakdown, self.media_type)
 
     @abstractmethod
     def _get_watched_data(self) -> Dict:
@@ -1200,6 +1255,14 @@ class BaseRecommender(ABC):
         Must be implemented by subclasses.
         """
         pass
+
+    def _save_cache(self):
+        """Save the recommender's caches. Concrete for both media types
+        (movie.py/tv.py previously duplicated this identical one-line
+        body) - just delegates to the abstract _save_watched_cache
+        subclasses must already implement.
+        """
+        self._save_watched_cache()
 
     def _enhance_profile_with_trakt(self):
         """

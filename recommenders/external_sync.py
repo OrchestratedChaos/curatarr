@@ -65,6 +65,28 @@ def flatten_categorized(categorized: Dict) -> List[Dict]:
     return items
 
 
+def collect_tmdb_ids(categorized: Dict) -> List[int]:
+    """Extract TMDB IDs from categorized items, deduplicated in
+    first-seen order.
+
+    Handles both category shapes used across export_to_mdblist and
+    export_to_simkl: dict-of-lists (user_services/other_services, keyed
+    by streaming service) and flat lists (acquire).
+    """
+    tmdb_ids = []
+    for category_items in categorized.values():
+        if isinstance(category_items, dict):
+            for items in category_items.values():
+                for item in items:
+                    if item.get("tmdb_id"):
+                        tmdb_ids.append(item["tmdb_id"])
+        elif isinstance(category_items, list):
+            for item in category_items:
+                if item.get("tmdb_id"):
+                    tmdb_ids.append(item["tmdb_id"])
+    return list(dict.fromkeys(tmdb_ids))
+
+
 def get_imdb_id(tmdb_api_key: str, tmdb_id: int, media_type: str = "movie") -> Optional[str]:
     """Fetch IMDB ID from TMDB external IDs endpoint."""
     try:
@@ -880,21 +902,6 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
     else:
         users_to_export = all_users_data
 
-    # Helper to collect TMDB IDs from categorized data
-    def collect_tmdb_ids(categorized):
-        tmdb_ids = []
-        for category_items in categorized.values():
-            if isinstance(category_items, dict):
-                for items in category_items.values():
-                    for item in items:
-                        if item.get("tmdb_id"):
-                            tmdb_ids.append(item["tmdb_id"])
-            elif isinstance(category_items, list):
-                for item in category_items:
-                    if item.get("tmdb_id"):
-                        tmdb_ids.append(item["tmdb_id"])
-        return list(dict.fromkeys(tmdb_ids))
-
     # Handle combined mode
     if user_mode == "combined":
         all_movie_tmdb_ids = []
@@ -1026,22 +1033,6 @@ def export_to_simkl(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
             return
     else:
         users_to_export = all_users_data
-
-    # Collect TMDB IDs from categorized data
-    def collect_tmdb_ids(categorized):
-        """Extract TMDB IDs from categorized items."""
-        tmdb_ids = []
-        for category_items in categorized.values():
-            if isinstance(category_items, dict):
-                for items in category_items.values():
-                    for item in items:
-                        if item.get("tmdb_id"):
-                            tmdb_ids.append(item["tmdb_id"])
-            elif isinstance(category_items, list):
-                for item in category_items:
-                    if item.get("tmdb_id"):
-                        tmdb_ids.append(item["tmdb_id"])
-        return list(dict.fromkeys(tmdb_ids))
 
     # Collect all recommendations
     all_movie_tmdb_ids = []

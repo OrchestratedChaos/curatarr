@@ -4,12 +4,12 @@ Generates markdown watchlists and combined HTML views.
 """
 
 import html
-import json
 import os
 from datetime import datetime
 from typing import Dict, List
 from urllib.parse import quote_plus
 
+from utils.cache import load_json_cache, save_json_cache
 from utils.config import TMDB_ANIMATION_GENRE_ID
 
 
@@ -31,23 +31,12 @@ def _esc(value) -> str:
 
 def _load_imdb_cache(cache_path: str) -> Dict[str, str]:
     """Load IMDB ID cache from disk. IDs are permanent so no staleness check."""
-    try:
-        if os.path.exists(cache_path):
-            with open(cache_path, "r") as f:
-                return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        pass
-    return {}
+    return load_json_cache(cache_path) or {}
 
 
 def _save_imdb_cache(cache_path: str, cache: Dict[str, str]) -> None:
     """Save IMDB ID cache to disk."""
-    try:
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, "w") as f:
-            json.dump(cache, f)
-    except IOError:
-        pass
+    save_json_cache(cache_path, cache)
 
 
 # ANSI color codes
