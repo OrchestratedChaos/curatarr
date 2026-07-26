@@ -1412,6 +1412,57 @@ class TestDownloadAndVerifyUpdate:
         leftovers = [p for p in os.listdir(str(tmp_path)) if p.endswith(".tmp")]
         assert leftovers == []
 
+    def test_asset_404_raises_download_error_and_leaves_everything_untouched(self, tmp_path, monkeypatch):
+        """Models discussion #207's real-world case directly: a release
+        that genuinely exists (SHA256SUMS.txt/.sig download fine) but
+        the specific platform asset an older binary still requests was
+        dropped from it (e.g. the retired 'curatarr-macos-universal'
+        name - see utils/self_update.py's ASSET_MACOS_ARM64 comment) -
+        so its own download 404s. Deliberately does NOT monkeypatch
+        `_download_to_file` away (unlike every other test in this
+        class) - it patches `requests.get` instead, so this exercises
+        the REAL `_download_to_file` implementation and proves the
+        failure propagates all the way through
+        download_and_verify_update() exactly the way a genuine HTTPS
+        404 would, not just via a stand-in raising DownloadError
+        directly. See TestDownloadToFile::test_http_error_status_raises_download_error
+        for the lower-level version of this same check in isolation."""
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        current_exe = tmp_path / "curatarr"
+        current_exe.write_bytes(b"old binary")
+
+        monkeypatch.setattr(self_update, "current_binary_path", lambda: str(current_exe))
+        monkeypatch.setattr(self_update, "determine_update_target", lambda force_refresh=True: "2.9.0")
+        monkeypatch.setattr(self_update, "select_asset_name", lambda: "curatarr-macos-universal")
+
+        def _fake_get(url, timeout=None, stream=None):
+            mock_response = Mock()
+            mock_response.__enter__ = Mock(return_value=mock_response)
+            mock_response.__exit__ = Mock(return_value=False)
+            if url.endswith("curatarr-macos-universal"):
+                # The dropped asset itself: a real GitHub 404.
+                mock_response.raise_for_status = Mock(
+                    side_effect=requests.HTTPError(f"404 Client Error: Not Found for url: {url}")
+                )
+            else:
+                # SHA256SUMS.txt / .sig: the release itself is real and
+                # serves those just fine - only the requested asset is
+                # gone.
+                mock_response.raise_for_status = Mock()
+                mock_response.iter_content = Mock(return_value=[b"irrelevant - never reached"])
+            return mock_response
+
+        monkeypatch.setattr(self_update.requests, "get", Mock(side_effect=_fake_get))
+
+        with pytest.raises(self_update.DownloadError, match="404"):
+            self_update.download_and_verify_update()
+
+        # Fail-closed: original binary on disk is completely untouched.
+        assert current_exe.read_bytes() == b"old binary"
+        # No stray temp asset file left behind in the install directory.
+        leftovers = [p for p in os.listdir(str(tmp_path)) if p.endswith(".tmp")]
+        assert leftovers == []
+
     def test_no_update_available_never_downloads_anything(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "frozen", True, raising=False)
         current_exe = tmp_path / "curatarr"

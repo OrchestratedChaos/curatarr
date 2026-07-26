@@ -12,7 +12,7 @@ escape handling at all, and shlex.quote() below makes the values this
 script prints safe to eval regardless of what characters a path
 contains.
 
-Usage: python print_manifest_env.py <bad_sig|bad_hash|rollback>
+Usage: python print_manifest_env.py <bad_sig|bad_hash|rollback|missing_asset>
 """
 
 import json

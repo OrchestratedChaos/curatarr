@@ -18,6 +18,14 @@ Scenarios:
               "broken" binary) - expect the hand-off script's own
               fail-safe to detect that, restore the old binary, and
               relaunch it successfully.
+  missing_asset - the release itself is real (SHA256SUMS.txt/.sig
+              download fine) but the specific platform asset filename
+              this binary requests was never published to it (models
+              discussion #207: an old binary still requesting a
+              filename - e.g. the retired 'curatarr-macos-universal' -
+              that a later release dropped) - expect a 404 on the
+              asset download itself, refused before signature/hash
+              verification ever runs, old binary/version unchanged.
 
 Prints clear PASS/FAIL evidence; exits 1 on any unexpected outcome or
 timeout (a stuck/hung process must fail the CI job, never hang it
@@ -152,7 +160,7 @@ def kill_by_install_dir(install_dir):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--scenario", required=True, choices=["swap", "bad_sig", "bad_hash", "rollback"])
+    p.add_argument("--scenario", required=True, choices=["swap", "bad_sig", "bad_hash", "rollback", "missing_asset"])
     p.add_argument("--old-binary", required=True)
     p.add_argument("--release-dir", required=True)
     p.add_argument("--old-version", required=True)
@@ -274,14 +282,25 @@ def main():
                 flush=True,
             )
 
-        elif args.scenario in ("bad_sig", "bad_hash"):
+        elif args.scenario in ("bad_sig", "bad_hash", "missing_asset"):
             time.sleep(20)
             data = http_get_json(f"http://127.0.0.1:{args.ui_port}/healthz", timeout=3)
             assert data.get("version") == args.old_version, f"expected version to stay {args.old_version}, got {data}"
             final_hash = sha256_file(exe_path)
             assert final_hash == original_hash, "binary hash CHANGED - a bad update was applied!"
             log = read_update_log()
+            # web/update_apply.py's _run_frozen_verify_and_handoff wraps
+            # download_and_verify_update() in a single blanket `except
+            # Exception` and always logs this exact line regardless of
+            # WHICH *Error subclass it caught (SignatureVerificationError
+            # for bad_sig, HashMismatchError for bad_hash, DownloadError
+            # for missing_asset's 404) - same assertion covers all three.
             assert "verify failed" in log, f"update_apply.log does not show a verify failure: {log!r}"
+            # No stray temp download artifact left behind in the install
+            # directory (utils.self_update._download_and_verify_update_impl
+            # cleans up its own partial download on any failure).
+            leftover_temp_files = [n for n in os.listdir(install_dir) if ".curatarr-update-" in n]
+            assert leftover_temp_files == [], f"leftover temp download artifact(s): {leftover_temp_files}"
             print(
                 f"[{args.scenario}] PASS: update refused, binary hash unchanged "
                 f"({final_hash[:12]}), still serving v{args.old_version}",

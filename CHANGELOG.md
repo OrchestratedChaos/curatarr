@@ -2,6 +2,41 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.22] - 2026-07-26
+
+### Added
+
+- **Self-update E2E: `missing_asset` scenario.** The real end-to-end
+  self-update harness (`scripts/selfupdate_e2e/`) had no coverage for
+  "the requested release asset doesn't exist" (a 404 on the platform
+  asset download) - the exact situation discussion #207 describes for
+  pre-2.10.0 macOS binaries once the transitional
+  `curatarr-macos-universal` duplicate is dropped from newer releases.
+  Added a `missing_asset` scenario: a fixture release directory whose
+  `SHA256SUMS.txt`/`.sig` are present and correctly signed (the
+  release itself is real) but never lists or ships the requested
+  platform asset filename, so the fake release server's existing
+  "file not on disk -> 404" path fires exactly as a real GitHub
+  release missing that one asset would. Asserts the update is refused
+  before signature/hash verification ever runs, the running binary's
+  SHA256 is byte-for-byte unchanged, no temp download artifact is left
+  behind, and `update_apply.log` shows the same `verify failed` refusal
+  line already asserted for `bad_sig`/`bad_hash`. Wired into
+  `.github/workflows/selfupdate-e2e.yml` alongside the four existing
+  scenarios. Also added a unit-level integration test in
+  `tests/test_self_update.py` (`TestDownloadAndVerifyUpdate`) covering
+  a 404 through the full `download_and_verify_update()` path - the
+  existing 404 coverage
+  (`TestDownloadToFile::test_http_error_status_raises_download_error`)
+  only exercised the low-level `_download_to_file` helper in isolation.
+
+  Verified this scenario has teeth: temporarily patching
+  `download_and_verify_update` to swap the binary in before
+  verification (bypassing the fail-closed download-error path)
+  reliably fails the scenario's own hash-unchanged assertion - not
+  just the E2E job, but a targeted local check of the same assertion
+  path.
+
 ## [2.10.21] - 2026-07-26
 
 ### Changed

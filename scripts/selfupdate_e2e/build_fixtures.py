@@ -2,11 +2,14 @@
 (.github/workflows/selfupdate-e2e.yml) needs: two real PyInstaller
 binaries (the current version, "old", and a synthetic higher version,
 "new"), a non-functional "broken" placeholder asset for the
-new-binary-fails-to-boot rollback scenario, and four signed release
-fixture directories (good / bad_hash / bad_sig / rollback) - each a
-SHA256SUMS.txt + SHA256SUMS.txt.sig pair plus the asset they describe,
-exactly what utils.self_update.download_and_verify_update() expects to
-find on a real GitHub release.
+new-binary-fails-to-boot rollback scenario, and five signed release
+fixture directories (good / bad_hash / bad_sig / rollback /
+missing_asset) - each a SHA256SUMS.txt + SHA256SUMS.txt.sig pair plus
+(for every scenario except missing_asset - see
+build_missing_asset_release_dir's own docstring for why that one is
+different) the asset they describe, exactly what
+utils.self_update.download_and_verify_update() expects to find on a
+real GitHub release.
 
 CI-only, never used by the real release pipeline (scripts/release.sh,
 .github/workflows/release.yml) and never touches the real signing key:
@@ -266,6 +269,42 @@ def build_release_dir(release_dir, asset_name, asset_bytes_source_path, signing_
     return {"dir": release_dir, "asset": asset_dest, "real_hash": real_hash, "recorded_hash": recorded_hash}
 
 
+def build_missing_asset_release_dir(release_dir, requested_asset_name, signing_key_path):
+    """Models discussion #207's exact real-world situation: a release
+    that genuinely exists and publishes a validly-signed SHA256SUMS.txt
+    - it just never shipped the specific asset filename an OLDER
+    binary's self-updater still requests (e.g. the retired
+    'curatarr-macos-universal' name dropped once macOS binaries went
+    arm64-only - see utils/self_update.py's ASSET_MACOS_ARM64 comment).
+
+    Deliberately does NOT write `requested_asset_name` into this
+    directory at all, so fake_release_server.py's existing "file not
+    on disk -> 404" branch fires for it exactly as it would against a
+    real GitHub release missing that one asset - no changes needed to
+    that server. SHA256SUMS.txt/.sig are both present and correctly
+    signed (the release/tag itself is real) but list a DIFFERENT,
+    unrelated filename instead of requested_asset_name, mirroring a
+    real SHA256SUMS.txt regenerated for a release that simply never
+    published that name.
+
+    This deliberately never even reaches verify_downloaded_asset()'s
+    own "asset not listed in the verified sums file" check
+    (HashMismatchError) - the real failure this models happens one
+    step EARLIER, at the asset download itself (DownloadError), which
+    is what utils.self_update._download_and_verify_update_impl
+    actually hits first: it downloads SHA256SUMS.txt/.sig, THEN the
+    platform asset - see that function's docstring."""
+    os.makedirs(release_dir, exist_ok=True)
+    unrelated_name = "curatarr-some-other-platform-asset"
+    unrelated_bytes = b"stands in for a different release asset entirely - never downloaded by this scenario"
+    unrelated_hash = hashlib.sha256(unrelated_bytes).hexdigest()
+    sums_path = os.path.join(release_dir, "SHA256SUMS.txt")
+    with open(sums_path, "w", newline="\n") as f:
+        f.write(f"{unrelated_hash}  {unrelated_name}\n")
+    sign_sums_file(sums_path, signing_key_path)
+    return {"dir": release_dir}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--repo-root", required=True)
@@ -358,6 +397,11 @@ def main():
         os.path.join(releases_dir, "rollback"),
         asset_name,
         broken_binary_path,
+        test_key["key_path"],
+    )
+    manifest["releases"]["missing_asset"] = build_missing_asset_release_dir(
+        os.path.join(releases_dir, "missing_asset"),
+        asset_name,
         test_key["key_path"],
     )
 
