@@ -290,5 +290,3 @@ def create_radarr_client(config: Dict) -> Optional[RadarrClient]:
         return None
 
     return create_radarr_client_from(radarr_config.get("url"), radarr_config.get("api_key"))
-
-    return RadarrClient(url, api_key)

@@ -53,6 +53,7 @@ from recommenders.external import (
     save_horizon_cache,
     save_huntarr_cache,
 )
+from utils import TMDB_RATE_LIMIT_DELAY
 from utils.trakt import enhance_profile_with_trakt
 
 
@@ -4541,6 +4542,39 @@ class TestDiscoverPopularByGenre:
         # Should return empty list, not crash
         assert results == []
         mock_get.assert_not_called()
+
+    @patch("recommenders.external.requests.get")
+    @patch("recommenders.external.time.sleep")
+    def test_applies_rate_limit_delay_between_genre_calls(self, mock_sleep, mock_get):
+        """Regression test for a ruff F821: TMDB_RATE_LIMIT_DELAY was an
+        undefined name here, so evaluating it raised a NameError that the
+        surrounding try/except silently swallowed (logged as a generic
+        "Genre discover failed" warning) -- meaning the rate-limit sleep
+        never actually ran. Asserting the real constant is passed to the
+        mocked sleep call proves that line executes without raising."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": [
+                {
+                    "id": 123,
+                    "title": "Popular Action Movie",
+                    "release_date": "2024-01-15",
+                    "vote_average": 8.5,
+                    "vote_count": 1000,
+                    "overview": "",
+                    "genre_ids": [28],
+                }
+            ]
+        }
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        discover_popular_by_genre(
+            tmdb_api_key="test_key", top_genres=["Action"], library_data={}, media_type="movie", limit=10
+        )
+
+        mock_sleep.assert_called_once_with(TMDB_RATE_LIMIT_DELAY)
 
 
 class TestFindSimilarContentThinProfile:
