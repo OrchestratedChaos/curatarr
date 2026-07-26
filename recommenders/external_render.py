@@ -571,22 +571,11 @@ def generate_combined_html(
     return output_file
 
 
-def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, huntarr_tabs_html: str = "") -> str:
-    """Generate the full HTML template with CSS and JavaScript."""
-    # If no user tabs but huntarr tabs exist, put huntarr tabs in the main tabs row
-    # Otherwise, huntarr tabs go in their own row below user tabs
-    if not tabs_html.strip() and huntarr_tabs_html:
-        tabs_html = huntarr_tabs_html
-        huntarr_tabs_row = ""
-    elif huntarr_tabs_html:
-        huntarr_tabs_row = f"""
-            <div class="huntarr-tabs">
-                {huntarr_tabs_html}
-            </div>"""
-    else:
-        huntarr_tabs_row = ""
-
-    return f"""<!DOCTYPE html>
+def _html_head_and_style() -> str:
+    """Render the <head> (meta/title/fonts/<style>) through the closing
+    </head> tag - the CSS-heavy, purely-static first portion of the
+    watchlist page (see _generate_html_template)."""
+    return """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -596,13 +585,13 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     <style>
-        * {{ box-sizing: border-box; }}
+        * { box-sizing: border-box; }
 
-        html {{
+        html {
             background: #080808;
-        }}
+        }
 
-        body {{
+        body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             max-width: 1200px;
             margin: 0 auto;
@@ -612,10 +601,10 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             min-height: 100vh;
             position: relative;
             line-height: 1.6;
-        }}
+        }
 
         /* Draped curtain left */
-        body::before {{
+        body::before {
             content: '';
             position: fixed;
             left: 0;
@@ -638,10 +627,10 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 8px 0 30px rgba(0,0,0,0.5);
             z-index: 100;
             border-radius: 0 0 40% 0;
-        }}
+        }
 
         /* Draped curtain right */
-        body::after {{
+        body::after {
             content: '';
             position: fixed;
             right: 0;
@@ -664,10 +653,10 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 -8px 0 30px rgba(0,0,0,0.5);
             z-index: 100;
             border-radius: 0 0 0 40%;
-        }}
+        }
 
         /* Draped valance top */
-        .curtain-top {{
+        .curtain-top {
             position: fixed;
             top: 0;
             left: 0;
@@ -680,8 +669,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 #4a0000 100%);
             box-shadow: 0 8px 30px rgba(0,0,0,0.6);
             z-index: 101;
-        }}
-        .curtain-top::after {{
+        }
+        .curtain-top::after {
             content: '';
             position: absolute;
             bottom: -20px;
@@ -722,20 +711,20 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 radial-gradient(ellipse 60px 20px at 1830px 0px, #5a0000 70%, transparent 70%),
                 radial-gradient(ellipse 60px 20px at 1890px 0px, #4a0000 70%, transparent 70%);
             filter: drop-shadow(0 3px 4px rgba(0,0,0,0.4));
-        }}
+        }
 
-        .page-wrapper {{
+        .page-wrapper {
             position: relative;
             z-index: 1;
-        }}
+        }
 
         /* Branding */
-        .brand {{
+        .brand {
             text-align: center;
             margin-bottom: 40px;
             padding-top: 20px;
-        }}
-        .brand h1 {{
+        }
+        .brand h1 {
             font-family: 'Playfair Display', Georgia, serif;
             font-size: 3.2em;
             margin: 0;
@@ -746,22 +735,22 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             letter-spacing: 8px;
             font-weight: 700;
             filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
-        }}
-        .brand .subtitle {{
+        }
+        .brand .subtitle {
             color: #999;
             font-size: 0.9em;
             letter-spacing: 6px;
             text-transform: uppercase;
             margin-top: 8px;
             font-weight: 500;
-        }}
-        .brand .timestamp {{
+        }
+        .brand .timestamp {
             color: #666;
             font-size: 0.8em;
             margin-top: 12px;
-        }}
+        }
 
-        h2 {{
+        h2 {
             background: linear-gradient(135deg, #8b0000 0%, #6a0000 50%, #580000 100%);
             color: #f0d060;
             padding: 16px 22px;
@@ -776,8 +765,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 0 8px 25px rgba(0,0,0,0.4),
                 inset 0 1px 0 rgba(255,255,255,0.1),
                 inset 0 -2px 5px rgba(0,0,0,0.2);
-        }}
-        h3 {{
+        }
+        h3 {
             background: linear-gradient(135deg, #1e1e1e 0%, #282828 100%);
             color: #ccc;
             padding: 14px 18px;
@@ -788,24 +777,24 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             box-shadow:
                 0 4px 15px rgba(0,0,0,0.3),
                 inset 0 1px 0 rgba(255,255,255,0.05);
-        }}
-        h4 {{
+        }
+        h4 {
             color: #d4af37;
             margin: 20px 0 12px 0;
             font-size: 0.85em;
             text-transform: uppercase;
             letter-spacing: 1.5px;
             font-weight: 600;
-        }}
+        }
 
-        .header-actions {{
+        .header-actions {
             display: flex;
             justify-content: center;
             gap: 16px;
             margin-bottom: 35px;
             flex-wrap: wrap;
-        }}
-        .export-btn {{
+        }
+        .export-btn {
             background: linear-gradient(180deg, #a01010 0%, #8b0000 40%, #6a0000 100%);
             color: #ffd700;
             border: none;
@@ -825,8 +814,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 inset 0 -2px 10px rgba(0,0,0,0.2);
             position: relative;
             overflow: hidden;
-        }}
-        .export-btn::before {{
+        }
+        .export-btn::before {
             content: '';
             position: absolute;
             top: 0;
@@ -835,24 +824,24 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             height: 100%;
             background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
             transition: left 0.5s ease;
-        }}
-        .export-btn:hover {{
+        }
+        .export-btn:hover {
             transform: translateY(-3px);
             box-shadow:
                 0 10px 30px rgba(139, 0, 0, 0.5),
                 0 4px 10px rgba(0,0,0,0.3),
                 inset 0 1px 0 rgba(255,255,255,0.2);
-        }}
-        .export-btn:hover::before {{
+        }
+        .export-btn:hover::before {
             left: 100%;
-        }}
-        .export-btn:active {{
+        }
+        .export-btn:active {
             transform: translateY(-1px);
             box-shadow:
                 0 4px 15px rgba(139, 0, 0, 0.4),
                 inset 0 2px 5px rgba(0,0,0,0.2);
-        }}
-        .export-btn.sonarr {{
+        }
+        .export-btn.sonarr {
             background: linear-gradient(180deg, #404040 0%, #2d2d2d 40%, #1a1a1a 100%);
             color: #e0e0e0;
             box-shadow:
@@ -860,14 +849,14 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 0 2px 5px rgba(0,0,0,0.3),
                 inset 0 1px 0 rgba(255,255,255,0.1),
                 inset 0 -2px 10px rgba(0,0,0,0.2);
-        }}
-        .export-btn.sonarr:hover {{
+        }
+        .export-btn.sonarr:hover {
             box-shadow:
                 0 10px 30px rgba(0, 0, 0, 0.5),
                 0 4px 10px rgba(0,0,0,0.3),
                 inset 0 1px 0 rgba(255,255,255,0.15);
-        }}
-        .export-btn.trakt {{
+        }
+        .export-btn.trakt {
             background: linear-gradient(180deg, #ff3333 0%, #ed1c24 40%, #c41920 100%);
             color: #fff;
             box-shadow:
@@ -875,22 +864,22 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 0 2px 5px rgba(0,0,0,0.3),
                 inset 0 1px 0 rgba(255,255,255,0.2),
                 inset 0 -2px 10px rgba(0,0,0,0.2);
-        }}
-        .export-btn.trakt:hover {{
+        }
+        .export-btn.trakt:hover {
             box-shadow:
                 0 10px 30px rgba(237, 28, 36, 0.5),
                 0 4px 10px rgba(0,0,0,0.3),
                 inset 0 1px 0 rgba(255,255,255,0.25);
-        }}
+        }
 
-        .tabs-wrapper {{
+        .tabs-wrapper {
             display: flex;
             flex-direction: column;
             align-items: center;
             margin-bottom: 35px;
             gap: 12px;
-        }}
-        .tabs {{
+        }
+        .tabs {
             display: inline-flex;
             gap: 8px;
             flex-wrap: wrap;
@@ -901,8 +890,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             box-shadow:
                 inset 0 2px 10px rgba(0,0,0,0.6),
                 0 4px 15px rgba(0,0,0,0.3);
-        }}
-        .huntarr-tabs {{
+        }
+        .huntarr-tabs {
             display: inline-flex;
             gap: 8px;
             flex-wrap: wrap;
@@ -913,8 +902,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             box-shadow:
                 inset 0 2px 8px rgba(0,0,0,0.5),
                 0 3px 12px rgba(0,0,0,0.2);
-        }}
-        .tab-btn {{
+        }
+        .tab-btn {
             background: linear-gradient(180deg, #1c1c1c 0%, #151515 100%);
             color: #888;
             border: none;
@@ -928,28 +917,28 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             letter-spacing: 1px;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        }}
-        .tab-btn:hover {{
+        }
+        .tab-btn:hover {
             background: linear-gradient(180deg, #282828 0%, #1f1f1f 100%);
             color: #bbb;
             transform: translateY(-1px);
-        }}
-        .tab-btn.active {{
+        }
+        .tab-btn.active {
             background: linear-gradient(180deg, #a01010 0%, #8b0000 40%, #6a0000 100%);
             color: #ffd700;
             box-shadow:
                 0 6px 20px rgba(139, 0, 0, 0.5),
                 inset 0 1px 0 rgba(255,255,255,0.1);
-        }}
-        .tab-panel {{ display: none; }}
-        .tab-panel.active {{ display: block; animation: fadeIn 0.4s ease; }}
+        }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; animation: fadeIn 0.4s ease; }
 
-        @keyframes fadeIn {{
-            from {{ opacity: 0; transform: translateY(15px); }}
-            to {{ opacity: 1; transform: translateY(0); }}
-        }}
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
 
-        table {{
+        table {
             width: 100%;
             border-collapse: separate;
             border-spacing: 0;
@@ -961,68 +950,68 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 0 10px 40px rgba(0,0,0,0.5),
                 0 2px 10px rgba(0,0,0,0.3),
                 inset 0 1px 0 rgba(255,255,255,0.03);
-        }}
-        th, td {{
+        }
+        th, td {
             padding: 16px 14px;
             text-align: left;
             border-bottom: 1px solid rgba(255,255,255,0.05);
-        }}
-        th {{
+        }
+        th {
             background: linear-gradient(180deg, #222 0%, #1a1a1a 100%);
             color: #d4af37;
             font-size: 0.7em;
             text-transform: uppercase;
             letter-spacing: 1.5px;
             font-weight: 600;
-        }}
-        th.sortable {{
+        }
+        th.sortable {
             cursor: pointer;
             user-select: none;
             transition: color 0.2s ease;
             white-space: nowrap;
-        }}
-        th.sortable:hover {{
+        }
+        th.sortable:hover {
             color: #ffd700;
-        }}
-        th.sortable::after {{
+        }
+        th.sortable::after {
             content: ' \\25B2\\25BC';
             opacity: 0.3;
             font-size: 0.6em;
             margin-left: 4px;
             vertical-align: middle;
-        }}
-        th.sortable.asc::after {{
+        }
+        th.sortable.asc::after {
             content: ' \\25B2';
             opacity: 1;
             font-size: 0.7em;
-        }}
-        th.sortable.desc::after {{
+        }
+        th.sortable.desc::after {
             content: ' \\25BC';
             opacity: 1;
             font-size: 0.7em;
-        }}
-        th:first-child {{ border-radius: 16px 0 0 0; }}
-        th:last-child {{ border-radius: 0 16px 0 0; }}
-        tr {{
+        }
+        th:first-child { border-radius: 16px 0 0 0; }
+        th:last-child { border-radius: 0 16px 0 0; }
+        tr {
             transition: all 0.2s ease;
-        }}
-        tr:hover {{
+        }
+        tr:hover {
             background: rgba(139, 0, 0, 0.1);
-        }}
-        tr:last-child td {{
+        }
+        tr:last-child td {
             border-bottom: none;
-        }}
-        tr:last-child td:first-child {{ border-radius: 0 0 0 16px; }}
-        tr:last-child td:last-child {{ border-radius: 0 0 16px 0; }}
-        td:first-child, th:first-child {{ width: 50px; text-align: center; }}
-        input[type="checkbox"] {{
+        }
+        tr:last-child td:first-child { border-radius: 0 0 0 16px; }
+        tr:last-child td:last-child { border-radius: 0 0 16px 0; }
+        td:first-child, th:first-child { width: 50px; text-align: center; }
+        input[type="checkbox"] {
             width: 18px;
             height: 18px;
             cursor: pointer;
             accent-color: #8b0000;
             border-radius: 4px;
-        }}
-        .shared-badge {{
+        }
+        .shared-badge {
             display: inline-block;
             background: linear-gradient(135deg, #8b0000, #a00);
             color: #fff;
@@ -1033,8 +1022,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             margin-left: 8px;
             vertical-align: middle;
             box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }}
-        .tv-special-badge {{
+        }
+        .tv-special-badge {
             display: inline-block;
             background: linear-gradient(135deg, #6b46c1, #805ad5);
             color: #fff;
@@ -1045,8 +1034,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             margin-left: 8px;
             vertical-align: middle;
             box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }}
-        .animated-badge {{
+        }
+        .animated-badge {
             display: inline-block;
             background: linear-gradient(135deg, #0891b2, #06b6d4);
             color: #fff;
@@ -1057,10 +1046,10 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             margin-left: 8px;
             vertical-align: middle;
             box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }}
+        }
 
         /* Status badges for Horizon Huntarr */
-        .status-badge {{
+        .status-badge {
             display: inline-block;
             font-size: 10px;
             font-weight: 600;
@@ -1069,36 +1058,36 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             text-transform: uppercase;
             letter-spacing: 0.5px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }}
-        .status-badge.post-production {{
+        }
+        .status-badge.post-production {
             background: linear-gradient(135deg, #059669, #10b981);
             color: #fff;
-        }}
-        .status-badge.in-production {{
+        }
+        .status-badge.in-production {
             background: linear-gradient(135deg, #0284c7, #0ea5e9);
             color: #fff;
-        }}
-        .status-badge.planned {{
+        }
+        .status-badge.planned {
             background: linear-gradient(135deg, #7c3aed, #8b5cf6);
             color: #fff;
-        }}
-        .status-badge.rumored {{
+        }
+        .status-badge.rumored {
             background: linear-gradient(135deg, #475569, #64748b);
             color: #fff;
-        }}
-        .status-badge.unknown {{
+        }
+        .status-badge.unknown {
             background: linear-gradient(135deg, #374151, #4b5563);
             color: #9ca3af;
-        }}
+        }
 
         /* Streaming service icons */
-        .streaming-icons {{
+        .streaming-icons {
             display: flex;
             flex-wrap: wrap;
             gap: 3px;
             max-width: 280px;
-        }}
-        .streaming-icon {{
+        }
+        .streaming-icon {
             display: inline-block;
             padding: 3px 8px;
             border-radius: 4px;
@@ -1111,37 +1100,37 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             text-overflow: ellipsis;
             transition: transform 0.15s ease, box-shadow 0.15s ease;
             cursor: pointer;
-        }}
-        .streaming-icon.user-service {{
+        }
+        .streaming-icon.user-service {
             border: 2px solid #d4af37;
             box-shadow: 0 0 6px rgba(212, 175, 55, 0.4);
-        }}
-        .streaming-icon.netflix {{ background: #e50914; color: #fff; }}
-        .streaming-icon.hulu {{ background: #1ce783; color: #000; }}
-        .streaming-icon.disney_plus {{ background: #113ccf; color: #fff; }}
-        .streaming-icon.amazon_prime {{ background: #00a8e1; color: #fff; }}
-        .streaming-icon.paramount_plus {{ background: #0064ff; color: #fff; }}
-        .streaming-icon.apple_tv_plus {{ background: #000; color: #fff; }}
-        .streaming-icon.max {{ background: #002be7; color: #fff; }}
-        .streaming-icon.peacock {{ background: #000; color: #fff; }}
-        .streaming-icon.crunchyroll {{ background: #f47521; color: #fff; }}
-        .streaming-icon.crackle {{ background: #f36f21; color: #fff; }}
-        .streaming-icon.tubi {{ background: #fa382f; color: #fff; }}
-        .streaming-icon.mubi {{ background: #0b0c0f; color: #fff; }}
-        .streaming-icon.shudder {{ background: #000; color: #fff; }}
-        .streaming-icon.acquire {{ background: #444; color: #aaa; font-style: italic; }}
-        .streaming-icon.rent {{ background: linear-gradient(135deg, #004B93, #0066CC); color: #FFD700; font-weight: 600; }}
-        .streaming-icon.buy {{ background: linear-gradient(135deg, #2563eb, #3b82f6); color: #fff; }}
+        }
+        .streaming-icon.netflix { background: #e50914; color: #fff; }
+        .streaming-icon.hulu { background: #1ce783; color: #000; }
+        .streaming-icon.disney_plus { background: #113ccf; color: #fff; }
+        .streaming-icon.amazon_prime { background: #00a8e1; color: #fff; }
+        .streaming-icon.paramount_plus { background: #0064ff; color: #fff; }
+        .streaming-icon.apple_tv_plus { background: #000; color: #fff; }
+        .streaming-icon.max { background: #002be7; color: #fff; }
+        .streaming-icon.peacock { background: #000; color: #fff; }
+        .streaming-icon.crunchyroll { background: #f47521; color: #fff; }
+        .streaming-icon.crackle { background: #f36f21; color: #fff; }
+        .streaming-icon.tubi { background: #fa382f; color: #fff; }
+        .streaming-icon.mubi { background: #0b0c0f; color: #fff; }
+        .streaming-icon.shudder { background: #000; color: #fff; }
+        .streaming-icon.acquire { background: #444; color: #aaa; font-style: italic; }
+        .streaming-icon.rent { background: linear-gradient(135deg, #004B93, #0066CC); color: #FFD700; font-weight: 600; }
+        .streaming-icon.buy { background: linear-gradient(135deg, #2563eb, #3b82f6); color: #fff; }
 
-        .streaming-link {{
+        .streaming-link {
             text-decoration: none;
-        }}
-        .streaming-link:hover .streaming-icon {{
+        }
+        .streaming-link:hover .streaming-icon {
             transform: scale(1.1);
             box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-        }}
+        }
 
-        .instructions {{
+        .instructions {
             background: linear-gradient(180deg, #181818 0%, #121212 100%);
             padding: 30px 35px;
             border-radius: 20px;
@@ -1150,8 +1139,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             box-shadow:
                 0 10px 40px rgba(0,0,0,0.4),
                 inset 0 1px 0 rgba(255,255,255,0.03);
-        }}
-        .instructions h3 {{
+        }
+        .instructions h3 {
             background: none;
             border: none;
             padding: 0;
@@ -1159,22 +1148,22 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             margin-bottom: 20px;
             box-shadow: none;
             font-size: 1.1em;
-        }}
-        .instructions ul {{
+        }
+        .instructions ul {
             margin: 0;
             padding-left: 24px;
             color: #999;
-        }}
-        .instructions li {{
+        }
+        .instructions li {
             margin-bottom: 12px;
             line-height: 1.7;
-        }}
-        .instructions strong {{
+        }
+        .instructions strong {
             color: #ccc;
             font-weight: 600;
-        }}
+        }
 
-        .footer {{
+        .footer {
             text-align: center;
             margin-top: 50px;
             padding-top: 30px;
@@ -1182,19 +1171,19 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             color: #555;
             font-size: 0.8em;
             letter-spacing: 1px;
-        }}
-        .footer a {{
+        }
+        .footer a {
             color: #8b0000;
             text-decoration: none;
             font-weight: 500;
             transition: color 0.3s ease;
-        }}
-        .footer a:hover {{
+        }
+        .footer a:hover {
             color: #d4af37;
-        }}
+        }
 
         /* Filter bar - Art Deco Cinema style */
-        .filter-bar {{
+        .filter-bar {
             display: flex;
             gap: 20px;
             align-items: flex-end;
@@ -1209,9 +1198,9 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 inset 0 1px 0 rgba(212, 175, 55, 0.15),
                 inset 0 -1px 0 rgba(0,0,0,0.3);
             position: relative;
-        }}
+        }
         /* Top gold pinstripe */
-        .filter-bar::before {{
+        .filter-bar::before {
             content: '';
             position: absolute;
             top: -2px;
@@ -1220,9 +1209,9 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             height: 3px;
             background: linear-gradient(90deg, transparent, #b8960c 15%, #d4af37 35%, #f0d060 50%, #d4af37 65%, #b8960c 85%, transparent);
             border-radius: 0 0 2px 2px;
-        }}
+        }
         /* Film strip sprocket holes - left */
-        .filter-bar::after {{
+        .filter-bar::after {
             content: '';
             position: absolute;
             left: 10px;
@@ -1240,22 +1229,22 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 transparent 14px
             );
             opacity: 0.6;
-        }}
-        .filter-group {{
+        }
+        .filter-group {
             display: flex;
             flex-direction: column;
             gap: 6px;
-        }}
-        .filter-group label {{
+        }
+        .filter-group label {
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 1.5px;
             color: #d4af37;
             font-weight: 600;
             font-variant: small-caps;
-        }}
+        }
         .filter-group input[type="text"],
-        .filter-group input[type="number"] {{
+        .filter-group input[type="number"] {
             background: linear-gradient(180deg, #0c0b09 0%, #100f0d 100%);
             border: 1px solid #4a4030;
             border-top-color: #2a2520;
@@ -1270,42 +1259,42 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             box-shadow:
                 inset 1px 1px 3px rgba(0,0,0,0.5),
                 0 1px 0 rgba(212, 175, 55, 0.1);
-        }}
-        .filter-group input[type="text"] {{
+        }
+        .filter-group input[type="text"] {
             width: 140px;
-        }}
-        .filter-group input:focus {{
+        }
+        .filter-group input:focus {
             outline: none;
             border-color: #d4af37;
             box-shadow:
                 inset 1px 1px 3px rgba(0,0,0,0.5),
                 0 0 8px rgba(212, 175, 55, 0.4);
-        }}
-        .filter-group input::placeholder {{
+        }
+        .filter-group input::placeholder {
             color: #5a5040;
             font-style: italic;
             font-size: 12px;
-        }}
+        }
         /* Year inputs side by side */
-        .year-inputs {{
+        .year-inputs {
             display: flex;
             align-items: center;
             gap: 6px;
-        }}
-        .year-inputs input {{
+        }
+        .year-inputs input {
             width: 65px;
-        }}
-        .year-separator {{
+        }
+        .year-separator {
             color: #5a5040;
             font-size: 14px;
-        }}
-        .streaming-filter {{
+        }
+        .streaming-filter {
             position: relative;
-        }}
-        .streaming-dropdown {{
+        }
+        .streaming-dropdown {
             position: relative;
-        }}
-        .dropdown-toggle {{
+        }
+        .dropdown-toggle {
             background: linear-gradient(180deg, #0c0b09 0%, #100f0d 100%);
             border: 1px solid #4a4030;
             border-top-color: #2a2520;
@@ -1325,15 +1314,15 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             box-shadow:
                 inset 1px 1px 3px rgba(0,0,0,0.5),
                 0 1px 0 rgba(212, 175, 55, 0.1);
-        }}
-        .dropdown-toggle:hover {{
+        }
+        .dropdown-toggle:hover {
             border-color: #5a4a30;
-        }}
-        .dropdown-toggle .arrow {{
+        }
+        .dropdown-toggle .arrow {
             font-size: 10px;
             color: #d4af37;
-        }}
-        .dropdown-menu {{
+        }
+        .dropdown-menu {
             display: none;
             position: absolute;
             top: 100%;
@@ -1350,9 +1339,9 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             box-shadow:
                 0 15px 45px rgba(0,0,0,0.7),
                 inset 0 1px 0 rgba(212, 175, 55, 0.1);
-        }}
+        }
         /* Art deco corner accents on dropdown */
-        .dropdown-menu::before {{
+        .dropdown-menu::before {
             content: '';
             position: absolute;
             top: 4px;
@@ -1361,8 +1350,8 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             height: 12px;
             border-left: 2px solid #d4af37;
             border-top: 2px solid #d4af37;
-        }}
-        .dropdown-menu::after {{
+        }
+        .dropdown-menu::after {
             content: '';
             position: absolute;
             top: 4px;
@@ -1371,16 +1360,16 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             height: 12px;
             border-right: 2px solid #d4af37;
             border-top: 2px solid #d4af37;
-        }}
-        .dropdown-menu.show {{
+        }
+        .dropdown-menu.show {
             display: block;
             animation: dropIn 0.2s ease;
-        }}
-        @keyframes dropIn {{
-            from {{ opacity: 0; transform: translateY(-8px); }}
-            to {{ opacity: 1; transform: translateY(0); }}
-        }}
-        .dropdown-menu label {{
+        }
+        @keyframes dropIn {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .dropdown-menu label {
             display: flex;
             align-items: center;
             gap: 10px;
@@ -1395,94 +1384,94 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             font-variant: normal;
             transition: all 0.15s ease;
             border: 1px solid transparent;
-        }}
+        }
         /* Service-specific colors */
-        .dropdown-menu label[data-service="user-service"] {{
+        .dropdown-menu label[data-service="user-service"] {
             color: #ffd700;
             background: linear-gradient(90deg, rgba(212, 175, 55, 0.1) 0%, transparent 100%);
             border-left: 3px solid #d4af37;
-        }}
-        .dropdown-menu label[data-service="netflix"] {{
+        }
+        .dropdown-menu label[data-service="netflix"] {
             color: #ff6b6b;
             background: linear-gradient(90deg, rgba(229, 9, 20, 0.15) 0%, transparent 100%);
             border-left: 3px solid #e50914;
-        }}
-        .dropdown-menu label[data-service="hulu"] {{
+        }
+        .dropdown-menu label[data-service="hulu"] {
             color: #6ee7a0;
             background: linear-gradient(90deg, rgba(28, 231, 131, 0.12) 0%, transparent 100%);
             border-left: 3px solid #1ce783;
-        }}
-        .dropdown-menu label[data-service="disney_plus"] {{
+        }
+        .dropdown-menu label[data-service="disney_plus"] {
             color: #7da0e0;
             background: linear-gradient(90deg, rgba(17, 60, 207, 0.15) 0%, transparent 100%);
             border-left: 3px solid #113ccf;
-        }}
-        .dropdown-menu label[data-service="amazon_prime"] {{
+        }
+        .dropdown-menu label[data-service="amazon_prime"] {
             color: #6dcff6;
             background: linear-gradient(90deg, rgba(0, 168, 225, 0.12) 0%, transparent 100%);
             border-left: 3px solid #00a8e1;
-        }}
-        .dropdown-menu label[data-service="max"] {{
+        }
+        .dropdown-menu label[data-service="max"] {
             color: #8080ff;
             background: linear-gradient(90deg, rgba(0, 43, 231, 0.15) 0%, transparent 100%);
             border-left: 3px solid #002be7;
-        }}
-        .dropdown-menu label[data-service="paramount_plus"] {{
+        }
+        .dropdown-menu label[data-service="paramount_plus"] {
             color: #6699ff;
             background: linear-gradient(90deg, rgba(0, 100, 255, 0.12) 0%, transparent 100%);
             border-left: 3px solid #0064ff;
-        }}
-        .dropdown-menu label[data-service="apple_tv_plus"] {{
+        }
+        .dropdown-menu label[data-service="apple_tv_plus"] {
             color: #e0e0e0;
             background: linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0%, transparent 100%);
             border-left: 3px solid #888;
-        }}
-        .dropdown-menu label[data-service="peacock"] {{
+        }
+        .dropdown-menu label[data-service="peacock"] {
             color: #e0e0e0;
             background: linear-gradient(90deg, rgba(255, 255, 255, 0.06) 0%, transparent 100%);
             border-left: 3px solid #666;
-        }}
-        .dropdown-menu label[data-service="crunchyroll"] {{
+        }
+        .dropdown-menu label[data-service="crunchyroll"] {
             color: #ffa060;
             background: linear-gradient(90deg, rgba(244, 117, 33, 0.12) 0%, transparent 100%);
             border-left: 3px solid #f47521;
-        }}
-        .dropdown-menu label[data-service="tubi"] {{
+        }
+        .dropdown-menu label[data-service="tubi"] {
             color: #ff7070;
             background: linear-gradient(90deg, rgba(250, 56, 47, 0.12) 0%, transparent 100%);
             border-left: 3px solid #fa382f;
-        }}
-        .dropdown-menu label[data-service="rent"] {{
+        }
+        .dropdown-menu label[data-service="rent"] {
             color: #ffd700;
             background: linear-gradient(90deg, rgba(0, 75, 147, 0.2) 0%, transparent 100%);
             border-left: 3px solid #004B93;
-        }}
-        .dropdown-menu label[data-service="acquire"] {{
+        }
+        .dropdown-menu label[data-service="acquire"] {
             color: #999;
             background: linear-gradient(90deg, rgba(100, 100, 100, 0.1) 0%, transparent 100%);
             border-left: 3px solid #555;
-        }}
-        .dropdown-menu label:hover {{
+        }
+        .dropdown-menu label:hover {
             border: 1px solid rgba(212, 175, 55, 0.4);
             box-shadow:
                 inset 0 1px 0 rgba(255,255,255,0.1),
                 0 2px 8px rgba(0,0,0,0.3);
             transform: translateX(2px);
-        }}
-        .dropdown-menu label:has(input:checked) {{
+        }
+        .dropdown-menu label:has(input:checked) {
             border: 1px solid rgba(212, 175, 55, 0.6);
             box-shadow:
                 inset 0 2px 4px rgba(0,0,0,0.4),
                 inset 0 -1px 0 rgba(255,255,255,0.1),
                 0 0 10px rgba(212, 175, 55, 0.2);
-        }}
-        .dropdown-menu input[type="checkbox"] {{
+        }
+        .dropdown-menu input[type="checkbox"] {
             width: 14px;
             height: 14px;
             accent-color: #d4af37;
             cursor: pointer;
-        }}
-        .clear-filters-btn {{
+        }
+        .clear-filters-btn {
             background: linear-gradient(180deg, #a01010 0%, #8b0000 40%, #6a0000 100%);
             color: #ffd700;
             border: none;
@@ -1499,19 +1488,26 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 0 3px 10px rgba(139, 0, 0, 0.4),
                 inset 0 1px 0 rgba(255,255,255,0.1),
                 inset 0 -1px 0 rgba(0,0,0,0.2);
-        }}
-        .clear-filters-btn:hover {{
+        }
+        .clear-filters-btn:hover {
             transform: translateY(-1px);
             box-shadow:
                 0 5px 15px rgba(139, 0, 0, 0.5),
                 inset 0 1px 0 rgba(255,255,255,0.15);
-        }}
-        tr.filtered-out {{
+        }
+        tr.filtered-out {
             display: none;
-        }}
+        }
     </style>
 </head>
-<body>
+"""
+
+
+def _html_body_header(now: datetime) -> str:
+    """Render the page body's opening section - curtain decoration, brand/
+    title, export buttons, and the filter bar - up to (not including) the
+    tabs container (see _generate_html_template)."""
+    return f"""<body>
     <div class="curtain-top"></div>
 
     <div class="page-wrapper">
@@ -1574,7 +1570,13 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             <button class="clear-filters-btn" onclick="clearFilters()">Clear</button>
         </div>
 
-        <div class="tabs-wrapper">
+"""
+
+
+def _html_tabs_and_panels(tabs_html: str, huntarr_tabs_row: str, panels_html: str) -> str:
+    """Render the tabs container, huntarr tabs row, category panels,
+    instructions and footer (see _generate_html_template)."""
+    return f"""        <div class="tabs-wrapper">
             <div class="tabs">
                 {tabs_html}
             </div>
@@ -1600,10 +1602,17 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
         </div>
     </div>
 
-    <script>
+"""
+
+
+def _html_script() -> str:
+    """Render the <script> block plus the closing </body>/</html> tags -
+    the JS-heavy final portion of the watchlist page (see
+    _generate_html_template)."""
+    return """    <script>
         // Tab switching
-        document.querySelectorAll('.tab-btn').forEach(btn => {{
-            btn.addEventListener('click', function() {{
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
                 const userId = this.getAttribute('data-user');
 
                 // Update active tab
@@ -1612,101 +1621,101 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
 
                 // Show corresponding panel
                 document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-                document.querySelector(`.tab-panel[data-user="${{userId}}"]`).classList.add('active');
-            }});
-        }});
+                document.querySelector(`.tab-panel[data-user="${userId}"]`).classList.add('active');
+            });
+        });
 
         // Select-all checkbox functionality (per table)
-        document.querySelectorAll('.select-all-table').forEach(selectAll => {{
-            selectAll.addEventListener('change', function() {{
+        document.querySelectorAll('.select-all-table').forEach(selectAll => {
+            selectAll.addEventListener('change', function() {
                 const table = this.closest('table');
-                table.querySelectorAll('.select-item').forEach(cb => {{
+                table.querySelectorAll('.select-item').forEach(cb => {
                     cb.checked = this.checked;
-                }});
+                });
                 updateCounts();
-            }});
-        }});
+            });
+        });
 
         // Update counts when individual items are checked
-        document.querySelectorAll('.select-item').forEach(cb => {{
+        document.querySelectorAll('.select-item').forEach(cb => {
             cb.addEventListener('change', updateCounts);
-        }});
+        });
 
-        function updateCounts() {{
+        function updateCounts() {
             // Count ALL selected items across ALL users (excluding filtered-out rows)
             const movieCount = document.querySelectorAll('tr[data-type="movie"]:not(.filtered-out) .select-item:checked').length;
             const showCount = document.querySelectorAll('tr[data-type="show"]:not(.filtered-out) .select-item:checked').length;
             document.getElementById('movie-count').textContent = movieCount;
             document.getElementById('show-count').textContent = showCount;
             document.getElementById('total-count').textContent = movieCount + showCount;
-        }}
+        }
 
-        function exportRadarr() {{
+        function exportRadarr() {
             // Export from ALL users (excluding filtered-out rows)
             const rows = document.querySelectorAll('tr[data-type="movie"]:not(.filtered-out)');
             const imdbIds = [];
-            rows.forEach(row => {{
+            rows.forEach(row => {
                 const checkbox = row.querySelector('.select-item');
-                if (checkbox && checkbox.checked) {{
+                if (checkbox && checkbox.checked) {
                     const imdb = row.getAttribute('data-imdb');
-                    if (imdb && imdb.startsWith('tt')) {{
+                    if (imdb && imdb.startsWith('tt')) {
                         imdbIds.push(imdb);
-                    }}
-                }}
-            }});
-            if (imdbIds.length === 0) {{
+                    }
+                }
+            });
+            if (imdbIds.length === 0) {
                 alert('No selected movies with IMDB IDs to export. Select items first.');
                 return;
-            }}
+            }
             downloadFile('radarr_import.txt', [...new Set(imdbIds)].join('\\n'));
             alert('Exported ' + imdbIds.length + ' movies for Radarr import.');
-        }}
+        }
 
-        function exportSonarr() {{
+        function exportSonarr() {
             // Export from ALL users (excluding filtered-out rows)
             const rows = document.querySelectorAll('tr[data-type="show"]:not(.filtered-out)');
             const imdbIds = [];
-            rows.forEach(row => {{
+            rows.forEach(row => {
                 const checkbox = row.querySelector('.select-item');
-                if (checkbox && checkbox.checked) {{
+                if (checkbox && checkbox.checked) {
                     const imdb = row.getAttribute('data-imdb');
-                    if (imdb && imdb.startsWith('tt')) {{
+                    if (imdb && imdb.startsWith('tt')) {
                         imdbIds.push(imdb);
-                    }}
-                }}
-            }});
-            if (imdbIds.length === 0) {{
+                    }
+                }
+            });
+            if (imdbIds.length === 0) {
                 alert('No selected TV shows with IMDB IDs to export. Select items first.');
                 return;
-            }}
+            }
             downloadFile('sonarr_import.txt', [...new Set(imdbIds)].join('\\n'));
             alert('Exported ' + imdbIds.length + ' shows for Sonarr import.');
-        }}
+        }
 
-        function exportTrakt() {{
+        function exportTrakt() {
             // Export ALL selected items (movies + shows) for Trakt import (excluding filtered-out rows)
             const allRows = document.querySelectorAll('tr[data-imdb]:not(.filtered-out)');
             const imdbIds = [];
-            allRows.forEach(row => {{
+            allRows.forEach(row => {
                 const checkbox = row.querySelector('.select-item');
-                if (checkbox && checkbox.checked) {{
+                if (checkbox && checkbox.checked) {
                     const imdb = row.getAttribute('data-imdb');
-                    if (imdb && imdb.startsWith('tt')) {{
+                    if (imdb && imdb.startsWith('tt')) {
                         imdbIds.push(imdb);
-                    }}
-                }}
-            }});
-            if (imdbIds.length === 0) {{
+                    }
+                }
+            });
+            if (imdbIds.length === 0) {
                 alert('No selected items with IMDB IDs to export. Select items first.');
                 return;
-            }}
+            }
             // Trakt accepts IMDB IDs one per line for list import
             downloadFile('trakt_import.txt', [...new Set(imdbIds)].join('\\n'));
             alert('Exported ' + imdbIds.length + ' items for Trakt.\\n\\nTo import:\\n1. Go to trakt.tv/users/YOUR_USERNAME/lists\\n2. Create or edit a list\\n3. Click "Add Items" and paste the IMDB IDs');
-        }}
+        }
 
-        function downloadFile(filename, content) {{
-            const blob = new Blob([content], {{ type: 'text/plain' }});
+        function downloadFile(filename, content) {
+            const blob = new Blob([content], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -1715,10 +1724,10 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-        }}
+        }
 
         // Column sorting
-        function sortTable(th, colIndex) {{
+        function sortTable(th, colIndex) {
             const table = th.closest('table');
             const tbody = table.querySelector('tbody');
             const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -1728,37 +1737,37 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             const isDesc = th.classList.contains('desc');
 
             // Clear all sort classes in this table
-            table.querySelectorAll('th.sortable').forEach(header => {{
+            table.querySelectorAll('th.sortable').forEach(header => {
                 header.classList.remove('asc', 'desc');
-            }});
+            });
 
             // Set new sort direction
             let direction;
-            if (!isAsc && !isDesc) {{
+            if (!isAsc && !isDesc) {
                 direction = 'desc'; // Default to descending (highest first)
-            }} else if (isDesc) {{
+            } else if (isDesc) {
                 direction = 'asc';
-            }} else {{
+            } else {
                 direction = 'desc';
-            }}
+            }
             th.classList.add(direction);
 
             // Sort rows
-            rows.sort((a, b) => {{
+            rows.sort((a, b) => {
                 const aCell = a.cells[colIndex];
                 const bCell = b.cells[colIndex];
 
                 // Handle streaming icons column (sort by service name)
                 const aIcons = aCell.querySelectorAll('.streaming-icon');
                 const bIcons = bCell.querySelectorAll('.streaming-icon');
-                if (aIcons.length > 0 || bIcons.length > 0) {{
+                if (aIcons.length > 0 || bIcons.length > 0) {
                     // Get first service name (or "zzz" for Acquire to sort last)
                     const aFirst = aCell.querySelector('.streaming-icon')?.textContent?.trim() || '';
                     const bFirst = bCell.querySelector('.streaming-icon')?.textContent?.trim() || '';
                     const aName = aFirst === 'Acquire' ? 'zzz' : aFirst;
                     const bName = bFirst === 'Acquire' ? 'zzz' : bFirst;
                     return direction === 'asc' ? aName.localeCompare(bName) : bName.localeCompare(aName);
-                }}
+                }
 
                 // Get text, excluding badge content for title column
                 let aVal = aCell.childNodes[0]?.textContent?.trim() || aCell.textContent.trim();
@@ -1769,77 +1778,77 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 bVal = bVal.replace(/\\s+\\d+\\/\\d+$/, '').trim();
 
                 // Handle percentages (Score column)
-                if (aVal.endsWith('%') && bVal.endsWith('%')) {{
+                if (aVal.endsWith('%') && bVal.endsWith('%')) {
                     return direction === 'asc'
                         ? parseFloat(aVal) - parseFloat(bVal)
                         : parseFloat(bVal) - parseFloat(aVal);
-                }}
+                }
 
                 // Handle fractions like "2/4" (Owned column)
-                if (aVal.match(/^\\d+\\/\\d+$/) && bVal.match(/^\\d+\\/\\d+$/)) {{
+                if (aVal.match(/^\\d+\\/\\d+$/) && bVal.match(/^\\d+\\/\\d+$/)) {
                     const aNum = parseFloat(aVal.split('/')[0]);
                     const bNum = parseFloat(bVal.split('/')[0]);
                     return direction === 'asc' ? aNum - bNum : bNum - aNum;
-                }}
+                }
 
                 // Handle plain numbers (Year, Rating, Days)
                 const aNum = parseFloat(aVal);
                 const bNum = parseFloat(bVal);
-                if (!isNaN(aNum) && !isNaN(bNum)) {{
+                if (!isNaN(aNum) && !isNaN(bNum)) {
                     return direction === 'asc' ? aNum - bNum : bNum - aNum;
-                }}
+                }
 
                 // Text comparison (Title, Collection)
                 return direction === 'asc'
                     ? aVal.localeCompare(bVal)
                     : bVal.localeCompare(aVal);
-            }});
+            });
 
             // Reattach sorted rows
             rows.forEach(row => tbody.appendChild(row));
-        }}
+        }
 
         // Initialize sortable headers
-        document.querySelectorAll('th.sortable').forEach(th => {{
-            th.addEventListener('click', function() {{
+        document.querySelectorAll('th.sortable').forEach(th => {
+            th.addEventListener('click', function() {
                 const colIndex = Array.from(this.parentNode.children).indexOf(this);
                 sortTable(this, colIndex);
-            }});
-        }});
+            });
+        });
 
         // Initialize counts on load
         updateCounts();
 
         // Streaming dropdown toggle
-        function toggleStreamingDropdown() {{
+        function toggleStreamingDropdown() {
             const menu = document.getElementById('streaming-menu');
             menu.classList.toggle('show');
-        }}
+        }
 
         // Close dropdown when clicking outside
-        document.addEventListener('click', function(e) {{
+        document.addEventListener('click', function(e) {
             const dropdown = document.getElementById('streaming-dropdown');
-            if (!dropdown.contains(e.target)) {{
+            if (!dropdown.contains(e.target)) {
                 document.getElementById('streaming-menu').classList.remove('show');
-            }}
-        }});
+            }
+        });
 
         // Update dropdown button text based on selections
-        function updateStreamingButtonText() {{
+        function updateStreamingButtonText() {
             const checkboxes = document.querySelectorAll('#streaming-menu input[type="checkbox"]:checked');
             const button = document.querySelector('.dropdown-toggle');
-            if (checkboxes.length === 0) {{
+            if (checkboxes.length === 0) {
                 button.innerHTML = 'All Services <span class="arrow">&#9662;</span>';
-            }} else if (checkboxes.length === 1) {{
+            } else if (checkboxes.length === 1) {
                 const label = checkboxes[0].parentNode.textContent.trim();
                 button.innerHTML = label + ' <span class="arrow">&#9662;</span>';
-            }} else {{
+            } else {
                 button.innerHTML = checkboxes.length + ' selected <span class="arrow">&#9662;</span>';
-            }}
-        }}
+            }
+        }
 
         // Main filter function
-        function applyFilters() {{
+        function applyFilters() {
             const searchTerm = document.getElementById('filter-search').value.toLowerCase().trim();
             const ratingMin = parseFloat(document.getElementById('filter-rating-min').value) || 0;
             const yearMin = parseInt(document.getElementById('filter-year-min').value) || 0;
@@ -1853,7 +1862,7 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
             updateStreamingButtonText();
 
             // Filter rows in all tables
-            document.querySelectorAll('tbody tr').forEach(row => {{
+            document.querySelectorAll('tbody tr').forEach(row => {
                 let show = true;
 
                 // Get cell values - handle different table structures
@@ -1868,96 +1877,118 @@ def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, hun
                 let year = 0, rating = 0, days = 0;
                 let streamingCell = null;
 
-                cells.forEach((cell, idx) => {{
+                cells.forEach((cell, idx) => {
                     if (idx === 0) return; // Skip checkbox
                     const text = cell.textContent.trim();
 
                     // Check if it's a streaming icons cell
-                    if (cell.querySelector('.streaming-icons') || cell.querySelector('.streaming-icon')) {{
+                    if (cell.querySelector('.streaming-icons') || cell.querySelector('.streaming-icon')) {
                         streamingCell = cell;
                         return;
-                    }}
+                    }
 
                     // Year: 4-digit number between 1900-2030
-                    if (/^\\d{{4}}$/.test(text) && parseInt(text) >= 1900 && parseInt(text) <= 2030) {{
+                    if (/^\\d{4}$/.test(text) && parseInt(text) >= 1900 && parseInt(text) <= 2030) {
                         year = parseInt(text);
-                    }}
+                    }
                     // Rating: decimal between 0-10
-                    else if (/^\\d+\\.\\d$/.test(text) && parseFloat(text) <= 10) {{
+                    else if (/^\\d+\\.\\d$/.test(text) && parseFloat(text) <= 10) {
                         rating = parseFloat(text);
-                    }}
+                    }
                     // Days: plain integer (last numeric column)
-                    else if (/^\\d+$/.test(text) && parseInt(text) < 10000) {{
+                    else if (/^\\d+$/.test(text) && parseInt(text) < 10000) {
                         days = parseInt(text);
-                    }}
-                }});
+                    }
+                });
 
                 // Search filter
-                if (searchTerm && !title.includes(searchTerm)) {{
+                if (searchTerm && !title.includes(searchTerm)) {
                     show = false;
-                }}
+                }
 
                 // Rating filter
-                if (rating < ratingMin) {{
+                if (rating < ratingMin) {
                     show = false;
-                }}
+                }
 
                 // Year filter
-                if (year > 0 && (year < yearMin || year > yearMax)) {{
+                if (year > 0 && (year < yearMin || year > yearMax)) {
                     show = false;
-                }}
+                }
 
                 // Days filter
-                if (days > daysMax) {{
+                if (days > daysMax) {
                     show = false;
-                }}
+                }
 
                 // Streaming service filter
-                if (selectedServices.length > 0 && streamingCell) {{
+                if (selectedServices.length > 0 && streamingCell) {
                     const icons = streamingCell.querySelectorAll('.streaming-icon');
                     let hasMatch = false;
 
-                    icons.forEach(icon => {{
+                    icons.forEach(icon => {
                         const classes = Array.from(icon.classList);
                         // Check for "user-service" class match
-                        if (selectedServices.includes('user-service') && classes.includes('user-service')) {{
+                        if (selectedServices.includes('user-service') && classes.includes('user-service')) {
                             hasMatch = true;
-                        }}
+                        }
                         // Check for specific service match
-                        selectedServices.forEach(service => {{
-                            if (service !== 'user-service' && classes.includes(service)) {{
+                        selectedServices.forEach(service => {
+                            if (service !== 'user-service' && classes.includes(service)) {
                                 hasMatch = true;
-                            }}
-                        }});
-                    }});
+                            }
+                        });
+                    });
 
-                    if (!hasMatch) {{
+                    if (!hasMatch) {
                         show = false;
-                    }}
-                }}
+                    }
+                }
 
                 // Apply visibility
                 row.classList.toggle('filtered-out', !show);
-            }});
+            });
 
             updateCounts();
-        }}
+        }
 
         // Clear all filters
-        function clearFilters() {{
+        function clearFilters() {
             document.getElementById('filter-search').value = '';
             document.getElementById('filter-rating-min').value = '';
             document.getElementById('filter-year-min').value = '';
             document.getElementById('filter-year-max').value = '';
             document.getElementById('filter-days-max').value = '';
 
-            document.querySelectorAll('#streaming-menu input[type="checkbox"]').forEach(cb => {{
+            document.querySelectorAll('#streaming-menu input[type="checkbox"]').forEach(cb => {
                 cb.checked = false;
-            }});
+            });
 
             updateStreamingButtonText();
             applyFilters();
-        }}
+        }
     </script>
 </body>
 </html>"""
+
+
+def _generate_html_template(tabs_html: str, panels_html: str, now: datetime, huntarr_tabs_html: str = "") -> str:
+    """Generate the full HTML template with CSS and JavaScript."""
+    # If no user tabs but huntarr tabs exist, put huntarr tabs in the main tabs row
+    # Otherwise, huntarr tabs go in their own row below user tabs
+    if not tabs_html.strip() and huntarr_tabs_html:
+        tabs_html = huntarr_tabs_html
+        huntarr_tabs_row = ""
+    elif huntarr_tabs_html:
+        huntarr_tabs_row = f"""
+            <div class="huntarr-tabs">
+                {huntarr_tabs_html}
+            </div>"""
+    else:
+        huntarr_tabs_row = ""
+    return (
+        _html_head_and_style()
+        + _html_body_header(now)
+        + _html_tabs_and_panels(tabs_html, huntarr_tabs_row, panels_html)
+        + _html_script()
+    )
