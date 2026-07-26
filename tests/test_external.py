@@ -2109,20 +2109,16 @@ class TestFindHorizonMovies:
         assert saved['library_tmdb_ids'] == [1]
         assert saved['horizon_movies'][0]['tmdb_id'] == 2
 
-    def test_stale_partial_sequel_cache_silently_misses_newly_owned_movie_collection(self, tmp_path):
-        """Documents surprising behavior found while writing this coverage
-        (NOT fixed here - recommenders/external.py is out of scope for
-        this change). When the Sequel Huntarr cache exists but is PARTIAL
-        (e.g. the user added a new movie to Plex after Sequel Huntarr's
-        last run, so its tmdb_id was never recorded in movie_collections),
-        find_horizon_movies's cache-reuse branch trusts movie_collections
-        wholesale and never attempts to discover the new movie's
-        collection - unlike find_missing_sequels, which diffs against
-        movie_collections and fetches only the still-uncached ids. Net
-        effect: a legitimately-owned movie's upcoming sequel is silently
-        never surfaced, with zero network calls even attempted, until
-        Sequel Huntarr happens to run again and refresh the shared
-        cache."""
+    def test_stale_partial_sequel_cache_still_discovers_newly_owned_movie_collection(self, tmp_path):
+        """When the Sequel Huntarr cache exists but is PARTIAL (e.g. the
+        user added a new movie to Plex after Sequel Huntarr's last run, so
+        its tmdb_id was never recorded in movie_collections),
+        find_horizon_movies must diff the current library against the
+        cached movie_collections map - just like find_missing_sequels does
+        - and fetch collection data for the still-uncached ids, instead of
+        trusting the cache wholesale. Net effect: a legitimately-owned
+        movie's upcoming sequel is still discovered, without needing
+        Sequel Huntarr to run again first."""
         import time
         cache_dir = tmp_path / 'cache'
         cache_dir.mkdir()
@@ -2137,16 +2133,27 @@ class TestFindHorizonMovies:
             'missing_sequels': [],
         }))
         # The real, current Plex library owns tmdb_id=5, which does belong
-        # to a collection with a genuine upcoming sequel - but the code
-        # never finds out, because 5 isn't a key in movie_collections.
+        # to a collection with a genuine upcoming sequel. Since 5 isn't a
+        # key in movie_collections yet, discovering it requires a fetch.
         plex = _plex_with_libraries([_library_item(5)])
+        url_map = {
+            'https://api.themoviedb.org/3/movie/5': _tmdb_movie_detail_response(
+                belongs_to_collection={'id': 700}),
+            'https://api.themoviedb.org/3/collection/700': _tmdb_collection_detail_response(
+                700, 'Newly Discovered Collection', [
+                    {'id': 5, 'title': 'Owned', 'release_date': _PAST_DATE, 'genre_ids': []},
+                    {'id': 6, 'title': 'Upcoming Sequel', 'release_date': _FUTURE_DATE, 'genre_ids': []},
+                ]),
+            'https://api.themoviedb.org/3/movie/6': _tmdb_movie_detail_response(status='Planned'),
+        }
 
         with patch('recommenders.external.get_project_root', return_value=str(tmp_path)), \
-             patch('recommenders.external.requests.get') as mock_get:
+             patch('recommenders.external.requests.get', side_effect=_strict_get_dispatcher(url_map)):
             result = find_horizon_movies('key', plex, 'Movies')
 
-        assert result == []
-        mock_get.assert_not_called()
+        assert [m['tmdb_id'] for m in result] == [6]
+        assert result[0]['collection_name'] == 'Newly Discovered Collection'
+        assert result[0]['status'] == 'Planned'
 
 
 class TestCategorizeByStreamingServiceAllItems:

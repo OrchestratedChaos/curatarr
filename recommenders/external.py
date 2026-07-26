@@ -1210,66 +1210,63 @@ def find_horizon_movies(
     movie_collections = sequel_cache.get('movie_collections', {})
     collection_details_cache = sequel_cache.get('collection_details', {})
 
-    # If no sequel cache, we need to build collection data
-    if not movie_collections:
-        total_items = len(items)
-        print(f"{CYAN}  Scanning {total_items} movies for collections...{RESET}")
+    # Diff the current library against the cached movie->collection map,
+    # exactly like find_missing_sequels does: trust the cache for ids it
+    # already knows about, but fetch collection data for any movie that
+    # isn't in it yet (e.g. added to Plex after Sequel Huntarr's last run).
+    # This intentionally always scans `items` rather than trusting
+    # movie_collections wholesale, so newly-owned movies aren't silently
+    # skipped.
+    total_items = len(items)
+    print(f"{CYAN}  Scanning {total_items} movies for collections...{RESET}")
 
-        collection_owned = {}
+    collection_owned = {}
 
-        for i, item in enumerate(items):
-            if i % 50 == 0:
-                show_progress("  Scanning library", i + 1, total_items)
+    for i, item in enumerate(items):
+        if i % 50 == 0:
+            show_progress("  Scanning library", i + 1, total_items)
 
-            tmdb_id = None
-            for guid in item.guids:
-                if 'tmdb://' in guid.id:
-                    try:
-                        tmdb_id = int(guid.id.split('tmdb://')[1])
-                        break
-                    except (ValueError, IndexError):
-                        continue
-
-            if not tmdb_id:
-                continue
-
-            tmdb_id_str = str(tmdb_id)
-            if tmdb_id_str in movie_collections:
-                coll_id = movie_collections[tmdb_id_str]
-                if coll_id:
-                    if coll_id not in collection_owned:
-                        collection_owned[coll_id] = set()
-                    collection_owned[coll_id].add(tmdb_id)
-            else:
-                # Fetch collection ID
+        tmdb_id = None
+        for guid in item.guids:
+            if 'tmdb://' in guid.id:
                 try:
-                    url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-                    params = {'api_key': tmdb_api_key}
-                    response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
-
-                    if response.status_code == 200:
-                        data = response.json()
-                        collection = data.get('belongs_to_collection')
-                        if collection:
-                            coll_id = collection['id']
-                            movie_collections[tmdb_id_str] = coll_id
-                            if coll_id not in collection_owned:
-                                collection_owned[coll_id] = set()
-                            collection_owned[coll_id].add(tmdb_id)
-                        else:
-                            movie_collections[tmdb_id_str] = None
-                except (requests.RequestException, KeyError):
+                    tmdb_id = int(guid.id.split('tmdb://')[1])
+                    break
+                except (ValueError, IndexError):
                     continue
 
-        show_progress("  Scanning library", total_items, total_items)
-    else:
-        # Build collection_owned from cached data
-        collection_owned = {}
-        for tmdb_id_str, coll_id in movie_collections.items():
-            if coll_id and int(tmdb_id_str) in library_tmdb_ids:
+        if not tmdb_id:
+            continue
+
+        tmdb_id_str = str(tmdb_id)
+        if tmdb_id_str in movie_collections:
+            coll_id = movie_collections[tmdb_id_str]
+            if coll_id:
                 if coll_id not in collection_owned:
                     collection_owned[coll_id] = set()
-                collection_owned[coll_id].add(int(tmdb_id_str))
+                collection_owned[coll_id].add(tmdb_id)
+        else:
+            # Fetch collection ID
+            try:
+                url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+                params = {'api_key': tmdb_api_key}
+                response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    collection = data.get('belongs_to_collection')
+                    if collection:
+                        coll_id = collection['id']
+                        movie_collections[tmdb_id_str] = coll_id
+                        if coll_id not in collection_owned:
+                            collection_owned[coll_id] = set()
+                        collection_owned[coll_id].add(tmdb_id)
+                    else:
+                        movie_collections[tmdb_id_str] = None
+            except (requests.RequestException, KeyError):
+                continue
+
+    show_progress("  Scanning library", total_items, total_items)
 
     print(f"{GREEN}  Found {len(collection_owned)} collections to check for upcoming movies{RESET}")
 
