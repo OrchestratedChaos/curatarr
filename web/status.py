@@ -127,7 +127,7 @@ def list_log_files(logs_dir: str) -> List[Dict]:
 
 
 def display_name_safe_slug(config: Dict, username: str) -> str:
-    """Mirror recommenders/external_output.py's filename derivation:
+    """Mirror recommenders/external_render.py's filename derivation:
     display_name (falling back to the username itself), lowercased,
     spaces replaced with underscores.
     """
@@ -140,7 +140,7 @@ def find_user_watchlist(external_dir: str, config: Dict, username: str) -> Optio
     """Return the basename of this user's generated watchlist, if any.
 
     Prefers the per-user "<display_name>_watchlist.html" file that
-    recommenders/external_output.py writes; falls back to the combined
+    recommenders/external_render.py writes; falls back to the combined
     (all-users, tabbed) "watchlist.html" if that's all that exists yet.
     Returns None if neither has been generated.
     """

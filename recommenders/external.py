@@ -29,7 +29,7 @@ logger = logging.getLogger("curatarr")
 
 # Import shared utilities - same as internal recommenders
 # Import export functions
-from recommenders.external_exports import (
+from recommenders.external_sync import (
     export_to_mdblist,
     export_to_radarr,
     export_to_simkl,
@@ -40,7 +40,7 @@ from recommenders.external_exports import (
 )
 
 # Import output generation
-from recommenders.external_output import SERVICE_DISPLAY_NAMES, generate_combined_html, generate_markdown
+from recommenders.external_render import SERVICE_DISPLAY_NAMES, generate_combined_html, generate_markdown
 from utils import (
     CYAN,
     DEFAULT_RATING_MULTIPLIERS,
@@ -2876,6 +2876,22 @@ def _main_impl():
 
     # Get TMDB API key
     tmdb_api_key = get_tmdb_config(config)["api_key"]
+    if not tmdb_api_key:
+        # Unlike movie.py/tv.py (where tmdb_api_key is genuinely optional -
+        # both guard every use with `if tmdb_api_key`, degrading to
+        # Plex-native-only scoring without it), this module has no degraded
+        # mode: every candidate it discovers comes from TMDB (discovery/
+        # keyword/collection/watch-provider lookups all type-hint
+        # tmdb_api_key as `str`, never `Optional[str]`), so a missing key
+        # wouldn't shrink the watchlist, it would silently break it
+        # end-to-end. fetch_tmdb_with_retry() swallows every TMDB failure
+        # into a bare `None` by design (see that function's docstring), so
+        # without this check that would otherwise surface only as a
+        # confusing empty/broken watchlist with no indication why - fail
+        # early and clearly here instead.
+        log_error("TMDB API key is not configured (config/config.yml: tmdb.api_key).")
+        log_error("Get a free key from: https://www.themoviedb.org/settings/api")
+        sys.exit(1)
 
     # Get users
     users = [u.strip() for u in config["users"]["list"].split(",")]

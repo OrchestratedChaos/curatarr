@@ -1,5 +1,5 @@
 /* Curatarr admin UI - "Red Velvet Cinema" theme, matched to the
-   generated watchlist page (recommenders/external_output.py). Fonts
+   generated watchlist page (recommenders/external_render.py). Fonts
    are self-hosted (web/static/fonts/) - no external requests, so this
    works offline and doesn't conflict with the app's Origin/Host/CSP
    guards. Dark-only, no light mode. */

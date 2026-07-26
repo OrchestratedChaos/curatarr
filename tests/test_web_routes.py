@@ -232,7 +232,7 @@ class TestResults:
 
     def test_watchlist_html_gets_restrictive_csp_header(self, client):
         """Defense-in-depth on top of the escaping fix in
-        recommenders/external_output.py - even a future gap there
+        recommenders/external_render.py - even a future gap there
         shouldn't be able to turn into a script driving this app's own
         state-changing endpoints."""
         c, app, root = client

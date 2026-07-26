@@ -2,6 +2,51 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.19] - 2026-07-26
+
+### Added
+
+- **README.md now documents how to actually run the test suite** - a
+  brief Development section with the real commands (previously only
+  discoverable by reading `.github/workflows/tests.yml`).
+- **Upfront, actionable error when the TMDB API key is missing** for
+  external recommendations (`recommenders/external.py`). Unlike
+  `movie.py`/`tv.py` (where `tmdb_api_key` is genuinely optional -
+  every use there is guarded with `if tmdb_api_key`, degrading to
+  Plex-native-only scoring without one), external recommendations have
+  no degraded mode: every candidate comes from TMDB, so a missing key
+  previously produced a silently empty/broken watchlist instead of a
+  clear error (`fetch_tmdb_with_retry()` swallows every TMDB failure
+  into `None` by design). Now fails fast with a link to get a free key.
+
+### Fixed
+
+- **`.github/ISSUE_TEMPLATE/bug_report.md` still had the stock
+  "Smartphone"/"Desktop" sections** from GitHub's default template -
+  irrelevant to a self-hosted Python/Docker app. Rewritten to ask for
+  Curatarr version, install method, OS, Plex version, and a relevant
+  log excerpt.
+- **`CLAUDE.md` said "Python 3.8+"** (the real floor is 3.10+, per
+  `README.md` and `requirements.txt`'s plexapi/requests pins) - fixed
+  in place (gitignored, not part of this PR).
+
+### Changed
+
+- **Renamed `recommenders/external_output.py` -> `external_render.py`**
+  (renders markdown/HTML) and **`recommenders/external_exports.py` ->
+  `external_sync.py`** (pushes to Trakt/Sonarr/Radarr/MDBList/Simkl) -
+  clearer names for what each module actually does. Verified every
+  import/patch-target/comment reference across the codebase (grepped
+  exhaustively - 159 occurrences updated) and confirmed
+  `curatarr.spec` has no explicit reference to either module name (it
+  only lists `curatarr_app.py` as the Analysis entry point; PyInstaller
+  follows the rest of the import graph automatically). Verified against
+  the real frozen binary, not just the build log: a fresh
+  `pyinstaller curatarr.spec` build succeeded, `--version` reported
+  2.10.19, and `--run-recommender external` reached
+  `recommenders/external.py`'s `_main_impl()` (importing both renamed
+  modules) with no `ImportError`.
+
 ## [2.10.18] - 2026-07-26
 
 ### Changed
