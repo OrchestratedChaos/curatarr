@@ -149,9 +149,6 @@ from .metrics import (
 
 # Plex utilities
 from .plex import (
-    MOVIE_RATING_HIERARCHY,
-    TV_RATING_HIERARCHY,
-    apply_user_label_restrictions,
     cleanup_old_collections,
     extract_genres,
     extract_ids_from_guids,
@@ -166,7 +163,6 @@ from .plex import (
     get_excluded_genres_for_user,
     get_library_imdb_ids,
     get_library_imdb_ids_from_items,
-    get_max_rating_for_user,
     get_plex_account_ids,
     get_plex_user_ids,
     get_user_specific_connection,
@@ -174,8 +170,17 @@ from .plex import (
     get_watched_show_count,
     identify_dropped_shows,
     init_plex,
-    is_rating_allowed,
     update_plex_collection,
+)
+
+# Plex rating/label POLICY (split from .plex - see utils/plex_policy.py's
+# own module docstring for why these four specifically live here instead)
+from .plex_policy import (
+    MOVIE_RATING_HIERARCHY,
+    TV_RATING_HIERARCHY,
+    apply_user_label_restrictions,
+    get_max_rating_for_user,
+    is_rating_allowed,
 )
 
 # Radarr utilities
@@ -357,6 +362,27 @@ __all__ = [
     "get_libraries_for_media_type",
     "get_effective_arr_config",
     "get_update_mode",
+    "get_negative_multiplier",
+    "get_negative_signals_config",
+    "PLEX_REQUEST_TIMEOUT",
+    "SONARR_REQUEST_TIMEOUT",
+    "RADARR_REQUEST_TIMEOUT",
+    "TMDB_REQUEST_TIMEOUT",
+    "TMDB_ANIMATION_GENRE_ID",
+    "TMDB_TV_MOVIE_GENRE_ID",
+    "DEFAULT_NEGATIVE_MULTIPLIERS",
+    "DEFAULT_NEGATIVE_THRESHOLD",
+    "COLLECTION_BONUS_BASE",
+    "COLLECTION_BONUS_CAP",
+    "COLLECTION_BONUS_LOG_FACTOR",
+    "RATING_MULTIPLIER_2_STAR",
+    "RATING_MULTIPLIER_3_STAR",
+    "RATING_MULTIPLIER_4_STAR",
+    "RATING_MULTIPLIER_5_STAR",
+    "RATING_MULTIPLIER_UNRATED",
+    "RATING_TIER_3_STAR",
+    "RATING_TIER_4_STAR",
+    "RATING_TIER_5_STAR",
     # Self-update (frozen binaries only)
     "SelfUpdateError",
     "NotFrozenError",
@@ -415,10 +441,14 @@ __all__ = [
     "smart_open_html",
     # TMDB
     "LANGUAGE_CODES",
+    "IMDB_TMDB_CACHE_VERSION",
     "get_full_language_name",
     "fetch_tmdb_with_retry",
     "get_tmdb_id_for_item",
+    "get_tmdb_id_from_imdb",
     "get_tmdb_keywords",
+    "load_imdb_tmdb_cache",
+    "save_imdb_tmdb_cache",
     # Cache
     "save_json_cache",
     "load_json_cache",
@@ -476,6 +506,7 @@ __all__ = [
     "is_rating_allowed",
     "MOVIE_RATING_HIERARCHY",
     "TV_RATING_HIERARCHY",
+    "apply_user_label_restrictions",
     "get_user_specific_connection",
     "find_plex_movie",
     "extract_genres",
@@ -484,6 +515,8 @@ __all__ = [
     "get_library_imdb_ids",
     "get_library_imdb_ids_from_items",
     "get_plex_user_ids",
+    "fetch_show_completion_data",
+    "identify_dropped_shows",
     # User migration (stable Plex id -> username)
     "USER_ID_MAP_FILENAME",
     "load_user_id_map",
@@ -497,6 +530,7 @@ __all__ = [
     "migrate_renamed_plex_users",
     # Trakt
     "TRAKT_RATE_LIMIT_DELAY",
+    "TRAKT_ENHANCE_CACHE_VERSION",
     "TraktAuthError",
     "TraktAPIError",
     "TraktClient",
@@ -504,6 +538,8 @@ __all__ = [
     "get_authenticated_trakt_client",
     "fetch_tmdb_details_for_profile",
     "enhance_profile_with_trakt",
+    "load_trakt_enhance_cache",
+    "save_trakt_enhance_cache",
     # Trakt Discovery
     "DISCOVERY_CACHE_TTL",
     "get_trending_items",

@@ -1,5 +1,11 @@
 """
 Tests for utils/plex.py - Plex extraction and utility functions.
+
+Also covers utils/plex_policy.py (rating/label policy split out of
+utils/plex.py - see that module's docstring) rather than a separate
+test file, since this suite predates that split and stays organized by
+"Plex-related behavior", not by which of the two modules a given
+function now lives in.
 """
 
 from unittest.mock import MagicMock, Mock, patch
@@ -9,7 +15,6 @@ import pytest
 import requests
 
 from utils.plex import (
-    apply_user_label_restrictions,
     extract_genres,
     extract_ids_from_guids,
     extract_rating,
@@ -18,6 +23,7 @@ from utils.plex import (
     get_excluded_genres_for_user,
     get_library_imdb_ids,
 )
+from utils.plex_policy import apply_user_label_restrictions
 
 
 class TestExtractGenres:
@@ -1842,9 +1848,9 @@ class TestUpdatePlexCollectionSort:
 class TestApplyUserLabelRestrictions:
     """Tests for apply_user_label_restrictions() function."""
 
-    @patch("utils.plex.requests.put")
-    @patch("utils.plex.requests.get")
-    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex_policy.requests.put")
+    @patch("utils.plex_policy.requests.get")
+    @patch("utils.plex_policy.MyPlexAccount")
     def test_applies_exclude_restrictions_to_users(self, mock_account_class, mock_get, mock_put):
         """Test that exclude restrictions are applied to each user."""
 
@@ -1881,9 +1887,9 @@ class TestApplyUserLabelRestrictions:
         # Should be called twice (once for each non-admin user)
         assert mock_put.call_count == 2
 
-    @patch("utils.plex.requests.put")
-    @patch("utils.plex.requests.get")
-    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex_policy.requests.put")
+    @patch("utils.plex_policy.requests.get")
+    @patch("utils.plex_policy.MyPlexAccount")
     def test_skips_admin_user(self, mock_account_class, mock_get, mock_put):
         """Test that admin user is skipped (can't have restrictions)."""
 
@@ -1916,9 +1922,9 @@ class TestApplyUserLabelRestrictions:
         # Should only be called once (for OtherUser, not AdminUser)
         mock_put.assert_called_once()
 
-    @patch("utils.plex.requests.put")
-    @patch("utils.plex.requests.get")
-    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex_policy.requests.put")
+    @patch("utils.plex_policy.requests.get")
+    @patch("utils.plex_policy.MyPlexAccount")
     def test_returns_false_for_unknown_user(self, mock_account_class, mock_get, mock_put):
         """Test that unknown users result in partial failure."""
 
@@ -1952,7 +1958,7 @@ class TestApplyUserLabelRestrictions:
         # But should still apply restrictions for KnownUser
         mock_put.assert_called_once()
 
-    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex_policy.MyPlexAccount")
     def test_handles_plex_api_error(self, mock_account_class):
         """Test that PlexApiException is handled gracefully."""
 
@@ -1967,7 +1973,7 @@ class TestApplyUserLabelRestrictions:
 
         assert result is False
 
-    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex_policy.MyPlexAccount")
     def test_returns_true_for_single_user(self, mock_account_class):
         """Test that single user returns True (nothing to hide)."""
 
@@ -1982,7 +1988,7 @@ class TestApplyUserLabelRestrictions:
         # MyPlexAccount should not even be instantiated
         mock_account_class.assert_not_called()
 
-    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex_policy.MyPlexAccount")
     def test_returns_true_for_empty_labels(self, mock_account_class):
         """Test that empty labels dict returns True."""
 
@@ -1993,9 +1999,9 @@ class TestApplyUserLabelRestrictions:
         assert result is True
         mock_account_class.assert_not_called()
 
-    @patch("utils.plex.requests.put")
-    @patch("utils.plex.requests.get")
-    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex_policy.requests.put")
+    @patch("utils.plex_policy.requests.get")
+    @patch("utils.plex_policy.MyPlexAccount")
     def test_case_insensitive_username_match(self, mock_account_class, mock_get, mock_put):
         """Test that username matching is case insensitive."""
 
@@ -2036,7 +2042,7 @@ class TestContentRatingFilter:
 
     def test_get_max_rating_for_user_returns_rating(self):
         """Test getting max_rating for a user who has one configured."""
-        from utils.plex import get_max_rating_for_user
+        from utils.plex_policy import get_max_rating_for_user
 
         user_prefs = {
             "kids": {"display_name": "Kids", "max_rating": "PG"},
@@ -2048,7 +2054,7 @@ class TestContentRatingFilter:
 
     def test_get_max_rating_for_user_returns_none_when_not_set(self):
         """Test getting max_rating returns None when not configured."""
-        from utils.plex import get_max_rating_for_user
+        from utils.plex_policy import get_max_rating_for_user
 
         user_prefs = {
             "adult": {"display_name": "Adult"}  # No max_rating
@@ -2058,7 +2064,7 @@ class TestContentRatingFilter:
 
     def test_get_max_rating_for_user_returns_none_for_unknown_user(self):
         """Test getting max_rating returns None for unknown user."""
-        from utils.plex import get_max_rating_for_user
+        from utils.plex_policy import get_max_rating_for_user
 
         user_prefs = {"kids": {"max_rating": "PG"}}
 
@@ -2067,7 +2073,7 @@ class TestContentRatingFilter:
 
     def test_is_rating_allowed_movie_hierarchy(self):
         """Test movie rating hierarchy: G < PG < PG-13 < R < NC-17."""
-        from utils.plex import is_rating_allowed
+        from utils.plex_policy import is_rating_allowed
 
         # PG-13 max rating
         assert is_rating_allowed("G", "PG-13", "movie") is True
@@ -2084,7 +2090,7 @@ class TestContentRatingFilter:
 
     def test_is_rating_allowed_tv_hierarchy(self):
         """Test TV rating hierarchy: TV-Y < TV-Y7 < TV-G < TV-PG < TV-14 < TV-MA."""
-        from utils.plex import is_rating_allowed
+        from utils.plex_policy import is_rating_allowed
 
         # TV-PG max rating
         assert is_rating_allowed("TV-Y", "TV-PG", "tv") is True
@@ -2101,7 +2107,7 @@ class TestContentRatingFilter:
 
     def test_is_rating_allowed_case_insensitive(self):
         """Test rating comparison is case insensitive."""
-        from utils.plex import is_rating_allowed
+        from utils.plex_policy import is_rating_allowed
 
         assert is_rating_allowed("pg-13", "PG-13", "movie") is True
         assert is_rating_allowed("PG-13", "pg-13", "movie") is True
@@ -2109,7 +2115,7 @@ class TestContentRatingFilter:
 
     def test_is_rating_allowed_no_max_rating(self):
         """Test that no max_rating allows all content."""
-        from utils.plex import is_rating_allowed
+        from utils.plex_policy import is_rating_allowed
 
         assert is_rating_allowed("R", None, "movie") is True
         assert is_rating_allowed("NC-17", None, "movie") is True
@@ -2117,14 +2123,14 @@ class TestContentRatingFilter:
 
     def test_is_rating_allowed_no_content_rating(self):
         """Test that missing content_rating allows the content."""
-        from utils.plex import is_rating_allowed
+        from utils.plex_policy import is_rating_allowed
 
         assert is_rating_allowed(None, "PG-13", "movie") is True
         assert is_rating_allowed("", "PG-13", "movie") is True
 
     def test_is_rating_allowed_unknown_rating(self):
         """Test that unknown ratings (NR, Unrated) are allowed."""
-        from utils.plex import is_rating_allowed
+        from utils.plex_policy import is_rating_allowed
 
         assert is_rating_allowed("NR", "PG-13", "movie") is True
         assert is_rating_allowed("Unrated", "PG", "movie") is True

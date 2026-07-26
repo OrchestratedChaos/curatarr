@@ -4,8 +4,9 @@ This is a companion to, not a replacement for, utils.migrate_config -
 that module validates config.yml's overall *shape* (monolithic vs.
 modular layout). Nothing in the existing codebase validates individual
 field values (weights summing to 1.0, well-formed URLs, etc.) before
-writing them out, so web/config_app.py uses these helpers to reject bad
-input before it ever reaches config_io.save_module.
+writing them out, so each of web/config_connections.py, config_users.py,
+config_libraries.py, and config_settings.py uses these helpers to reject
+bad input before it ever reaches config_io.save_module.
 
 Every validate_* function appends to a shared `errors` dict of
 field_name -> message instead of raising immediately, so a form
