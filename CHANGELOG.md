@@ -2,6 +2,41 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.30] - 2026-07-26
+
+### Changed
+
+- **Web hardening: login rate limiting, conditional Secure cookie, static assets.**
+
+  Three independent hardening fixes to `web/security.py`, found during
+  an audit pass:
+
+  - `POST /login` had no failed-attempt limiting at all - an attacker
+    (or a script) could hammer the endpoint as fast as the process
+    could handle requests. Added a per-source-IP failed-attempt
+    counter: 5 failures within a rolling 60-second window locks that
+    IP out (rejected outright, without even checking the token, so
+    continuing to hit the endpoint while locked out can't extend the
+    lockout). Never permanent - the window ages out on its own with no
+    operator intervention, and a single successful login clears the
+    IP's history immediately. In-process/in-memory, no new dependency
+    (flask-limiter is not already a requirement). Every failed attempt
+    is logged (source IP only, never the attempted token).
+  - The `curatarr_token` cookie always omitted `Secure`, on the
+    reasoning that this app is served over plain HTTP by design. That's
+    still true for the common case, but self-hosters commonly put a
+    TLS-terminating reverse proxy (nginx/Caddy/Traefik) in front of it.
+    `Secure` is now set whenever the request actually arrived over TLS
+    - directly, or via a trusted proxy's `X-Forwarded-Proto`, gated
+    behind an explicit `CURATARR_TRUST_PROXY_PROTO=true` opt-in (that
+    header is otherwise exactly as spoofable by a direct caller as any
+    other request header - unset by default, so every existing install
+    is unaffected).
+  - `_TOKEN_EXEMPT_PATHS` only exempted `/login` and `/healthz` - on a
+    non-loopback bind, the login page's own `/static/style.css` 401'd
+    before the browser had a token to present, breaking the login page
+    itself. Static assets are now exempt too (nothing else is).
+
 ## [2.10.29] - 2026-07-26
 
 ### Changed

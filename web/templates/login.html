@@ -11,7 +11,9 @@
     <main>
       <h1>Curatarr</h1>
       <p>This instance is not bound to loopback and requires an access token.</p>
-      {% if error %}
+      {% if error == 'locked' %}
+      <p class="banner error">Too many failed attempts. Try again in a minute.</p>
+      {% elif error %}
       <p class="banner error">Invalid token.</p>
       {% endif %}
       <form method="post" action="{{ url_for('login_submit') }}">

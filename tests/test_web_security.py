@@ -8,7 +8,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 
 from web.app import create_app
-from web.security import _is_loopback_bind, is_allowed_host, redact, redact_lines, safe_join
+from web.security import (
+    _client_ip,
+    _is_loopback_bind,
+    _login_failures,
+    is_allowed_host,
+    redact,
+    redact_lines,
+    safe_join,
+)
 
 
 class TestRedact:
@@ -325,3 +333,254 @@ class TestRegisterTokenAuth:
         app.testing = True
         resp = app.test_client().get("/")
         assert resp.status_code == 401  # a configured token always wins
+
+
+class TestConditionalSecureCookie:
+    """PR2(b): the curatarr_token cookie's Secure attribute is set only
+    when the request actually arrived over TLS - directly
+    (request.is_secure) or, opt-in only, via a trusted reverse proxy's
+    X-Forwarded-Proto header - see web/security.py's
+    _request_is_secure. Never set on a plain-HTTP request with no
+    opt-in, matching this app's plain-HTTP-by-design default (see
+    TestRegisterTokenAuth.test_login_submit_with_correct_token_sets_cookie_and_redirects
+    above, unchanged)."""
+
+    NON_LOOPBACK_HOST = "0.0.0.0"
+    TOKEN = "a" * 32
+
+    def _client(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv("CURATARR_AUTH_TOKEN", self.TOKEN)
+        monkeypatch.delenv("CURATARR_TRUSTED_NETWORK", raising=False)
+        app = create_app(project_root=curatarr_web_root, bind_host=self.NON_LOOPBACK_HOST)
+        app.testing = True
+        return app.test_client()
+
+    def test_plain_http_request_gets_no_secure_flag(self, curatarr_web_root, monkeypatch):
+        monkeypatch.delenv("CURATARR_TRUST_PROXY_PROTO", raising=False)
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.post("/login", data={"token": self.TOKEN}, follow_redirects=False)
+        assert "Secure" not in resp.headers.get("Set-Cookie", "")
+
+    def test_direct_tls_request_gets_secure_flag(self, curatarr_web_root, monkeypatch):
+        monkeypatch.delenv("CURATARR_TRUST_PROXY_PROTO", raising=False)
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            environ_overrides={"wsgi.url_scheme": "https"},
+        )
+        assert "Secure" in resp.headers.get("Set-Cookie", "")
+
+    def test_forwarded_proto_ignored_without_opt_in(self, curatarr_web_root, monkeypatch):
+        """A direct caller can set X-Forwarded-Proto to whatever it
+        wants - without CURATARR_TRUST_PROXY_PROTO=true, it must not be
+        trusted (see _request_is_secure's docstring)."""
+        monkeypatch.delenv("CURATARR_TRUST_PROXY_PROTO", raising=False)
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        assert "Secure" not in resp.headers.get("Set-Cookie", "")
+
+    def test_forwarded_proto_honored_with_explicit_opt_in(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv("CURATARR_TRUST_PROXY_PROTO", "true")
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        assert "Secure" in resp.headers.get("Set-Cookie", "")
+
+    def test_forwarded_proto_http_with_opt_in_stays_insecure(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv("CURATARR_TRUST_PROXY_PROTO", "true")
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            headers={"X-Forwarded-Proto": "http"},
+        )
+        assert "Secure" not in resp.headers.get("Set-Cookie", "")
+
+    def test_forwarded_proto_takes_last_value_in_chain(self, curatarr_web_root, monkeypatch):
+        """Only the nearest hop's appended value is trusted - see
+        _request_is_secure's docstring on single-hop trust."""
+        monkeypatch.setenv("CURATARR_TRUST_PROXY_PROTO", "true")
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            headers={"X-Forwarded-Proto": "https, http"},
+        )
+        assert "Secure" not in resp.headers.get("Set-Cookie", "")
+
+
+class TestStaticAssetsExemptFromToken:
+    """PR2(c): the login page's own static assets must be reachable
+    before a browser has a token - see web/security.py's
+    _TOKEN_EXEMPT_STATIC_PREFIX. Nothing else under /static-like paths
+    is exempted beyond that one prefix."""
+
+    NON_LOOPBACK_HOST = "0.0.0.0"
+    TOKEN = "a" * 32
+
+    def _client(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv("CURATARR_AUTH_TOKEN", self.TOKEN)
+        monkeypatch.delenv("CURATARR_TRUSTED_NETWORK", raising=False)
+        app = create_app(project_root=curatarr_web_root, bind_host=self.NON_LOOPBACK_HOST)
+        app.testing = True
+        return app.test_client()
+
+    def test_static_css_reachable_without_token(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.get("/static/style.css")
+        assert resp.status_code != 401
+
+    def test_other_paths_still_require_token(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, monkeypatch)
+        resp = c.get("/config/connections")
+        assert resp.status_code == 401
+
+
+class TestLoginRateLimiting:
+    """PR2(a): per-IP failed-attempt lockout on POST /login - see
+    web/security.py's _is_locked_out/_record_login_failure. Policy:
+    at most 5 failed attempts per source IP within a rolling 60-second
+    window; never permanent - see web/security.py's module docstring
+    above register_token_auth for the full rationale.
+    """
+
+    NON_LOOPBACK_HOST = "0.0.0.0"
+    TOKEN = "a" * 32
+    IP = "203.0.113.5"
+
+    def setup_method(self):
+        _login_failures.clear()
+
+    def teardown_method(self):
+        _login_failures.clear()
+
+    def _client(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv("CURATARR_AUTH_TOKEN", self.TOKEN)
+        monkeypatch.delenv("CURATARR_TRUSTED_NETWORK", raising=False)
+        app = create_app(project_root=curatarr_web_root, bind_host=self.NON_LOOPBACK_HOST)
+        app.testing = True
+        return app.test_client()
+
+    def _fail(self, c, times, ip=None):
+        for _ in range(times):
+            c.post(
+                "/login",
+                data={"token": "wrong"},
+                follow_redirects=False,
+                environ_overrides={"REMOTE_ADDR": ip or self.IP},
+            )
+
+    def test_below_threshold_still_gets_invalid_token_error(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, monkeypatch)
+        self._fail(c, 4)
+        resp = c.post(
+            "/login",
+            data={"token": "wrong"},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert resp.headers["Location"] == "/login?error=1"
+
+    def test_reaching_threshold_locks_out(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, monkeypatch)
+        self._fail(c, 5)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},  # even the CORRECT token is rejected while locked out
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert resp.headers["Location"] == "/login?error=locked"
+        assert "curatarr_token" not in resp.headers.get("Set-Cookie", "")
+
+    def test_lockout_is_scoped_per_ip(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, monkeypatch)
+        self._fail(c, 5, ip=self.IP)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": "198.51.100.9"},
+        )
+        assert resp.status_code == 303
+        assert "curatarr_token" in resp.headers.get("Set-Cookie", "")
+
+    def test_successful_login_clears_failure_history(self, curatarr_web_root, monkeypatch):
+        c = self._client(curatarr_web_root, monkeypatch)
+        self._fail(c, 4)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert "curatarr_token" in resp.headers.get("Set-Cookie", "")
+        assert _client_ip.__module__ == "web.security"  # sanity the right module is under test
+        # A fresh run of failures now needs the full threshold again,
+        # not just one more (proves the history was actually cleared).
+        self._fail(c, 4)
+        resp = c.post(
+            "/login",
+            data={"token": "wrong"},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert resp.headers["Location"] == "/login?error=1"
+
+    def test_lockout_expires_after_window(self, curatarr_web_root, monkeypatch):
+        """Never permanent - a rolling window that ages out on its
+        own. Simulated by monkeypatching time.monotonic rather than
+        actually sleeping 60s."""
+        import web.security as security_module
+
+        fake_now = [1000.0]
+        monkeypatch.setattr(security_module.time, "monotonic", lambda: fake_now[0])
+
+        c = self._client(curatarr_web_root, monkeypatch)
+        self._fail(c, 5)
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert resp.headers["Location"] == "/login?error=locked"
+
+        fake_now[0] += security_module._LOGIN_WINDOW_SECONDS + 1
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert resp.status_code == 303
+        assert "curatarr_token" in resp.headers.get("Set-Cookie", "")
+
+    def test_failed_attempt_is_logged(self, curatarr_web_root, monkeypatch):
+        import web.security as security_module
+
+        logged = []
+        monkeypatch.setattr(security_module, "log_warning", lambda msg: logged.append(msg))
+
+        c = self._client(curatarr_web_root, monkeypatch)
+        c.post(
+            "/login",
+            data={"token": "wrong"},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert any(self.IP in msg for msg in logged)
+        assert not any("wrong" in msg for msg in logged)  # never log the attempted token
