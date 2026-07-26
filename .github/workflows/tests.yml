@@ -44,6 +44,42 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short --cov=. --cov-report=term-missing --cov-fail-under=85
 
+  lint:
+    runs-on: ubuntu-latest
+
+    # Non-blocking for now (every step below is continue-on-error) -
+    # this job was added by the 2.10.13 audit-remediation pass to start
+    # reporting ruff/mypy findings on every PR without wedging merges
+    # on a first pass across a codebase that had never been linted
+    # before. See CHANGELOG.md's [2.10.13]/[2.10.14] entries for the
+    # measured violation counts and the plan to flip pieces of this to
+    # blocking once they're clean on main.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install lint tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy
+
+      - name: ruff check
+        continue-on-error: true
+        run: ruff check .
+
+      - name: ruff format --check
+        continue-on-error: true
+        run: ruff format --check .
+
+      - name: mypy
+        continue-on-error: true
+        run: mypy .
+
   secret-scan:
     runs-on: ubuntu-latest
 
