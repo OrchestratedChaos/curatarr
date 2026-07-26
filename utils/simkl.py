@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .api_client import BaseAPIClient
 from .metrics import record_api_call
 
 logger = logging.getLogger("curatarr")
@@ -53,12 +54,19 @@ class SimklAPIError(Exception):
     pass
 
 
-class SimklClient:
+class SimklClient(BaseAPIClient):
     """
     Simkl API client with PIN authentication.
 
     PIN auth works in Docker/SSH environments without browser redirects.
     """
+
+    api_name = "Simkl"
+    exception_class = SimklAPIError
+    rate_limit_delay = SIMKL_RATE_LIMIT_DELAY
+    request_timeout = SIMKL_REQUEST_TIMEOUT
+    max_429_retries = SIMKL_MAX_429_RETRIES
+    max_retry_after_seconds = SIMKL_MAX_RETRY_AFTER_SECONDS
 
     def __init__(self, client_id: str, access_token: Optional[str] = None, token_callback: Optional[callable] = None):
         """
@@ -69,10 +77,10 @@ class SimklClient:
             access_token: Existing access token (optional)
             token_callback: Function to call when tokens are updated (for saving)
         """
+        super().__init__()
         self.client_id = client_id
         self.access_token = access_token
         self.token_callback = token_callback
-        self._last_request_time = 0
 
     @property
     def is_authenticated(self) -> bool:
@@ -86,12 +94,7 @@ class SimklClient:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
 
-    def _rate_limit(self) -> None:
-        """Enforce rate limiting between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < SIMKL_RATE_LIMIT_DELAY:
-            time.sleep(SIMKL_RATE_LIMIT_DELAY - elapsed)
-        self._last_request_time = time.time()
+    # _rate_limit() inherited from BaseAPIClient (rate_limit_delay set above)
 
     def _make_request(
         self,
@@ -137,36 +140,12 @@ class SimklClient:
         request_start = time.time()
         outcome = "error"
         try:
-            response = None
-            # Bounded retry loop for 429s - see SIMKL_MAX_429_RETRIES's
-            # comment above for why this used to recurse unboundedly.
-            for attempt in range(SIMKL_MAX_429_RETRIES + 1):
-                self._rate_limit()
-                response = requests.request(
-                    method=method,
-                    url=url,
-                    headers=headers,
-                    json=data,
-                    params=params,
-                    timeout=SIMKL_REQUEST_TIMEOUT,
-                    # Never auto-follow redirects - requests only strips
-                    # the Authorization header on a cross-host hop, not
-                    # the custom simkl-api-key header this client also
-                    # sends (see _get_headers).
-                    allow_redirects=False,
-                )
-
-                if response.status_code != 429 or attempt == SIMKL_MAX_429_RETRIES:
-                    break
-
-                retry_after = min(
-                    int(response.headers.get("Retry-After", 1)),
-                    SIMKL_MAX_RETRY_AFTER_SECONDS,
-                )
-                logger.warning(
-                    f"Simkl rate limited, waiting {retry_after}s (retry {attempt + 1}/{SIMKL_MAX_429_RETRIES})"
-                )
-                time.sleep(retry_after)
+            # Rate-limited request with the shared bounded 429-retry
+            # loop (see BaseAPIClient._send_with_retries) - returns the
+            # raw response instead of raising, so the status handling
+            # below (401/404/error mapping specific to Simkl) stays
+            # unchanged.
+            response = self._send_with_retries(method, url, data=data, params=params, headers=headers)
 
             # Handle auth errors
             if response.status_code == 401:

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .api_client import BaseAPIClient
 from .metrics import record_api_call
 
 logger = logging.getLogger("curatarr")
@@ -54,12 +55,19 @@ class TraktAPIError(Exception):
     pass
 
 
-class TraktClient:
+class TraktClient(BaseAPIClient):
     """
     Trakt API client with OAuth device authentication.
 
     Device auth flow works in Docker/SSH environments without browser redirects.
     """
+
+    api_name = "Trakt"
+    exception_class = TraktAPIError
+    rate_limit_delay = TRAKT_RATE_LIMIT_DELAY
+    request_timeout = TRAKT_REQUEST_TIMEOUT
+    max_429_retries = TRAKT_MAX_429_RETRIES
+    max_retry_after_seconds = TRAKT_MAX_RETRY_AFTER_SECONDS
 
     def __init__(
         self,
@@ -79,12 +87,12 @@ class TraktClient:
             refresh_token: Existing refresh token (optional)
             token_callback: Function to call when tokens are updated (for saving)
         """
+        super().__init__()
         self.client_id = client_id
         self.client_secret = client_secret
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.token_callback = token_callback
-        self._last_request_time = 0
 
     @property
     def is_authenticated(self) -> bool:
@@ -98,12 +106,7 @@ class TraktClient:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
 
-    def _rate_limit(self) -> None:
-        """Enforce rate limiting between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < TRAKT_RATE_LIMIT_DELAY:
-            time.sleep(TRAKT_RATE_LIMIT_DELAY - elapsed)
-        self._last_request_time = time.time()
+    # _rate_limit() inherited from BaseAPIClient (rate_limit_delay set above)
 
     def _make_request(
         self,
@@ -144,35 +147,13 @@ class TraktClient:
         request_start = time.time()
         outcome = "error"
         try:
-            response = None
-            # Bounded retry loop for 429s - see TRAKT_MAX_429_RETRIES's
-            # comment above for why this used to recurse unboundedly.
-            for attempt in range(TRAKT_MAX_429_RETRIES + 1):
-                self._rate_limit()
-                response = requests.request(
-                    method=method,
-                    url=url,
-                    headers=headers,
-                    json=data,
-                    timeout=TRAKT_REQUEST_TIMEOUT,
-                    # Never auto-follow redirects - requests only strips
-                    # the Authorization header on a cross-host hop, not
-                    # the custom trakt-api-key header this client also
-                    # sends (see _get_headers).
-                    allow_redirects=False,
-                )
-
-                if response.status_code != 429 or attempt == TRAKT_MAX_429_RETRIES:
-                    break
-
-                retry_after = min(
-                    int(response.headers.get("Retry-After", 1)),
-                    TRAKT_MAX_RETRY_AFTER_SECONDS,
-                )
-                logger.warning(
-                    f"Trakt rate limited, waiting {retry_after}s (retry {attempt + 1}/{TRAKT_MAX_429_RETRIES})"
-                )
-                time.sleep(retry_after)
+            # Rate-limited request with the shared bounded 429-retry
+            # loop (see BaseAPIClient._send_with_retries) - this
+            # returns the raw response instead of raising on an error
+            # status, so the 401-refresh-and-retry handling below (this
+            # client's own, security-sensitive OAuth logic) still gets
+            # to inspect it first.
+            response = self._send_with_retries(method, url, data=data, headers=headers)
 
             # Handle auth errors
             if response.status_code == 401 and retry_auth and self.refresh_token:
