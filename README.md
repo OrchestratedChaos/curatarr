@@ -455,7 +455,7 @@ collections:
   stale_removal_days: 7       # Rotate unwatched Plex collection labels
 
 external_recommendations:
-  min_relevance_score: 0.25   # See note below
+  min_relevance_score: 0.65   # See note below
   auto_open_html: false       # Open HTML watchlist in browser after run
 ```
 
@@ -648,9 +648,9 @@ The `min_relevance_score` setting (0.0-1.0) controls how strictly personal the e
 3. This ensures you get personally relevant content, not just popular movies
 
 **Tuning:**
-- `0.25` (default) — Balanced. Most users should start here.
-- `0.50` — Stricter. Only highly relevant recommendations.
-- `0.10` — Looser. More variety, but less personalized.
+- `0.65` (default) — Balanced. Most users should start here.
+- `0.50` — Looser. More variety, less strictly personalized.
+- `0.25` — Much looser. Maximum variety, least personalized.
 
 If you're seeing too many "random" recommendations, increase this value.
 
@@ -833,10 +833,10 @@ Have an idea for Curatarr? We track feature requests as GitHub Issues and **your
 
 ### Code Contributions
 
-Bug fixes and small improvements are welcome. Open an issue first for
-anything nontrivial so the approach can be discussed before you sink time
-into it, then send a PR against `main`. The test suite runs on every PR
-(`.github/workflows/tests.yml`) - keep it green.
+This is a solo-maintained project and external pull requests are not
+accepted - any PR not opened by the maintainer is closed automatically.
+Bug reports and feature requests via GitHub issues are very welcome (see
+above); if you want changes beyond that, fork it.
 
 ---
 

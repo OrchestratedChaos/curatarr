@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Dict
 
+from .config import MAX_LOG_FILE_BYTES
 from .display import log_info, log_warning
 
 
@@ -323,6 +324,17 @@ def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
     """
     Remove log files older than specified retention period.
 
+    Also force-truncates any single .log file that has grown past
+    MAX_LOG_FILE_BYTES, regardless of its mtime. This exists for
+    append-only logs (e.g. a cron job's `>> logs/daily-run.log`
+    redirect) - every write refreshes the mtime, so the age-based
+    removal below can never trigger for them and they would otherwise
+    grow forever. Truncating in place (rather than removing/renaming)
+    is deliberate: a process that already has the file open in append
+    mode keeps writing from the new end-of-file without needing to
+    reopen it - the same "copytruncate" strategy logrotate uses for
+    this exact situation.
+
     Args:
         log_dir: Directory containing log files
         retention_days: Number of days to retain logs (0 = keep all)
@@ -338,6 +350,21 @@ def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
                 continue
 
             filepath = os.path.join(log_dir, filename)
+
+            try:
+                file_size = os.path.getsize(filepath)
+                if file_size > MAX_LOG_FILE_BYTES:
+                    with open(filepath, 'w'):
+                        pass
+                    log_info(
+                        f"Truncated oversized log: {filename} "
+                        f"({file_size} bytes > {MAX_LOG_FILE_BYTES} cap)"
+                    )
+                    continue
+            except Exception as e:
+                log_warning(f"Failed to check/truncate oversized log {filename}: {e}")
+                continue
+
             try:
                 file_mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
                 if file_mtime < cutoff_time:

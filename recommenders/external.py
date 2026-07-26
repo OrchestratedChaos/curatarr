@@ -1540,67 +1540,6 @@ def get_user_watch_history(plex: Any, config: Dict, username: str, media_type: s
         log_warning(f"  Warning: Could not fetch watch history: {e}")
         return []
 
-def balance_genres_proportionally(
-    recommendations: List[Dict],
-    genre_distribution: Dict,
-    limit: int,
-    media_type: str = 'movie'
-) -> List[Dict]:
-    """
-    Balance recommendations to match user's genre distribution from watch history
-    Prevents any single genre from dominating the list
-    """
-    if not genre_distribution or not recommendations:
-        return recommendations[:limit]
-
-    genre_map = TMDB_MOVIE_GENRES if media_type == 'movie' else TMDB_TV_GENRES
-
-    # Calculate target counts for each genre
-    genre_targets = {}
-    for genre_name, percentage in genre_distribution.items():
-        target_count = int(limit * percentage)
-        # Ensure at least 1 slot for genres that exist in history
-        if target_count == 0 and percentage > 0:
-            target_count = 1
-        genre_targets[genre_name] = target_count
-
-    # Track how many of each genre we've added
-    genre_counts = {genre: 0 for genre in genre_targets}
-
-    balanced_recs = []
-    remaining_recs = []
-
-    # First pass: add items up to their genre targets
-    for rec in recommendations:
-        if len(balanced_recs) >= limit:
-            break
-
-        # Get primary genre (first genre_id)
-        primary_genre_id = rec['genre_ids'][0] if rec['genre_ids'] else None
-        primary_genre = genre_map.get(primary_genre_id, 'Unknown')
-
-        # Check if this genre is under its target
-        if primary_genre in genre_targets and genre_counts[primary_genre] < genre_targets[primary_genre]:
-            balanced_recs.append(rec)
-            genre_counts[primary_genre] += 1
-        else:
-            remaining_recs.append(rec)
-
-    # Second pass: fill remaining slots with best-scored items regardless of genre
-    remaining_needed = limit - len(balanced_recs)
-    if remaining_needed > 0:
-        balanced_recs.extend(remaining_recs[:remaining_needed])
-
-    print(f"Genre balancing: {len(balanced_recs)} items selected")
-    for genre, count in sorted(genre_counts.items(), key=lambda x: x[1], reverse=True):
-        if count > 0:
-            target = genre_targets.get(genre, 0)
-            actual_pct = (count / len(balanced_recs) * 100) if balanced_recs else 0
-            target_pct = genre_distribution.get(genre, 0) * 100
-            print(f"  {genre}: {count} items ({actual_pct:.1f}% actual vs {target_pct:.1f}% target)")
-
-    return balanced_recs
-
 def is_in_library(tmdb_id: Optional[int], title: Optional[str], year: Optional[str], library_data: Dict) -> bool:
     """Check if item is in library by TMDB ID or title+year"""
     # Check TMDB ID first (fast O(1) lookup)

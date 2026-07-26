@@ -10,7 +10,7 @@ import yaml
 from typing import Dict, List
 
 # Project version - single source of truth
-__version__ = "2.10.8"
+__version__ = "2.10.9"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -95,6 +95,20 @@ PLEX_REQUEST_TIMEOUT = 30
 TMDB_REQUEST_TIMEOUT = 10
 SONARR_REQUEST_TIMEOUT = 30
 RADARR_REQUEST_TIMEOUT = 30
+
+# A handful of Plex calls (e.g. a watch-history page fetch of up to
+# 10000 items) legitimately take longer than the default request timeout
+# above - this is a deliberate, separate ceiling for just those call
+# sites, not a general Plex timeout.
+PLEX_LONG_REQUEST_TIMEOUT = 60
+
+# Cap on any single log file under logs/ before cleanup_old_logs() force-
+# truncates it, regardless of its mtime. Needed because an append-only log
+# (e.g. a cron job's `>> logs/daily-run.log` redirect) has its mtime
+# refreshed on every write, so the normal age-based retention_days cleanup
+# below can never delete it - left unchecked it grows forever. 20MB is
+# comfortably larger than any single run's own log output.
+MAX_LOG_FILE_BYTES = 20 * 1024 * 1024
 
 # Collection bonus parameters (for movies in user's started collections)
 COLLECTION_BONUS_BASE = 0.05          # Base bonus multiplier

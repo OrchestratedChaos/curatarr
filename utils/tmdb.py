@@ -10,6 +10,7 @@ import logging
 import requests
 from typing import Dict, List, Optional
 
+from .config import TMDB_REQUEST_TIMEOUT
 from .metrics import record_api_call
 
 # Module-level logger
@@ -268,7 +269,7 @@ def get_tmdb_id_from_imdb(tmdb_api_key: str, imdb_id: str, media_type: str = 'mo
     try:
         url = f"https://api.themoviedb.org/3/find/{imdb_id}"
         params = {'api_key': tmdb_api_key, 'external_source': 'imdb_id'}
-        response = requests.get(url, params=params, timeout=10, allow_redirects=False)
+        response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT, allow_redirects=False)
 
         if response.status_code == 200:
             outcome = 'success'

@@ -1094,8 +1094,8 @@ def _download_and_verify_update_impl(force_refresh: bool = True) -> VerifiedUpda
             if os.path.isfile(asset_path):
                 try:
                     os.remove(asset_path)
-                except OSError:
-                    pass
+                except OSError as cleanup_exc:
+                    logger.debug(f"Could not remove partial download {asset_path}: {cleanup_exc}")
             raise
 
     return VerifiedUpdate(
@@ -1252,6 +1252,6 @@ def perform_self_update(force_refresh: bool = True) -> str:
         if os.path.isfile(verified.asset_path):
             try:
                 os.remove(verified.asset_path)
-            except OSError:
-                pass
+            except OSError as cleanup_exc:
+                logger.debug(f"Could not remove leftover asset {verified.asset_path}: {cleanup_exc}")
     return verified.version

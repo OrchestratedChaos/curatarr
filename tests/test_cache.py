@@ -6,6 +6,7 @@ import pytest
 import os
 import json
 import tempfile
+from unittest.mock import patch
 from utils.cache import (
     save_json_cache,
     load_json_cache,
@@ -404,5 +405,101 @@ class TestSaveWatchedCache:
             # Keys should be strings in JSON
             assert '123' in loaded['plex_tmdb_cache']
             assert '789' in loaded['plex_tmdb_cache']
+        finally:
+            os.unlink(cache_path)
+
+
+class TestAtomicCacheWrite:
+    """Tests proving cache saves are atomic (write-temp-then-os.replace()):
+    a failed/interrupted write must never leave the existing cache file
+    truncated or corrupted, and must not leave an orphaned temp file
+    behind."""
+
+    def test_save_json_cache_failure_leaves_original_intact(self):
+        """A write that fails partway through must not touch the
+        original file's content."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_path = f.name
+            f.write('{"original": "data"}')
+
+        try:
+            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
+                result = save_json_cache(cache_path, {"new": "data"})
+
+            assert result is False
+            with open(cache_path, 'r') as f:
+                content = f.read()
+            assert content == '{"original": "data"}'
+        finally:
+            os.unlink(cache_path)
+
+    def test_save_json_cache_failure_leaves_no_temp_file(self):
+        """A failed write must clean up its temp file rather than
+        leaving an orphaned .tmp- file in the cache directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, "cache.json")
+            with open(cache_path, 'w') as f:
+                f.write('{"original": "data"}')
+
+            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
+                result = save_json_cache(cache_path, {"new": "data"})
+
+            assert result is False
+            assert os.listdir(tmpdir) == ["cache.json"]
+
+    def test_save_json_cache_success_leaves_no_temp_file(self):
+        """A successful write replaces the target and leaves no
+        leftover temp file behind."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, "cache.json")
+
+            result = save_json_cache(cache_path, {"key": "value"})
+
+            assert result is True
+            assert os.listdir(tmpdir) == ["cache.json"]
+
+    def test_save_media_cache_failure_leaves_original_intact(self):
+        """A failed media cache write must not corrupt the existing
+        cache file."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_path = f.name
+            f.write('{"original": "data"}')
+
+        try:
+            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
+                result = save_media_cache(cache_path, {"movies": {}}, media_key='movies')
+
+            assert result is False
+            with open(cache_path, 'r') as f:
+                content = f.read()
+            assert content == '{"original": "data"}'
+        finally:
+            os.unlink(cache_path)
+
+    def test_save_watched_cache_failure_leaves_original_intact(self):
+        """A failed watched cache write must not corrupt the existing
+        cache file - this is the cache docker-compose's `curatarr` and
+        `curatarr-recommend` services could otherwise race on."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            cache_path = f.name
+            f.write('{"original": "data"}')
+
+        try:
+            with patch('utils.cache.json.dump', side_effect=ValueError("boom")):
+                result = save_watched_cache(
+                    cache_path,
+                    {},
+                    {},
+                    {},
+                    set(),
+                    {},
+                    watched_count=0,
+                    media_type='movie'
+                )
+
+            assert result is False
+            with open(cache_path, 'r') as f:
+                content = f.read()
+            assert content == '{"original": "data"}'
         finally:
             os.unlink(cache_path)
