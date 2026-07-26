@@ -3,12 +3,18 @@
 import os
 import sys
 import tempfile
+from datetime import datetime
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from recommenders.external_render import (
     SERVICE_SHORT_NAMES,
+    _generate_html_template,
+    _html_body_header,
+    _html_head_and_style,
+    _html_script,
+    _html_tabs_and_panels,
     _load_imdb_cache,
     _save_imdb_cache,
     generate_combined_html,
@@ -1038,3 +1044,61 @@ class TestSequelBadges:
 
         assert 'animated-badge">Animated</span>' in html
         assert 'tv-special-badge">TV Special</span>' in html
+
+
+class TestGenerateHtmlTemplateHelpers:
+    """Tests for the _html_*() helpers _generate_html_template was split
+    into (head/style, body header, tabs/panels, script) - see that
+    function's docstring."""
+
+    def test_head_and_style_contains_head_and_style_tags(self):
+        result = _html_head_and_style()
+        assert result.startswith("<!DOCTYPE html>")
+        assert "<head>" in result
+        assert "<style>" in result
+        assert result.rstrip().endswith("</head>")
+
+    def test_head_and_style_has_no_leftover_double_braces(self):
+        """The un-escaped (plain, non-f-string) fragment should render CSS
+        with single braces, not literal double braces."""
+        result = _html_head_and_style()
+        assert "{{" not in result
+        assert "}}" not in result
+        assert "box-sizing: border-box" in result
+
+    def test_body_header_interpolates_now(self):
+        now = datetime(2026, 3, 15, 9, 30)
+        result = _html_body_header(now)
+        assert result.startswith("<body>")
+        assert "Updated March 15, 2026 at 09:30" in result
+
+    def test_tabs_and_panels_interpolates_all_three_args(self):
+        result = _html_tabs_and_panels("TABS_MARKER", "HUNTARR_MARKER", "PANELS_MARKER")
+        assert "TABS_MARKER" in result
+        assert "HUNTARR_MARKER" in result
+        assert "PANELS_MARKER" in result
+
+    def test_script_contains_script_tags_and_closing_html(self):
+        result = _html_script()
+        assert result.lstrip().startswith("<script>")
+        assert result.rstrip().endswith("</html>")
+        assert "</script>" in result
+        assert "{{" not in result
+        assert "}}" not in result
+
+    def test_generate_html_template_matches_concatenated_helpers(self):
+        """_generate_html_template's output must equal the concatenation of
+        its four helpers (in order) for the same inputs - this is the
+        actual contract the refactor must preserve."""
+        now = datetime(2026, 1, 1, 0, 0)
+        tabs_html = "<div>tabs</div>"
+        panels_html = "<div>panels</div>"
+
+        expected = (
+            _html_head_and_style()
+            + _html_body_header(now)
+            + _html_tabs_and_panels(tabs_html, "", panels_html)
+            + _html_script()
+        )
+        actual = _generate_html_template(tabs_html, panels_html, now)
+        assert actual == expected

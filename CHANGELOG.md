@@ -2,6 +2,49 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.27] - 2026-07-26
+
+### Changed
+
+- **Audit remediation batch E (PR2): split `_generate_html_template`
+  (`recommenders/external_render.py`) - ~1389 lines (71% of the file)
+  building the entire watchlist page (markup + `<style>` + `<script>`) as
+  one nested f-string - into four per-concern helpers:
+  `_html_head_and_style` (meta/fonts/CSS), `_html_body_header` (curtain/
+  brand/export buttons/filter bar), `_html_tabs_and_panels` (tabs/huntarr
+  row/panels/instructions/footer), and `_html_script` (the `<script>`
+  block). `_generate_html_template` now just concatenates them in order;
+  its signature and return contract are unchanged.
+
+  **Helper functions, not Jinja2 templates.** `web/templates/` proves this
+  codebase does Jinja properly for the web UI, and Jinja2 is already a
+  dependency there - but only in `requirements-ui.txt`/`requirements-ui.lock`
+  (installed by `run-ui.sh`/`run-ui.ps1` and the PyInstaller binary's UI
+  stack), never in core `requirements.txt`. `external_render.py` is
+  imported by `recommenders/external.py` - the plain CLI/cron recommender,
+  not gated behind the web UI - so a bare `./run.sh` install (no
+  `requirements-ui.txt`) would hit `ModuleNotFoundError: jinja2` the first
+  time it tried to render a watchlist. Since the CLI/cron path can't take
+  on that dependency, this split uses plain helper functions instead.
+
+  Two of the four fragments (`_html_head_and_style`, `_html_script`) have
+  no `{variable}` interpolation at all - they were only escaped as `{{`/
+  `}}` in the original because they shared one big f-string with fragments
+  that do interpolate. Verified every brace in both fragments is part of
+  a balanced `{{`/`}}` pair (no stray/odd braces) before un-escaping them
+  to plain (non-f) strings with single braces, which resolves ruff's F541
+  ("f-string without placeholders") that a naive split would have
+  introduced as a new lint finding, with identical runtime string output.
+
+  Verified behavior-preserving three ways: `tests/harness.py` byte-identical
+  `PYTHONHASHSEED=0` output before/after (unaffected by this file, but
+  re-checked); a synthetic two-user watchlist page generated via
+  `generate_combined_html` with a frozen clock, byte-identical before/after
+  (`diff` clean); and a full `pyinstaller curatarr.spec` build + running the
+  resulting frozen binary (`--help`/`--version`, arm64), confirming the
+  split didn't break the frozen build. Added 6 new tests for the extracted
+  helpers (2437 passed, up from 2431).
+
 ## [2.10.26] - 2026-07-26
 
 ### Changed
