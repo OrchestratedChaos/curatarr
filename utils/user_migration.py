@@ -36,7 +36,7 @@ USER_ID_MAP_FILENAME = "user_id_map.json"
 # Cache filename patterns keyed on username. Kept explicit (rather than a
 # filesystem glob) so migration only ever touches files curatarr itself
 # generates for a given user.
-_CACHE_FILENAME_PATTERNS = [
+CACHE_FILENAME_PATTERNS = [
     "watched_cache_plex_{username}.json",
     "tv_watched_cache_plex_{username}.json",
     "external_recs_{username}_movies.json",
@@ -252,7 +252,7 @@ def _safe_cache_path(cache_dir: str, filename: str) -> Optional[str]:
     Why this matters here specifically: old_username/new_username come
     from a live Plex account's own username/title field - set by
     whoever owns that account, not something curatarr controls - and
-    get interpolated directly into _CACHE_FILENAME_PATTERNS. A username
+    get interpolated directly into CACHE_FILENAME_PATTERNS. A username
     containing a path separator (e.g. '../../etc/passwd') would
     otherwise make the "cache filename" resolve OUTSIDE cache_dir
     entirely, and migrate_cache_files below calls os.rename/os.remove
@@ -274,7 +274,7 @@ def _safe_cache_path(cache_dir: str, filename: str) -> Optional[str]:
 def migrate_cache_files(cache_dir: str, old_username: str, new_username: str) -> None:
     """Rename (or drop, if a file for the new name already exists) known
     per-user cache files so a rename doesn't leave stale/orphaned caches."""
-    for pattern in _CACHE_FILENAME_PATTERNS:
+    for pattern in CACHE_FILENAME_PATTERNS:
         old_path = _safe_cache_path(cache_dir, pattern.format(username=old_username))
         new_path = _safe_cache_path(cache_dir, pattern.format(username=new_username))
         if old_path is None or new_path is None:

@@ -45,6 +45,17 @@ general:
   #   (source installs only - see run.sh/run.ps1).
   # off: never check for updates.
   update_mode: notify
+  # Prunes cache/ files left behind by users no longer in your
+  # users.list (removed-user watched caches, external_recs_<user>_*
+  # exports, etc.) - see utils/cache_prune.py. enabled: true just logs
+  # what it *would* remove every run; nothing is deleted until you also
+  # set dry_run: false. Conservative on purpose: only ever considers
+  # the exact per-user cache filename patterns curatarr itself
+  # generates (never all_movies_cache.json/all_shows_cache.json or
+  # anything it doesn't recognize).
+  # cache_prune:
+  #   enabled: true
+  #   dry_run: true
 
 # Huntarr: Find missing/upcoming movies from collections
 huntarr:
