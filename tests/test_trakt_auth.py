@@ -31,6 +31,40 @@ class TestTraktAuthLoadConfig:
         assert result["trakt"]["enabled"] is True
         assert result["trakt"]["client_id"] == "test"
 
+    def test_env_var_overrides_apply(self, tmp_path, monkeypatch):
+        """Regression test: trakt_auth previously had its own local
+        load_config() that opened config.yml/trakt.yml directly with
+        yaml.safe_load and never applied the PLEX_URL/PLEX_TOKEN/
+        TMDB_API_KEY env-var overrides the rest of the app gets via
+        utils.config.load_config(). Trakt device-auth should see the
+        same config (env overrides included) as everything else -
+        important for Docker/env-var-configured installs."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        config_path = config_dir / "config.yml"
+        config_path.write_text("plex:\n  url: http://original-host\n  token: original-token\n")
+
+        trakt_path = config_dir / "trakt.yml"
+        trakt_path.write_text("enabled: true\nclient_id: test\n")
+
+        monkeypatch.setenv("PLEX_URL", "http://env-override-host")
+        monkeypatch.setenv("PLEX_TOKEN", "env-override-token")
+        monkeypatch.setenv("TMDB_API_KEY", "env-override-tmdb-key")
+
+        from utils import trakt_auth
+
+        monkeypatch.setattr(trakt_auth, "get_config_dir", lambda: str(config_dir))
+
+        result = trakt_auth.load_config()
+
+        assert result["plex"]["url"] == "http://env-override-host"
+        assert result["plex"]["token"] == "env-override-token"
+        assert result["tmdb"]["api_key"] == "env-override-tmdb-key"
+        # Module merge (trakt.yml) still happens via the canonical loader.
+        assert result["trakt"]["enabled"] is True
+        assert result["trakt"]["client_id"] == "test"
+
 
 class TestTraktAuthSaveTokens:
     """Tests for trakt_auth save_tokens function."""

@@ -2,6 +2,39 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.17] - 2026-07-26
+
+### Fixed
+
+- **`utils/trakt_auth.py` had its own local `load_config()`** (a second,
+  narrower `yaml.safe_load` of `config.yml` + `trakt.yml`) instead of the
+  canonical `utils.config.load_config()` the rest of the app uses - so
+  Trakt device-auth never got `tuning.yml`/`radarr.yml`/`sonarr.yml`
+  module merging, legacy-config auto-migration, or the
+  `PLEX_URL`/`PLEX_TOKEN`/`TMDB_API_KEY` env-var overrides everything
+  else gets. Wrong for Docker/env-var installs and un-migrated legacy
+  configs. Now delegates to the canonical loader; added a regression
+  test covering the previously-broken env-var-override case.
+- **`utils/scoring.py` used an absolute `from utils.config import (...)`
+  import** while most other `utils/` submodules use relative imports.
+  Normalized to `from .config import (...)`.
+- **Redundant `RATING_MULTIPLIERS` backwards-compat alias** in
+  `utils/config.py` (`RATING_MULTIPLIERS = DEFAULT_RATING_MULTIPLIERS`)
+  with both names still live. Dropped the alias; `recommenders/external.py`
+  and `utils/__init__.py`'s public API now use `DEFAULT_RATING_MULTIPLIERS`
+  only.
+
+### Changed
+
+- **Moved `utils/trakt_sync.py` to the project root (`trakt_sync.py`).**
+  It's a CLI orchestrator that imports from the domain layer
+  (`recommenders.external.sync_watch_history_to_trakt`), not a shared
+  utility - `utils/` reaching into `recommenders/` was an inverted
+  dependency. Now sits alongside `curatarr_app.py`, the other root-level
+  entry point. Updated `run.sh`/`run.ps1`'s invocations
+  (`python3 utils/trakt_sync.py` -> `python3 trakt_sync.py`) and the
+  test suite's patch targets accordingly.
+
 ## [2.10.16] - 2026-07-25
 
 ### Fixed

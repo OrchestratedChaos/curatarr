@@ -10,7 +10,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
-from utils.config import (
+from .config import (
     POPULARITY_DAMPENING_CAP,
     POPULARITY_DAMPENING_FACTOR,
     TFIDF_GENRE_PENALTY,

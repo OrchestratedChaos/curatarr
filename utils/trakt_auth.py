@@ -14,6 +14,7 @@ import yaml
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils.config import load_config as _load_canonical_config
 from utils.helpers import harden_file_permissions
 from utils.trakt import TraktAuthError, TraktClient
 
@@ -24,20 +25,18 @@ def get_config_dir():
 
 
 def load_config():
-    """Load config from config/ directory (main + trakt.yml)."""
-    config_dir = get_config_dir()
-    config_path = os.path.join(config_dir, "config.yml")
-    trakt_path = os.path.join(config_dir, "trakt.yml")
+    """Load config via the canonical utils.config.load_config().
 
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    # Merge trakt.yml if it exists
-    if os.path.exists(trakt_path):
-        with open(trakt_path, "r") as f:
-            config["trakt"] = yaml.safe_load(f)
-
-    return config
+    Delegates to the same app-wide loader everything else uses (merges
+    tuning.yml/trakt.yml/radarr.yml/sonarr.yml, auto-migrates legacy
+    monolithic configs, and applies PLEX_URL/PLEX_TOKEN/TMDB_API_KEY
+    env-var overrides) instead of a second, narrower yaml.safe_load of
+    config.yml + trakt.yml - previously Trakt device-auth saw a
+    different config than the rest of the app (missed env-var overrides
+    and un-migrated legacy configs, wrong for Docker/env-var installs).
+    """
+    config_path = os.path.join(get_config_dir(), "config.yml")
+    return _load_canonical_config(config_path)
 
 
 def save_tokens(access_token: str, refresh_token: str):
