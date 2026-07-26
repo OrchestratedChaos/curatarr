@@ -170,6 +170,22 @@ jobs:
             --work-dir "$RUNNER_TEMP/selfupdate-e2e/runs/rollback" \
             --debug-log "$RUNNER_TEMP/selfupdate-e2e/debug-logs/rollback_handoff.log"
 
+      - name: Missing asset - requested filename 404s on an otherwise-real release (must refuse, old server keeps serving)
+        if: always()
+        shell: bash
+        env:
+          MANIFEST: ${{ runner.temp }}/selfupdate-e2e/fixtures/manifest.json
+        run: |
+          set -euo pipefail
+          eval "$(python scripts/selfupdate_e2e/print_manifest_env.py missing_asset)"
+          python scripts/selfupdate_e2e/run_scenario.py \
+            --scenario missing_asset \
+            --old-binary "$OLD_BINARY" --release-dir "$RELEASE_DIR" \
+            --old-version "$OLD_VERSION" --target-version "$NEW_VERSION" \
+            --ui-port 18791 --server-port 18804 \
+            --work-dir "$RUNNER_TEMP/selfupdate-e2e/runs/missing_asset" \
+            --debug-log "$RUNNER_TEMP/selfupdate-e2e/debug-logs/missing_asset_handoff.log"
+
       - name: Upload debug logs on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
