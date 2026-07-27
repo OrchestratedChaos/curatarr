@@ -2,6 +2,51 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.37] - 2026-07-26
+
+### Changed
+
+- **Removed `adapt_config_for_media_type()`'s dead, divergently-defaulted display-option output (audit remediation, PR4).**
+
+  - Since the 2.10.23 config fix, `recommenders/base.py` resolves
+    `movies:`/`tv:` `show_summary`/`show_cast`/`show_language`/`show_rating`
+    overrides itself, directly from `self.media_config` (defaulting to
+    `False` for all four when unset). `utils/config.py`'s
+    `adapt_config_for_media_type()` still independently flattened the
+    same four keys onto its returned dict with a **different default**
+    (`True`).
+  - Verified "read nowhere outside `utils/config.py`" myself with an
+    exhaustive grep (including every test file) before touching anything:
+    the only reads of these four specific keys are `recommenders/base.py`'s
+    own, separate `self.media_config`-based resolution (unrelated code
+    path, never touches this function's output) and this function's own
+    definition - not a single caller anywhere (`utils/cli.py`'s
+    `run_recommender_main`, `recommenders/movie.py`/`tv.py`'s
+    `process_recommendations`, or any test) ever reads
+    `result["show_summary"]` etc. from `adapt_config_for_media_type()`'s
+    return value.
+  - The rest of the function is NOT dead: `run_recommender_main` reads
+    the returned `general`/`plex`/`plex_users`/`users`/`libraries` keys
+    (passthroughs of the same root-config values, not media-specific
+    adaptations) for log retention, the Plex token, the configured user
+    list, and per-library-per-user looping - kept those untouched.
+    `limit_results`/`randomize_recommendations`/`normalize_counters`/
+    quality-filter/weights/radarr-sonarr/`add_label` keys are also
+    unread outside this function's own tests, same as the four removed
+    keys, but were **left in place** - out of this PR's explicitly-scoped
+    finding (which named only the four *divergently-defaulted* display
+    keys), and none of them have a different-default divergence risk
+    from the live path the way show_summary/cast/language/rating did
+    (e.g. `limit_results`'s 50/20 default here already matches
+    `recommenders/base.py`'s, post-PR1).
+  - Removed the four keys entirely rather than just fixing their default
+    to match - fixing the default wouldn't make the output any less dead,
+    and would leave the exact same "looks like it matters, doesn't" trap
+    for a future maintainer.
+  - Added a test locking in that `adapt_config_for_media_type()` no
+    longer produces these four keys, so a future change can't silently
+    reintroduce them.
+
 ## [2.10.36] - 2026-07-26
 
 ### Changed

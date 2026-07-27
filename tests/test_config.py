@@ -255,6 +255,22 @@ class TestAdaptConfigForMediaType:
         assert len(libs) == 1
         assert libs[0]["section"] == "Movies"
 
+    def test_does_not_produce_dead_divergently_defaulted_display_keys(self):
+        """PR4 audit remediation: show_summary/show_cast/show_language/
+        show_rating used to be flattened onto the returned dict here with
+        a default (True) that silently diverged from
+        recommenders/base.py's real, live resolution (default False) -
+        while never actually being read from this function's output
+        anywhere. Removed rather than fixed-in-place, since fixing the
+        default wouldn't make the output any less dead. Locks in that a
+        future change doesn't silently reintroduce the same trap."""
+        result = adapt_config_for_media_type({}, "movies")
+
+        assert "show_summary" not in result
+        assert "show_cast" not in result
+        assert "show_language" not in result
+        assert "show_rating" not in result
+
 
 class TestNegativeSignalsConstants:
     """Tests for negative signals constants"""

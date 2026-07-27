@@ -11,7 +11,7 @@ from typing import Dict, List
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.36"
+__version__ = "2.10.37"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -505,10 +505,15 @@ def adapt_config_for_media_type(root_config: Dict, media_type: str = "movies") -
     config["limit_results"] = media_config.get("limit_results", 50 if media_type == "movies" else 20)
     config["randomize_recommendations"] = media_config.get("randomize_recommendations", False)
     config["normalize_counters"] = media_config.get("normalize_counters", True)
-    config["show_summary"] = media_config.get("show_summary", True)
-    config["show_cast"] = media_config.get("show_cast", True)
-    config["show_language"] = media_config.get("show_language", True)
-    config["show_rating"] = media_config.get("show_rating", True)
+    # NOTE: show_summary/show_cast/show_language/show_rating deliberately
+    # NOT flattened here (removed 2026-07, audit remediation PR4) -
+    # recommenders/base.py resolves these itself directly from
+    # self.media_config (see its __init__), with a DIFFERENT default
+    # (False) than this function used to produce (True) for all four.
+    # This function's output for these specific keys was never read
+    # anywhere outside its own tests (see CHANGELOG) - do not re-add a
+    # flattened copy here; it would only reintroduce the same dead,
+    # misleadingly-defaulted trap for a future maintainer.
     config["show_imdb_link"] = media_config.get("show_imdb_link", False)
 
     # Quality filters
