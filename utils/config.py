@@ -11,7 +11,7 @@ from typing import Dict, List
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.33"
+__version__ = "2.10.34"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -21,7 +21,21 @@ TOP_CAST_COUNT = 3  # Number of top actors to consider
 TMDB_RATE_LIMIT_DELAY = 0.5  # Seconds between TMDB API calls
 DEFAULT_RATING = 5.0  # Default rating when none available
 WEIGHT_SUM_TOLERANCE = 1e-6  # Tolerance for weight sum validation
-DEFAULT_LIMIT_PLEX_RESULTS = 100  # Default candidate pool (2x collection target for better selection)
+# Final recommendation/collection count per media type - the
+# config/tuning.yml movies:/tv: `limit_results` value (documented since
+# it shipped, but never actually read anywhere until PR1 of the 2026-07
+# audit remediation batch - see CHANGELOG). recommenders/base.py reads
+# this dict as the fallback when limit_results is unset, so existing
+# installs keep exactly today's effective 50/20 behavior.
+DEFAULT_LIMIT_RESULTS = {"movie": 50, "tv": 20}
+# How many scoring candidates recommenders/base.py generates per
+# limit_results item (self.limit_plex_results), so the best-scoring
+# items can compete against whatever a prior run already labeled
+# instead of being capped at exactly the final collection size. Was
+# previously two independent hardcoded 100/40-vs-50/20 literals at two
+# call sites in recommenders/base.py; now derived from limit_results so
+# the buffer scales with it automatically.
+CANDIDATE_BUFFER_MULTIPLIER = 2
 TOP_POOL_PERCENTAGE = 0.1  # Top 10% for randomization pool
 
 # Media type constants - use these instead of hardcoded strings
