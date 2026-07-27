@@ -64,7 +64,6 @@ from .config import (
     UPDATE_MODES,
     WEIGHT_SUM_TOLERANCE,
     __version__,
-    adapt_config_for_media_type,
     check_cache_version,
     get_config_section,
     get_effective_arr_config,
@@ -76,6 +75,8 @@ from .config import (
     get_tmdb_config,
     get_update_mode,
     load_config,
+    load_resolved_config,
+    resolve_media_type_overrides,
 )
 
 # Counter utilities
@@ -359,8 +360,9 @@ __all__ = [
     "get_config_section",
     "get_tmdb_config",
     "load_config",
+    "load_resolved_config",
+    "resolve_media_type_overrides",
     "get_rating_multipliers",
-    "adapt_config_for_media_type",
     "get_libraries",
     "get_libraries_for_media_type",
     "get_effective_arr_config",

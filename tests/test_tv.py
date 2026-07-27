@@ -11,7 +11,6 @@ import pytest
 from recommenders.tv import (
     PlexTVRecommender,
     ShowCache,
-    adapt_root_config_to_legacy,
     format_show_output,
     main,
     process_recommendations,
@@ -841,27 +840,6 @@ class TestFormatShowOutput:
         result = format_show_output(show, index=1, show_summary=True)
 
         assert "chemistry" in result.lower() or "meth" in result.lower()
-
-
-class TestAdaptRootConfigToLegacy:
-    """Tests for adapt_root_config_to_legacy function."""
-
-    def test_adapt_preserves_plex_key(self):
-        """Test that config with 'plex' key preserves it."""
-        config = {"plex": {"url": "http://localhost", "token": "abc"}}
-
-        result = adapt_root_config_to_legacy(config)
-
-        assert "plex" in result
-        assert result["plex"]["url"] == "http://localhost"
-
-    def test_adapt_returns_dict(self):
-        """Test that function returns a dict."""
-        config = {"plex": {"url": "http://localhost"}}
-
-        result = adapt_root_config_to_legacy(config)
-
-        assert isinstance(result, dict)
 
 
 class TestPlexTVRecommenderShowDetails:

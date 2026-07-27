@@ -26,7 +26,6 @@ from utils import (
     CACHE_VERSION,
     CANDIDATE_BUFFER_MULTIPLIER,
     CYAN,
-    DEFAULT_LIMIT_RESULTS,
     DEFAULT_NEGATIVE_THRESHOLD,
     GREEN,
     RATING_MULTIPLIER_2_STAR,
@@ -76,6 +75,7 @@ from utils import (
     print_similarity_breakdown,
     process_counters_from_cache,
     remove_labels_from_items,
+    resolve_media_type_overrides,
     save_media_cache,
     save_watched_cache,
     select_tiered_recommendations,
@@ -429,7 +429,13 @@ class BaseRecommender(ABC):
                 it just doesn't share across users/instances.
         """
         self.single_user = single_user
-        self.config = load_config(config_path)
+        # load_config() (modular merge + auto-migration + env-var
+        # overrides) followed by resolve_media_type_overrides() (the
+        # movies:/tv: per-media-type resolution - see its docstring in
+        # utils/config.py for exactly which keys this adds/overwrites and
+        # why) - the one resolution path every recommender now shares
+        # with utils/cli.py.
+        self.config = resolve_media_type_overrides(load_config(config_path), self.media_type)
         self.library = library
         self._library_items_cache: Dict[str, List] = library_items_cache if library_items_cache is not None else {}
 
@@ -470,16 +476,11 @@ class BaseRecommender(ABC):
         # Media-specific section (movies:/tv: in tuning.yml) - the
         # documented, web-UI-writable location for display options,
         # randomize_recommendations, normalize_counters, quality_filters,
-        # and weights (see config/tuning.example.yml). Historically this
-        # class read all of these from `general_config` above instead,
-        # which meant a user's movies:/tv: overrides were silently never
-        # applied - randomize_recommendations, quality_filters, and
-        # several display options resolved to their code-level defaults
-        # no matter what was configured (see CHANGELOG). Every read below checks
-        # media_config first and falls back to the old general_config/
-        # root-level read so back-compat installs that (for whatever
-        # undocumented reason) set these under general: or root level
-        # keep behaving exactly as before.
+        # and weights (see config/tuning.example.yml). Kept as a direct
+        # reference to the raw section (not the resolved keys above) for
+        # get_recommendations()'s own quality_filters read further down,
+        # which resolves that key fresh at call time rather than once
+        # here - see its comment there for why.
         media_section = "movies" if self.media_type == "movie" else "tv"
         self.media_config = self.config.get(media_section, self.config.get(media_section.upper(), {})) or {}
 
@@ -510,7 +511,10 @@ class BaseRecommender(ABC):
         # CHANGELOG). This is now the single source of truth for how many
         # items end up in the recommendation collection - manage_plex_labels()
         # below reads self.limit_results directly as its target_count.
-        self.limit_results = self.media_config.get("limit_results", DEFAULT_LIMIT_RESULTS[self.media_type])
+        # Resolved once, up front, by resolve_media_type_overrides() (see
+        # its docstring in utils/config.py) - this class no longer hand-
+        # resolves movies:/tv: overrides itself.
+        self.limit_results = self.config["limit_results"]
 
         # Internal candidate-scoring buffer: generate CANDIDATE_BUFFER_MULTIPLIER x
         # limit_results scoring candidates per run, so the best-scoring items can
@@ -523,18 +527,14 @@ class BaseRecommender(ABC):
         # existing documented/tested behavior for installs that already set it.
         default_limit = self.limit_results * CANDIDATE_BUFFER_MULTIPLIER
         self.limit_plex_results = general_config.get("limit_plex_results", default_limit)
-        self.randomize_recommendations = self.media_config.get(
-            "randomize_recommendations", general_config.get("randomize_recommendations", True)
-        )
-        self.normalize_counters = self.media_config.get(
-            "normalize_counters", general_config.get("normalize_counters", True)
-        )
-        self.show_summary = self.media_config.get("show_summary", general_config.get("show_summary", False))
-        self.show_genres = self.media_config.get("show_genres", general_config.get("show_genres", True))
-        self.show_cast = self.media_config.get("show_cast", general_config.get("show_cast", False))
-        self.show_language = self.media_config.get("show_language", general_config.get("show_language", False))
-        self.show_rating = self.media_config.get("show_rating", general_config.get("show_rating", False))
-        self.show_imdb_link = self.media_config.get("show_imdb_link", general_config.get("show_imdb_link", False))
+        self.randomize_recommendations = self.config["randomize_recommendations"]
+        self.normalize_counters = self.config["normalize_counters"]
+        self.show_summary = self.config["show_summary"]
+        self.show_genres = self.config["show_genres"]
+        self.show_cast = self.config["show_cast"]
+        self.show_language = self.config["show_language"]
+        self.show_rating = self.config["show_rating"]
+        self.show_imdb_link = self.config["show_imdb_link"]
 
         # Load excluded genres
         exclude_genre_str = general_config.get("exclude_genre", "")
@@ -547,9 +547,12 @@ class BaseRecommender(ABC):
 
         # Load weights - movies:/tv: weights: (documented location, see
         # config/tuning.example.yml) take priority over the legacy
-        # root-level `weights` key some back-compat installs/tests still use.
-        weights_config = self.media_config.get("weights", self.config.get("weights", {}))
-        self.weights = self._load_weights(weights_config)
+        # root-level `weights` key some back-compat installs/tests still
+        # use; that fallback chain is resolved once by
+        # resolve_media_type_overrides() (self.config["weights"]) -
+        # _load_weights() below only applies the media-type-specific
+        # per-field defaults (director vs studio, etc.), unchanged.
+        self.weights = self._load_weights(self.config["weights"])
 
         # Validate weights sum
         total_weight = sum(self.weights.values())

@@ -23,7 +23,6 @@ from utils import (
     RESET,
     TOP_CAST_COUNT,
     YELLOW,
-    adapt_config_for_media_type,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
@@ -586,20 +585,11 @@ def format_show_output(
     )
 
 
-# ------------------------------------------------------------------------
-# CONFIG ADAPTER
-# ------------------------------------------------------------------------
-def adapt_root_config_to_legacy(root_config):
-    """Convert root config.yml format to legacy TRFP format"""
-    return adapt_config_for_media_type(root_config, "tv")
-
-
 def main():
     """Entry point for TV show recommendations."""
     run_recommender_main(
         media_type="TV Show",
         description="TV Show Recommendations for Plex",
-        adapt_config_func=adapt_root_config_to_legacy,
         process_func=process_recommendations,
         media_type_key="tv",
     )

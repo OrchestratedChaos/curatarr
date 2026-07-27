@@ -251,7 +251,6 @@ def print_runtime(start_time: datetime):
 def run_recommender_main(
     media_type: str,
     description: str,
-    adapt_config_func: Callable[[Dict], Dict],
     process_func: Callable[[Dict, str, int, Optional[str], Optional[Dict], Optional[Dict]], None],
     media_type_key: str = "movie",
 ):
@@ -264,10 +263,19 @@ def run_recommender_main(
     one library of this media type) synthesize a single library entry, so
     this collapses back to the original one-loop-per-user behavior.
 
+    Reads root_config directly (no per-media-type adaptation) for every
+    value this loop itself needs (users, libraries, general.*, plex.token)
+    - all root-level passthroughs with a single meaning regardless of
+    media type. The actual movies:/tv: media-type-resolved config (used
+    for scoring/display/etc.) is resolved exactly once, inside each
+    recommender's own __init__ (see recommenders/base.py's
+    BaseRecommender, utils.config.load_resolved_config) - this function
+    never needs a second, parallel resolution of those same keys (see
+    CHANGELOG for the architecture history this replaces).
+
     Args:
         media_type: 'Movie' or 'TV Show' for display
         description: argparse description
-        adapt_config_func: Function to adapt root config to media-specific format
         process_func: Function to process recommendations for a user. Receives
             (user_config, config_path, log_retention_days, resolved_user,
             library, library_items_cache)
@@ -319,7 +327,6 @@ def run_recommender_main(
                 with open(config_path, "r") as f:
                     root_config = yaml.safe_load(f)
 
-            base_config = adapt_config_func(root_config)
         except Exception as e:
             log_error(f"Could not load config.yml from project root: {e}")
             log_warning(f"Looking for config at: {config_path}")
@@ -329,7 +336,7 @@ def run_recommender_main(
         logger = setup_logging(debug=args.debug, config=root_config)
         logger.debug("Debug logging enabled")
 
-        general = base_config.get("general", {})
+        general = root_config.get("general", {})
         log_retention_days = general.get("log_retention_days", 7)
 
         # Advisory update notice - printed right after the version banner
@@ -343,7 +350,7 @@ def run_recommender_main(
             log_warning(f"Single user mode: {single_user}")
 
         # Get users to process
-        all_users = get_users_from_config(base_config)
+        all_users = get_users_from_config(root_config)
         if single_user:
             all_users = [single_user]
 
@@ -355,7 +362,7 @@ def run_recommender_main(
         # install (no 'libraries:' config, or exactly one explicit library of
         # this media type) always resolves to exactly one entry here, so the
         # loop below collapses to the original one-pass-per-user behavior.
-        libraries = get_libraries_for_media_type(base_config, media_type_key)
+        libraries = get_libraries_for_media_type(root_config, media_type_key)
 
         if args.library_id:
             libraries = [lib for lib in libraries if lib.get("id") == args.library_id]
@@ -372,7 +379,7 @@ def run_recommender_main(
         resolved_usernames = set()
 
         # Process each library x user
-        plex_token = base_config.get("plex", {}).get("token", "")
+        plex_token = root_config.get("plex", {}).get("token", "")
         for library in libraries:
             if multi_library:
                 print(f"\n{CYAN}=== Library: {library['name']} ==={RESET}")
@@ -395,7 +402,7 @@ def run_recommender_main(
                 print("-" * 50)
 
                 resolved_user = resolve_admin_username(user, plex_token)
-                user_config = update_config_for_user(base_config, resolved_user)
+                user_config = update_config_for_user(root_config, resolved_user)
                 resolved_usernames.add(resolved_user)
 
                 process_func(user_config, config_path, log_retention_days, resolved_user, library, library_items_cache)

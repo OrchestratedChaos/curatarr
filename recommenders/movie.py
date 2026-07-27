@@ -21,7 +21,6 @@ from utils import (
     RED,
     RESET,
     TOP_CAST_COUNT,
-    adapt_config_for_media_type,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
@@ -155,9 +154,9 @@ class PlexMovieRecommender(BaseRecommender):
         self.plex_watched_rating_keys: Set[int] = set()
         # movies.show_director: is the documented location (config/tuning.example.yml);
         # fall back to the legacy root-level general.show_director for back-compat.
-        self.show_director = self.media_config.get(
-            "show_director", self.config.get("general", {}).get("show_director", False)
-        )
+        # Resolved once, up front, by resolve_media_type_overrides() (see
+        # its docstring in utils/config.py) via BaseRecommender.__init__.
+        self.show_director = self.config["show_director"]
 
         # Create movie cache
         self.movie_cache = MovieCache(self.cache_dir, recommender=self)
@@ -545,14 +544,6 @@ def format_movie_output(
 
 
 # ------------------------------------------------------------------------
-# CONFIG ADAPTER
-# ------------------------------------------------------------------------
-def adapt_root_config_to_legacy(root_config):
-    """Convert root config.yml format to legacy MRFP format"""
-    return adapt_config_for_media_type(root_config, "movies")
-
-
-# ------------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------------
 def process_recommendations(
@@ -620,7 +611,6 @@ def main():
     run_recommender_main(
         media_type="Movie",
         description="Movie Recommendations for Plex",
-        adapt_config_func=adapt_root_config_to_legacy,
         process_func=process_recommendations,
         media_type_key="movie",
     )

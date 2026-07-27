@@ -2,6 +2,71 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.39] - 2026-07-26
+
+### Fixed
+
+- **Deleted the second, dead `movies:`/`tv:` config-resolution path that caused the 2.10.23 bug and left the architecture that produced it unfixed (audit remediation).**
+
+  - `utils/config.py`'s `adapt_config_for_media_type()` and
+    `recommenders/base.py`'s inline `self.media_config` resolution were
+    two fully independent implementations of the same `movies:`/`tv:`
+    override resolution, computed from two separate `load_config()`
+    reads. Only the `base.py` one was ever live - `adapt_config_for_media_type()`'s
+    output fed `utils/cli.py`'s `run_recommender_main()` as `base_config`,
+    but nothing downstream (`process_recommendations()` in
+    `recommenders/movie.py`/`tv.py`) ever read its media-type-resolved
+    keys, only root-level passthroughs (`general`, `plex`, `users`,
+    `libraries`) that were identical either way. This is exactly the
+    architecture that let the 2.10.23 bug happen and stay invisible for
+    months - a future key added to one implementation had no way to end
+    up in the other.
+  - Replaced both with one function, `utils/config.py`'s
+    `resolve_media_type_overrides(config, media_type)` (plus
+    `load_resolved_config(config_path, media_type)`, the `load_config()`
+    + `resolve_media_type_overrides()` one-call convenience most callers
+    want). It takes the FULL root config and only overlays the specific
+    resolved keys on top - unlike the deleted function, there is no
+    cherry-picked reconstruction that can silently drop an unrelated
+    root-level key (see below).
+  - `recommenders/base.py`, `movie.py`, and `utils/cli.py` now call this
+    directly instead of hand-resolving `movies:`/`tv:` overrides
+    themselves. `utils/cli.py`'s `run_recommender_main()` no longer takes
+    an `adapt_config_func` parameter - it never needed a media-type-
+    resolved config for its own bookkeeping (users/libraries/general.*/
+    plex.token are all root-level, media-type-independent values), so it
+    now reads `root_config` directly.
+  - **Defaults are unchanged for every key this touches** - verified by
+    reconstructing the OLD inline `base.py` resolution logic exactly and
+    diffing it key-for-key against the new function across 6 config
+    shapes (no `tuning.yml`, `movies:`-only, `tv:`-only, both, unknown/
+    extra keys, and the production install's actual config shape) x 2
+    media types = 12 scenarios, all matching. Where the deleted dead
+    path's computed defaults disagreed with the live one (documented
+    explicitly so a future maintainer doesn't "fix" the wrong one back
+    in): `randomize_recommendations` (dead path defaulted to `false`,
+    live/kept default is `true`), TV `weights` (dead path's `genre`
+    0.25/`actor` 0.20/`studio` 0.10/`keyword` 0.50/`language` 0.0 -
+    doesn't even sum to 1.0 - vs. the live, kept
+    `PlexTVRecommender._load_weights()` defaults of `genre` 0.20/`actor`
+    0.15/`studio` 0.15/`keyword` 0.45/`language` 0.05), and movies
+    `quality_filters` (dead path defaulted `min_rating`/`min_vote_count`
+    to 5.0/50 when unset; the live, kept default - shared with TV - is
+    0.0/0, resolved unchanged directly in
+    `BaseRecommender.get_recommendations()`, never migrated into the new
+    function since it was never divergent there).
+  - Added `tests/test_config.py`'s
+    `TestResolveMediaTypeOverridesKeyEnumeration`: parses the real,
+    committed `config/tuning.example.yml` and asserts every documented
+    `movies:`/`tv:` key actually resolves, plus a closed-set membership
+    check that fails loudly if a future edit to that file adds a key
+    neither test method accounts for - the standing guard against this
+    bug class recurring for a new key.
+  - `tests/harness.py` untouched (byte-identical - it only imports
+    `utils/scoring.py`, never `utils/config.py` or `recommenders/base.py`)
+    and its own test (`tests/test_harness.py`) still passes, confirming
+    no scoring drift.
+
 ## [2.10.38] - 2026-07-26
 
 ### Fixed
