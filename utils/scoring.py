@@ -9,7 +9,7 @@ import random
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from .config import (
     POPULARITY_DAMPENING_CAP,
@@ -135,14 +135,14 @@ def fuzzy_keyword_match(
 
     # Check for exact match first
     if keyword_lower in user_keywords:
-        result = (user_keywords[keyword_lower], keyword_lower)
+        result: Tuple[float, Optional[str]] = (user_keywords[keyword_lower], keyword_lower)
         if cache is not None:
             cache[keyword_lower] = result
         return result
 
     # Check for partial matches (keyword contains or is contained by user keyword)
-    best_score = 0
-    best_match = None
+    best_score: float = 0
+    best_match: Optional[str] = None
 
     for user_kw, count in user_keywords.items():
         user_kw_lower = user_kw.lower()
@@ -360,7 +360,7 @@ def _normalize_user_genre_counts(user_genre_counter: Counter) -> Tuple[Dict[str,
     1 when the user has no genre data, matching
     calculate_similarity_score()'s pre-existing fallback.
     """
-    normalized_user_genres: Dict[str, int] = {}
+    normalized_user_genres: Dict[str, float] = {}
     for genre, count in user_genre_counter.items():
         norm_genre = normalize_genre(genre)
         if norm_genre in normalized_user_genres:
@@ -804,7 +804,10 @@ def calculate_similarity_score(
 
     effective_weights = _redistribute_weights(weights, user_profile, media_type)
 
-    score_breakdown = {
+    # Any, not a narrower per-key type - this is a heterogeneous
+    # reporting structure (float component scores alongside a nested
+    # "details" dict), not a uniformly-typed mapping.
+    score_breakdown: Dict[str, Any] = {
         "genre_score": 0.0,
         "director_score": 0.0,
         "studio_score": 0.0,
@@ -948,13 +951,26 @@ def calculate_similarity_score(
         return 0.0, score_breakdown
 
 
+class _RandomLike(Protocol):
+    """Structural type for select_tiered_recommendations()'s `rng` param.
+
+    Matches both a real random.Random instance AND the `random` module
+    itself - the `rng or random` fallback below intentionally accepts
+    either (the module's top-level sample() is a bound method of the
+    same underlying Random class the module maintains internally), and
+    .sample() is the only method this function ever calls on it.
+    """
+
+    def sample(self, population: Sequence[Any], k: int) -> List[Any]: ...
+
+
 def select_tiered_recommendations(
     scored_items: List[Dict],
     limit: int,
     safe_percent: float = 0.6,
     diverse_percent: float = 0.3,
     wildcard_percent: float = 0.1,
-    rng: Optional[random.Random] = None,
+    rng: Optional[_RandomLike] = None,
 ) -> List[Dict]:
     """
     Select recommendations using a tiered approach for variety.

@@ -222,7 +222,12 @@ def rename_user_in_users_list(config_text: str, old_username: str, new_username:
         if seq_match and seq_match.group("val") == old_username:
             indent = " " * _line_indent(lines[i])
             newline = lines[i][len(lines[i].rstrip("\r\n")) :]
-            dash = re.match(r"^-\s*", stripped).group(0)
+            # Always matches - stripped already matched the stricter
+            # "^-\s*(?P<val>...)" pattern above (seq_match), which is a
+            # superset of this simpler leading-dash-only pattern.
+            dash_match = re.match(r"^-\s*", stripped)
+            assert dash_match is not None
+            dash = dash_match.group(0)
             lines[i] = f"{indent}{dash}{new_username}{newline}"
             return "".join(lines), True
 

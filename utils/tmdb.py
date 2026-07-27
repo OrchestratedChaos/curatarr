@@ -131,7 +131,9 @@ def _fetch_tmdb_with_retry_impl(url: str, params: Dict, max_retries: int = 3, ti
     return None
 
 
-def get_tmdb_id_for_item(item, tmdb_api_key: str, media_type: str = "movie", cache: Dict = None) -> Optional[int]:
+def get_tmdb_id_for_item(
+    item, tmdb_api_key: str, media_type: str = "movie", cache: Optional[Dict] = None
+) -> Optional[int]:
     """
     Get TMDB ID for a Plex item using multiple fallback methods.
 
@@ -196,7 +198,9 @@ def get_tmdb_id_for_item(item, tmdb_api_key: str, media_type: str = "movie", cac
     return None
 
 
-def get_tmdb_keywords(tmdb_api_key: str, tmdb_id: int, media_type: str = "movie", cache: Dict = None) -> List[str]:
+def get_tmdb_keywords(
+    tmdb_api_key: str, tmdb_id: int, media_type: str = "movie", cache: Optional[Dict] = None
+) -> List[str]:
     """
     Get keywords for a TMDB item.
 
@@ -274,7 +278,7 @@ def save_imdb_tmdb_cache(cache_dir: str, cache: Dict[str, int]):
 
 
 def get_tmdb_id_from_imdb(
-    tmdb_api_key: str, imdb_id: str, media_type: str = "movie", cache: Dict[str, int] = None
+    tmdb_api_key: str, imdb_id: str, media_type: str = "movie", cache: Optional[Dict[str, int]] = None
 ) -> Optional[int]:
     """
     Convert IMDB ID to TMDB ID using TMDB's find API.

@@ -53,6 +53,7 @@ PR description), so that residual gap is accepted rather than forced.
 """
 
 import os
+from typing import Optional
 
 RUN_LOCK_FILENAME = ".recommender_run.lock"
 
@@ -84,7 +85,7 @@ class PosixRunLock:
 
     def __init__(self, lock_path: str):
         self._lock_path = lock_path
-        self._fd = None
+        self._fd: Optional[int] = None
 
     def acquire(self) -> None:
         """Acquire the lock or raise OSError if already held elsewhere."""

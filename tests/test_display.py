@@ -232,13 +232,13 @@ class TestTeeLogger:
 
         try:
             sys.stdout = mock_stdout
-            sys.__stdout__ = mock_sys_stdout
+            sys.__stdout__ = mock_sys_stdout  # type: ignore[misc]  # sys.__stdout__ is typed Final, but real code under test reads it - a real test double requires reassigning it
             tee = TeeLogger(mock_logfile)
             tee.flush()
             mock_logfile.flush.assert_called_once()
         finally:
             sys.stdout = original_stdout
-            sys.__stdout__ = original_sys_stdout
+            sys.__stdout__ = original_sys_stdout  # type: ignore[misc]  # restoring the same Final-typed attribute
 
 
 class TestSetupLogging:

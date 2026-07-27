@@ -259,14 +259,14 @@ def map_users(plex_identities: List[Dict], tautulli_users: List[Dict]) -> Dict[s
         email = (identity.get("email") or "").strip().lower()
         username = (identity.get("username") or "").strip().lower()
 
-        tautulli_id = None
+        matched_tautulli_id: Optional[str] = None
         if email and email in by_email:
-            tautulli_id = by_email[email]
+            matched_tautulli_id = by_email[email]
         elif username and username in by_username:
-            tautulli_id = by_username[username]
+            matched_tautulli_id = by_username[username]
 
-        if tautulli_id:
-            user_map[str(plex_id)] = tautulli_id
+        if matched_tautulli_id:
+            user_map[str(plex_id)] = matched_tautulli_id
         else:
             logger.debug(f"Tautulli: no match found for Plex user '{identity.get('username')}'")
 

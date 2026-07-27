@@ -8,7 +8,7 @@ import logging
 import re
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from .redact import redact
 
@@ -166,7 +166,7 @@ class TeeLogger:
         self.logfile.flush()
 
 
-def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
+def setup_logging(debug: bool = False, config: Optional[dict] = None) -> logging.Logger:
     """
     Configure logging for recommendation scripts.
 
@@ -198,6 +198,7 @@ def setup_logging(debug: bool = False, config: dict = None) -> logging.Logger:
     handler = logging.StreamHandler()
     handler.setLevel(level)
 
+    formatter: logging.Formatter
     if log_format == "json":
         formatter = JsonFormatter()
     else:
@@ -274,7 +275,7 @@ def log_error(message: str) -> None:
     logger.error(redact(message))
 
 
-def clickable_link(url: str, text: str = None) -> str:
+def clickable_link(url: str, text: Optional[str] = None) -> str:
     """
     Create a clickable hyperlink for modern terminals using OSC 8 escape codes.
 
@@ -315,7 +316,7 @@ def format_media_output(
     media: Dict,
     media_type: str = "movie",
     show_summary: bool = False,
-    index: int = None,
+    index: Optional[int] = None,
     show_cast: bool = False,
     show_director: bool = False,
     show_language: bool = False,
@@ -670,7 +671,7 @@ def _open_html_windows(file_url: str) -> bool:
     # ShellExecute equivalent of double-clicking the file/URL - no shell
     # involved at all.
     try:
-        os.startfile(file_url)
+        os.startfile(file_url)  # type: ignore[attr-defined]  # Windows-only os API, absent from typeshed on other platforms
         print("Opened in default browser")
         return True
     except OSError:

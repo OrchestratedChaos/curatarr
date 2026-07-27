@@ -165,7 +165,13 @@ def teardown_log_file(original_stdout, log_retention_days: int):
     """
     if log_retention_days > 0 and sys.stdout is not original_stdout:
         try:
-            sys.stdout.logfile.close()
+            # getattr (not sys.stdout.logfile) - sys.stdout is only ever a
+            # TeeLogger (with a .logfile) in this branch, but its static
+            # type is plain TextIO; getattr(obj, "name") (no default)
+            # still raises AttributeError exactly like direct access if
+            # that's ever wrong, just without needing a static .logfile
+            # declaration on TextIO.
+            getattr(sys.stdout, "logfile").close()  # noqa: B009 -- deliberate, see mypy comment above
             sys.stdout = original_stdout
         except Exception as e:
             log_warning(f"Error closing log file: {e}")

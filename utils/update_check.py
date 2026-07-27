@@ -111,7 +111,8 @@ def parse_version(version: Optional[str]) -> Optional[Tuple[int, int, int]]:
     match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", version.strip())
     if not match:
         return None
-    return tuple(int(part) for part in match.groups())
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch)
 
 
 def _read_cache() -> Optional[dict]:

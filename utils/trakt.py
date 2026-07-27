@@ -8,7 +8,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -75,7 +75,7 @@ class TraktClient(BaseAPIClient):
         client_secret: str,
         access_token: Optional[str] = None,
         refresh_token: Optional[str] = None,
-        token_callback: Optional[callable] = None,
+        token_callback: Optional[Callable[[str, str], None]] = None,
     ):
         """
         Initialize Trakt client.
@@ -650,7 +650,7 @@ class TraktClient(BaseAPIClient):
 
         return self._make_request("POST", "/sync/history", data)
 
-    def get_ratings(self, media_type: str = None) -> List[Dict[str, Any]]:
+    def get_ratings(self, media_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get user's ratings from Trakt.
 
@@ -671,7 +671,7 @@ class TraktClient(BaseAPIClient):
         except TraktAPIError:
             return []
 
-    def get_watchlist(self, media_type: str = None) -> List[Dict[str, Any]]:
+    def get_watchlist(self, media_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get user's watchlist from Trakt.
 
@@ -721,7 +721,7 @@ class TraktClient(BaseAPIClient):
 
         return imdb_ids
 
-    def get_watchlist_imdb_ids(self, media_type: str = None) -> set:
+    def get_watchlist_imdb_ids(self, media_type: Optional[str] = None) -> set:
         """
         Get set of IMDB IDs from user's Trakt watchlist.
 

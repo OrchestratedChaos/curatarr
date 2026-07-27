@@ -256,7 +256,7 @@ def find_missing_sequels(
         for guid in item.guids:
             if "tmdb://" in guid.id:
                 try:
-                    tmdb_id = int(guid.id.split("tmdb://")[1])
+                    tmdb_id: Optional[int] = int(guid.id.split("tmdb://")[1])
                     library_tmdb_ids.add(tmdb_id)
                     break
                 except (ValueError, IndexError):

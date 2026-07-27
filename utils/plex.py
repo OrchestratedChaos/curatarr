@@ -16,7 +16,7 @@ import logging
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, TypedDict, Union
 
 import plexapi.exceptions
 import plexapi.server
@@ -373,7 +373,7 @@ def fetch_plex_watch_history_movies(
 
 def fetch_plex_watch_history_shows(
     config: Dict, account_ids: List[str], tv_section: Any = None, return_timestamps: bool = False
-) -> Set[int]:
+) -> Union[Set[int], Tuple[Set[int], Dict[int, Any]]]:
     """
     Fetch TV show watch history for specified account IDs using direct Plex API.
 
@@ -389,8 +389,8 @@ def fetch_plex_watch_history_shows(
     print("")
     print(f"{GREEN}Fetching Plex watch history for {len(account_ids)} user(s)...{RESET}")
 
-    watched_show_ids: Set[str] = set()
-    show_timestamps: Dict[str, Any] = {}  # show_id -> latest viewedAt timestamp
+    watched_show_ids: Set[int] = set()
+    show_timestamps: Dict[int, Any] = {}  # show_id -> latest viewedAt timestamp
 
     for account_id in account_ids:
         print("")
@@ -465,9 +465,9 @@ def fetch_show_completion_data(config: Dict, account_ids: List[str], tv_section:
             'last_watched': int (timestamp),
         }
     """
-    show_data: Dict[str, Any] = {}
-    show_episodes: Dict[str, Set[int]] = {}  # show_id -> set of episode rating keys
-    show_last_watched: Dict[str, Any] = {}  # show_id -> most recent viewedAt
+    show_data: Dict[int, Any] = {}
+    show_episodes: Dict[int, Set[Any]] = {}  # show_id -> set of episode rating keys
+    show_last_watched: Dict[int, Any] = {}  # show_id -> most recent viewedAt
 
     # Fetch watched episode data from history
     for account_id in account_ids:
@@ -599,7 +599,9 @@ def fetch_watch_history_with_tmdb(
         List of dicts: [{'tmdb_id': int, 'title': str, 'year': int}, ...]
     """
     watched_items = []
-    seen_tmdb_ids = set()
+    # Holds both str(rating_key) forms and int tmdb_id forms - two
+    # independent dedup checks (below) intentionally share one set.
+    seen_tmdb_ids: Set[Union[str, int]] = set()
 
     for account_id in account_ids:
         url = f"{config['plex']['url']}/status/sessions/history/all"
@@ -663,7 +665,7 @@ def fetch_watch_history_with_tmdb(
 
 
 def update_plex_collection(
-    section: Any, collection_name: str, items: List[Any], logger: Any = None, label_name: str = None
+    section: Any, collection_name: str, items: List[Any], logger: Any = None, label_name: Optional[str] = None
 ) -> bool:
     """
     Create or update a Plex collection with items in the specified order.
@@ -838,8 +840,16 @@ def get_configured_users(config: dict) -> dict:
             log_error(f"Error: Managed user '{user}' not found")
             raise ValueError(f"User '{user}' not found in Plex account")
 
-    seen = set()
-    managed_users = [u for u in processed_managed if not (u in seen or seen.add(u))]
+    # Dedup while preserving first-occurrence order. Written as an
+    # explicit loop (rather than the `not (u in seen or seen.add(u))`
+    # one-liner) so the set.add() call isn't used for its return value -
+    # same result, just without relying on set.add() always being None.
+    seen: set = set()
+    managed_users = []
+    for u in processed_managed:
+        if u not in seen:
+            seen.add(u)
+            managed_users.append(u)
 
     return {"managed_users": managed_users, "plex_users": plex_users, "admin_user": admin_user}
 
@@ -859,7 +869,9 @@ def get_current_users(users: dict) -> str:
     return f"Managed users: {', '.join(users['managed_users'])}"
 
 
-def get_excluded_genres_for_user(exclude_genres: set, user_preferences: dict, username: str = None) -> set:
+def get_excluded_genres_for_user(
+    exclude_genres: Iterable[str], user_preferences: dict, username: Optional[str] = None
+) -> set:
     """
     Get excluded genres including user-specific preferences.
 
@@ -882,7 +894,7 @@ def get_excluded_genres_for_user(exclude_genres: set, user_preferences: dict, us
 
 
 def get_streaming_services_for_user(
-    streaming_services: List[str], user_preferences: dict, username: str = None
+    streaming_services: List[str], user_preferences: dict, username: Optional[str] = None
 ) -> List[str]:
     """
     Get streaming services including user-specific preferences.
@@ -1006,7 +1018,17 @@ def extract_genres(item) -> List[str]:
     return genres
 
 
-def extract_ids_from_guids(item) -> Dict[str, Optional[str]]:
+class GuidIds(TypedDict):
+    """Return shape of extract_ids_from_guids() - a TypedDict (rather than
+    a homogeneous Dict[str, ...]) so imdb_id and tmdb_id each keep their
+    own real type at every call site, instead of both collapsing to a
+    shared Optional[Union[str, int]] that callers would need to re-narrow."""
+
+    imdb_id: Optional[str]
+    tmdb_id: Optional[int]
+
+
+def extract_ids_from_guids(item) -> GuidIds:
     """
     Extract IMDB and TMDB IDs from a Plex item's guids.
 
@@ -1014,9 +1036,9 @@ def extract_ids_from_guids(item) -> Dict[str, Optional[str]]:
         item: Plex media item with optional 'guids' attribute
 
     Returns:
-        Dict with 'imdb_id' and 'tmdb_id' keys (values may be None)
+        Dict with 'imdb_id' (str or None) and 'tmdb_id' (int or None) keys
     """
-    result = {"imdb_id": None, "tmdb_id": None}
+    result: GuidIds = {"imdb_id": None, "tmdb_id": None}
 
     if not hasattr(item, "guids"):
         return result

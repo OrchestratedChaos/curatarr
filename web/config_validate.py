@@ -38,7 +38,7 @@ def validate_url(value: str, field: str, errors: Dict[str, str], required: bool 
         errors[field] = "Must be a valid http:// or https:// URL"
 
 
-def validate_required(value: Optional[str], field: str, errors: Dict[str, str], label: str = None) -> None:
+def validate_required(value: Optional[str], field: str, errors: Dict[str, str], label: Optional[str] = None) -> None:
     if not (value or "").strip():
         errors[field] = f"{label or field} is required"
 
@@ -56,7 +56,12 @@ def validate_media_type(value: str, field: str, errors: Dict[str, str]) -> None:
 
 
 def validate_float(
-    value, field: str, errors: Dict[str, str], lo: float = None, hi: float = None, label: str = None
+    value,
+    field: str,
+    errors: Dict[str, str],
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+    label: Optional[str] = None,
 ) -> Optional[float]:
     """Parse *value* as a float, recording an error and returning None on
     failure so callers can skip using an invalid value downstream."""
@@ -73,7 +78,12 @@ def validate_float(
 
 
 def validate_int(
-    value, field: str, errors: Dict[str, str], lo: int = None, hi: int = None, label: str = None
+    value,
+    field: str,
+    errors: Dict[str, str],
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+    label: Optional[str] = None,
 ) -> Optional[int]:
     try:
         parsed = int(value)

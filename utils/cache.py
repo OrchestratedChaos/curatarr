@@ -37,7 +37,7 @@ def _atomic_write_json(cache_path: str, data: Dict, **json_kwargs) -> None:
         raise
 
 
-def save_json_cache(cache_path: str, data: Dict, cache_version: int = None) -> bool:
+def save_json_cache(cache_path: str, data: Dict, cache_version: Optional[int] = None) -> bool:
     """
     Save data to a JSON cache file.
 

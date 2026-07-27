@@ -70,9 +70,20 @@ jobs:
     # variables, ambiguous single-letter names, missing `raise ... from
     # err`, etc.) was fixed for real. `ruff check`'s continue-on-error
     # is removed below to match - a real regression now fails this job
-    # for real. `mypy` stays non-blocking (180 pre-existing errors,
-    # reduced from 255 but still unrelated to most day-to-day changes -
-    # this codebase is only partially annotated).
+    # for real.
+    #
+    # A subsequent pass worked mypy's ~180 pre-existing errors down to
+    # zero (missing/implicit-Optional annotations, mismatched container
+    # element types, a handful of narrow `# type: ignore[...]` for
+    # genuine typeshed/stdlib-overload limitations - e.g. Windows-only
+    # ctypes/os attributes analyzed on non-Windows, subprocess.run/Popen
+    # overload resolution against a `**dict` splat - and three narrow,
+    # explicitly-commented ignores marking pre-existing runtime bugs
+    # this pass deliberately did NOT fix, since a real fix there is a
+    # behavior change outside a typing-only PR's scope - see
+    # recommenders/external_sync.py's three `# type: ignore` comments).
+    # `mypy`'s continue-on-error is removed below to match - a real
+    # regression now fails this job for real, same as ruff above.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -94,7 +105,6 @@ jobs:
         run: ruff format --check .
 
       - name: mypy
-        continue-on-error: true
         run: mypy .
 
   secret-scan:

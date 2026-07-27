@@ -113,6 +113,10 @@ class BaseAPIClient:
                 f"{self.api_name} rate limited, waiting {retry_after}s (retry {attempt + 1}/{self.max_429_retries})"
             )
             time.sleep(retry_after)
+        # range(self.max_429_retries + 1) always executes at least once
+        # (max_429_retries is never negative), so response is always
+        # assigned by the time we get here.
+        assert response is not None
         return response
 
     def _get_headers(self) -> Dict[str, str]:
@@ -137,7 +141,7 @@ class BaseAPIClient:
         Returns:
             Extracted error message or raw response text
         """
-        error_msg = response.text
+        error_msg: Any = response.text
         try:
             error_data = response.json()
             if isinstance(error_data, list) and error_data:

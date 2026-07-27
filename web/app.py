@@ -35,6 +35,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
+from typing import Optional
 
 from flask import (
     Flask,
@@ -167,7 +168,7 @@ class _BrowserLikeTestClient(FlaskClient):
         return super().open(*args, **kwargs)
 
 
-def create_app(project_root: str = None, bind_host: str = None) -> Flask:
+def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = None) -> Flask:
     """Application factory. project_root is overridable so tests can
     point the app at a throwaway fixture repo instead of the real one.
 
@@ -190,8 +191,10 @@ def create_app(project_root: str = None, bind_host: str = None) -> Flask:
     app.config["PROJECT_ROOT"] = project_root
     app.config["LOGS_DIR"] = logs_dir
     app.config["EXTERNAL_DIR"] = external_dir
-    app.job_manager = JobManager(project_root, logs_dir)
-    app.update_manager = UpdateManager(project_root, logs_dir)
+    # Flask's stub doesn't declare these - real, deliberate attribute
+    # attachment (every route reads them back the same way), not a typo.
+    app.job_manager = JobManager(project_root, logs_dir)  # type: ignore[attr-defined]
+    app.update_manager = UpdateManager(project_root, logs_dir)  # type: ignore[attr-defined]
     app.test_client_class = _BrowserLikeTestClient
 
     register_origin_host_guard(app)
@@ -605,7 +608,7 @@ def _skip_slow_server_name_lookup() -> None:
             return "localhost"
         return _real_getfqdn(name)
 
-    _fast_getfqdn._curatarr_fast_path = True
+    _fast_getfqdn._curatarr_fast_path = True  # type: ignore[attr-defined]  # deliberate marker attribute on a plain function, re-entrancy guard for the check above
     _socket.getfqdn = _fast_getfqdn
 
 

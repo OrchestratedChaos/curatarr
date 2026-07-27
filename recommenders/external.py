@@ -293,7 +293,7 @@ def discover_candidates_by_profile(
         try:
             # Use Discover API with quality filters
             url = f"https://api.themoviedb.org/3/discover/{media}"
-            params = {
+            params: Dict[str, Any] = {
                 "api_key": tmdb_api_key,
                 "with_genres": genre_id,
                 "vote_average.gte": DISCOVER_MIN_RATING,
@@ -463,7 +463,7 @@ def discover_popular_by_genre(
         try:
             # Use TMDB Discover sorted by vote_average (quality) with minimum votes
             url = f"https://api.themoviedb.org/3/discover/{media}"
-            params = {
+            params: Dict[str, Any] = {
                 "api_key": tmdb_api_key,
                 "with_genres": genre_id,
                 "sort_by": "vote_average.desc",
@@ -773,7 +773,7 @@ def fetch_similar_from_tmdb(
 
     try:
         url = f"https://api.themoviedb.org/3/{media}/{tmdb_id}/similar"
-        params = {"api_key": tmdb_api_key, "page": 1}
+        params: Dict[str, Any] = {"api_key": tmdb_api_key, "page": 1}
         response = requests.get(url, params=params, timeout=TMDB_REQUEST_TIMEOUT)
 
         if response.status_code == 200:

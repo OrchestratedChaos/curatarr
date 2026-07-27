@@ -119,7 +119,7 @@ class PlexTVRecommender(BaseRecommender):
     def __init__(
         self,
         config_path: str,
-        single_user: str = None,
+        single_user: Optional[str] = None,
         library: Optional[Dict] = None,
         library_items_cache: Optional[Dict] = None,
     ):
@@ -189,8 +189,9 @@ class PlexTVRecommender(BaseRecommender):
 
         if (not cache_exists) or (current_watched_count != self.cached_watched_count):
             print("Watched count changed or no cache found; gathering watched data now. This may take a while...\n")
-            # Clear existing data to force actual fetch (prevents early returns in fetch functions)
-            self.watched_data_counters = None
+            # Clear existing data to force actual fetch (prevents early returns in fetch
+            # functions) - {} not None, see BaseRecommender._refresh_watched_data's comment.
+            self.watched_data_counters = {}
             self.watched_ids = set()
             if self.users["plex_users"]:
                 self.watched_data = self._get_plex_watched_shows_data()
@@ -256,10 +257,17 @@ class PlexTVRecommender(BaseRecommender):
             log_error("No valid users found!")
             return counters
 
-        # Use shared utility to fetch watch history with timestamps for recency decay
-        watched_ids, show_timestamps = fetch_plex_watch_history_shows(
-            self.config, account_ids, shows_section, return_timestamps=True
-        )
+        # Use shared utility to fetch watch history with timestamps for recency decay.
+        # fetch_plex_watch_history_shows() returns a plain set when
+        # return_timestamps is False and a (set, dict) tuple when True (see
+        # its own docstring) - the isinstance check below is a real type
+        # narrowing (return_timestamps=True is always passed here, so this
+        # never actually hits the `else`), not a defensive runtime guard.
+        history_result = fetch_plex_watch_history_shows(self.config, account_ids, shows_section, return_timestamps=True)
+        if isinstance(history_result, tuple):
+            watched_ids, show_timestamps = history_result
+        else:
+            watched_ids, show_timestamps = history_result, {}
 
         # Optionally merge in Tautulli watch history, weighted the same way as
         # Plex history. Covers users whose Plex-native history is thin (e.g.
@@ -451,7 +459,7 @@ class PlexTVRecommender(BaseRecommender):
             # Extract IDs using utility
             ids = extract_ids_from_guids(show)
             imdb_id = ids["imdb_id"]
-            audience_rating = 0
+            audience_rating: float = 0
             tmdb_keywords = []
 
             # Extract rating using shared utility

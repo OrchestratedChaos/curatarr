@@ -34,6 +34,7 @@ import shutil
 import struct
 import subprocess
 import sys
+from typing import Optional
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -435,7 +436,7 @@ class TestVerifyPinnedSignature:
 class TestVerifyDownloadedAsset:
     ASSET_NAME = "curatarr-linux-x86_64"
 
-    def _write_verified_fixture(self, tmp_path, signing_key, asset_bytes: bytes, version_line: str = None):
+    def _write_verified_fixture(self, tmp_path, signing_key, asset_bytes: bytes, version_line: Optional[str] = None):
         asset_path = tmp_path / self.ASSET_NAME
         asset_path.write_bytes(asset_bytes)
         digest = self_update.sha256_file(str(asset_path))
@@ -612,7 +613,7 @@ class TestVerifyDownloadedAssetVersionBinding:
 
     ASSET_NAME = "curatarr-linux-x86_64"
 
-    def _write_verified_fixture(self, tmp_path, signing_key, asset_bytes: bytes, version_line: str = None):
+    def _write_verified_fixture(self, tmp_path, signing_key, asset_bytes: bytes, version_line: Optional[str] = None):
         asset_path = tmp_path / self.ASSET_NAME
         asset_path.write_bytes(asset_bytes)
         digest = self_update.sha256_file(str(asset_path))
