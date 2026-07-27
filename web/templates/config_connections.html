@@ -129,8 +129,21 @@
     </label>
     <p class="muted">
       Account link: {{ trakt.access_token_status }}.
-      Run <code>python3 -m utils.trakt_auth</code> from the project root to link/relink a Trakt account
-      (device-code OAuth can't be completed from this form).
+      {% if trakt_reauth.docker %}
+      Device-code OAuth needs a live terminal, so it can't be completed from this form - run
+      <code>docker exec -it &lt;container&gt; python3 -m utils.trakt_auth</code> instead (add
+      <code>--reauth</code> to relink an account that's already linked). <code>&lt;container&gt;</code> is
+      this image's container name in <code>docker-compose.yml</code> (<code>curatarr</code> by default) -
+      substitute your own if you run/named it differently.
+      {% elif trakt_reauth.frozen %}
+      Linking/relinking Trakt isn't available yet from a packaged app build - there's no in-app way to run
+      the device-code flow from here. This is a known gap for packaged installs; see the project's issue
+      tracker for status.
+      {% else %}
+      Device-code OAuth can't be completed from this form - from the project root, with your virtual
+      environment active if you're using one, run <code>python3 -m utils.trakt_auth</code> to link/relink a
+      Trakt account (add <code>--reauth</code> to relink one that's already linked).
+      {% endif %}
     </p>
     <button type="button" class="test-connection" data-service="trakt"
             data-field-map='{"client_id": "trakt_client_id", "client_secret": "trakt_client_secret"}'>Test Connection</button>

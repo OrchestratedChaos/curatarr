@@ -7,6 +7,48 @@ import pytest
 import yaml
 
 
+class TestGetConfigDir:
+    """get_config_dir() must resolve against utils.helpers.
+    get_project_root() (CURATARR_CONFIG_DIR override in Docker,
+    ~/.curatarr for a frozen binary, repo root for a source checkout -
+    see that function's own docstring), never against this script's
+    own directory on disk. It used to always resolve to
+    dirname(dirname(__file__)) - correct for a source checkout, but
+    /app in Docker: the code's fixed WORKDIR, not the separately
+    mounted /data config/trakt.yml actually lives in (confirmed in a
+    real container - a `docker exec ... python3 -m utils.trakt_auth`
+    before this fix silently read/wrote the wrong, non-persisted
+    path)."""
+
+    def test_uses_get_project_root_not_own_file_location(self, monkeypatch):
+        from utils import trakt_auth
+
+        monkeypatch.setattr(trakt_auth, "get_project_root", lambda: "/data")
+        assert trakt_auth.get_config_dir() == os.path.join("/data", "config")
+        assert "/app" not in trakt_auth.get_config_dir()
+
+    def test_respects_curatarr_config_dir_env_var(self, tmp_path, monkeypatch):
+        """End-to-end through the real (unpatched) get_project_root() -
+        CURATARR_CONFIG_DIR is exactly how Docker points
+        get_project_root() at /data while the code stays at the
+        image's fixed /app (tmp_path stands in for /data here so this
+        test never touches a real filesystem root). get_project_root()
+        is @lru_cache(maxsize=1) - cleared before (so this test's own
+        call isn't served a value cached by some earlier, unrelated
+        test) and after (so this test's own result doesn't leak into
+        whatever runs next), matching tests/test_helpers.py's own
+        convention for this same cache."""
+        from utils import trakt_auth
+        from utils.helpers import get_project_root
+
+        monkeypatch.setenv("CURATARR_CONFIG_DIR", str(tmp_path))
+        get_project_root.cache_clear()
+        try:
+            assert trakt_auth.get_config_dir() == os.path.join(str(tmp_path), "config")
+        finally:
+            get_project_root.cache_clear()
+
+
 class TestTraktAuthLoadConfig:
     """Tests for trakt_auth load_config function."""
 

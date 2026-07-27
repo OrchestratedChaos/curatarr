@@ -11,8 +11,11 @@ client_secret: YOUR_CLIENT_SECRET
 # to date automatically as they're refreshed (access tokens currently
 # last about 24 hours - refreshed transparently before/on expiry, no
 # action needed unless the refresh itself is rejected, in which case
-# re-run trakt_auth.py below with --reauth).
-# Run: python3 utils/trakt_auth.py
+# re-run the command below with --reauth to relink).
+#
+# Run (from the project root, with your virtual environment active if
+# you're using one): python3 -m utils.trakt_auth [--reauth]
+# Docker: docker exec -it curatarr python3 -m utils.trakt_auth [--reauth]
 access_token: null
 refresh_token: null
 # token_created_at / token_expires_in: also set automatically (used to

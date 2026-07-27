@@ -15,12 +15,29 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import load_config as _load_canonical_config
+from utils.helpers import get_project_root
 from utils.trakt import TraktAuthError, TraktClient, save_trakt_tokens
 
 
 def get_config_dir():
-    """Get the config directory path."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
+    """Get the config directory path.
+
+    Delegates to utils.helpers.get_project_root() - CURATARR_CONFIG_DIR
+    override for Docker, ~/.curatarr for a frozen binary, repo root for
+    a source checkout (see that function's own docstring) - instead of
+    this script's own directory. This used to always resolve to
+    dirname(dirname(__file__)), i.e. wherever trakt_auth.py itself
+    lives on disk: correct for a source checkout, but /app in Docker -
+    the code's fixed WORKDIR, not the separately mounted /data volume
+    config/trakt.yml actually lives in (confirmed in a real container -
+    the same code_root-vs-project_root divergence #260 already fixed
+    for web/job_runner.py's JobManager, just never touched here). A
+    `docker exec ... python3 -m utils.trakt_auth` before this fix would
+    have silently read/written /app/config/trakt.yml - a path that
+    isn't even bind-mounted, so it neither sees the real existing
+    config nor persists whatever it saves past the container's life.
+    """
+    return os.path.join(get_project_root(), "config")
 
 
 def load_config():
@@ -113,7 +130,7 @@ def main(argv=None):
     # access_token first, and even a source install shouldn't have to).
     if not args.reauth and trakt_config.get("access_token") and trakt_config.get("access_token") != "null":
         print("Already authenticated!")
-        print("To re-authenticate, run: python3 utils/trakt_auth.py --reauth")
+        print("To re-authenticate, run: python3 -m utils.trakt_auth --reauth")
         sys.exit(0)
 
     # Create client

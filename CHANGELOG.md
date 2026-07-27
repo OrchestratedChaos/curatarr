@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.57] - 2026-07-27
+
+### Fixed
+
+- **Trakt re-authentication instructions were inconsistent across three locations, and all three could fail with `ModuleNotFoundError: No module named 'cryptography'` when run with the wrong interpreter.** `run.ps1` said `python utils/trakt_auth.py`, `config/trakt.example.yml` said `python3 utils/trakt_auth.py`, and the Connections screen said `python3 -m utils.trakt_auth` - three different invocations, none mentioning that this needs the project's own dependencies (a virtual environment, if you're using one), which is what actually broke for a reporter running the documented command against their system Python. Confirmed `python3 -m utils.trakt_auth` and `python3 utils/trakt_auth.py` behave identically (`-m` still runs the same `__main__` block); standardized all three locations, plus the script's own internal re-auth hint, on the `-m` form, and added a plain reminder to activate a virtual environment if applicable.
+
+  Testing this surfaced a second, more serious bug in the same area: `utils/trakt_auth.py`'s own `get_config_dir()` resolved against wherever the script itself lives on disk, not against `utils.helpers.get_project_root()` like everything else in the app - correct for a source checkout, but wrong in Docker, where the code lives at a fixed `/app` while `config/trakt.yml` actually lives on the separately mounted `/data` volume. A `docker exec` re-auth before this fix would have silently read/written the wrong, non-persisted path - confirmed in a real container. `get_config_dir()` now delegates to `get_project_root()`, and the Connections screen and `docs/DOCKER.md` both now give Docker users the `docker exec -it <container> python3 -m utils.trakt_auth` command that actually works against the real config, instead of a source-install command they have no way to run.
+
+  Checked the frozen (PyInstaller) binary separately: unlike `movie`/`tv`/`external`/`full`, there is currently no way to run Trakt re-auth from a packaged build at all (no loose `utils/trakt_auth.py`, no `--run-recommender`-equivalent dispatch). The Connections screen now says so plainly instead of showing a command that can't work there; closing this gap needs its own follow-up.
+
+  `config/trakt.example.yml` now also documents `--reauth` for relinking an already-linked account, not just first-time setup.
+
 ## [2.10.56] - 2026-07-27
 
 ### Fixed
