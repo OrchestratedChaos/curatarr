@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.60] - 2026-07-27
+
+### Fixed
+
+- **Hardened `sanitize_frozen_relaunch_env` (utils/self_update.py) against PyInstaller onefile's dynamic-loader-path env-var inheritance hazard.** Follows up the v2.10.57 release verification, where a real self-update from v2.10.48 hit a SIGSEGV in the post-swap version readback (rolled itself back correctly; could not be reproduced in 10/10 clean reruns and CI's own smoke test) - not chased further per its own inconclusiveness, but it surfaced a real, separate, verified gap: the sanitizer stripped only `_MEIPASS2`/`_PYI_*`/`_PYINSTALLER_*`, never `LD_LIBRARY_PATH` - the classic PyInstaller onefile hazard where a parent's own extraction-directory-pointing loader path leaks into a relaunched child.
+
+  Verified directly against PyInstaller 6.21.0's own bootloader source (the version this repo's build-requirements.lock pins - both the compiled bootloader binaries this repo's own release CI ships, and the upstream C source) rather than assumed: Linux's onefile bootloader unconditionally prepends its extraction directory onto `LD_LIBRARY_PATH` on every launch, saving any pre-existing value under `LD_LIBRARY_PATH_ORIG` first. macOS's bootloader does **not** touch `DYLD_LIBRARY_PATH`/`DYLD_FRAMEWORK_PATH` at all ("we rewrite the library paths on collected binaries" - PyInstaller's own source comment); confirmed empirically too (the compiled Darwin bootloader binaries contain no such strings, unlike the Linux one, which contains both `LD_LIBRARY_PATH` and `LD_LIBRARY_PATH_ORIG` verbatim).
+
+  `sanitize_frozen_relaunch_env` now resolves all three variables using PyInstaller's own `<VAR>_ORIG` convention: restores the original value and drops the `_ORIG` marker when present, and - only for `LD_LIBRARY_PATH` on Linux, the one (variable, platform) pair confirmed to always be bootloader-injected when absent - removes the variable outright when no `_ORIG` exists. Everywhere else (the macOS variables, and `LD_LIBRARY_PATH` on any non-Linux platform), a value with no `_ORIG` is left completely untouched rather than risk clobbering something a user genuinely set themselves. All three of this module's real relaunch/subprocess call sites (the self-update worker spawn, the post-swap `--version` readback, and the web UI's external hand-off script launch) already routed through this same function, so all three are covered by this one change; the hand-off shell script templates' own redundant belt-and-suspenders re-stripping deliberately does not duplicate the loader-path handling, since that decision can only be made correctly once, before the `_ORIG` marker is consumed.
+
+  Verified end-to-end against a real, actually-built Linux onefile binary (matching this repo's own release CI exactly): captured the real bootloader-injected environment of a live running instance in two scenarios (no pre-existing `LD_LIBRARY_PATH`, and a genuine pre-existing one) and confirmed the sanitizer strips the former outright and correctly restores the latter to its original value. The macOS side of this fix is confirmed correct by source/unit tests but is precautionary for this project specifically - PyInstaller doesn't touch these variables for a Qt-less build like curatarr's, so there was nothing to observe mutating them in a real macOS build. The original SIGSEGV itself was not re-attempted, per its own inconclusiveness.
+
 ## [2.10.59] - 2026-07-27
 
 ### Fixed
