@@ -141,6 +141,20 @@ def register_origin_host_guard(app) -> None:
         if not is_allowed_host(request.host):
             abort(400)
         if request.method in STATE_CHANGING_METHODS:
+            # The Referer fallback only ever fires for a browser that
+            # sent Origin but not Referer, or neither - which is exactly
+            # what happens on a same-origin form POST when the response
+            # Referrer-Policy (web/app.py's _BASELINE_SECURITY_HEADERS)
+            # is stricter than "same-origin"/"origin"/"strict-origin-
+            # when-cross-origin"/"no-referrer-when-downgrade" - a plain
+            # <form method="post"> (unlike fetch()) never sets Origin
+            # itself, so it relies entirely on the browser doing so, and
+            # a "no-referrer" policy makes browsers send Origin: null on
+            # that request instead (see #260). If the policy is ever
+            # tightened back to no-referrer, every non-fetch() POST in
+            # this app breaks again, including /login - see
+            # tests/test_web_routes.py's TestBaselineSecurityHeaders for
+            # the regression test pinning this coupling.
             source = request.headers.get("Origin") or request.headers.get("Referer")
             if not source:
                 abort(403)

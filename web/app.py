@@ -134,7 +134,20 @@ BASELINE_CSP = (
 _BASELINE_SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    # same-origin (not no-referrer - see #260): still sends NO referrer on
+    # a cross-origin request, so a link out of this app never leaks
+    # anything to another site, but it DOES send one on a same-origin
+    # request/navigation - which is what makes the browser attach a real
+    # Origin header (not "null") to a plain <form method="post"> submit.
+    # register_origin_host_guard (web/security.py) reads that Origin to
+    # tell a same-origin form POST apart from a cross-site one; under
+    # no-referrer every non-fetch() POST looked cross-site (Origin: null)
+    # and got 403'd, including /login itself. A cross-origin form POST
+    # still gets Origin: null under same-origin (browsers never send
+    # Origin OR Referer cross-origin under this policy) and is still
+    # correctly rejected - this only fixes the same-origin case, it does
+    # not loosen the guard.
+    "Referrer-Policy": "same-origin",
     "Content-Security-Policy": BASELINE_CSP,
 }
 

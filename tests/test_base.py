@@ -1605,6 +1605,7 @@ class TestBaseRecommenderCollectionNaming:
         assert recommender._library_suffix_for_label() == "_movies-4k"
         assert recommender._cache_library_prefix() == "movies-4k_"
 
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
     @patch("recommenders.base.cleanup_old_collections")
     @patch("recommenders.base.update_plex_collection")
     @patch("recommenders.base.init_plex")
@@ -1613,7 +1614,7 @@ class TestBaseRecommenderCollectionNaming:
     @patch("recommenders.base.load_config")
     @patch("os.makedirs")
     def test_sync_plex_collection_single_library_name_unchanged(
-        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
     ):
         """Single-library install: collection name is byte-identical to
         pre-Phase-3 (no suffix)."""
@@ -1626,13 +1627,15 @@ class TestBaseRecommenderCollectionNaming:
         recommender = ConcreteRecommender("/path/to/config.yml")
         section = Mock()
 
-        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()])
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
 
         collection_name = mock_update.call_args[0][1]
         assert collection_name == "🎬 Alice - Recommendation"
         mock_cleanup.assert_called_once()
         assert mock_cleanup.call_args[0][1] == "🎬 Alice - Recommendation"
+        mock_cleanup_legacy.assert_called_once()
 
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
     @patch("recommenders.base.cleanup_old_collections")
     @patch("recommenders.base.update_plex_collection")
     @patch("recommenders.base.init_plex")
@@ -1641,7 +1644,7 @@ class TestBaseRecommenderCollectionNaming:
     @patch("recommenders.base.load_config")
     @patch("os.makedirs")
     def test_sync_plex_collection_multi_library_adds_suffix(
-        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
     ):
         """Multi-library install: collection name is suffixed with the
         library name so same-named collections across libraries are
@@ -1655,7 +1658,7 @@ class TestBaseRecommenderCollectionNaming:
         recommender = ConcreteRecommender("/path/to/config.yml", library=LIB_MOVIES_4K)
         section = Mock()
 
-        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()])
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
 
         collection_name = mock_update.call_args[0][1]
         assert collection_name == "🎬 Alice - Recommendation (Movies 4K)"
@@ -1690,8 +1693,13 @@ class TestBaseRecommenderCollectionNaming:
             pass
 
         assert mock_build_label.called
-        base_label_arg = mock_build_label.call_args[0][0]
-        assert base_label_arg == "Recommended_movies-4k"
+        # manage_plex_labels now calls build_label_name twice before the
+        # short-circuit: once for the item label (base_label), once for
+        # the collection-level private label (private_base_label, #261) -
+        # both must be library-id-qualified the same way.
+        call_base_labels = [call.args[0] for call in mock_build_label.call_args_list]
+        assert call_base_labels[0] == "Recommended_movies-4k"
+        assert "PrivateCollection_movies-4k" in call_base_labels
 
 
 # ------------------------------------------------------------------------
@@ -2066,9 +2074,17 @@ class TestManagePlexLabelsFullFlow:
         recommender.config["collections"] = {
             "add_label": True,
             "label_name": "Recommended",
-            "append_usernames": False,
+            # True matches config/tuning.example.yml's documented default
+            # and the code default (#261) - False was the exact broken
+            # production config every fresh install actually ran with
+            # (nothing in any install path ever wrote a real tuning.yml),
+            # which collapsed every user's label to the identical literal
+            # "Recommended". See TestPrivateCollectionsAppendUsernames
+            # below for explicit coverage of both the True and False paths.
+            "append_usernames": True,
             "private_collections": False,
         }
+        recommender.single_user = "alice"
         recommender.confirm_operations = False
         recommender._find_plex_items_for_recs = Mock(return_value=([Mock()], []))
         recommender._remove_outdated_labels = Mock(return_value=[])
@@ -2119,14 +2135,28 @@ class TestManagePlexLabelsFullFlow:
         assert args[1] == []
 
     @patch("recommenders.base.apply_user_label_restrictions")
-    @patch("recommenders.base.build_label_name", return_value="Recommended_alice")
-    def test_private_collections_applies_restrictions(self, mock_build_label, mock_apply):
-        recommender = self._base_recommender()
+    def test_private_collections_applies_restrictions(self, mock_apply):
+        """#261 regression: uses the REAL build_label_name (not a hardcoded
+        patch) and a multi-user fixture, and asserts on the actual per-user
+        PrivateCollection_* labels apply_user_label_restrictions receives -
+        not just that it was called. The old version of this test patched
+        build_label_name to a fixed "Recommended_alice" and used a
+        single-user fixture, so it couldn't have caught #261: every user
+        collapsing to the identical label was invisible to it."""
+        recommender = self._base_recommender(
+            users={"plex_users": ["alice", "bob"], "managed_users": [], "admin_user": "admin"}
+        )
+        recommender.single_user = "alice"
         recommender.config["collections"]["private_collections"] = True
 
         recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
 
         mock_apply.assert_called_once()
+        all_user_private_labels = mock_apply.call_args[0][1]
+        assert all_user_private_labels == {
+            "alice": "PrivateCollection_alice",
+            "bob": "PrivateCollection_bob",
+        }
 
     @patch("recommenders.base.get_max_rating_for_user", return_value="PG-13")
     @patch("recommenders.base.build_label_name", return_value="Recommended_alice")
@@ -2165,6 +2195,135 @@ class TestManagePlexLabelsFullFlow:
         recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
 
         assert recommender._update_labels_by_rank.call_args[0][3] == 7
+
+
+class TestPrivateCollectionsAppendUsernames:
+    """#261: collections.append_usernames' True/False paths, explicitly.
+
+    True is both the documented default (config/tuning.example.yml) and
+    the code default - every user gets a distinct label, so
+    private_collections' exclude filters correctly isolate each user.
+    False is only safe with exactly one user configured (build_label_name
+    just returns the bare base label either way - nothing to disambiguate
+    since there's nothing to disambiguate FROM); with more than one user
+    it must fail loud instead of applying restrictions (see
+    TestManagePlexLabelsFullFlow._base_recommender for the shared setup
+    this subclasses)."""
+
+    def _recommender(self, users, append_usernames, single_user="alice"):
+        recommender = _make_recommender(users=users)
+        recommender.plex = Mock()
+        recommender.config["collections"] = {
+            "add_label": True,
+            "label_name": "Recommended",
+            "append_usernames": append_usernames,
+            "private_collections": True,
+        }
+        recommender.single_user = single_user
+        recommender.confirm_operations = False
+        recommender._find_plex_items_for_recs = Mock(return_value=([Mock()], []))
+        recommender._remove_outdated_labels = Mock(return_value=[])
+        recommender._build_scored_candidates = Mock(return_value={1: (Mock(), 0.9)})
+        recommender._update_labels_by_rank = Mock(return_value=[Mock()])
+        recommender._sync_plex_collection = Mock(return_value=True)
+        recommender._save_watched_cache = Mock()
+        return recommender
+
+    @patch("recommenders.base.apply_user_label_restrictions")
+    def test_append_usernames_true_multi_user_applies_distinct_labels(self, mock_apply):
+        recommender = self._recommender(
+            users={"plex_users": ["alice", "bob"], "managed_users": [], "admin_user": "admin"},
+            append_usernames=True,
+        )
+
+        result = recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        assert result is True
+        mock_apply.assert_called_once()
+        assert mock_apply.call_args[0][1] == {
+            "alice": "PrivateCollection_alice",
+            "bob": "PrivateCollection_bob",
+        }
+
+    @patch("recommenders.base.apply_user_label_restrictions")
+    def test_append_usernames_false_single_user_still_applies(self, mock_apply):
+        """A single configured user has nothing to disambiguate from, so
+        False is harmless here - apply_user_label_restrictions itself
+        also no-ops on a single-entry dict (see utils/plex_policy.py)."""
+        recommender = self._recommender(
+            users={"plex_users": ["alice"], "managed_users": [], "admin_user": "admin"},
+            append_usernames=False,
+        )
+
+        result = recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        assert result is True
+        mock_apply.assert_called_once()
+        assert mock_apply.call_args[0][1] == {"alice": "PrivateCollection"}
+
+    @patch("recommenders.base.log_warning")
+    @patch("recommenders.base.apply_user_label_restrictions")
+    def test_append_usernames_false_multi_user_skips_and_warns(self, mock_apply, mock_warn):
+        """The #261 failure mode itself: more than one user configured
+        with append_usernames false must never reach
+        apply_user_label_restrictions (every user's label would be the
+        identical bare "PrivateCollection", so the exclude filter would
+        hide the one shared collection - and its items - from everyone
+        instead of isolating each user's own). Must fail loud instead,
+        naming the config key so an operator can actually fix it."""
+        recommender = self._recommender(
+            users={"plex_users": ["alice", "bob"], "managed_users": [], "admin_user": "admin"},
+            append_usernames=False,
+        )
+
+        result = recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        assert result is True
+        mock_apply.assert_not_called()
+        mock_warn.assert_called_once()
+        warning_text = mock_warn.call_args[0][0]
+        assert "append_usernames" in warning_text
+        assert "tuning.yml" in warning_text
+
+
+class TestCollectionTitleUsesRealUsername:
+    """#261 regression: the collection title is always built from the
+    real username (self.single_user), even with append_usernames false
+    (the exact broken production default) - never from label_name string
+    surgery. Before the fix, this exact config produced the literal
+    title "🎬 Recommended - Recommendation" for every user, since
+    label_name was just the bare base label with no "Recommended_" prefix
+    to strip."""
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection", return_value=True)
+    def test_title_uses_real_username_even_with_append_usernames_false(
+        self, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        recommender = _make_recommender(users={"plex_users": ["alice"], "managed_users": [], "admin_user": "admin"})
+        recommender.plex = Mock()
+        recommender.single_user = "alice"
+        recommender.config["collections"] = {
+            "add_label": True,
+            "label_name": "Recommended",
+            "append_usernames": False,
+            "private_collections": False,
+        }
+        recommender.confirm_operations = False
+        recommender._find_plex_items_for_recs = Mock(return_value=([Mock()], []))
+        recommender._remove_outdated_labels = Mock(return_value=[])
+        recommender._build_scored_candidates = Mock(return_value={1: (Mock(), 0.9)})
+        recommender._update_labels_by_rank = Mock(return_value=[Mock()])
+        recommender._save_watched_cache = Mock()
+
+        result = recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        assert result is True
+        collection_name = mock_update.call_args[0][1]
+        assert "Alice" in collection_name
+        assert collection_name == "🎬 Alice - Recommendation"
+        assert collection_name != "🎬 Recommended - Recommendation"
 
 
 class TestManagePlexLabelsExceptionHandling:

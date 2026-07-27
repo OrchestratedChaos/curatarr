@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.48"
+__version__ = "2.10.49"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so

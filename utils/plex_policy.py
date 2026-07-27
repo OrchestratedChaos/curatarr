@@ -15,7 +15,11 @@ rules about what a user is allowed to see -
     built on top of the hierarchies above.
   - apply_user_label_restrictions: the PrivateCollection_*/Recommended_*
     labeling convention that keeps one user's recommendation collection
-    hidden from another user sharing the same server.
+    out of another user's library Browse/Search results on the same
+    server. This is UI-level separation only, not an access-control
+    boundary - see the function's own docstring for the enumeration
+    caveat (a user who already has, or guesses, a collection's ratingKey
+    can still retrieve its contents directly via the Plex API).
 
 apply_user_label_restrictions still talks to the Plex API directly (via
 utils.plex's _capped_get/_capped_put) - it's included here anyway because
@@ -103,36 +107,53 @@ def is_rating_allowed(content_rating: Optional[str], max_rating: Optional[str], 
 
 def apply_user_label_restrictions(
     config: Dict,
-    all_user_labels: Dict[str, str],
+    all_user_private_labels: Dict[str, str],
 ) -> bool:
     """
-    Apply exclude restrictions so each user can't see other users' collections.
+    Apply exclude restrictions so each user's collection is excluded from
+    every other user's library browse/search results.
 
-    Collections get PrivateCollection_* labels (hidden via exclusions).
+    NOT an access-control boundary - see the module docstring above and
+    README.md's FAQ for the enumeration caveat (Plex applies this
+    exclusion to the collection object, not to the items a client
+    requests directly from it).
+
     Items get Recommended_* labels (visible to everyone, not excluded).
+    Collections get their own PrivateCollection_* label - passed in here
+    fully built via all_user_private_labels, not derived from the item
+    labels by string surgery (#261: label.replace("Recommended_",
+    "PrivateCollection_") silently produced the wrong, unprefixed result
+    whenever the item label wasn't literally "Recommended_<user>" - e.g.
+    every install running with collections.append_usernames: false,
+    where it collapsed to the same bare label for every user).
 
     Each user gets an EXCLUDE filter for other users' PrivateCollection_* labels:
     - They can see their full library (all items, including others' recommendations)
     - They can see their own collection (their PrivateCollection label not excluded)
-    - They cannot see other users' collections (those PrivateCollection labels excluded)
+    - They cannot browse/search to other users' collections (those labels excluded)
 
     Uses direct Plex API calls (not plexapi's updateFriend which doesn't work for Home users).
     Note: Server admin cannot have restrictions applied (Plex limitation).
 
     Args:
         config: Configuration dict with plex token
-        all_user_labels: Dict mapping username to their Recommended_* label name
-                         e.g., {'Jason': 'Recommended_Jason', 'Sarah': 'Recommended_Sarah'}
-                         (converted to PrivateCollection_* internally for exclusions)
+        all_user_private_labels: Dict mapping username to their already-built
+                         PrivateCollection_* label name (see
+                         recommenders/base.py's manage_plex_labels, which
+                         builds this the same way it builds the item-level
+                         label - via build_label_name(), just rooted at
+                         "PrivateCollection" instead of the configured
+                         label_name)
+                         e.g., {'Jason': 'PrivateCollection_Jason', 'Sarah': 'PrivateCollection_Sarah'}
 
     Returns:
         True if all restrictions applied successfully, False if any failed
     """
-    if not all_user_labels:
+    if not all_user_private_labels:
         return True
 
     # Only one user - nothing to hide from anyone
-    if len(all_user_labels) <= 1:
+    if len(all_user_private_labels) <= 1:
         return True
 
     plex_token = config["plex"]["token"]
@@ -170,7 +191,7 @@ def apply_user_label_restrictions(
         logger.debug(f"Plex users available for restrictions: {list(plex_users.keys())}")
 
         all_success = True
-        for username, _user_label in all_user_labels.items():
+        for username, _user_private_label in all_user_private_labels.items():
             # Admin can't have restrictions
             if username.lower() == admin_username:
                 logger.debug(f"Skipping restrictions for admin user: {username}")
@@ -194,13 +215,13 @@ def apply_user_label_restrictions(
                 all_success = False
                 continue
 
-            # Get labels to EXCLUDE (all other users' PrivateCollection labels)
-            # We exclude PrivateCollection_* (on collections) NOT Recommended_* (on items)
-            # This hides other users' collections but keeps items visible to everyone
+            # Labels to EXCLUDE: every OTHER user's already-built
+            # PrivateCollection_* label (on collections), never
+            # Recommended_* (on items) - this hides other users'
+            # collections but keeps items visible to everyone. Used as
+            # given, not derived here (#261 - see this function's docstring).
             exclude_labels = [
-                label.replace("Recommended_", "PrivateCollection_")
-                for u, label in all_user_labels.items()
-                if u.lower() != username.lower()
+                private_label for u, private_label in all_user_private_labels.items() if u.lower() != username.lower()
             ]
 
             if not exclude_labels:

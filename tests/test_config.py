@@ -528,6 +528,123 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         )
 
 
+class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
+    """Standing guard (#261 audit remediation): TestResolveMediaTypeOverrides
+    KeyEnumeration above only ever walked movies:/tv:, so a mismatch in any
+    OTHER top-level section of config/tuning.example.yml - like
+    collections.append_usernames (documented true, code defaulted to
+    false - #261) - was structurally outside what it could ever catch.
+    This walks every remaining top-level section and asserts each
+    documented example value matches the real code fallback that reads
+    it, so a documented default and its code default can never again
+    silently drift apart without a test failing.
+
+    Uses the real, committed config/tuning.example.yml - not a hand-rolled
+    fixture - so it also catches the example file and the code drifting
+    apart from each other, exactly like #261.
+    """
+
+    @staticmethod
+    def _load_example_tuning():
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        example_path = os.path.join(repo_root, "config", "tuning.example.yml")
+        with open(example_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    def test_collections_defaults_match(self):
+        """recommenders/base.py's manage_plex_labels() reads every one of
+        these directly off self.config["collections"] with these exact
+        fallback defaults."""
+        tuning = self._load_example_tuning()
+        collections = tuning["collections"]
+        assert collections["add_label"] is True
+        assert collections["label_name"] == "Recommended"
+        assert collections["append_usernames"] is True  # #261
+        assert collections["private_collections"] is True
+
+    def test_external_recommendations_defaults_match(self):
+        from recommenders.external import MAX_DISCOVERY_ITERATIONS, OUTPUT_MIN_VOTES
+
+        tuning = self._load_example_tuning()
+        external = tuning["external_recommendations"]
+        assert external["movie_limit"] == 50
+        assert external["show_limit"] == 20
+        assert external["min_relevance_score"] == 0.65
+        assert external["auto_open_html"] is False
+        assert external["min_votes"] == OUTPUT_MIN_VOTES
+        assert external["language"] is None
+        # KNOWN MISMATCH surfaced by this guardrail, reported rather than
+        # silently "fixed" (see this PR's description) - the example
+        # documents 5, the code fallback (MAX_DISCOVERY_ITERATIONS) is 8.
+        # Pinned here on both sides so whichever way this is resolved,
+        # this test forces a deliberate update instead of drifting further.
+        assert external["max_iterations"] == 5
+        assert MAX_DISCOVERY_ITERATIONS == 8
+
+    def test_recency_decay_defaults_match(self):
+        """utils/scoring.py's calculate_recency_multiplier reads every one
+        of these with these exact fallback defaults."""
+        tuning = self._load_example_tuning()
+        recency = tuning["recency_decay"]
+        assert recency["enabled"] is True
+        assert recency["days_0_30"] == 1.0
+        assert recency["days_31_90"] == 0.75
+        assert recency["days_91_180"] == 0.50
+        assert recency["days_181_365"] == 0.25
+        assert recency["days_365_plus"] == 0.10
+
+    def test_rating_multipliers_defaults_match(self):
+        """get_rating_multipliers()'s star_X argument defaults, used
+        whenever config["rating_multipliers"] exists but is missing
+        individual star_X keys - see this test class's own docstring
+        note in the PR description about the SEPARATE
+        DEFAULT_RATING_MULTIPLIERS fallback (used only when the whole
+        rating_multipliers section is absent), which uses different
+        numbers and was NOT asserted here - reported as a distinct,
+        unresolved finding, not silently reconciled."""
+        tuning = self._load_example_tuning()
+        multipliers = tuning["rating_multipliers"]
+        assert multipliers["star_5"] == 2.5
+        assert multipliers["star_4"] == 1.7
+        assert multipliers["star_3"] == 1.0
+        assert multipliers["star_2"] == 0.4
+        assert multipliers["star_1"] == 0.2
+
+    def test_negative_signals_defaults_match(self):
+        """get_negative_signals_config()'s fallback defaults."""
+        tuning = self._load_example_tuning()
+        negative = tuning["negative_signals"]
+        assert negative["enabled"] is True
+        assert negative["bad_ratings"]["enabled"] is True
+        assert negative["bad_ratings"]["threshold"] == DEFAULT_NEGATIVE_THRESHOLD
+        assert negative["bad_ratings"]["cap_penalty"] == 0.5
+        assert negative["dropped_shows"]["enabled"] is True
+        assert negative["dropped_shows"]["min_episodes_watched"] == 2
+        assert negative["dropped_shows"]["max_completion_percent"] == 25
+        assert negative["dropped_shows"]["penalty_multiplier"] == -0.4
+
+    def test_top_level_sections_are_all_covered_by_this_class(self):
+        """Belt-and-braces, mirroring
+        TestResolveMediaTypeOverridesKeyEnumeration's own version of this:
+        fails loudly (instead of silently passing) if a future
+        tuning.example.yml edit adds a new top-level section none of the
+        tests above account for."""
+        tuning = self._load_example_tuning()
+        covered_sections = {
+            "movies",
+            "tv",
+            "collections",
+            "external_recommendations",
+            "recency_decay",
+            "rating_multipliers",
+            "negative_signals",
+            "users",
+        }
+        assert set(tuning.keys()) <= covered_sections, (
+            f"tuning.example.yml has undocumented-here top-level sections: {set(tuning.keys()) - covered_sections}"
+        )
+
+
 class TestNegativeSignalsConstants:
     """Tests for negative signals constants"""
 

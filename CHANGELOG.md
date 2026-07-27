@@ -2,6 +2,30 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.49] - 2026-07-27
+
+### Fixed
+
+- **Every web UI form (Save/Run/Login) was returning 403 - #260.**
+
+  `web/app.py`'s baseline security headers set `Referrer-Policy: no-referrer` on every response (added in 2.9.0, #198). Per the Fetch spec, a browser under that policy sends `Origin: null` (and no `Referer` at all) on a plain `<form method="post">` navigation - `fetch()` calls are unaffected since they use CORS mode and always send a real `Origin`. `web/security.py`'s origin guard then saw the literal string `"null"`, couldn't resolve it to this app's own host, and rejected the request with 403. Affected routes: `/run`, `/config/settings`, `/config/users`, `/config/connections`, `/config/libraries`, `/update/dismiss` - and `/login` itself, since that guard runs before token auth, so a token-protected deploy couldn't even log in.
+
+  Fixed by changing `Referrer-Policy` to `same-origin`: this still sends NO referrer on a cross-origin request (nothing new leaks to another site), but it does send one - and therefore a real `Origin` header - on a same-origin request, which is exactly what the guard needs to tell a same-origin form POST apart from a cross-site one. A cross-origin or opaque-origin (sandboxed iframe, `data:`/`blob:` document) form POST still gets `Origin: null` under `same-origin` and is still correctly rejected with 403 - this only fixes the same-origin case, the CSRF guard itself is unchanged and was not loosened.
+
+  **Why the test suite was green while this was broken in production:** the test client (`_BrowserLikeTestClient`) stamps a same-origin `Origin` header onto every request by default, and the one test that pinned `Referrer-Policy` asserted `no-referrer` in isolation - the two facts that combine to cause #260 were never asserted together. Added a regression test that pins the actual invariant (the response's `Referrer-Policy` must be a value that preserves `Origin` on a same-origin form POST, explicitly not `no-referrer`) and a second test using the raw Flask test client (bypassing the same-origin stamping) confirming cross-origin/opaque-origin POSTs are still rejected.
+
+- **Multi-user installs got a single, mis-named, shared collection with recommendations hidden from every shared user instead of their own - #261.**
+
+  `recommenders/base.py` read `collections.append_usernames` with a code default of `False`, while the shipped `config/tuning.example.yml` always documented `true` - and nothing in any install path (Dockerfile, setup.sh, the web UI) ever wrote a real `tuning.yml`, so every fresh install silently ran on the wrong default. With `append_usernames` false: every user's item label collapsed to the identical bare string `"Recommended"`; the collection title's username was then derived by stripping a `"Recommended_"` prefix that was never there, a silent no-op that left the literal word `"Recommended"` capitalized into the collection title `🎬 Recommended - Recommendation`; and - worst - `private_collections` (on by default) then pushed a `label!=Recommended` exclude filter to every non-admin user's Plex account, which matched the one shared collection's own label too, hiding it (and its items) from everyone instead of isolating each user's own recommendations.
+
+  Fixed: `append_usernames` now defaults to `true`, matching the documented example. Collection/label identity is now built from the real username the caller already has (`self.single_user`) and threaded explicitly through `recommenders/base.py`, `utils/plex.py`, and `utils/plex_policy.py`, instead of being re-derived by stripping a prefix that wasn't always there. If `append_usernames` is ever explicitly set `false` with more than one user configured - the one combination `private_collections` genuinely cannot support - curatarr now skips applying label restrictions and logs a clear warning naming the config key and file, instead of silently sending a filter that hides content.
+
+  **What changes on your next run if you were affected (multi-user install, no `tuning.yml`, default settings):** each user gets their own correctly-named collection (`🎬 <Username> - Recommendation`) and label going forward. The old shared `🎬 Recommended - Recommendation` collection is orphaned junk from the bug and is now cleaned up automatically (its bare `"Recommended"` item label is stripped and the collection deleted) the first time any user's run completes successfully after upgrading - this is idempotent and requires no manual action. The stale `label!=Recommended` Plex account filter that was hiding the shared collection from every non-admin user is also corrected automatically: applying label restrictions always recomputes and re-sends every configured user's filter in one pass, so it self-heals as soon as any single user's run succeeds post-upgrade - nobody needs to touch plex.tv account settings by hand.
+
+### Documentation
+
+- **Corrected the "private collections" claim - no functional/security change.** README.md and `config/tuning.example.yml` described per-user collections as private/hidden from other users. Verified against a live server: Plex enforces the `label!=` exclusion on the collection object (so it's absent from browse/search, and a direct `GET` on its ratingKey 404s for another user) but NOT on the items returned by that collection's own `/children` endpoint - so a user who already has, or guesses, a collection's ratingKey (Plex assigns small sequential integers) can still retrieve its full contents via the Plex API. This is Plex server-side behavior, not something curatarr can fix. Reworded README.md's feature list/FAQ, `config/tuning.example.yml`'s `private_collections` comment, and `utils/plex_policy.py`'s docstrings to describe this correctly as UI-level separation (each user's own Browse/Search only shows their own collection), not an access-control or privacy boundary. The feature itself, and its default-on behavior, are unchanged.
+
 ## [2.10.48] - 2026-07-27
 
 ### Fixed

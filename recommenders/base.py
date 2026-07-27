@@ -49,6 +49,7 @@ from utils import (
     build_label_name,
     categorize_labeled_items,
     check_cache_version,
+    cleanup_legacy_unnamed_collection,
     cleanup_old_collections,
     create_empty_counters,
     enhance_profile_with_trakt,
@@ -1064,8 +1065,24 @@ class BaseRecommender(ABC):
         print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
         return [plex_item for item_id, (plex_item, score) in top_candidates]
 
-    def _sync_plex_collection(self, section, label_name: str, final_items: List) -> bool:
+    def _sync_plex_collection(
+        self,
+        section,
+        label_name: str,
+        final_items: List,
+        username: Optional[str] = None,
+        private_label: Optional[str] = None,
+    ) -> bool:
         """Create/update Plex collection with final recommendations.
+
+        username/private_label are the real per-user identity and the
+        already-built PrivateCollection_* label - both computed once by
+        the caller (manage_plex_labels) and passed through explicitly,
+        rather than re-derived here by stripping a "Recommended_" prefix
+        off label_name (#261: that stripping was a silent no-op whenever
+        collections.append_usernames was false, since label_name was then
+        just the bare base label with nothing to strip - every user's
+        collection/label ended up named the literal string "Recommended").
 
         Returns:
             True if collection was created/updated, False otherwise.
@@ -1074,7 +1091,19 @@ class BaseRecommender(ABC):
             print(f"{YELLOW}No items to add to collection{RESET}")
             return False
 
-        username = label_name.replace("Recommended_", "")
+        if not username:
+            # Defensive only - every real caller (manage_plex_labels) always
+            # supplies self.single_user, which utils/cli.py's per-user loop
+            # always sets to a real username. Falls back to the old (#261)
+            # derivation so a hypothetical future caller degrades instead of
+            # crashing; still correct whenever label_name IS prefixed.
+            log_warning(
+                "_sync_plex_collection called with no username - using legacy "
+                "prefix-strip derivation, which only works if label_name is "
+                "prefixed with 'Recommended_' (see #261)"
+            )
+            username = label_name.replace("Recommended_", "")
+
         if (
             self.user_preferences
             and username in self.user_preferences
@@ -1086,9 +1115,12 @@ class BaseRecommender(ABC):
 
         emoji = "🎬" if self.media_type == "movie" else "📺"
         collection_name = f"{emoji} {display_name} - Recommendation{self._library_suffix_for_collection_name()}"
-        success = update_plex_collection(section, collection_name, final_items, logger, label_name=label_name)
+        success = update_plex_collection(
+            section, collection_name, final_items, logger, label_name=label_name, private_label=private_label
+        )
         if success:
             cleanup_old_collections(section, collection_name, username, emoji, logger)
+            cleanup_legacy_unnamed_collection(section, collection_name, emoji, logger)
         return success
 
     def manage_plex_labels(self, recommended_items: List[Dict]) -> bool:
@@ -1118,9 +1150,29 @@ class BaseRecommender(ABC):
             section = self.plex.library.section(self.library_title)
             base_label = self.config.get("collections", {}).get("label_name", "Recommended")
             base_label = f"{base_label}{self._library_suffix_for_label()}"
-            append_usernames = self.config.get("collections", {}).get("append_usernames", False)
+            # Default True (#261): matches config/tuning.example.yml's
+            # documented default. Nothing in any install path (Dockerfile,
+            # setup.sh, the web UI) ever writes a real tuning.yml, so every
+            # fresh install ran on this code default - False meant every
+            # user's item label AND collection-level filter label collapsed
+            # to the identical bare base_label ("Recommended"), which made
+            # private_collections (below) push a filter that hid every
+            # user's recommendations from every other user instead of
+            # isolating them.
+            append_usernames = self.config.get("collections", {}).get("append_usernames", True)
             users = self.users["plex_users"] or self.users["managed_users"]
             label_name = build_label_name(base_label, users, self.single_user, append_usernames)
+
+            # Separate, hardcoded-root label applied to the COLLECTION
+            # object itself (never to individual items) so the exclude
+            # filter below only ever hides a collection, never an item
+            # shared in everyone's normal library view. Built via the same
+            # build_label_name() call (same real username/append_usernames
+            # inputs) as label_name above, instead of derived later by
+            # rewriting label_name's prefix (#261 - see
+            # utils/plex_policy.apply_user_label_restrictions's docstring).
+            private_base_label = f"PrivateCollection{self._library_suffix_for_label()}"
+            private_label_name = build_label_name(private_base_label, users, self.single_user, append_usernames)
 
             # Find items in Plex
             items_found, skipped = self._find_plex_items_for_recs(section, selected_items)
@@ -1170,21 +1222,39 @@ class BaseRecommender(ABC):
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
 
             # Sync to Plex collection
-            success = self._sync_plex_collection(section, label_name, final_items)
+            success = self._sync_plex_collection(section, label_name, final_items, self.single_user, private_label_name)
 
             # Apply user label restrictions if private_collections is enabled (default: true)
             # Note: Only works for shared friends, not Plex Home managed users
             if success and self.config.get("collections", {}).get("private_collections", True):
-                # Build dict of all user labels for exclude-based restrictions
-                # Each user's label excludes them from seeing other users' recommendations
-                all_user_labels = {}
-                users = self.users["plex_users"] or self.users["managed_users"]
+                if not append_usernames and len(users) > 1:
+                    # #261: with more than one user configured, a false
+                    # append_usernames means every user's label above is
+                    # identical - private_collections has no way to tell
+                    # them apart, so applying it would push a filter that
+                    # hides the (one, shared) collection and its items from
+                    # every non-admin user instead of isolating each user's
+                    # own. Fail loud instead of sending that filter.
+                    log_warning(
+                        "collections.append_usernames is false with more than one "
+                        "user configured (see config/tuning.yml) - private_collections "
+                        "cannot correctly separate per-user labels this way, since "
+                        "every user would get the identical label. Skipping label "
+                        "restrictions this run rather than hiding recommendations "
+                        "from everyone (#261). Set collections.append_usernames: true "
+                        "in config/tuning.yml (the documented default) to enable "
+                        "per-user private collections, or private_collections: false "
+                        "if a single shared collection is what you actually want."
+                    )
+                else:
+                    # Build dict of all users' PrivateCollection_* labels for
+                    # exclude-based restrictions - each user's own label stays
+                    # visible to them, every OTHER user's label is excluded.
+                    all_user_private_labels = {}
+                    for u in users:
+                        all_user_private_labels[u] = build_label_name(private_base_label, users, u, append_usernames)
 
-                for username in users:
-                    user_label = build_label_name(base_label, users, username, append_usernames)
-                    all_user_labels[username] = user_label
-
-                apply_user_label_restrictions(self.config, all_user_labels)
+                    apply_user_label_restrictions(self.config, all_user_private_labels)
 
             return success
 

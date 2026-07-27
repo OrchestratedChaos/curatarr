@@ -49,7 +49,7 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 
 ### For Your Library (What to Watch)
 - **Per-user recommendations** — Each user gets their own curated collection
-- **Private by default** — Users only see their own recommendations, not others'
+- **Per-user by default** — Each user's library Browse/Search only shows their own recommendation collection, not others' (UI-level separation, not access control — see FAQ)
 - **Smart scoring** — Weights keywords, genres, cast, and directors
 - **Recency bias** — Recent watches influence recommendations more
 - **Rewatch detection** — Content you love gets weighted higher
@@ -766,7 +766,7 @@ No. Only adds labels to Plex metadata.
 At least 5 for meaningful recommendations.
 
 **Q: Can users see each other's recommendations?**
-No! By default, private collections are enabled—each user only sees their own recommendations, not other users'. The admin/server owner sees all (Plex limitation). Disable with `private_collections: false` in tuning.yml if you want shared visibility.
+When browsing or searching the library, no — by default each user's recommendation collection is excluded from every other user's view (Plex label restrictions), and the admin/server owner always sees all of them (Plex limitation). This is UI-level separation, not an access-control boundary: Plex enforces the exclusion on the collection object, not on the items inside it, so a user who already has (or guesses — ratingKeys are small sequential integers) a collection's ratingKey can still retrieve its contents directly through the Plex API. Disable with `private_collections: false` in tuning.yml if you want shared visibility instead.
 
 **Q: What about new users with no history?**
 They're skipped until they have enough watch history.

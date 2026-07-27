@@ -151,6 +151,7 @@ from .metrics import (
 
 # Plex utilities
 from .plex import (
+    cleanup_legacy_unnamed_collection,
     cleanup_old_collections,
     extract_genres,
     extract_ids_from_guids,
@@ -504,6 +505,7 @@ __all__ = [
     "fetch_watch_history_with_tmdb",
     "update_plex_collection",
     "cleanup_old_collections",
+    "cleanup_legacy_unnamed_collection",
     "get_configured_users",
     "get_current_users",
     "get_excluded_genres_for_user",
