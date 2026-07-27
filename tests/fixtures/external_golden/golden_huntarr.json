@@ -1,0 +1,22 @@
+[
+  {
+    "buy_services": [],
+    "collection_id": 100,
+    "collection_name": "Rogue Chronicles Collection",
+    "is_animated": false,
+    "is_tv_movie": false,
+    "on_user_services": [
+      "netflix"
+    ],
+    "owned_count": 1,
+    "release_date": "2018-07-04",
+    "rent_services": [],
+    "streaming_services": [
+      "netflix"
+    ],
+    "title": "Rogue Chronicles: Ascension",
+    "tmdb_id": 3,
+    "total_count": 2,
+    "year": "2018"
+  }
+]
