@@ -334,6 +334,60 @@ class TestTraktClientDeviceAuth:
 
         assert result is False
 
+    @patch("utils.trakt.requests.post")
+    def test_poll_for_token_calls_on_wait_once_per_pending_iteration(self, mock_post):
+        """on_wait (see utils/trakt_auth.py's periodic progress printer)
+        must fire once per still-waiting (400) iteration, and never on
+        the final success iteration."""
+        pending = Mock()
+        pending.status_code = 400
+
+        success = Mock()
+        success.status_code = 200
+        success.json.return_value = {"access_token": "access", "refresh_token": "refresh"}
+
+        mock_post.side_effect = [pending, pending, success]
+
+        on_wait = Mock()
+        client = TraktClient("id", "secret")
+        result = client.poll_for_token("device_code", interval=0, expires_in=10, on_wait=on_wait)
+
+        assert result is True
+        assert on_wait.call_count == 2
+
+    @patch("utils.trakt.requests.post")
+    def test_poll_for_token_without_on_wait_still_works(self, mock_post):
+        """on_wait defaults to None - existing callers (and every
+        existing test above) that never pass it must be unaffected."""
+        pending = Mock()
+        pending.status_code = 400
+
+        success = Mock()
+        success.status_code = 200
+        success.json.return_value = {"access_token": "access", "refresh_token": "refresh"}
+
+        mock_post.side_effect = [pending, success]
+
+        client = TraktClient("id", "secret")
+        result = client.poll_for_token("device_code", interval=0, expires_in=10)
+
+        assert result is True
+
+    @patch("utils.trakt.requests.post")
+    def test_poll_for_token_on_wait_not_called_on_denied(self, mock_post):
+        """on_wait is specifically for the still-waiting (400) branch -
+        never for a terminal outcome like 418 (denied)."""
+        mock_response = Mock()
+        mock_response.status_code = 418
+        mock_post.return_value = mock_response
+
+        on_wait = Mock()
+        client = TraktClient("id", "secret")
+        result = client.poll_for_token("device_code", interval=0, expires_in=10, on_wait=on_wait)
+
+        assert result is False
+        on_wait.assert_not_called()
+
 
 class TestTraktClientTokenRefresh:
     """Tests for token refresh."""

@@ -270,7 +270,13 @@ class TraktClient(BaseAPIClient):
 
         return response.json()
 
-    def poll_for_token(self, device_code: str, interval: int = 5, expires_in: int = 600) -> bool:
+    def poll_for_token(
+        self,
+        device_code: str,
+        interval: int = 5,
+        expires_in: int = 600,
+        on_wait: Optional[Callable[[], None]] = None,
+    ) -> bool:
         """
         Poll for user authorization completion.
 
@@ -278,6 +284,16 @@ class TraktClient(BaseAPIClient):
             device_code: Device code from get_device_code()
             interval: Polling interval in seconds
             expires_in: Expiration time in seconds
+            on_wait: optional zero-arg callback invoked once per
+                still-waiting (HTTP 400) iteration, right before the
+                interval sleep - lets a caller (see utils/trakt_auth.py)
+                print its own periodic "still waiting" progress so a
+                user watching this genuinely long (up to expires_in,
+                normally 600s) blocking call can tell "working" from
+                "hung" apart, without this method itself owning any
+                console/display concerns. Never called on the
+                success/denied/expired/error branches below, only while
+                actually still polling.
 
         Returns:
             True if authorized, False if expired/denied
@@ -313,6 +329,8 @@ class TraktClient(BaseAPIClient):
 
             elif response.status_code == 400:
                 # Still waiting for user
+                if on_wait is not None:
+                    on_wait()
                 time.sleep(interval)
                 continue
 

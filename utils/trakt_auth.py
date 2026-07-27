@@ -9,6 +9,7 @@ Tokens are saved to trakt.yml for future use.
 import argparse
 import os
 import sys
+import time
 from typing import Optional
 
 # Add project root to path
@@ -76,6 +77,15 @@ def save_tokens(
     print("\033[92mTokens saved to config/trakt.yml\033[0m")
 
 
+# How often poll_for_token's on_wait callback (utils/trakt.py) is
+# allowed to print a "still waiting" progress line - throttled well
+# below the polling interval itself (typically 5s from Trakt) so a
+# ~10-minute wait doesn't spam ~120 lines, while still giving a user
+# watching a log/SSH session something periodic to distinguish
+# "working" from "hung" - see main()'s _on_wait below.
+PROGRESS_PRINT_INTERVAL_SECONDS = 30
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Trakt device-code authentication for Curatarr")
     parser.add_argument(
@@ -98,6 +108,24 @@ def main(argv=None):
     picking up whatever's actually in sys.argv (e.g. pytest's own CLI
     args when this is called directly from a test)."""
     args = parse_args(argv)
+
+    # Line-buffer stdout so every print below (in particular the
+    # device code/verification URL just before the blocking
+    # poll_for_token call) reaches whoever's watching IMMEDIATELY,
+    # rather than sitting in a buffer until the process eventually
+    # exits. CPython fully block-buffers stdout whenever it isn't a
+    # real terminal (`ssh host "python3 -m utils.trakt_auth --reauth" >
+    # log` with no -t, `docker exec` without -t, any captured/piped
+    # invocation) - that silently held the device code and activation
+    # URL in memory for the entire (up to 10-minute) polling wait,
+    # with nothing ever appearing for the user to act on. Reconfigured
+    # here (the entry point), not via a global PYTHONUNBUFFERED/-u
+    # requirement, so this is correct standalone regardless of how the
+    # caller invokes it. hasattr-guarded since not every sys.stdout
+    # stand-in (e.g. some test/capture harnesses) implements
+    # reconfigure().
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
 
     print("\033[96m=== Trakt Authentication ===\033[0m")
     print()
@@ -149,11 +177,26 @@ def main(argv=None):
         print("(Press Ctrl+C to cancel)")
         print()
 
+        # Periodic "still here" progress so a user watching this over
+        # SSH/a log/docker logs can tell an in-progress wait apart from
+        # a hung one - throttled to PROGRESS_PRINT_INTERVAL_SECONDS
+        # (poll_for_token's own interval, normally 5s, would otherwise
+        # print far too often over a wait that can last minutes).
+        last_progress_at = time.monotonic()
+
+        def _on_wait() -> None:
+            nonlocal last_progress_at
+            now = time.monotonic()
+            if now - last_progress_at >= PROGRESS_PRINT_INTERVAL_SECONDS:
+                print("...still waiting for approval")
+                last_progress_at = now
+
         # Poll for token
         success = client.poll_for_token(
             device_code=device_info["device_code"],
             interval=device_info.get("interval", 5),
             expires_in=device_info.get("expires_in", 600),
+            on_wait=_on_wait,
         )
 
         if success:

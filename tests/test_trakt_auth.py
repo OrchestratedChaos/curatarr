@@ -1,10 +1,17 @@
 """Tests for utils/trakt_auth.py"""
 
 import os
+import subprocess
+import sys
+import time
 from unittest.mock import Mock, patch
 
 import pytest
 import yaml
+
+# tests/ lives directly under the repo root - same one-level-up
+# resolution get_code_root() itself uses (see utils/helpers.py).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class TestGetConfigDir:
@@ -352,3 +359,261 @@ class TestTraktAuthMain:
         with pytest.raises(SystemExit) as exc_info:
             main([])
         assert exc_info.value.code == 1
+
+
+class TestTraktAuthStdoutLineBuffering:
+    """main() reconfigures stdout to line-buffered on entry - see that
+    function's own comment for the full "why" (CPython fully
+    block-buffers stdout whenever it isn't a real terminal, which
+    silently held the device code/verification URL in memory for the
+    whole poll_for_token wait when invoked over e.g. `ssh host "cmd" >
+    log` with no -t)."""
+
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
+    def test_reconfigures_stdout_to_line_buffered(self, mock_load, mock_client_class, monkeypatch):
+        from utils.trakt_auth import main
+
+        mock_load.return_value = {
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": None}
+        }
+        mock_client = Mock()
+        mock_client.get_device_code.return_value = {
+            "device_code": "abc123",
+            "user_code": "XYZ789",
+            "verification_url": "https://trakt.tv/activate",
+        }
+        mock_client.poll_for_token.return_value = True
+        mock_client.get_username.return_value = "testuser"
+        mock_client_class.return_value = mock_client
+
+        fake_stdout = Mock()
+        fake_stdout.reconfigure = Mock()
+        monkeypatch.setattr("sys.stdout", fake_stdout)
+
+        main([])
+
+        fake_stdout.reconfigure.assert_called_once_with(line_buffering=True)
+
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
+    def test_tolerates_stdout_without_reconfigure(self, mock_load, mock_client_class, monkeypatch, capsys):
+        """Some sys.stdout stand-ins (certain test/capture harnesses)
+        don't implement reconfigure() at all - main() must not crash
+        on those, it just skips the line-buffering step."""
+        from utils.trakt_auth import main
+
+        mock_load.return_value = {
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": None}
+        }
+        mock_client = Mock()
+        mock_client.get_device_code.return_value = {
+            "device_code": "abc123",
+            "user_code": "XYZ789",
+            "verification_url": "https://trakt.tv/activate",
+        }
+        mock_client.poll_for_token.return_value = True
+        mock_client.get_username.return_value = "testuser"
+        mock_client_class.return_value = mock_client
+
+        class _NoReconfigureStdout:
+            def write(self, s):
+                pass
+
+            def flush(self):
+                pass
+
+        monkeypatch.setattr("sys.stdout", _NoReconfigureStdout())
+
+        # Must not raise - hasattr(sys.stdout, "reconfigure") is False here.
+        main([])
+
+
+class TestTraktAuthProgressCallback:
+    """main() passes poll_for_token an on_wait callback that prints a
+    throttled 'still waiting' progress line - see
+    PROGRESS_PRINT_INTERVAL_SECONDS and main()'s own comment."""
+
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
+    def test_on_wait_throttled_to_progress_interval(self, mock_load, mock_client_class, monkeypatch, capsys):
+        from utils import trakt_auth
+        from utils.trakt_auth import main
+
+        mock_load.return_value = {
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": None}
+        }
+        mock_client = Mock()
+        mock_client.get_device_code.return_value = {
+            "device_code": "abc123",
+            "user_code": "XYZ789",
+            "verification_url": "https://trakt.tv/activate",
+        }
+        mock_client.get_username.return_value = "testuser"
+        mock_client_class.return_value = mock_client
+
+        # Fake a clock: main()'s _on_wait uses time.monotonic() - drive
+        # it through several calls, some inside the throttle window,
+        # some past it, without any real sleeping.
+        fake_now = [0.0]
+        monkeypatch.setattr(trakt_auth.time, "monotonic", lambda: fake_now[0])
+
+        def fake_poll_for_token(device_code, interval, expires_in, on_wait=None):
+            assert on_wait is not None
+            fake_now[0] = 5.0
+            on_wait()  # inside the throttle window (< 30s) - no print
+            fake_now[0] = 10.0
+            on_wait()  # still inside the window - no print
+            fake_now[0] = 31.0
+            on_wait()  # past PROGRESS_PRINT_INTERVAL_SECONDS - prints
+            fake_now[0] = 40.0
+            on_wait()  # only 9s since the last print - no print
+            return True
+
+        mock_client.poll_for_token.side_effect = fake_poll_for_token
+
+        main([])
+
+        captured = capsys.readouterr()
+        assert captured.out.count("...still waiting for approval") == 1
+
+
+class TestTraktAuthStdoutNotBuffered:
+    """Regression test for the real bug: `ssh host "python3 -m
+    utils.trakt_auth --reauth" > log` (no -t - no TTY) produced ZERO
+    output while the process sat there polling - the device code and
+    activation URL were written into a buffer that was never flushed
+    because the process was blocked in poll_for_token's loop, not
+    exiting.
+
+    A test that only asserts main()/print() were called (mocking
+    sys.stdout) would pass even against the OLD, broken code - Python's
+    own statement order is always synchronous regardless of buffering.
+    This has to actually observe bytes arriving on a REAL, non-TTY
+    stdout pipe - `subprocess.Popen(..., stdout=subprocess.PIPE)` is
+    never a pty - while a real child process is still genuinely
+    blocked, to mean anything. That distinction is the entire bug."""
+
+    def _write_fake_auth_script(self, tmp_path, poll_sleep_seconds: float) -> str:
+        """A standalone script (never imports pytest) that runs the
+        real utils.trakt_auth.main() against a fake TraktClient - no
+        real Trakt device code is ever requested/consumed, no
+        config/trakt.yml outside this test's own tmp_path is ever
+        touched (CURATARR_CONFIG_DIR is pointed at tmp_path)."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "config.yml").write_text("plex:\n  url: http://localhost\n", encoding="utf-8")
+        (config_dir / "trakt.yml").write_text(
+            "enabled: true\nclient_id: fake-id\nclient_secret: fake-secret\n", encoding="utf-8"
+        )
+
+        script_path = tmp_path / "run_fake_trakt_auth.py"
+        script_path.write_text(
+            f"""
+import os
+import sys
+import time
+
+sys.path.insert(0, {_REPO_ROOT!r})
+os.environ["CURATARR_CONFIG_DIR"] = {str(tmp_path)!r}
+
+import utils.trakt_auth as trakt_auth
+from utils.helpers import get_project_root
+
+get_project_root.cache_clear()
+
+
+class FakeTraktClient:
+    def __init__(self, client_id, client_secret, token_callback):
+        pass
+
+    def get_device_code(self):
+        return {{
+            "device_code": "fake-device-code",
+            "user_code": "FAKE-CODE",
+            "verification_url": "https://trakt.tv/activate",
+            "interval": 1,
+            "expires_in": 600,
+        }}
+
+    def poll_for_token(self, device_code, interval, expires_in, on_wait=None):
+        time.sleep({poll_sleep_seconds!r})
+        return True
+
+    def get_username(self):
+        return "repro-user"
+
+
+trakt_auth.TraktClient = FakeTraktClient
+trakt_auth.main([])
+""",
+            encoding="utf-8",
+        )
+        return str(script_path)
+
+    def test_device_code_visible_before_poll_completes_when_not_a_tty(self, tmp_path):
+        # Generous relative to interpreter startup/import overhead
+        # (utils.trakt_auth transitively imports requests/yaml/etc) so
+        # this isn't flaky on a slow/cold CI runner - the deadline below
+        # is a fraction of this, still comfortably before the fake
+        # poll's sleep completes.
+        poll_sleep_seconds = 6.0
+        script = self._write_fake_auth_script(tmp_path, poll_sleep_seconds)
+
+        # stdout=subprocess.PIPE is a real OS pipe, never a pty/tty -
+        # exactly the "no TTY" condition `ssh host "cmd" > log` (no -t)
+        # and plain `docker exec` (no -t) both produce.
+        proc = subprocess.Popen(
+            [sys.executable, script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        collected = []
+        try:
+            deadline = time.monotonic() + (poll_sleep_seconds * 0.7)
+            while time.monotonic() < deadline:
+                line = proc.stdout.readline()
+                if line:
+                    collected.append(line)
+                    if "FAKE-CODE" in line:
+                        break
+                else:
+                    time.sleep(0.02)
+
+            output_so_far = "".join(collected)
+            assert "FAKE-CODE" in output_so_far, (
+                "device code never appeared on the (non-TTY) pipe before the "
+                f"fake poll_for_token wait finished - got: {output_so_far!r}"
+            )
+            assert "https://trakt.tv/activate" in output_so_far
+
+            # The fake poll_for_token is still sleeping at this point
+            # (deadline is 80% of its sleep duration) - the process
+            # must still be alive, i.e. this really was observed WHILE
+            # blocked, not after it already exited.
+            assert proc.poll() is None, "process should still be blocked in poll_for_token at this point"
+        finally:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    def test_tty_path_still_works(self, tmp_path):
+        """Sanity check for the other half of the verification ask:
+        confirm the TTY path (the case that already worked before this
+        fix, via line-buffering-by-default on a real terminal) still
+        completes normally - run to completion rather than a pty
+        capture (spawning a real pty is platform-specific/POSIX-only),
+        just confirming the fix doesn't somehow break a normal run."""
+        poll_sleep_seconds = 0.2
+        script = self._write_fake_auth_script(tmp_path, poll_sleep_seconds)
+
+        result = subprocess.run(
+            [sys.executable, script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0
+        assert "FAKE-CODE" in result.stdout
+        assert "Authentication Successful" in result.stdout

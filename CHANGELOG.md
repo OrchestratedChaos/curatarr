@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.58] - 2026-07-27
+
+### Fixed
+
+- **`python3 -m utils.trakt_auth --reauth` produced zero output and appeared to hang when run without a TTY** (`ssh host "cmd" > log` with no `-t`, or `docker exec` without `-t`) - the device code and `trakt.tv/activate` URL were written to stdout right before the script blocks in `poll_for_token`'s device-auth polling loop (up to 10 minutes), but CPython fully block-buffers stdout whenever it isn't a real terminal, so none of that text ever reached the log/pipe until the process eventually exited - there was nothing to approve, so the flow could never complete. Reproduced directly (a real, non-TTY child process showed zero bytes of output while still genuinely blocked in the poll wait) before fixing.
+
+  `utils/trakt_auth.py`'s `main()` now reconfigures stdout to line-buffered on entry, so every print - the device code and URL in particular - is flushed immediately regardless of how the script is invoked, without relying on the caller passing `-u` or setting `PYTHONUNBUFFERED`. `utils/trakt.py`'s `poll_for_token()` also gained an optional `on_wait` callback, which `trakt_auth.py` uses to print a throttled "...still waiting for approval" line roughly every 30 seconds, so a user watching a long wait over SSH/a log can tell it's working, not hung.
+
+  Audited `utils/simkl.py`'s equivalent PIN-code flow and `setup.sh`'s/`run.ps1`'s own inline Trakt/Simkl device-auth blocks for the same pattern - unaffected: both are bounded to a 30-second poll, gated behind an explicit `read -p`/`Read-Host` "press Enter after you've approved" prompt (already requiring a real interactive terminal), and their device-code output is captured via command substitution from a short-lived process that exits (and therefore flushes) almost immediately, never left sitting in a buffer during a long, otherwise-invisible wait.
+
 ## [2.10.57] - 2026-07-27
 
 ### Fixed
