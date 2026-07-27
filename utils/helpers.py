@@ -339,16 +339,29 @@ def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
     """
     Remove log files older than specified retention period.
 
-    Also force-truncates any single .log file that has grown past
-    MAX_LOG_FILE_BYTES, regardless of its mtime. This exists for
-    append-only logs (e.g. a cron job's `>> logs/daily-run.log`
-    redirect) - every write refreshes the mtime, so the age-based
-    removal below can never trigger for them and they would otherwise
-    grow forever. Truncating in place (rather than removing/renaming)
-    is deliberate: a process that already has the file open in append
-    mode keeps writing from the new end-of-file without needing to
-    reopen it - the same "copytruncate" strategy logrotate uses for
-    this exact situation.
+    Also caps any single .log file that has grown past MAX_LOG_FILE_BYTES,
+    regardless of its mtime, to its last MAX_LOG_FILE_BYTES - keeping a
+    tail instead of truncating to zero (#263 - see below for why this
+    changed). This exists for append-only logs (e.g. a cron job's
+    `>> logs/daily-run.log` redirect) - every write refreshes the mtime,
+    so the age-based removal below can never trigger for them and they
+    would otherwise grow forever. Rewriting in place (rather than
+    removing/renaming) is deliberate: a process that already has the
+    file open in append mode keeps writing from the new end-of-file
+    without needing to reopen it - the same "copytruncate" strategy
+    logrotate uses for this exact situation.
+
+    #263: this used to truncate to exactly 0 bytes (`open(path, "w")`),
+    which is silent, permanent data loss the moment ANY .log file in
+    log_dir - not just genuinely append-only ones - happens to exceed
+    the cap: this function runs at the START of every setup_log_file()
+    call (see utils/cli.py), so a user's own completed, still-wanted
+    run log got zeroed out by the very NEXT user's run in the same
+    batch, the moment it crossed 20MB - producing a permanent "unknown"
+    status (web/status.py) with no way to recover the content. Keeping
+    a tail preserves the same size-bounding property (and the same
+    copytruncate-safety for an actively-appending writer) without
+    destroying everything that was there.
 
     Args:
         log_dir: Directory containing log files
@@ -369,12 +382,18 @@ def cleanup_old_logs(log_dir: str, retention_days: int) -> None:
             try:
                 file_size = os.path.getsize(filepath)
                 if file_size > MAX_LOG_FILE_BYTES:
-                    with open(filepath, "w"):
-                        pass
-                    log_info(f"Truncated oversized log: {filename} ({file_size} bytes > {MAX_LOG_FILE_BYTES} cap)")
+                    with open(filepath, "rb") as f:
+                        f.seek(file_size - MAX_LOG_FILE_BYTES)
+                        tail = f.read()
+                    with open(filepath, "wb") as f:
+                        f.write(tail)
+                    log_info(
+                        f"Capped oversized log to its last {MAX_LOG_FILE_BYTES} bytes: "
+                        f"{filename} (was {file_size} bytes)"
+                    )
                     continue
             except Exception as e:
-                log_warning(f"Failed to check/truncate oversized log {filename}: {e}")
+                log_warning(f"Failed to check/cap oversized log {filename}: {e}")
                 continue
 
             try:

@@ -382,3 +382,40 @@ class TestDismissSnooze:
             resp = fresh_client.get("/")
 
         assert b"update-banner" not in resp.data
+
+
+class TestUpdateAvailableCaching:
+    """#262: update_available() (itself already interval-gated against
+    hitting the network, see utils/update_check.py) still re-reads its
+    own small on-disk cache file on every call - the context processor
+    fired it on EVERY page render. Deduped per app instance for a short
+    TTL, same spirit as _load_config's own cache (see
+    TestConfigLoadCaching in tests/test_web_routes.py)."""
+
+    def test_repeated_renders_reuse_the_cached_update_check(self, client):
+        c, app, root = client
+        _write_config(root, update_mode="notify")
+
+        with patch("web.app.update_available", return_value=("2.9.0", "2.8.28", True)) as mock_update_available:
+            c.get("/")
+            c.get("/")
+            c.get("/")
+
+        assert mock_update_available.call_count == 1
+
+    def test_dismiss_still_takes_effect_on_the_very_next_render(self, client):
+        """The one thing that must NOT be cached: is_dismissed() itself
+        is checked fresh every render, so dismissing still hides the
+        banner immediately - caching update_available()'s own result
+        must never delay that."""
+        c, app, root = client
+        _write_config(root, update_mode="notify")
+
+        with patch("web.app.update_available", return_value=("2.9.0", "2.8.28", True)):
+            shown = c.get("/")
+            assert b"update-banner" in shown.data
+
+            c.post("/update/dismiss", data={"version": "2.9.0", "next": "/"})
+
+            hidden = c.get("/")
+            assert b"update-banner" not in hidden.data

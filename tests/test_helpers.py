@@ -291,21 +291,40 @@ class TestCleanupOldLogs:
             assert not os.path.exists(old_log)
             assert os.path.exists(new_log)
 
-    def test_truncates_oversized_append_only_log(self):
-        """An append-only log's mtime is refreshed on every write, so it
-        can never age past retention_days - proves the size-based cap
-        catches what the mtime check structurally cannot."""
+    def test_caps_oversized_append_only_log_keeping_tail(self):
+        """#263: an append-only log's mtime is refreshed on every write,
+        so it can never age past retention_days - proves the size-based
+        cap catches what the mtime check structurally cannot. Must keep
+        a tail, not truncate to 0 - the old zero-byte behavior was
+        confirmed data loss (see cleanup_old_logs' own docstring)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             huge_log = os.path.join(tmpdir, "daily-run.log")
             with open(huge_log, "wb") as f:
-                f.write(b"x" * (MAX_LOG_FILE_BYTES + 1))
+                f.write(b"a" * 1000)
+                f.write(b"z" * MAX_LOG_FILE_BYTES)
 
             # Freshly written - mtime is "now", nowhere near the
             # retention_days cutoff.
             cleanup_old_logs(tmpdir, retention_days=7)
 
             assert os.path.exists(huge_log)
-            assert os.path.getsize(huge_log) == 0
+            with open(huge_log, "rb") as f:
+                content = f.read()
+            assert len(content) == MAX_LOG_FILE_BYTES
+            # Kept the TAIL (the most recent writes), dropped the head.
+            assert content == b"z" * MAX_LOG_FILE_BYTES
+
+    def test_oversized_log_not_zeroed(self):
+        """Belt-and-braces regression pin for #263 - the exact bug
+        report: a file over the cap must never come out at 0 bytes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            huge_log = os.path.join(tmpdir, "recommendations_alice.log")
+            with open(huge_log, "wb") as f:
+                f.write(b"x" * (MAX_LOG_FILE_BYTES + 1))
+
+            cleanup_old_logs(tmpdir, retention_days=7)
+
+            assert os.path.getsize(huge_log) > 0
 
     def test_keeps_log_under_size_cap(self):
         """A log under the cap is left alone by the size check (mtime

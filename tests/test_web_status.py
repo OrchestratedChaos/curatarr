@@ -31,7 +31,7 @@ class TestGetLastRunStatus:
 
     def test_never_run_when_no_logs(self, tmp_path):
         result = get_last_run_status(str(tmp_path), "alice")
-        assert result == {"status": "never_run", "timestamp": None, "log_file": None}
+        assert result == {"status": "never_run", "timestamp": None, "log_file": None, "reason": None}
 
     def test_success_when_no_failure_markers(self, tmp_path):
         _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "Processing alice\nDone\n")
@@ -58,6 +58,30 @@ class TestGetLastRunStatus:
         _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "")
         result = get_last_run_status(str(tmp_path), "alice")
         assert result["status"] == "unknown"
+
+    def test_unknown_reason_distinguishes_empty_from_unreadable(self, tmp_path):
+        """#263: 'unknown' used to collapse two very different causes -
+        a 0-byte log (run interrupted before writing anything) and a
+        log that exists but can't be read at all (permissions, or a
+        race with log-retention cleanup) - into the identical bare
+        'unknown' with no explanation. Both must now say why."""
+        log_path = _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "")
+        empty_result = get_last_run_status(str(tmp_path), "alice")
+        assert empty_result["status"] == "unknown"
+        assert empty_result["reason"] is not None
+        assert "empty" in empty_result["reason"].lower()
+
+        try:
+            os.chmod(log_path, 0o000)
+            if os.access(log_path, os.R_OK):
+                pytest.skip("running as a user that bypasses file permissions (e.g. root)")
+            unreadable_result = get_last_run_status(str(tmp_path), "alice")
+            assert unreadable_result["status"] == "unknown"
+            assert unreadable_result["reason"] is not None
+            assert "unreadable" in unreadable_result["reason"].lower()
+            assert unreadable_result["reason"] != empty_result["reason"]
+        finally:
+            os.chmod(log_path, 0o644)
 
     def test_picks_newest_log_by_mtime(self, tmp_path):
         older = _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "ok\n")
@@ -91,7 +115,7 @@ class TestGetLastRunStatus:
         # last-run status onto this one's dashboard row.
         _write_log(tmp_path, "recommendations_bob_20260101_030000.log", "ok\n")
         result = get_last_run_status(str(tmp_path), "*")
-        assert result == {"status": "never_run", "timestamp": None, "log_file": None}
+        assert result == {"status": "never_run", "timestamp": None, "log_file": None, "reason": None}
 
     def test_username_with_bracket_glob_chars_does_not_match(self, tmp_path):
         _write_log(tmp_path, "recommendations_bob_20260101_030000.log", "ok\n")
@@ -172,7 +196,9 @@ class TestReadLogTail:
 
     def test_reads_content(self, tmp_path):
         _write_log(tmp_path, "a.log", "line1\nline2\n")
-        assert read_log_tail(str(tmp_path), "a.log") == "line1\nline2"
+        content, reason = read_log_tail(str(tmp_path), "a.log")
+        assert content == "line1\nline2"
+        assert reason is None
 
     def test_raises_for_missing_file(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -184,13 +210,13 @@ class TestReadLogTail:
 
     def test_redacts_secrets(self, tmp_path):
         _write_log(tmp_path, "a.log", "token=abcdef123456\n")
-        result = read_log_tail(str(tmp_path), "a.log")
-        assert "abcdef123456" not in result
+        content, _reason = read_log_tail(str(tmp_path), "a.log")
+        assert "abcdef123456" not in content
 
     def test_truncates_to_max_lines(self, tmp_path):
         content = "\n".join(f"line{i}" for i in range(10))
         _write_log(tmp_path, "a.log", content)
-        result = read_log_tail(str(tmp_path), "a.log", max_lines=3)
+        result, _reason = read_log_tail(str(tmp_path), "a.log", max_lines=3)
         assert result.splitlines() == ["line7", "line8", "line9"]
 
     def test_rejects_non_log_extension(self, tmp_path):
@@ -210,6 +236,15 @@ class TestReadLogTail:
             pytest.skip("symlinks not supported in this environment")
         with pytest.raises(FileNotFoundError):
             read_log_tail(str(logs_dir), "escape.log")
+
+    def test_empty_log_returns_reason(self, tmp_path):
+        """#263: a 0-byte log (interrupted run) gets an explanatory
+        reason instead of just an empty string with no context."""
+        _write_log(tmp_path, "a.log", "")
+        content, reason = read_log_tail(str(tmp_path), "a.log")
+        assert content == ""
+        assert reason is not None
+        assert "empty" in reason.lower()
 
 
 class TestDisplayNameSafeSlug:

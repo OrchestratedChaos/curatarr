@@ -38,7 +38,9 @@ see requirements-docker.txt/.lock and the Dockerfile - never installed
 for a native source/binary install, which has no use for it.
 """
 
+import atexit
 import os
+import signal
 import sys
 
 import waitress
@@ -131,6 +133,38 @@ def main() -> None:
     host = os.environ.get("CURATARR_UI_HOST", "0.0.0.0")
     _require_auth_token_or_exit(host)
     app = create_app(bind_host=host)
+
+    # #263: this process is PID 1 in the container (no init system in
+    # front of it), and until this fix it caught SIGINT but never
+    # SIGTERM - confirmed via /proc/1/status's SigCgt bitmask in a real
+    # container. `docker stop`/`compose restart`/a `compose up -d`
+    # recreate all send SIGTERM first and only SIGKILL after the full
+    # stop grace period (10s by default) if the process hasn't exited -
+    # so every one of those operations was silently eating that entire
+    # grace period before being hard-killed (exit 137), which also
+    # meant any in-flight recommender run's log file lost whatever
+    # hadn't been flushed yet (see utils/display.py's TeeLogger, fixed
+    # in this same PR to flush per-write - this handler is what actually
+    # gets a chance to run BEFORE that kill now). Mirrors web/app.py's
+    # main() (native mode), which has always registered this.
+    # Flask's stub doesn't declare this dynamically-attached attribute
+    # (see web/app.py's create_app(), the only place it's set) - real,
+    # deliberate attribute access, not a typo.
+    atexit.register(app.job_manager.terminate_running)  # type: ignore[attr-defined]
+
+    def _handle_shutdown_signal(signum, frame):
+        app.job_manager.terminate_running()  # type: ignore[attr-defined]
+        sys.exit(0)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handle_shutdown_signal)
+        except (ValueError, OSError):
+            # signal.signal() only works on the main thread, and not
+            # every signal is available on every platform - atexit above
+            # still covers a normal interpreter shutdown either way.
+            pass
+
     waitress.serve(app, host=host, port=port, threads=THREADS)
 
 

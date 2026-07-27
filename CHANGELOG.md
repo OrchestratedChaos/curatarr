@@ -2,6 +2,25 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.50] - 2026-07-27
+
+### Fixed
+
+- **The Docker container was never actually restarting - it just looked like it - #262.**
+
+  `utils/config.py`'s `load_config()` (and the helper it calls to merge in `tuning.yml`/`trakt.yml`/`radarr.yml`/`sonarr.yml`) printed a handful of "Loaded X.yml"/"Successfully loaded configuration" lines with `print()` on every single call, with no level control. `web/app.py` calls this 1-2x per page render (the update-banner banner shown on every page, plus whichever route is actually serving the request each load config independently) - so every dashboard view, config save, or status check produced a fresh burst of these lines in `docker logs`, which read exactly like the container repeatedly restarting.
+
+  Fixed: those `print()` calls are now the project logger (`log_info`/`log_warning`/`log_error`), and `web/app.py` now caches the parsed config (keyed on the mtimes of every file `load_config()` reads) and the update-check result (a short TTL, deliberately excluding the dismiss check, which still takes effect immediately), so a page view costs at most one real disk read/parse instead of two-plus. A config edit - through the web UI's own save routes, or a hand edit to `tuning.yml` on disk - is still picked up on the very next request, no restart needed. The CLI is unaffected: it always configures logging with these messages visible at their existing default level, so a normal `curatarr` run looks exactly the same as before. Verified in a real container: 11 requests across the dashboard/run/status.json routes produced zero additional log lines beyond one one-time config-format-migration notice, versus roughly 15-20 lines under the old behavior.
+
+- **An interrupted run - `docker stop`, a container recreate, or a crash - could leave a zeroed-out, unexplained log file - #263.**
+
+  Three compounding bugs, all in the log-writing/shutdown path:
+  - `utils/display.py`'s `TeeLogger` (used by every CLI/native recommender run) never flushed the log file per write - only a clean shutdown did. A hard kill lost the whole unflushed buffer, leaving a 0-byte log file. Fixed: every write is now flushed immediately (write volume here is a few hundred/thousand status lines over a multi-minute run, not a hot per-item loop, so this is negligible overhead).
+  - `web/docker_server.py` (the Docker image's own entrypoint) registered no signal handling at all - it caught SIGINT but never SIGTERM. Every `docker stop`/`compose restart`/recreate therefore ate the entire 10-second stop grace period before being hard SIGKILLed (exit 137), which also guaranteed any in-flight run lost its unflushed log buffer. Fixed: it now registers the same SIGINT/SIGTERM -> stop-the-running-job handling the native app has always had. Verified in a real container: `docker stop` dropped from 10.1s/exit 137 to 0.14s/exit 0.
+  - `utils/helpers.py`'s `cleanup_old_logs()` (which runs at the start of every run) truncated any `.log` file over 20MB to exactly 0 bytes in place - a legitimate, still-wanted log from an earlier run could get silently zeroed the moment the very next run's cleanup pass saw it cross that size. Fixed: it now keeps the file's last 20MB (a tail) instead of erasing it outright.
+
+  Also: `web/status.py`'s `unknown` status (shown when a log file has no readable content) now explains itself - "log file is empty (0 bytes) - the run was likely interrupted before writing any output" versus "log file unreadable (...)" for a permissions/OS-level failure - surfaced both on the dashboard (as a tooltip on the badge) and on the log-view page itself (instead of just a blank pane), in the `/status.json` API, and available programmatically as `get_last_run_status()`'s new `reason` field.
+
 ## [2.10.49] - 2026-07-27
 
 ### Fixed

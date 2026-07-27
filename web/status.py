@@ -8,7 +8,7 @@ import glob
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .security import redact, safe_join
 
@@ -38,16 +38,47 @@ def _parse_timestamp(filename: str) -> Optional[datetime]:
 
 
 def _read_tail(path: str, max_bytes: int = TAIL_BYTES) -> str:
-    """Best-effort read of up to the last max_bytes of a file as text."""
+    """Best-effort read of up to the last max_bytes of a file as text.
+
+    Thin wrapper around _read_tail_with_reason() for callers that don't
+    need to distinguish WHY an empty result came back - see that
+    function's docstring (#263).
+    """
+    content, _reason = _read_tail_with_reason(path, max_bytes)
+    return content
+
+
+def _read_tail_with_reason(path: str, max_bytes: int = TAIL_BYTES) -> Tuple[str, Optional[str]]:
+    """Same read as _read_tail, but also returns WHY the content is empty
+    when it is - _read_tail alone collapsed "0-byte log, run was
+    interrupted before writing anything" and "file exists but can't be
+    read (permissions, race with log-retention cleanup, etc.)" into the
+    same bare "" (#263), which is exactly what made get_last_run_status's
+    "unknown" status unexplainable - a real interrupted-run report showed
+    an "unknown" badge with a live "view log" link, and the log pane was
+    just blank with no indication of why.
+
+    Returns:
+        (content, reason) - reason is None whenever content is genuinely
+        non-empty; otherwise a short human-readable explanation.
+    """
     try:
         size = os.path.getsize(path)
+    except OSError as e:
+        return "", f"log file unreadable ({e.strerror or e})"
+
+    try:
         with open(path, "rb") as f:
             if size > max_bytes:
                 f.seek(size - max_bytes)
             data = f.read()
-        return data.decode("utf-8", errors="replace")
-    except OSError:
-        return ""
+    except OSError as e:
+        return "", f"log file unreadable ({e.strerror or e})"
+
+    content = data.decode("utf-8", errors="replace")
+    if size == 0:
+        return content, "log file is empty (0 bytes) - the run was likely interrupted before writing any output"
+    return content, None
 
 
 def latest_user_log(logs_dir: str, username: str) -> Optional[str]:
@@ -76,10 +107,14 @@ def get_last_run_status(logs_dir: str, username: str) -> Dict:
       status: 'never_run' | 'success' | 'failed' | 'unknown'
       timestamp: datetime or None
       log_file: basename of the log, or None
+      reason: human-readable explanation, only set (non-None) when
+        status is 'unknown' (#263) - distinguishes a genuinely empty
+        (0-byte, interrupted-run) log from one that exists but couldn't
+        be read at all.
     """
     log_path = latest_user_log(logs_dir, username)
     if not log_path:
-        return {"status": "never_run", "timestamp": None, "log_file": None}
+        return {"status": "never_run", "timestamp": None, "log_file": None, "reason": None}
 
     basename = os.path.basename(log_path)
     timestamp = _parse_timestamp(basename)
@@ -92,15 +127,17 @@ def get_last_run_status(logs_dir: str, username: str) -> Dict:
             # timestamp rather than 500ing the dashboard.
             timestamp = None
 
-    content = _read_tail(log_path)
+    content, empty_reason = _read_tail_with_reason(log_path)
+    reason: Optional[str] = None
     if not content.strip():
         status = "unknown"
+        reason = empty_reason or "log file has no readable content"
     elif any(marker in content.lower() for marker in _FAILURE_MARKERS):
         status = "failed"
     else:
         status = "success"
 
-    return {"status": status, "timestamp": timestamp, "log_file": basename}
+    return {"status": status, "timestamp": timestamp, "log_file": basename, "reason": reason}
 
 
 def list_log_files(logs_dir: str) -> List[Dict]:
@@ -156,17 +193,22 @@ def find_user_watchlist(external_dir: str, config: Dict, username: str) -> Optio
     return None
 
 
-def read_log_tail(logs_dir: str, filename: str, max_lines: int = 500) -> str:
+def read_log_tail(logs_dir: str, filename: str, max_lines: int = 500) -> Tuple[str, Optional[str]]:
     """Read the last max_lines of logs_dir/filename, secrets redacted.
 
     Raises FileNotFoundError if filename escapes logs_dir, isn't a
     *.log file, or doesn't resolve to a real file.
+
+    Returns (content, empty_reason) - empty_reason is None whenever
+    content is non-empty, otherwise the same human-readable explanation
+    get_last_run_status's "reason" surfaces (#263), so the log-view page
+    can show why a log is blank instead of just rendering nothing.
     """
     if not filename.endswith(".log"):
         raise FileNotFoundError(filename)
     path = safe_join(logs_dir, filename)
     if not os.path.isfile(path):
         raise FileNotFoundError(filename)
-    content = _read_tail(path)
+    content, reason = _read_tail_with_reason(path)
     lines = content.splitlines()[-max_lines:]
-    return redact("\n".join(lines))
+    return redact("\n".join(lines)), (reason if not content.strip() else None)

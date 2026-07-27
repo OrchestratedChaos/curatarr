@@ -20,7 +20,7 @@
     <tr>
       <td>{{ row.username }}</td>
       <td>{{ row.timestamp.strftime('%Y-%m-%d %H:%M:%S') if row.timestamp else '—' }}</td>
-      <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+      <td><span class="badge {{ row.status }}"{% if row.reason %} title="{{ row.reason }}"{% endif %}>{{ row.status }}</span></td>
       <td>
         {% if row.log_file %}
         <a href="{{ url_for('results_log', filename=row.log_file) }}">view log</a>
