@@ -67,8 +67,14 @@ collections:
   add_label: true  # Add 'Recommended' label to items
   label_name: Recommended
   append_usernames: true  # Include username in collection name
-  # Private collections - each user only sees their own recommendations
-  # Uses Plex label restrictions (only works on Library tab, not Home)
+  # Per-user label restrictions - each user's library Browse/Search only
+  # shows their own recommendation collection, not other users' (Plex
+  # label restrictions; Library tab only, does not apply to Home).
+  # NOT an access-control boundary: Plex enforces this exclusion on the
+  # collection object, not on the items inside it, so a user who already
+  # has (or guesses - ratingKeys are small sequential integers) a
+  # collection's ratingKey can still retrieve its contents directly via
+  # the Plex API. Treat this as UI-level separation, not privacy.
   # Note: Server admin always sees all collections (Plex limitation)
   private_collections: true
 

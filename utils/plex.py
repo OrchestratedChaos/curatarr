@@ -27,6 +27,7 @@ from plexapi.myplex import MyPlexAccount
 from .config import PLEX_LONG_REQUEST_TIMEOUT, PLEX_REQUEST_TIMEOUT
 from .display import GREEN, RED, RESET, YELLOW, log_error, log_warning
 from .helpers import normalize_title, read_response_capped
+from .labels import remove_labels_from_items
 from .metrics import record_api_call
 
 # Module-level logger
@@ -665,7 +666,12 @@ def fetch_watch_history_with_tmdb(
 
 
 def update_plex_collection(
-    section: Any, collection_name: str, items: List[Any], logger: Any = None, label_name: Optional[str] = None
+    section: Any,
+    collection_name: str,
+    items: List[Any],
+    logger: Any = None,
+    label_name: Optional[str] = None,
+    private_label: Optional[str] = None,
 ) -> bool:
     """
     Create or update a Plex collection with items in the specified order.
@@ -675,7 +681,21 @@ def update_plex_collection(
         collection_name: Name of the collection to create/update
         items: List of Plex media items in desired order (best first)
         logger: Optional logger instance
-        label_name: Optional label to add to the collection itself (for private collections)
+        label_name: Currently unused here beyond being an on/off switch for
+            adding a collection-level label at all - kept as a separate
+            parameter (rather than folded into private_label) so a caller
+            that wants item labeling without collection labeling still has
+            a way to say so.
+        private_label: The COLLECTION-level label to add (e.g.
+            "PrivateCollection_alice"), fully computed by the caller (see
+            recommenders/base.py's manage_plex_labels) via the same
+            build_label_name() call it uses for the item-level label -
+            not derived here by string-rewriting label_name. Prior to
+            #261 this was computed as
+            label_name.replace("Recommended_", "PrivateCollection_"),
+            which silently produced the wrong (unprefixed) label whenever
+            label_name wasn't literally "Recommended_<user>" - e.g. every
+            install running with collections.append_usernames: false.
 
     Returns:
         True if successful, False otherwise
@@ -723,13 +743,18 @@ def update_plex_collection(
                 if logger:
                     logger.warning(f"Could not set custom order: {e}")
 
-        # Add private label to collection itself for private collection filtering
-        # Uses a DIFFERENT prefix than item labels so exclusions only affect collections
-        # Items keep Recommended_* labels (visible to all), collections get PrivateCollection_*
-        if target_collection and label_name:
+        # Add private label to collection itself for per-user label
+        # restrictions (utils.plex_policy.apply_user_label_restrictions).
+        # Uses a DIFFERENT namespace than item labels so exclusions only ever
+        # affect collections, never the items shared in everyone's normal
+        # library view - items keep Recommended_* labels (visible to all),
+        # collections get PrivateCollection_* (see private_label's docstring
+        # above for why this is passed in fully-built, not derived here).
+        # NOT an access-control boundary - see apply_user_label_restrictions's
+        # own docstring for the enumeration caveat (Plex enforces this
+        # exclusion on the collection object, not on the items inside it).
+        if target_collection and label_name and private_label:
             try:
-                # Convert Recommended_username to PrivateCollection_username
-                private_label = label_name.replace("Recommended_", "PrivateCollection_")
                 current_labels = [label.tag for label in target_collection.labels]
                 if private_label not in current_labels:
                     target_collection.addLabel(private_label)
@@ -791,6 +816,82 @@ def cleanup_old_collections(
 
     except plexapi.exceptions.PlexApiException as e:
         error_msg = f"Error cleaning up old collections: {e}"
+        if logger:
+            logger.warning(error_msg)
+        else:
+            print(f"WARNING: {error_msg}")
+
+
+# Exact collection title every install produced while running under the
+# collections.append_usernames: false code default (fixed in #261 - the
+# shipped config/tuning.example.yml always documented true, but nothing
+# in any install path ever wrote a real tuning.yml, so every fresh
+# install got the code default instead). build_label_name() never got a
+# username to append, so every user's collection was created under this
+# one literal, identical name - and update_plex_collection's old
+# label_name.replace("Recommended_", "PrivateCollection_") was a no-op
+# on the bare "Recommended" label that produced, so the collection's own
+# filter label and every item's label were both also just "Recommended".
+_LEGACY_SHARED_COLLECTION_LABEL = "Recommended"
+
+
+def cleanup_legacy_unnamed_collection(
+    section: Any, current_collection_name: str, emoji: str, logger: Any = None
+) -> None:
+    """
+    One-time migration cleanup for the #261 append_usernames default bug.
+
+    cleanup_old_collections() above can't find this collection - it only
+    ever matches patterns built from a REAL username, and this legacy
+    collection's title contains none (see _LEGACY_SHARED_COLLECTION_LABEL's
+    comment). Left alone, it stays in Plex forever as an orphaned,
+    never-updated collection, and its items keep a stale "Recommended"
+    label that no current run ever looks at.
+
+    Idempotent and safe to call every run: does nothing once the legacy
+    collection is gone. Skips deleting *current_collection_name* itself
+    (mirroring cleanup_old_collections' own guard) so a real Plex user
+    literally named "Recommended" - who would legitimately produce this
+    exact title today - never has their live collection treated as
+    legacy junk.
+
+    Args:
+        section: PlexAPI library section
+        current_collection_name: This run's correct collection name - never deleted
+        emoji: The emoji prefix (differs between movies/TV)
+        logger: Optional logger instance
+    """
+    legacy_title = f"{emoji} Recommended - Recommendation"
+    if legacy_title == current_collection_name:
+        return
+
+    try:
+        for collection in section.collections():
+            if collection.title != legacy_title:
+                continue
+
+            try:
+                legacy_items = collection.items()
+            except plexapi.exceptions.PlexApiException:
+                legacy_items = []
+
+            if legacy_items:
+                remove_labels_from_items(
+                    legacy_items,
+                    _LEGACY_SHARED_COLLECTION_LABEL,
+                    {},
+                    "legacy collections.append_usernames=false cleanup (#261)",
+                )
+
+            collection.delete()
+            msg = f"Deleted legacy shared collection from #261 migration: {legacy_title}"
+            if logger:
+                logger.info(msg)
+            else:
+                print(msg)
+
+    except plexapi.exceptions.PlexApiException as e:
+        error_msg = f"Error cleaning up legacy shared collection: {e}"
         if logger:
             logger.warning(error_msg)
         else:

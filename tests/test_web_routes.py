@@ -8,6 +8,8 @@ import sys
 import time
 from unittest.mock import Mock, patch
 
+from flask.testing import FlaskClient
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
@@ -94,8 +96,34 @@ class TestBaselineSecurityHeaders:
         assert resp.status_code == 200
         assert resp.headers.get("X-Frame-Options") == "DENY"
         assert resp.headers.get("X-Content-Type-Options") == "nosniff"
-        assert resp.headers.get("Referrer-Policy") == "no-referrer"
+        assert resp.headers.get("Referrer-Policy") == "same-origin"
         assert resp.headers.get("Content-Security-Policy") == app_module.BASELINE_CSP
+
+    def test_referrer_policy_preserves_origin_on_same_origin_form_posts(self, client):
+        """Regression test for #260: every HTML form POST returned 403.
+
+        Root cause was Referrer-Policy: no-referrer - per the Fetch spec, a
+        browser sends Origin: null (and no Referer) on a same-origin plain
+        <form method="post"> navigation under that policy, which made
+        register_origin_host_guard's Origin check (web/security.py) treat
+        every non-fetch() POST as cross-site and reject it with 403 -
+        including /login, since that guard runs before token auth.
+
+        This test pins the actual invariant, not just today's chosen
+        value: the response's Referrer-Policy must be one that still
+        sends a real Origin on a same-origin form POST. no-referrer and
+        same-origin (or stricter-when-safe) look identical from the
+        single-assertion test that pinned no-referrer before this fix -
+        that test passed while the product was broken - so this
+        explicitly allowlists only policies that preserve Origin
+        same-origin, and explicitly rejects no-referrer.
+        """
+        c, app, root = client
+        resp = c.get("/")
+        policy = resp.headers.get("Referrer-Policy")
+        allowed = {"same-origin", "strict-origin-when-cross-origin", "origin", "no-referrer-when-downgrade"}
+        assert policy in allowed, f"Referrer-Policy {policy!r} not in allowlist {allowed}"
+        assert policy != "no-referrer"
 
     def test_baseline_csp_has_no_upgrade_insecure_requests(self, client):
         """This app serves plain HTTP by design (see docs/DOCKER.md) -
@@ -409,6 +437,29 @@ class TestOriginHostGuard:
             headers={"Origin": ""},
         )
         assert resp.status_code == 403
+
+    def test_null_origin_post_rejected_403_raw_client(self, curatarr_web_root):
+        """#260 follow-up: confirms the fix does NOT loosen the guard.
+
+        Uses the raw Flask test client (not the 'client' fixture's
+        _BrowserLikeTestClient, which stamps a same-origin Origin header
+        onto every request) to model what a genuinely cross-origin or
+        opaque-origin request looks like: Origin: null with no Referer -
+        exactly what a sandboxed iframe, a data:/blob: document, or a
+        cross-site form POST produces. Both /login and /run must still
+        403 this - same-origin Referrer-Policy only fixes the same-
+        origin case (#260), it never makes the guard accept "null".
+        """
+        app = create_app(project_root=curatarr_web_root)
+        app.testing = True
+        app.test_client_class = FlaskClient
+        raw_client = app.test_client()
+
+        login_resp = raw_client.post("/login", data={"token": "whatever"}, headers={"Origin": "null"})
+        assert login_resp.status_code == 403
+
+        run_resp = raw_client.post("/run", data={"engine": "movie", "user": "alice"}, headers={"Origin": "null"})
+        assert run_resp.status_code == 403
 
     def test_referer_fallback_accepted_when_origin_absent(self, client):
         c, app, root = client

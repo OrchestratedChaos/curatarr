@@ -590,6 +590,92 @@ class TestCleanupOldCollections:
         mock_logger.info.assert_called_once()
 
 
+class TestCleanupLegacyUnnamedCollection:
+    """Tests for cleanup_legacy_unnamed_collection() - #261 migration.
+
+    Installs that ran under the collections.append_usernames: false code
+    default (fixed in #261) all produced one identically-titled shared
+    collection: "{emoji} Recommended - Recommendation". cleanup_old_
+    collections() above can never find it (its patterns are all built
+    from a real username, and this title contains none), so it needs its
+    own, separate cleanup path.
+    """
+
+    def test_deletes_legacy_collection_and_strips_item_labels(self):
+        from utils.plex import cleanup_legacy_unnamed_collection
+
+        legacy_item = Mock(ratingKey=101)
+        mock_legacy_collection = Mock()
+        mock_legacy_collection.title = "🎬 Recommended - Recommendation"
+        mock_legacy_collection.items.return_value = [legacy_item]
+
+        mock_section = Mock()
+        mock_section.collections.return_value = [mock_legacy_collection]
+
+        cleanup_legacy_unnamed_collection(mock_section, "🎬 Alice - Recommendation", "🎬")
+
+        mock_legacy_collection.delete.assert_called_once()
+        legacy_item.removeLabel.assert_called_once_with("Recommended")
+
+    def test_leaves_current_collection_alone(self):
+        """A real user literally named 'Recommended' would legitimately
+        produce this exact title today - never delete the collection
+        this run just created/updated."""
+        from utils.plex import cleanup_legacy_unnamed_collection
+
+        mock_section = Mock()
+
+        cleanup_legacy_unnamed_collection(mock_section, "🎬 Recommended - Recommendation", "🎬")
+
+        mock_section.collections.assert_not_called()
+
+    def test_leaves_unrelated_collections_alone(self):
+        from utils.plex import cleanup_legacy_unnamed_collection
+
+        mock_other = Mock()
+        mock_other.title = "🎬 Alice - Recommendation"
+
+        mock_section = Mock()
+        mock_section.collections.return_value = [mock_other]
+
+        cleanup_legacy_unnamed_collection(mock_section, "🎬 Alice - Recommendation", "🎬")
+
+        mock_other.delete.assert_not_called()
+
+    def test_idempotent_when_already_cleaned_up(self):
+        """No legacy collection left - a no-op, not an error."""
+        from utils.plex import cleanup_legacy_unnamed_collection
+
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+
+        cleanup_legacy_unnamed_collection(mock_section, "🎬 Alice - Recommendation", "🎬")
+
+    def test_handles_exception(self):
+        from utils.plex import cleanup_legacy_unnamed_collection
+
+        mock_section = Mock()
+        mock_section.collections.side_effect = plexapi.exceptions.PlexApiException("API Error")
+
+        # Should not raise
+        cleanup_legacy_unnamed_collection(mock_section, "🎬 Alice - Recommendation", "🎬")
+
+    def test_with_logger(self):
+        from utils.plex import cleanup_legacy_unnamed_collection
+
+        mock_logger = Mock()
+        mock_legacy_collection = Mock()
+        mock_legacy_collection.title = "🎬 Recommended - Recommendation"
+        mock_legacy_collection.items.return_value = []
+
+        mock_section = Mock()
+        mock_section.collections.return_value = [mock_legacy_collection]
+
+        cleanup_legacy_unnamed_collection(mock_section, "🎬 Alice - Recommendation", "🎬", logger=mock_logger)
+
+        mock_logger.info.assert_called_once()
+
+
 class TestGetPlexUserIds:
     """Tests for get_plex_user_ids() function."""
 
@@ -1903,6 +1989,47 @@ class TestUpdatePlexCollectionSort:
 
 class TestApplyUserLabelRestrictions:
     """Tests for apply_user_label_restrictions() function."""
+
+    @patch("utils.plex_policy.requests.put")
+    @patch("utils.plex_policy.requests.get")
+    @patch("utils.plex_policy.MyPlexAccount")
+    def test_exclude_filter_uses_passed_labels_verbatim(self, mock_account_class, mock_get, mock_put):
+        """#261: exclude labels are used exactly as passed in, never
+        derived by string-replacing a "Recommended_" prefix off them -
+        that derivation silently produced the wrong (unprefixed) label
+        whenever a caller's label wasn't literally "Recommended_<user>",
+        e.g. every install running with collections.append_usernames:
+        false. Passing deliberately odd label strings here (no
+        "Recommended_"/"PrivateCollection_" prefix at all) proves
+        nothing is being rewritten internally."""
+        mock_account = Mock()
+        mock_account.username = "adminuser"
+        mock_account_class.return_value = mock_account
+
+        mock_get_response = Mock()
+        mock_get_response.headers = {}
+        mock_get_response.iter_content = Mock(return_value=[])
+        mock_get_response.content = b"""<MediaContainer>
+            <User id="123" title="Jason" username="jason"/>
+            <User id="456" title="Sarah" username="sarah"/>
+        </MediaContainer>"""
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
+
+        mock_put_response = Mock()
+        mock_put_response.headers = {}
+        mock_put_response.iter_content = Mock(return_value=[])
+        mock_put_response.raise_for_status = Mock()
+        mock_put.return_value = mock_put_response
+
+        config = {"plex": {"token": "test_token"}}
+        all_user_private_labels = {"Jason": "SomeOtherLabel_Jason", "Sarah": "SomeOtherLabel_Sarah"}
+
+        result = apply_user_label_restrictions(config, all_user_private_labels)
+
+        assert result is True
+        put_filter_values = {call.kwargs["params"]["filterMovies"] for call in mock_put.call_args_list}
+        assert put_filter_values == {"label!=SomeOtherLabel_Sarah", "label!=SomeOtherLabel_Jason"}
 
     @patch("utils.plex_policy.requests.put")
     @patch("utils.plex_policy.requests.get")
