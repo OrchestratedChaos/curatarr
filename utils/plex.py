@@ -881,6 +881,43 @@ def get_excluded_genres_for_user(exclude_genres: set, user_preferences: dict, us
     return excluded
 
 
+def get_streaming_services_for_user(
+    streaming_services: List[str], user_preferences: dict, username: str = None
+) -> List[str]:
+    """
+    Get streaming services including user-specific preferences.
+
+    Mirrors get_excluded_genres_for_user() above: a per-user
+    users.preferences.<user>.streaming_services list is UNIONed onto
+    (never replaces) the global top-level streaming_services list, not
+    overridden outright - both are list-type preferences with a global
+    counterpart (unlike max_rating, which has no global equivalent to
+    override), and this codebase's one other example of that shape
+    (exclude_genres) merges. A user with a personal streaming_services
+    override still benefits from services the whole household/global
+    config lists, rather than losing them.
+
+    Args:
+        streaming_services: Global list of streaming service ids
+        user_preferences: User preferences dictionary
+        username: Username to get streaming services for
+
+    Returns:
+        List of streaming service ids (global + user-specific, de-duplicated,
+        original order preserved)
+    """
+    services = list(streaming_services)
+
+    if username and user_preferences and username in user_preferences:
+        user_prefs = user_preferences[username]
+        user_services = user_prefs.get("streaming_services", [])
+        for service in user_services:
+            if service not in services:
+                services.append(service)
+
+    return services
+
+
 def get_user_specific_connection(plex: Any, config: Dict, users: Dict) -> Any:
     """
     Get Plex connection for specific user context.

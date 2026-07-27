@@ -22,6 +22,7 @@ from utils.plex import (
     get_current_users,
     get_excluded_genres_for_user,
     get_library_imdb_ids,
+    get_streaming_services_for_user,
 )
 from utils.plex_policy import apply_user_label_restrictions
 
@@ -289,6 +290,61 @@ class TestGetExcludedGenresForUser:
 
         assert "horror" in result
         assert "comedy" not in result
+
+
+class TestGetStreamingServicesForUser:
+    """Tests for get_streaming_services_for_user() (PR2 audit remediation:
+    per-user streaming_services was previously dead config in
+    recommenders/external.py - see that module's CHANGELOG entry). Mirrors
+    TestGetExcludedGenresForUser above one-for-one: same merge (not
+    override) semantics, global list UNIONed with any per-user override."""
+
+    def test_returns_global_services_with_no_username(self):
+        global_services = ["netflix", "hulu"]
+        user_prefs = {}
+
+        result = get_streaming_services_for_user(global_services, user_prefs)
+
+        assert result == ["netflix", "hulu"]
+
+    def test_merges_user_specific_services_onto_global(self):
+        global_services = ["netflix"]
+        user_prefs = {"john": {"streaming_services": ["hulu", "disney_plus"]}}
+
+        result = get_streaming_services_for_user(global_services, user_prefs, username="john")
+
+        assert result == ["netflix", "hulu", "disney_plus"]
+
+    def test_does_not_duplicate_a_service_in_both_lists(self):
+        global_services = ["netflix", "hulu"]
+        user_prefs = {"john": {"streaming_services": ["hulu", "disney_plus"]}}
+
+        result = get_streaming_services_for_user(global_services, user_prefs, username="john")
+
+        assert result == ["netflix", "hulu", "disney_plus"]
+
+    def test_empty_global_and_user_prefs(self):
+        result = get_streaming_services_for_user([], {})
+
+        assert result == []
+
+    def test_no_username_returns_global_only(self):
+        global_services = ["netflix"]
+        user_prefs = {"john": {"streaming_services": ["hulu"]}}
+
+        result = get_streaming_services_for_user(global_services, user_prefs)
+
+        assert result == ["netflix"]
+
+    def test_user_with_no_override_gets_global_only(self):
+        """A configured user with no personal streaming_services override
+        behaves exactly as before this fix - global list only."""
+        global_services = ["netflix", "hulu"]
+        user_prefs = {"john": {"display_name": "John"}}
+
+        result = get_streaming_services_for_user(global_services, user_prefs, username="john")
+
+        assert result == ["netflix", "hulu"]
 
 
 class TestFindPlexMovie:

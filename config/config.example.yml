@@ -20,7 +20,10 @@ users:
       display_name: User One
       exclude_genres:  # Optional: genres to exclude
         - horror
-      streaming_services:  # Optional: for external recommendations
+      # Optional, for external recommendations (recommenders/external.py) -
+      # adds to (never replaces) the top-level streaming_services list
+      # above, same merge behavior as exclude_genres.
+      streaming_services:
         - netflix
         - disney_plus
     user2:

@@ -28,6 +28,7 @@ from recommenders.external import (
     _empty_categorized,
     _merge_categorized,
     _merge_user_runs,
+    _pu_categorize_and_stamp,
     _pu_plan_discovery,
     _pu_resolve_context,
     _stamp_library_id,
@@ -3806,6 +3807,52 @@ class TestProcessUserMovieLibrary:
         assert mock_markdown.call_args.kwargs["library_suffix"] == ""
         assert result["library_id"] == "movies"
 
+    @patch("recommenders.external.generate_markdown")
+    @patch("recommenders.external.categorize_by_streaming_service")
+    @patch("recommenders.external.save_cache")
+    @patch("recommenders.external.load_cache")
+    @patch("recommenders.external.load_ignore_list")
+    @patch("recommenders.external.enhance_profile_with_trakt")
+    @patch("recommenders.external.load_user_profile_from_cache")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.get_library_items")
+    def test_per_user_streaming_services_merges_onto_global(
+        self,
+        mock_get_items,
+        mock_get_tmdb,
+        mock_load_profile,
+        mock_enhance,
+        mock_load_ignore,
+        mock_load_cache,
+        mock_save_cache,
+        mock_categorize,
+        mock_markdown,
+    ):
+        """PR2 audit remediation: users.preferences.<user>.streaming_services
+        was previously dead config - it must now merge onto the global
+        streaming_services list (see get_streaming_services_for_user)."""
+        mock_get_items.return_value = {"titles": set(), "tmdb_ids": set()}
+        mock_get_tmdb.return_value = {"api_key": "fake_key", "use_keywords": True}
+        mock_load_profile.return_value = {"genres": {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = set()
+        mock_load_cache.side_effect = _fanout_load_cache_side_effect
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {"id": "movies", "name": "Movies", "section": "Movies", "media_type": "movie"}
+        config = {
+            "plex": {},
+            "users": {"preferences": {"alice": {"streaming_services": ["hulu"]}}},
+            "external_recommendations": {"movie_limit": 1, "min_relevance_score": 0.65},
+            "streaming_services": ["netflix"],
+            "trakt": {},
+            "libraries": [library],
+        }
+
+        process_user_movie_library(config, Mock(), "alice", library)
+
+        assert mock_categorize.call_args[0][2] == ["netflix", "hulu"]
+
 
 class TestProcessUserTvLibrary:
     """Tests for process_user_tv_library() (#157 Phase 3.5 fan-out)."""
@@ -3864,6 +3911,52 @@ class TestProcessUserTvLibrary:
         show_item = result["shows_categorized"]["other_services"]["Netflix"][0]
         assert show_item["library_id"] == "anime"
         assert mock_markdown.call_args.kwargs["library_suffix"] == "_anime"
+
+    @patch("recommenders.external.generate_markdown")
+    @patch("recommenders.external.categorize_by_streaming_service")
+    @patch("recommenders.external.save_cache")
+    @patch("recommenders.external.load_cache")
+    @patch("recommenders.external.load_ignore_list")
+    @patch("recommenders.external.enhance_profile_with_trakt")
+    @patch("recommenders.external.load_user_profile_from_cache")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.get_library_items")
+    def test_per_user_streaming_services_merges_onto_global(
+        self,
+        mock_get_items,
+        mock_get_tmdb,
+        mock_load_profile,
+        mock_enhance,
+        mock_load_ignore,
+        mock_load_cache,
+        mock_save_cache,
+        mock_categorize,
+        mock_markdown,
+    ):
+        """PR2 audit remediation: users.preferences.<user>.streaming_services
+        was previously dead config - it must now merge onto the global
+        streaming_services list (see get_streaming_services_for_user)."""
+        mock_get_items.return_value = {"titles": set(), "tmdb_ids": set()}
+        mock_get_tmdb.return_value = {"api_key": "fake_key", "use_keywords": True}
+        mock_load_profile.return_value = {"genres": {}}
+        mock_enhance.side_effect = lambda profile, *a, **kw: profile
+        mock_load_ignore.return_value = set()
+        mock_load_cache.side_effect = _fanout_load_cache_side_effect
+        mock_categorize.side_effect = _fanout_categorize_side_effect
+
+        library = {"id": "tv-shows", "name": "TV Shows", "section": "TV Shows", "media_type": "tv"}
+        config = {
+            "plex": {},
+            "users": {"preferences": {"alice": {"streaming_services": ["hulu"]}}},
+            "external_recommendations": {"show_limit": 1, "min_relevance_score": 0.65},
+            "streaming_services": ["netflix"],
+            "trakt": {},
+            "libraries": [library],
+        }
+
+        process_user_tv_library(config, Mock(), "alice", library)
+
+        assert mock_categorize.call_args[0][2] == ["netflix", "hulu"]
 
 
 class TestProcessUserMovieLibraryBranches:
@@ -4825,3 +4918,48 @@ class TestProcessUserPlanDiscovery:
 
         result = _pu_plan_discovery(config, user_prefs, {}, {})
         assert result[3] == ["Horror"]
+
+
+class TestPuCategorizeAndStamp:
+    """Tests for _pu_categorize_and_stamp() - process_user's (the
+    legacy, non-fan-out path's) streaming-service categorization stage
+    (PR2 audit remediation: users.preferences.<user>.streaming_services
+    was previously dead config here - it now merges onto the global
+    streaming_services list the same way process_user_movie_library/
+    process_user_tv_library do - see get_streaming_services_for_user)."""
+
+    @patch("recommenders.external.categorize_by_streaming_service")
+    def test_no_user_override_uses_global_services_only(self, mock_categorize):
+        mock_categorize.return_value = _empty_categorized()
+        config = {"streaming_services": ["netflix"], "users": {"preferences": {}}}
+
+        _pu_categorize_and_stamp(config, [], [], "fake_key", None, None, "alice")
+
+        assert mock_categorize.call_args_list[0][0][2] == ["netflix"]
+        assert mock_categorize.call_args_list[1][0][2] == ["netflix"]
+
+    @patch("recommenders.external.categorize_by_streaming_service")
+    def test_user_override_merges_onto_global_services(self, mock_categorize):
+        mock_categorize.return_value = _empty_categorized()
+        config = {
+            "streaming_services": ["netflix"],
+            "users": {"preferences": {"alice": {"streaming_services": ["hulu"]}}},
+        }
+
+        _pu_categorize_and_stamp(config, [], [], "fake_key", None, None, "alice")
+
+        assert mock_categorize.call_args_list[0][0][2] == ["netflix", "hulu"]
+
+    @patch("recommenders.external.categorize_by_streaming_service")
+    def test_other_user_without_override_unaffected_by_a_different_users_override(self, mock_categorize):
+        """Alice's personal streaming_services must not leak onto bob's
+        run - each user is resolved independently by username."""
+        mock_categorize.return_value = _empty_categorized()
+        config = {
+            "streaming_services": ["netflix"],
+            "users": {"preferences": {"alice": {"streaming_services": ["hulu"]}}},
+        }
+
+        _pu_categorize_and_stamp(config, [], [], "fake_key", None, None, "bob")
+
+        assert mock_categorize.call_args_list[0][0][2] == ["netflix"]
