@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.56] - 2026-07-27
+
+### Fixed
+
+- **The last piece of issue #260: the `full` engine (Run button, and now the #264 scheduler) failed inside Docker.** 2.10.51 fixed movie/tv/external but left `full` going through `run.sh` itself, which separately assumes the directory it lives in (`/app`) doubles as the data directory it reads `config/`, `cache/`, and `logs/` from - true for a source checkout, never true in Docker, where those are a separately mounted `/data` (`CURATARR_CONFIG_DIR`). Two symptoms of that one mismatch: `check_and_install_dependencies()`'s pip install always failed (the runtime image never ships `requirements.lock`/`requirements.txt` at all - only the venv those built at image-build time, confirmed against a real container), and `is_first_run()` always saw a missing `config/config.yml` and dropped into the interactive setup wizard, which isn't shipped in the image either.
+
+  Rather than teach the whole of `run.sh` (also used by every non-Docker install, where its assumption is correct) about `CURATARR_CONFIG_DIR`, the web UI's `full` trigger now bypasses `run.sh` entirely inside the real image, chaining `movie.py` -> `tv.py` -> `external.py` directly instead - the exact order `docker-entrypoint.sh`'s own `recommend full` mode (and the frozen binary's `--run-recommender full`) already use successfully in this same image. Source checkouts and native (non-Docker) web-UI runs are untouched and still go through `run.sh`/`run.ps1` exactly as before.
+
+  The frozen (PyInstaller) binary never had this problem - its `full` dispatch already calls `movie`/`tv`/`external` in-process and never touches `run.sh`/`run.ps1` at all.
+
+  Verified in a real container: launching `full` now clears dependency resolution and config loading, and reaches a real `recommenders/movie.py` traceback (a fake Plex token rejected with 401) instead of a pip failure or a dead subprocess - movie/tv/external individually confirmed still launching correctly too.
+
 ## [2.10.55] - 2026-07-27
 
 ### Added

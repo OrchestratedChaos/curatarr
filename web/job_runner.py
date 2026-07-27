@@ -29,6 +29,7 @@ sys.exit() behavior above stays safe.
 import logging
 import os
 import queue
+import shlex
 import signal
 import subprocess
 import sys
@@ -382,13 +383,51 @@ class JobManager:
         if engine == "full":
             if frozen:
                 cmd = [sys.executable, "--run-recommender", "full"]
+            elif os.environ.get("RUNNING_IN_DOCKER") == "true":
+                # #260: run.sh assumes the directory it lives in
+                # (SCRIPT_DIR, its own `cd` target) doubles as the data
+                # directory it reads config/cache/logs from - true for
+                # a source checkout, false in the Docker image, where
+                # code lives at /app but config/cache/logs are a
+                # separately mounted /data (CURATARR_CONFIG_DIR - see
+                # this function's own docstring above re:
+                # get_code_root()). run.sh's dependency-install step
+                # was the first symptom (it always fails there - the
+                # runtime image never ships requirements.lock/.txt at
+                # all, only the already-built venv - see Dockerfile),
+                # but is_first_run()'s identical SCRIPT_DIR-relative
+                # config/config.yml check is a second, deeper instance
+                # of the same assumption - teaching the whole,
+                # host-oriented run.sh script (also used by non-Docker
+                # installs, where that assumption is correct) about
+                # CURATARR_CONFIG_DIR everywhere it reads a path would
+                # be a much bigger change than this needs. Docker
+                # already has a working, already-shipped way to run all
+                # three recommenders in sequence that never goes
+                # through run.sh at all - docker-entrypoint.sh's own
+                # `recommend full` mode - so this mirrors that exact
+                # movie -> tv -> external order directly, same as
+                # frozen's own `--run-recommender full` (see
+                # curatarr_app.py) bypassing run.sh/run.ps1 entirely.
+                movie_script = os.path.join(code_root, "recommenders", "movie.py")
+                tv_script = os.path.join(code_root, "recommenders", "tv.py")
+                external_script = os.path.join(code_root, "recommenders", "external.py")
+                py = shlex.quote(sys.executable)
+                cmd = [
+                    "bash",
+                    "-c",
+                    f"{py} {shlex.quote(movie_script)} && "
+                    f"{py} {shlex.quote(tv_script)} && "
+                    f"{py} {shlex.quote(external_script)}",
+                ]
             elif os.name == "nt":
                 cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", os.path.join(code_root, "run.ps1")]
             else:
                 cmd = ["bash", os.path.join(code_root, "run.sh")]
             # Skip the interactive setup wizard / auto-update git-checkout
-            # dance for UI-triggered runs - config is assumed already
-            # set up, same bypass run.sh already supports for Docker.
+            # dance for UI-triggered runs on a source checkout - config
+            # is assumed already set up. Unused (but harmless) for the
+            # Docker branch above, which never touches run.sh at all.
             env["RUNNING_IN_DOCKER"] = "true"
             target = "all"
         elif engine in ("movie", "tv"):
