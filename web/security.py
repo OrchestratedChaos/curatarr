@@ -340,10 +340,22 @@ def _request_is_secure(request) -> bool:
 # whatever access restarting it requires. Guarded by a lock because
 # both app.run(threaded=True) (web/app.py) and the Docker waitress
 # server (web/docker_server.py) serve requests concurrently.
+#
+# Memory is bounded independently of the rolling window above (PR5):
+# a distributed attack that sends exactly one request per source IP
+# never revisits any of its own IPs, so the per-IP window pruning above
+# would otherwise never reclaim those one-shot entries - see
+# _LOGIN_FAILURES_MAX_TRACKED_IPS and _sweep_login_failures_locked.
 # ---------------------------------------------------------------------------
 
 _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_WINDOW_SECONDS = 60
+
+# Caps how many source IPs _login_failures tracks, against a distributed
+# one-request-per-IP flood (audit remediation, PR5) - see
+# _sweep_login_failures_locked below for how the cap is enforced without
+# weakening a genuine lockout.
+_LOGIN_FAILURES_MAX_TRACKED_IPS = 10_000
 
 _login_failures_lock = threading.Lock()
 _login_failures: Dict[str, List[float]] = {}  # {ip: [monotonic timestamp, ...]} of FAILED attempts only
@@ -376,12 +388,68 @@ def _is_locked_out(ip: str) -> bool:
         return len(_prune_locked(ip, time.monotonic())) >= _LOGIN_MAX_ATTEMPTS
 
 
+def _sweep_login_failures_locked(now: float) -> None:
+    """Bound _login_failures' memory footprint - must be called with
+    _login_failures_lock held. Only called from _record_login_failure
+    once the dict has grown past _LOGIN_FAILURES_MAX_TRACKED_IPS - a
+    distributed flood (one request from each of many source IPs) never
+    re-visits any single one of its own IPs, so nothing would otherwise
+    ever prune those one-shot entries: _prune_locked above only rewrites
+    the CURRENTLY-REQUESTING ip's own list, never every other ip's list.
+
+    First drops every entry that's aged out of the rolling window on its
+    own - the common case, since most of a one-shot flood's IPs will
+    already be stale by the time the cap is hit. If that alone isn't
+    enough, evicts the least-recently-active entries next, but NEVER an
+    IP that is currently locked out (>= _LOGIN_MAX_ATTEMPTS within the
+    window) while any non-locked-out entry remains to evict instead -
+    otherwise a flood of throwaway IPs could evict a genuine attacker's
+    (or a legitimate user's, if they happen to collide behind a shared
+    proxy - see _client_ip) active lockout and let them straight back in.
+    Only falls back to evicting a locked-out entry in the pathological
+    case where the cap is entirely full of simultaneously-locked IPs -
+    sustaining that requires _LOGIN_FAILURES_MAX_TRACKED_IPS *
+    _LOGIN_MAX_ATTEMPTS failed requests inside one _LOGIN_WINDOW_SECONDS
+    window, itself already a denial-of-service on the process regardless
+    of this dict.
+    """
+    for ip in list(_login_failures.keys()):
+        _prune_locked(ip, now)
+    for ip in [ip for ip, attempts in _login_failures.items() if not attempts]:
+        del _login_failures[ip]
+
+    overflow = len(_login_failures) - _LOGIN_FAILURES_MAX_TRACKED_IPS
+    if overflow <= 0:
+        return
+
+    def _last_activity(candidate_ip: str) -> float:
+        return max(_login_failures[candidate_ip])
+
+    not_locked = sorted(
+        (ip for ip, attempts in _login_failures.items() if len(attempts) < _LOGIN_MAX_ATTEMPTS),
+        key=_last_activity,
+    )
+    locked = sorted((ip for ip in _login_failures if ip not in set(not_locked)), key=_last_activity)
+
+    for ip in (not_locked + locked)[:overflow]:
+        del _login_failures[ip]
+
+    if overflow > len(not_locked):
+        log_warning(
+            f"Login failure tracker exceeded {_LOGIN_FAILURES_MAX_TRACKED_IPS} "
+            "simultaneously locked-out IPs - evicted the oldest active "
+            "lockouts to bound memory."
+        )
+
+
 def _record_login_failure(ip: str) -> None:
     with _login_failures_lock:
         now = time.monotonic()
         attempts = _prune_locked(ip, now)
         attempts.append(now)
         _login_failures[ip] = attempts
+        if len(_login_failures) > _LOGIN_FAILURES_MAX_TRACKED_IPS:
+            _sweep_login_failures_locked(now)
 
 
 def _clear_login_failures(ip: str) -> None:

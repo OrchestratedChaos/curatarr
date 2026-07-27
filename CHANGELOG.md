@@ -2,6 +2,49 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.38] - 2026-07-26
+
+### Fixed
+
+- **Login rate limiter (`web/security.py`'s `_login_failures`) could grow without bound under a distributed attack (audit remediation, PR5).**
+
+  - `_login_failures` was only pruned when the offending IP made another
+    request (`_prune_locked`, called from `_is_locked_out`/
+    `_record_login_failure` for that one IP only). A distributed
+    attack sending exactly one request per source IP never revisits any
+    of its own IPs, so nothing ever reclaimed those one-shot entries -
+    the dict grows by one entry per unique attacking IP forever.
+  - Added `_LOGIN_FAILURES_MAX_TRACKED_IPS` (10,000) and
+    `_sweep_login_failures_locked()`, triggered from
+    `_record_login_failure` only once the dict exceeds that cap (no new
+    background thread/timer - stays in keeping with this module's
+    existing "in-process/in-memory, no new dependency" design). The
+    sweep first drops every entry that's aged out of the rolling window
+    on its own (the common case for a one-shot flood), then, only if
+    still over cap, evicts the least-recently-active entries - but never
+    an actively locked-out IP (`>= _LOGIN_MAX_ATTEMPTS` within the
+    window) while any non-locked-out entry remains to evict instead.
+  - **Must not weaken lockout, must not let a flood evict a legitimate
+    lockout**: this is why locked-out entries are excluded from eviction
+    whenever a non-locked-out alternative exists - a flood of throwaway
+    IPs can only evict *other throwaway/expired* entries, never force out
+    a genuine attacker's (or a real user's, if they collide behind a
+    shared proxy) active lockout early. Only falls back to evicting a
+    locked-out entry in the pathological case where the cap is entirely
+    saturated by simultaneously-locked IPs (requires
+    `_LOGIN_FAILURES_MAX_TRACKED_IPS * _LOGIN_MAX_ATTEMPTS` failed
+    requests inside one `_LOGIN_WINDOW_SECONDS` window - already its own
+    denial-of-service on the process regardless of this dict) - logged
+    via `log_warning` if it ever happens.
+  - Tests added to `tests/test_web_security.py`: dict size stays bounded
+    under a 50-unique-IP flood with the cap monkeypatched down to 5,
+    an active lockout survives an unrelated flood of throwaway IPs (via
+    the real `/login` route), a legitimate under-threshold user still
+    logs in successfully after the same flood, and naturally-expired
+    entries are pruned before any eviction is even considered.
+  - No change to the existing lockout/window behavior for the ordinary
+    case - all 66 pre-existing tests in this file pass unchanged.
+
 ## [2.10.37] - 2026-07-26
 
 ### Changed
