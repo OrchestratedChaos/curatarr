@@ -873,3 +873,169 @@ class TestPrintUpdateNotice:
         assert "docker pull" in out
         assert "run.sh" not in out
         assert "--self-update" not in out
+
+
+class TestRunRecommenderMainCachePruneScope:
+    """Tests for the resolved_usernames -> prune_orphaned_cache_files
+    wiring at the end of run_recommender_main (#233 audit remediation
+    batch D / PR1(b)), and the single-user-mode false-orphan bug found
+    in pre-release review: single_user narrows all_users to just the one
+    user being processed, so resolved_usernames would only ever contain
+    that one user - pruning against it would misclassify every OTHER
+    configured user's still-live cache as orphaned. Every cache_dir here
+    is tmp_path/cache - never the real cache/ directory - and every test
+    sets dry_run: false so a regression would actually delete files, not
+    just log a false candidate.
+    """
+
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_single_user_run_does_not_orphan_other_configured_users(
+        self,
+        mock_parse_args,
+        mock_root,
+        mock_open,
+        mock_yaml,
+        mock_setup_log,
+        mock_resolve,
+        mock_print,
+        mock_migrate,
+        tmp_path,
+    ):
+        """A single-user run for 'bob' must never treat 'alice' (still
+        configured, just not processed this run) as orphaned - even with
+        cache_prune.dry_run: false, which would delete it if this run
+        pruned using only the current run's resolved_usernames."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        alice_cache = cache_dir / "watched_cache_plex_alice.json"
+        alice_cache.write_text("{}", encoding="utf-8")
+
+        mock_parse_args.return_value = Mock(username="bob", debug=False, library_id=None)
+        mock_root.return_value = str(tmp_path)
+        config = {
+            "plex": {"token": "abc"},
+            "users": {"list": "alice, bob"},
+            "general": {"cache_prune": {"enabled": True, "dry_run": False}},
+        }
+        mock_yaml.return_value = config
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(return_value=config)
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+
+        assert alice_cache.exists()
+
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_full_run_still_prunes_a_user_removed_from_config(
+        self,
+        mock_parse_args,
+        mock_root,
+        mock_open,
+        mock_yaml,
+        mock_setup_log,
+        mock_resolve,
+        mock_print,
+        mock_migrate,
+        tmp_path,
+    ):
+        """A full run (no username arg) must still prune 'charlie', who
+        is no longer in users.list - this is the legitimate case the
+        feature exists to handle, and scoping pruning to full-run-only
+        must not break it."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        alice_cache = cache_dir / "watched_cache_plex_alice.json"
+        alice_cache.write_text("{}", encoding="utf-8")
+        removed_cache = cache_dir / "watched_cache_plex_charlie.json"
+        removed_cache.write_text("{}", encoding="utf-8")
+
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
+        mock_root.return_value = str(tmp_path)
+        config = {
+            "plex": {"token": "abc"},
+            "users": {"list": "alice"},
+            "general": {"cache_prune": {"enabled": True, "dry_run": False}},
+        }
+        mock_yaml.return_value = config
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(return_value=config)
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+
+        assert alice_cache.exists()
+        assert not removed_cache.exists()
+
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_full_run_prunes_by_resolved_not_raw_admin_username(
+        self,
+        mock_parse_args,
+        mock_root,
+        mock_open,
+        mock_yaml,
+        mock_setup_log,
+        mock_resolve,
+        mock_print,
+        mock_migrate,
+        tmp_path,
+    ):
+        """The real per-user cache filename is written under the
+        RESOLVED account username (e.g. 'realadmin'), never the raw
+        config string 'admin' - see utils.cache_prune.find_orphaned_
+        cache_files's own docstring on this contract. Pruning must keep
+        classifying by that same resolved form: if a future change fed
+        the raw config string into prune_orphaned_cache_files instead,
+        a config that still says 'admin' would misclassify its own live
+        cache as orphaned and delete it - the exact inverse of this
+        bug."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        real_admin_cache = cache_dir / "watched_cache_plex_realadmin.json"
+        real_admin_cache.write_text("{}", encoding="utf-8")
+
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
+        mock_root.return_value = str(tmp_path)
+        config = {
+            "plex": {"token": "abc"},
+            "users": {"list": "admin"},
+            "general": {"cache_prune": {"enabled": True, "dry_run": False}},
+        }
+        mock_yaml.return_value = config
+        mock_migrate.return_value = {}
+
+        mock_adapt = Mock(return_value=config)
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: "realadmin" if u.lower() == "admin" else u
+
+        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+
+        assert real_admin_cache.exists()
