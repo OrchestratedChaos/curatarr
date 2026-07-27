@@ -571,14 +571,26 @@ jobs:
           MAX_ATTEMPTS=20
           SLEEP_SECONDS=30
 
+          # `if OUTPUT=$(...); then` (NOT `OUTPUT=$(...); STATUS=$?` followed
+          # by a separate `if`) is load-bearing here, not stylistic: GitHub
+          # Actions runs every `run:` step's script as `bash -e {0}` by
+          # default, and this step's own `set -uo pipefail` does not (and
+          # cannot) clear that inherited -e. A bare `VAR=$(failing_cmd)`
+          # statement is a simple command for errexit's purposes - if it's
+          # not already inside an `if`/`while`/`&&`/`||`/`!` condition,
+          # errexit kills the whole script on the spot, before a
+          # never-reached `STATUS=$?` line or the retry loop below it ever
+          # runs. That exact bug shipped in 2.10.25-2.10.32: this job died
+          # in under a second on the first MANIFEST_UNKNOWN with zero
+          # "Attempt N/20 failed" diagnostics, looking like a hung/instant
+          # failure instead of a retrying one. Putting the assignment
+          # directly in the `if` condition is what actually suppresses
+          # errexit for it - see `help set` / bash's "Compound Commands".
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-            OUTPUT="$(cosign verify \
+            if OUTPUT="$(cosign verify \
               --certificate-identity-regexp '^https://github\.com/OrchestratedChaos/curatarr/\.github/workflows/docker\.yml@refs/' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "$IMAGE" 2>&1)"
-            STATUS=$?
-
-            if [ "$STATUS" -eq 0 ]; then
+              "$IMAGE" 2>&1)"; then
               echo "$OUTPUT"
               echo "Verified $IMAGE on attempt ${attempt}/${MAX_ATTEMPTS}."
               exit 0

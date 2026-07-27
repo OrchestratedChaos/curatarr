@@ -2,6 +2,45 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.33] - 2026-07-26
+
+### Fixed
+
+- **`post-release-smoke-test.yml`'s `cosign-verify` bounded retry never
+  retried, and the same broken pattern existed in two other workflows
+  (#243).**
+
+  - The `cosign-verify` job's retry loop (added in 2.10.25 to survive
+    the race where this smoke test runs before `docker.yml` finishes
+    pushing and signing the image) never executed a single retry.
+    GitHub Actions runs every `run:` step as `bash -e {0}`; the step's
+    own `set -uo pipefail` does not (and cannot) clear that inherited
+    `-e`. `OUTPUT="$(cosign verify ...)"` is a bare command-substitution
+    assignment, not inside any conditional - so on the very first
+    `MANIFEST_UNKNOWN` failure, errexit killed the script immediately,
+    before the following `STATUS=$?` line or any retry logic ever ran.
+    Confirmed in the real v2.10.32 run: the job died in well under a
+    second with zero "Attempt N/20 failed" diagnostics.
+  - `release.yml` and `docker.yml`'s "Verify tag is signed by the
+    trusted release key" steps had the identical shape
+    (`VERIFY_OUTPUT="$(git verify-tag ...)"; VERIFY_EXIT=$?`) - lower
+    severity there (the step still failed the job either way, since
+    errexit's own exit code propagates), but the diagnostic
+    `git verify-tag` output and the `::error::` annotation explaining
+    *why* were both silently lost on every failure.
+  - Fixed all three by moving the failing command substitution directly
+    into the `if` condition (`if OUTPUT="$(...)"; then ... else ...
+    fi`), which is the one context bash's errexit does not apply to -
+    confirmed with a fake `cosign` on PATH covering fails-twice-then-
+    succeeds (retries and passes), always-fails (exhausts its budget
+    and fails non-zero, loudly, with every attempt's output printed),
+    and succeeds-immediately (no spurious retry delay).
+  - v2.10.32 itself was not affected - a manual re-dispatch of the
+    smoke test after `docker.yml` finished passed every check (cosign
+    verify, glibc floor, all 8 distro/arch starts, real self-update).
+    The auto-filed failure was this bug plus the pre-existing
+    not-published-yet race it was supposed to survive.
+
 ## [2.10.32] - 2026-07-26
 
 ### Fixed
