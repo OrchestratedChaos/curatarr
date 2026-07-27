@@ -2,6 +2,24 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.54] - 2026-07-27
+
+### Fixed
+
+- **Trakt exports have been silently failing for every user roughly 24 hours after linking their account, since access tokens now expire that fast (Trakt changed this 2025-03-20) - and every run still reported success.** `create_trakt_client()` built its Trakt API client with no way to save a refreshed token: the refresh itself worked and updated the token in memory, but as soon as that process exited the refreshed token was gone, and since Trakt's refresh tokens are single-use, the *next* run replayed the same already-consumed refresh token and failed - a one-way trapdoor with zero persisted state ever recovering on its own. Refreshed tokens (access + refresh + issued-at/expiry) are now saved back to `config/trakt.yml` immediately, atomically, and without disturbing any other key in the file.
+
+  Also fixed, all part of the same root cause:
+  - The refresh request was missing `redirect_uri`, which Trakt's documented refresh body (and PyTrakt) includes on a refresh grant.
+  - A refresh failure was completely silent - no HTTP status, no response body, nothing logged. Both are now logged (secrets redacted first, same as every other log line).
+  - `get_username()` swallowed the real authentication error into a bare `None`, which turned "your refresh was just rejected" into the identical, misleading "Cannot get lists: not authenticated" every caller already showed for "never linked at all". The real cause is now logged.
+  - **The failure was invisible in the web UI** - the run still exited 0 and the dashboard still said "succeeded". A new explicit integration-health signal (`utils/integration_status.py`) records the real outcome of every Trakt export/sync attempt and surfaces it as a banner on every page plus a `trakt_export` field in `/status.json` - deliberately not log-string matching, which is exactly how this hid for months in the first place.
+  - **Recovering no longer requires hand-editing `trakt.yml`.** `python3 utils/trakt_auth.py` refused to re-authenticate whenever *any* `access_token` was present, telling you to remove it from the file yourself first - awkward for a source install, effectively impossible for Docker/frozen-binary users who can't reasonably shell in to do that edit. It now takes a `--reauth`/`--force` flag that bypasses that check and starts a fresh device-code sign-in immediately. (A web-UI "re-link Trakt" button would need its own device-code-polling flow comparable in size to the existing web-triggered-run plumbing - not built this round; the CLI flag is the fix for now.)
+  - The client now also tracks when its access token was issued and how long it's valid for, and refreshes proactively before it expires rather than only reactively after a request gets rejected.
+
+  **`trakt.export.auto_sync`'s code default is now `false` (was `true`) - this changes behavior for anyone who never explicitly set this key.** `config/trakt.example.yml`, `setup.sh`, and both web UI config screens have always documented/shown `false`; only this one code path silently defaulted the opposite way, meaning recommendations could be pushed to a linked Trakt account with no explicit opt-in. If you were relying on the undocumented `true` default, add `trakt.export.auto_sync: true` to `trakt.yml` explicitly.
+
+  **Verified against a real refresh (once, deliberately - Trakt rotates refresh tokens single-use, so every attempt is potentially consuming): the stored refresh token is already dead.** Trakt returned `HTTP 400 {"error":"invalid_grant","error_description":"session not found"}` - `invalid_grant` (not a malformed-request `invalid_request`) means the token itself is no longer valid, not that the request body was wrong. The account needs an interactive re-link: `python3 utils/trakt_auth.py --reauth`. This fix still matters going forward - every account that re-links will actually stay linked now, instead of silently breaking again on its first automatic refresh.
+
 ## [2.10.53] - 2026-07-27
 
 ### Fixed

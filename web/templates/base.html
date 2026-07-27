@@ -132,6 +132,14 @@
         })();
       </script>
       {% endif %}
+      {% if trakt_banner %}
+      <div class="banner error" id="trakt-banner">
+        Trakt export/sync failed: {{ trakt_banner.detail }}
+        {% if trakt_banner.timestamp %}(last attempt: {{ trakt_banner.timestamp }}){% endif %}
+        - see <a href="{{ url_for('config_connections') }}">Connections</a> to check credentials, or run
+        <code>python3 utils/trakt_auth.py --reauth</code> to re-link your account.
+      </div>
+      {% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>

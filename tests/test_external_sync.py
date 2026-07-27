@@ -252,6 +252,21 @@ class TestExportToTrakt:
 
         export_to_trakt(config, all_users_data, "api_key")
 
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
+    def test_auto_sync_unset_defaults_to_disabled(self, mock_get_client):
+        """#trakt-token-refresh-persistence: auto_sync's code default is
+        now False, matching config/trakt.example.yml, setup.sh, and the
+        web UI's own displayed default (all of which have always said
+        False) - previously only this code path disagreed (True), so
+        Trakt exports silently ran for anyone who never set the key at
+        all. Never even reaches get_authenticated_trakt_client when
+        auto_sync is absent."""
+        config = {"trakt": {"enabled": True, "export": {"enabled": True}}}
+
+        export_to_trakt(config, [], "api_key")
+
+        mock_get_client.assert_not_called()
+
 
 class TestExportToRadarr:
     """Tests for export_to_radarr function"""
@@ -1135,7 +1150,7 @@ class TestExportToTraktLogic:
     @patch("recommenders.external_sync.get_authenticated_trakt_client")
     def test_no_client_warns_and_returns(self, mock_get_client):
         mock_get_client.return_value = None
-        config = {"trakt": {"enabled": True}}
+        config = {"trakt": {"enabled": True, "export": {"auto_sync": True}}}
 
         export_to_trakt(config, [], "tmdb-key")
 
@@ -1145,7 +1160,7 @@ class TestExportToTraktLogic:
     def test_mapping_mode_no_plex_users_warns_and_returns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
-        config = {"trakt": {"enabled": True, "export": {"user_mode": "mapping", "plex_users": []}}}
+        config = {"trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "mapping", "plex_users": []}}}
 
         export_to_trakt(config, [{"username": "jason"}], "tmdb-key")
 
@@ -1155,7 +1170,12 @@ class TestExportToTraktLogic:
     def test_mapping_mode_placeholder_plex_users_warns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
-        config = {"trakt": {"enabled": True, "export": {"user_mode": "mapping", "plex_users": ["YourPlexUsername"]}}}
+        config = {
+            "trakt": {
+                "enabled": True,
+                "export": {"auto_sync": True, "user_mode": "mapping", "plex_users": ["YourPlexUsername"]},
+            }
+        }
 
         export_to_trakt(config, [{"username": "jason"}], "tmdb-key")
 
@@ -1165,7 +1185,9 @@ class TestExportToTraktLogic:
     def test_mapping_mode_no_matching_users_warns(self, mock_get_client):
         client = _mock_trakt_client()
         mock_get_client.return_value = client
-        config = {"trakt": {"enabled": True, "export": {"user_mode": "mapping", "plex_users": ["jason"]}}}
+        config = {
+            "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "mapping", "plex_users": ["jason"]}}
+        }
         all_users_data = [{"username": "other", "display_name": "Other"}]
 
         export_to_trakt(config, all_users_data, "tmdb-key")
@@ -1182,7 +1204,12 @@ class TestExportToTraktLogic:
         config = {
             "trakt": {
                 "enabled": True,
-                "export": {"user_mode": "mapping", "plex_users": ["Jason"], "list_prefix": "MyRecs"},
+                "export": {
+                    "auto_sync": True,
+                    "user_mode": "mapping",
+                    "plex_users": ["Jason"],
+                    "list_prefix": "MyRecs",
+                },
             }
         }
         all_users_data = [
@@ -1216,7 +1243,9 @@ class TestExportToTraktLogic:
         client = _mock_trakt_client()
         mock_get_client.return_value = client
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
-        config = {"trakt": {"enabled": True, "export": {"user_mode": "mapping", "plex_users": ["jason"]}}}
+        config = {
+            "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "mapping", "plex_users": ["jason"]}}
+        }
         all_users_data = [
             {
                 "username": "jason",
@@ -1237,7 +1266,9 @@ class TestExportToTraktLogic:
         client = _mock_trakt_client(username="jasontv")
         mock_get_client.return_value = client
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
-        config = {"trakt": {"enabled": True, "export": {"user_mode": "combined", "list_prefix": "Fam"}}}
+        config = {
+            "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "combined", "list_prefix": "Fam"}}
+        }
         all_users_data = [
             {
                 "username": "a",
@@ -1275,7 +1306,7 @@ class TestExportToTraktLogic:
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
         client.sync_list.side_effect = [TraktAPIError("boom"), {}]
 
-        config = {"trakt": {"enabled": True, "export": {"user_mode": "per_user"}}}
+        config = {"trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "per_user"}}}
         all_users_data = [
             {
                 "username": "a",
@@ -1303,7 +1334,7 @@ class TestExportToTraktLogic:
         mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
         client.sync_list.side_effect = TraktAuthError("expired")
 
-        config = {"trakt": {"enabled": True, "export": {"user_mode": "combined"}}}
+        config = {"trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "combined"}}}
         all_users_data = [
             {
                 "username": "a",

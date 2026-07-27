@@ -122,6 +122,13 @@ from .helpers import (
     normalize_title,
 )
 
+# Integration-health signal (explicit, structured last-attempt status -
+# see module docstring for why this exists instead of log-string matching)
+from .integration_status import (
+    get_integration_status,
+    record_integration_status,
+)
+
 # Label utilities
 from .labels import (
     DEFAULT_MOVIE_NAME_TEMPLATE,
@@ -493,6 +500,9 @@ __all__ = [
     "map_path",
     "cleanup_old_logs",
     "compute_profile_hash",
+    # Integration-health signal
+    "record_integration_status",
+    "get_integration_status",
     # CLI
     "get_users_from_config",
     "resolve_admin_username",

@@ -54,6 +54,7 @@ from werkzeug.datastructures import Headers
 
 from utils import (
     __version__,
+    get_integration_status,
     get_project_root,
     get_update_mode,
     get_users_from_config,
@@ -388,6 +389,42 @@ def create_app(
             return {"update_banner": None}
 
     @app.context_processor
+    def _trakt_health_context():
+        """Injected into every rendered template (see base.html's banner
+        block) - surfaces a Trakt export/sync failure explicitly,
+        without requiring anyone to open a log file. Reads the
+        structured status utils.integration_status.record_integration_status
+        writes from recommenders/external_sync.py's export_to_trakt /
+        sync_watch_history_to_trakt - deliberately NOT log-string
+        matching (see CHANGELOG's Trakt token-refresh-persistence entry
+        for how fragile/silent that approach turned out to be: every run
+        exited 0 and the dashboard reported "succeeded" for months while
+        every single Trakt export actually failed).
+
+        Fails open (no banner) on any error, same spirit as
+        _update_banner_context above - a broken health check must never
+        break normal page rendering. Also hidden whenever Trakt isn't
+        even enabled, so an install that's never configured Trakt at
+        all never sees this.
+        """
+        try:
+            config = _load_config()
+            if not config or not (config.get("trakt") or {}).get("enabled", False):
+                return {"trakt_banner": None}
+            cache_dir = os.path.join(project_root, config.get("cache_dir", "cache"))
+            status = get_integration_status(cache_dir, "trakt_export")
+            if not status or status.get("success", True):
+                return {"trakt_banner": None}
+            return {
+                "trakt_banner": {
+                    "detail": status.get("detail") or "Trakt export/sync failed - see logs for detail.",
+                    "timestamp": status.get("timestamp"),
+                }
+            }
+        except Exception:
+            return {"trakt_banner": None}
+
+    @app.context_processor
     def _version_context():
         """#265: the running version, injected into every rendered
         template (see base.html's topbar) so it's visible on every page,
@@ -496,6 +533,19 @@ def create_app(
                 continue
             if last_run is None or status["timestamp"] > last_run["timestamp"]:
                 last_run = status
+
+        # Trakt export/sync health (see utils.integration_status and
+        # recommenders/external_sync.py) - an explicit, structured signal
+        # rather than log-string matching, so a Trakt auth/refresh
+        # failure is visible here even though it isn't a `last_run`
+        # failure (movie.py/tv.py's own run can - and did, for months -
+        # exit 0 while Trakt export silently failed underneath it).
+        # None whenever Trakt isn't enabled or nothing's been recorded yet.
+        trakt_export = None
+        if config and (config.get("trakt") or {}).get("enabled", False):
+            cache_dir = os.path.join(project_root, config.get("cache_dir", "cache"))
+            trakt_export = get_integration_status(cache_dir, "trakt_export")
+
         return jsonify(
             {
                 "version": __version__,
@@ -510,6 +560,7 @@ def create_app(
                 }
                 if last_run
                 else None,
+                "trakt_export": trakt_export,
             }
         )
 

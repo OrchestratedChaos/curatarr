@@ -1,9 +1,12 @@
 """Tests for utils/trakt.py - Trakt API client."""
 
+import os
 import time
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
+import yaml
 
 from utils.trakt import (
     TRAKT_RATE_LIMIT_DELAY,
@@ -274,7 +277,32 @@ class TestTraktClientDeviceAuth:
         assert result is True
         assert client.access_token == "access123"
         assert client.refresh_token == "refresh456"
-        callback.assert_called_once_with("access123", "refresh456")
+        callback.assert_called_once_with("access123", "refresh456", None, None)
+
+    @patch("utils.trakt.requests.post")
+    def test_poll_for_token_captures_created_at_and_expires_in(self, mock_post):
+        """The token grant's own created_at/expires_in fields (device-
+        code polling's own `expires_in` parameter is a DIFFERENT thing -
+        the polling window, not the access token's lifetime) are stored
+        on the client and forwarded to token_callback."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "access_token": "access123",
+            "refresh_token": "refresh456",
+            "created_at": 1700000000,
+            "expires_in": 7776000,
+        }
+        mock_post.return_value = mock_response
+
+        callback = Mock()
+        client = TraktClient("id", "secret", token_callback=callback)
+        result = client.poll_for_token("device_code", interval=0, expires_in=10)
+
+        assert result is True
+        assert client.created_at == 1700000000
+        assert client.expires_in == 7776000
+        callback.assert_called_once_with("access123", "refresh456", 1700000000, 7776000)
 
     @patch("utils.trakt.requests.post")
     def test_poll_for_token_pending(self, mock_post):
@@ -325,19 +353,77 @@ class TestTraktClientTokenRefresh:
         assert result is True
         assert client.access_token == "new_access"
         assert client.refresh_token == "new_refresh"
-        callback.assert_called_once_with("new_access", "new_refresh")
+        callback.assert_called_once_with("new_access", "new_refresh", None, None)
 
     @patch("utils.trakt.requests.post")
-    def test_refresh_access_token_failure(self, mock_post):
-        """Test failed token refresh."""
+    def test_refresh_access_token_sends_redirect_uri(self, mock_post):
+        """Trakt's documented /oauth/token refresh body includes
+        redirect_uri (PyTrakt sends this too) - suspected-required per
+        the diagnosis that motivated this whole fix."""
+        from utils.trakt import TRAKT_OOB_REDIRECT_URI
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"access_token": "new_access", "refresh_token": "new_refresh"}
+        mock_post.return_value = mock_response
+
+        client = TraktClient("id", "secret", refresh_token="old_refresh")
+        client._refresh_access_token()
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["redirect_uri"] == TRAKT_OOB_REDIRECT_URI
+        assert body["grant_type"] == "refresh_token"
+
+    @patch("utils.trakt.requests.post")
+    def test_refresh_access_token_captures_created_at_and_expires_in(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "access_token": "new_access",
+            "refresh_token": "new_refresh",
+            "created_at": 1700000000,
+            "expires_in": 7776000,
+        }
+        mock_post.return_value = mock_response
+
+        client = TraktClient("id", "secret", refresh_token="old_refresh")
+        client._refresh_access_token()
+
+        assert client.created_at == 1700000000
+        assert client.expires_in == 7776000
+
+    @patch("utils.trakt.log_error")
+    @patch("utils.trakt.requests.post")
+    def test_refresh_access_token_failure(self, mock_post, mock_log_error):
+        """Test failed token refresh - status + body are logged (#trakt-
+        token-refresh-persistence: this used to fail completely silently)."""
         mock_response = Mock()
         mock_response.status_code = 401
+        mock_response.text = '{"error": "invalid_grant"}'
         mock_post.return_value = mock_response
 
         client = TraktClient("id", "secret", refresh_token="old_refresh")
         result = client._refresh_access_token()
 
         assert result is False
+        mock_log_error.assert_called_once()
+        logged_message = mock_log_error.call_args[0][0]
+        assert "401" in logged_message
+        assert "invalid_grant" in logged_message
+
+    @patch("utils.trakt.log_error")
+    @patch("utils.trakt.requests.post")
+    def test_refresh_access_token_request_exception_is_logged(self, mock_post, mock_log_error):
+        """A network-level failure (not just a bad HTTP status) must
+        also be logged, not silently swallowed."""
+        mock_post.side_effect = requests.RequestException("connection reset")
+
+        client = TraktClient("id", "secret", refresh_token="old_refresh")
+        result = client._refresh_access_token()
+
+        assert result is False
+        mock_log_error.assert_called_once()
+        assert "connection reset" in mock_log_error.call_args[0][0]
 
     def test_refresh_access_token_no_refresh_token(self):
         """Test refresh fails when no refresh token."""
@@ -345,6 +431,140 @@ class TestTraktClientTokenRefresh:
         result = client._refresh_access_token()
 
         assert result is False
+
+
+class TestTraktClientProactiveExpiry:
+    """Tests for TraktClient._access_token_expired / proactive refresh."""
+
+    def test_no_expiry_data_never_expired(self):
+        """Unknown created_at/expires_in (e.g. a trakt.yml predating this
+        feature) must never be treated as expired - falls back to
+        exactly today's reactive-only (401-triggered) refresh."""
+        client = TraktClient("id", "secret", access_token="tok")
+        assert client._access_token_expired() is False
+
+    def test_well_within_lifetime_not_expired(self):
+        client = TraktClient("id", "secret", access_token="tok", created_at=int(time.time()), expires_in=7776000)
+        assert client._access_token_expired() is False
+
+    def test_past_expiry_is_expired(self):
+        client = TraktClient(
+            "id", "secret", access_token="tok", created_at=int(time.time()) - 7776001, expires_in=7776000
+        )
+        assert client._access_token_expired() is True
+
+    def test_within_safety_margin_is_expired(self):
+        from utils.trakt import TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS
+
+        created_at = int(time.time()) - 7776000 + (TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS - 10)
+        client = TraktClient("id", "secret", access_token="tok", created_at=created_at, expires_in=7776000)
+        assert client._access_token_expired() is True
+
+    @patch("utils.trakt.requests.post")
+    def test_make_request_refreshes_proactively_before_sending(self, mock_post):
+        """An expired-per-our-tracking token triggers a refresh BEFORE
+        the real request is sent, not just reactively after a 401."""
+        refresh_response = Mock()
+        refresh_response.status_code = 200
+        refresh_response.json.return_value = {"access_token": "new_access", "refresh_token": "new_refresh"}
+        mock_post.return_value = refresh_response
+
+        client = TraktClient(
+            "id",
+            "secret",
+            access_token="stale_access",
+            refresh_token="old_refresh",
+            created_at=int(time.time()) - 7776001,
+            expires_in=7776000,
+        )
+        with patch.object(client, "_send_with_retries") as mock_send:
+            api_response = Mock()
+            api_response.status_code = 200
+            api_response.json.return_value = {"ok": True}
+            mock_send.return_value = api_response
+
+            client._make_request("GET", "/some/endpoint")
+
+            # The real request went out with the REFRESHED token, not
+            # the stale one.
+            sent_headers = mock_send.call_args.kwargs["headers"]
+            assert sent_headers["Authorization"] == "Bearer new_access"
+
+
+class TestSaveTraktTokens:
+    """Tests for save_trakt_tokens() - the shared, atomic token-persistence
+    function hoisted out of utils/trakt_auth.py's own save_tokens (see
+    that module) so TraktClient's runtime token_callback and the manual
+    `python3 utils/trakt_auth.py` re-auth flow persist identically."""
+
+    def test_updates_tokens_preserves_other_keys(self, tmp_path):
+        from utils.trakt import save_trakt_tokens
+
+        trakt_path = tmp_path / "trakt.yml"
+        trakt_path.write_text(
+            "enabled: true\nclient_id: abc\nclient_secret: def\naccess_token: old_access\n"
+            "refresh_token: old_refresh\nexport:\n  auto_sync: false\n  user_mode: mapping\n"
+        )
+
+        save_trakt_tokens(str(trakt_path), "new_access", "new_refresh", 1700000000, 7776000)
+
+        result = yaml.safe_load(trakt_path.read_text())
+        assert result["access_token"] == "new_access"
+        assert result["refresh_token"] == "new_refresh"
+        assert result["token_created_at"] == 1700000000
+        assert result["token_expires_in"] == 7776000
+        # Every other key untouched.
+        assert result["enabled"] is True
+        assert result["client_id"] == "abc"
+        assert result["client_secret"] == "def"
+        assert result["export"] == {"auto_sync": False, "user_mode": "mapping"}
+
+    def test_omits_created_at_expires_in_when_not_given(self, tmp_path):
+        from utils.trakt import save_trakt_tokens
+
+        trakt_path = tmp_path / "trakt.yml"
+        trakt_path.write_text("access_token: old\nrefresh_token: old\n")
+
+        save_trakt_tokens(str(trakt_path), "new_access", "new_refresh")
+
+        result = yaml.safe_load(trakt_path.read_text())
+        assert "token_created_at" not in result
+        assert "token_expires_in" not in result
+
+    def test_write_is_atomic_no_leftover_temp_file(self, tmp_path):
+        from utils.trakt import save_trakt_tokens
+
+        trakt_path = tmp_path / "trakt.yml"
+        trakt_path.write_text("access_token: old\nrefresh_token: old\n")
+
+        save_trakt_tokens(str(trakt_path), "new_access", "new_refresh")
+
+        leftover = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp-")]
+        assert leftover == []
+        assert trakt_path.exists()
+
+    def test_hardens_permissions(self, tmp_path):
+        from utils.trakt import save_trakt_tokens
+
+        trakt_path = tmp_path / "trakt.yml"
+        trakt_path.write_text("access_token: old\nrefresh_token: old\n")
+
+        save_trakt_tokens(str(trakt_path), "new_access", "new_refresh")
+
+        if os.name != "nt":
+            mode = trakt_path.stat().st_mode & 0o777
+            assert mode == 0o600
+
+    def test_raises_and_leaves_original_file_untouched_on_bad_target_dir(self, tmp_path):
+        """A write failure (e.g. the temp file can't be created) must
+        raise - not silently succeed - so create_trakt_client's
+        token_callback can log it instead of pretending persistence
+        worked."""
+        from utils.trakt import save_trakt_tokens
+
+        trakt_path = tmp_path / "missing_dir" / "trakt.yml"
+        with pytest.raises(OSError):
+            save_trakt_tokens(str(trakt_path), "new_access", "new_refresh")
 
 
 class TestCreateTraktClient:
@@ -385,6 +605,82 @@ class TestCreateTraktClient:
         assert isinstance(result, TraktClient)
         assert result.client_id == "test_id"
         assert result.access_token == "token"
+
+    def test_reads_created_at_and_expires_in_from_config(self):
+        config = {
+            "trakt": {
+                "enabled": True,
+                "client_id": "test_id",
+                "client_secret": "test_secret",
+                "access_token": "token",
+                "refresh_token": "refresh",
+                "token_created_at": 1700000000,
+                "token_expires_in": 7776000,
+            }
+        }
+        result = create_trakt_client(config)
+
+        assert result.created_at == 1700000000
+        assert result.expires_in == 7776000
+
+    @patch("utils.trakt.save_trakt_tokens")
+    @patch("utils.trakt.get_project_root")
+    def test_token_callback_persists_via_save_trakt_tokens(self, mock_project_root, mock_save):
+        """#trakt-token-refresh-persistence: create_trakt_client's
+        token_callback is now wired to actually persist a refreshed
+        token (previously no callback was passed at all, so a refresh
+        during a normal run was never saved anywhere - and since Trakt
+        rotates refresh tokens single-use, the NEXT run then replayed an
+        already-consumed one)."""
+        mock_project_root.return_value = os.path.join("fake", "project", "root")
+        config = {
+            "trakt": {
+                "enabled": True,
+                "client_id": "test_id",
+                "client_secret": "test_secret",
+                "access_token": "token",
+                "refresh_token": "refresh",
+            }
+        }
+        client = create_trakt_client(config)
+        assert client.token_callback is not None
+
+        client.token_callback("new_access", "new_refresh", 1700000000, 7776000)
+
+        mock_save.assert_called_once_with(
+            os.path.join("fake", "project", "root", "config", "trakt.yml"),
+            "new_access",
+            "new_refresh",
+            1700000000,
+            7776000,
+        )
+
+    @patch("utils.trakt.log_error")
+    @patch("utils.trakt.save_trakt_tokens")
+    @patch("utils.trakt.get_project_root")
+    def test_token_callback_persistence_failure_is_logged_not_raised(
+        self, mock_project_root, mock_save, mock_log_error
+    ):
+        """A disk-level failure while persisting a refreshed token must
+        never crash the run that triggered the refresh - the refreshed
+        token still works in memory for the rest of this process."""
+        mock_project_root.return_value = os.path.join("fake", "project", "root")
+        mock_save.side_effect = OSError("disk full")
+        config = {
+            "trakt": {
+                "enabled": True,
+                "client_id": "test_id",
+                "client_secret": "test_secret",
+                "access_token": "token",
+                "refresh_token": "refresh",
+            }
+        }
+        client = create_trakt_client(config)
+
+        client.token_callback("new_access", "new_refresh", None, None)  # must not raise
+
+        mock_log_error.assert_called_once()
+        assert "disk full" in mock_log_error.call_args[0][0]
 
 
 class TestRevokeToken:
@@ -473,6 +769,33 @@ class TestTraktClientUserInfo:
         result = client.get_username()
 
         assert result is None
+
+    @patch("utils.trakt.log_warning")
+    def test_get_username_logs_real_auth_failure_cause(self, mock_log_warning):
+        """#trakt-token-refresh-persistence: a TraktAuthError (e.g. "Failed
+        to refresh Trakt token" from a rejected refresh) must be logged,
+        not silently discarded - previously this collapsed straight to
+        None with zero indication a refresh was even attempted, turning
+        into the misleading "Cannot get lists: not authenticated" at
+        every calling site with no way to tell a real refresh failure
+        apart from simply never having authenticated at all."""
+        client = TraktClient("id", "secret", access_token="token")
+        with patch.object(client, "get_user_settings", side_effect=TraktAuthError("Failed to refresh Trakt token")):
+            result = client.get_username()
+
+        assert result is None
+        mock_log_warning.assert_called_once()
+        assert "Failed to refresh Trakt token" in mock_log_warning.call_args[0][0]
+
+    @patch("utils.trakt.log_warning")
+    def test_get_username_logs_real_api_error_cause(self, mock_log_warning):
+        client = TraktClient("id", "secret", access_token="token")
+        with patch.object(client, "get_user_settings", side_effect=TraktAPIError("Trakt API error 500: boom")):
+            result = client.get_username()
+
+        assert result is None
+        mock_log_warning.assert_called_once()
+        assert "500" in mock_log_warning.call_args[0][0]
 
 
 class TestTraktClientListManagement:

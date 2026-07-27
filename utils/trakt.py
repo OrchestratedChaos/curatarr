@@ -7,12 +7,16 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
+import yaml
 
 from .api_client import BaseAPIClient
+from .display import log_error, log_warning
+from .helpers import get_project_root, harden_file_permissions
 from .metrics import record_api_call
 
 logger = logging.getLogger("curatarr")
@@ -20,6 +24,22 @@ logger = logging.getLogger("curatarr")
 # Trakt API endpoints
 TRAKT_API_URL = "https://api.trakt.tv"
 TRAKT_AUTH_URL = "https://trakt.tv"
+
+# Out-of-band redirect_uri for non-web (device-code/PIN) OAuth flows -
+# the OAuth 2.0 standard placeholder value, and what PyTrakt (the
+# reference third-party Trakt client) sends on both the authorization
+# and refresh grant - see its trakt/core.py REDIRECT_URI constant.
+# Trakt's own documented /oauth/token body includes redirect_uri on a
+# refresh_token grant; curatarr's device-code flow never establishes
+# one of its own (device auth doesn't use it), so this is the value to
+# send instead of omitting the field entirely.
+TRAKT_OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
+
+# How long before Trakt's own reported token expiry to proactively
+# refresh (see TraktClient._access_token_expired) rather than waiting
+# for a reactive 401 - covers clock skew and a request already in
+# flight when the token crosses its exact expiry instant.
+TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS = 300
 
 # Rate limiting: 0.2s delay (5 req/sec, well under 1000/5min limit)
 TRAKT_RATE_LIMIT_DELAY = 0.2
@@ -75,7 +95,9 @@ class TraktClient(BaseAPIClient):
         client_secret: str,
         access_token: Optional[str] = None,
         refresh_token: Optional[str] = None,
-        token_callback: Optional[Callable[[str, str], None]] = None,
+        created_at: Optional[int] = None,
+        expires_in: Optional[int] = None,
+        token_callback: Optional[Callable[[str, str, Optional[int], Optional[int]], None]] = None,
     ):
         """
         Initialize Trakt client.
@@ -85,19 +107,50 @@ class TraktClient(BaseAPIClient):
             client_secret: Trakt API application client secret
             access_token: Existing access token (optional)
             refresh_token: Existing refresh token (optional)
-            token_callback: Function to call when tokens are updated (for saving)
+            created_at: Unix timestamp the current access_token was issued
+                at (Trakt's token-grant response field of the same name -
+                previously discarded; see _access_token_expired below for
+                why this is tracked now)
+            expires_in: Seconds the current access_token is valid for from
+                created_at (also a token-grant response field, previously
+                discarded)
+            token_callback: Called with (access_token, refresh_token,
+                created_at, expires_in) whenever a token grant/refresh
+                succeeds, so the caller can persist the rotated tokens
+                (see create_trakt_client's token_callback - without this,
+                a refreshed token lives only in this process's memory,
+                and since Trakt rotates refresh tokens single-use, the
+                NEXT run replays an already-consumed one and fails)
         """
         super().__init__()
         self.client_id = client_id
         self.client_secret = client_secret
         self.access_token = access_token
         self.refresh_token = refresh_token
+        self.created_at = created_at
+        self.expires_in = expires_in
         self.token_callback = token_callback
 
     @property
     def is_authenticated(self) -> bool:
         """Check if client has valid tokens."""
         return self.access_token is not None
+
+    def _access_token_expired(self) -> bool:
+        """True if created_at/expires_in are both known and the access
+        token is at or within TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS of
+        Trakt's reported expiry - used to refresh proactively (see
+        _make_request) instead of only reactively on an actual 401.
+
+        False whenever either value is unknown (e.g. a trakt.yml
+        written before this was tracked, or a client constructed without
+        them) - never invents an expiry, and every existing install
+        falls back to exactly today's reactive-only behavior until its
+        next real token grant/refresh populates both.
+        """
+        if not self.created_at or not self.expires_in:
+            return False
+        return time.time() >= (self.created_at + self.expires_in - TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS)
 
     def _get_headers(self, authenticated: bool = True) -> Dict[str, str]:
         """Get headers for API requests."""
@@ -133,6 +186,18 @@ class TraktClient(BaseAPIClient):
             TraktAPIError: If still rate limited (429) after
                 TRAKT_MAX_429_RETRIES retries, or on any other API error.
         """
+        # Proactive refresh (#trakt-token-refresh-persistence): if we
+        # know this token is at/past its reported expiry, refresh BEFORE
+        # sending the request rather than waiting for Trakt to reject it
+        # with a 401 first. Best-effort only - if it fails, fall through
+        # and let the existing reactive 401-retry below handle it exactly
+        # as before (this is purely an optimization to avoid a guaranteed
+        # wasted round-trip, never a behavior curatarr depends on for
+        # correctness).
+        if authenticated and retry_auth and self.access_token and self.refresh_token and self._access_token_expired():
+            logger.info("Trakt token nearing/at expiry, refreshing proactively...")
+            self._refresh_access_token()
+
         url = f"{TRAKT_API_URL}{endpoint}"
         headers = self._get_headers(authenticated)
 
@@ -233,10 +298,16 @@ class TraktClient(BaseAPIClient):
                 data = response.json()
                 self.access_token = data["access_token"]
                 self.refresh_token = data["refresh_token"]
+                # Distinct names from this method's own `expires_in`
+                # parameter (the device-code polling window) - this is
+                # the ACCESS TOKEN's lifetime, a same-named but unrelated
+                # field on the token-grant response.
+                self.created_at = data.get("created_at")
+                self.expires_in = data.get("expires_in")
 
                 # Notify callback to save tokens
                 if self.token_callback:
-                    self.token_callback(self.access_token, self.refresh_token)
+                    self.token_callback(self.access_token, self.refresh_token, self.created_at, self.expires_in)
 
                 return True
 
@@ -284,6 +355,14 @@ class TraktClient(BaseAPIClient):
                     "client_id": self.client_id,
                     "client_secret": self.client_secret,
                     "grant_type": "refresh_token",
+                    # Trakt's documented /oauth/token body includes
+                    # redirect_uri on a refresh_token grant (PyTrakt sends
+                    # this too - see TRAKT_OOB_REDIRECT_URI's own comment).
+                    # Previously omitted entirely; suspected (not yet
+                    # confirmed against a real refresh at the time this
+                    # was written) to be why every refresh attempt in the
+                    # retained log window failed.
+                    "redirect_uri": TRAKT_OOB_REDIRECT_URI,
                 },
                 headers={"Content-Type": "application/json"},
                 timeout=TRAKT_REQUEST_TIMEOUT,
@@ -294,17 +373,28 @@ class TraktClient(BaseAPIClient):
                 data = response.json()
                 self.access_token = data["access_token"]
                 self.refresh_token = data["refresh_token"]
+                self.created_at = data.get("created_at")
+                self.expires_in = data.get("expires_in")
 
                 # Notify callback to save tokens
                 if self.token_callback:
-                    self.token_callback(self.access_token, self.refresh_token)
+                    self.token_callback(self.access_token, self.refresh_token, self.created_at, self.expires_in)
 
                 logger.info("Trakt token refreshed successfully")
                 return True
 
+            # Log status + body (redacted by log_error - see
+            # utils/display.py) so a refresh failure is actually
+            # diagnosable instead of silently collapsing to a bare
+            # False that every caller already treats identically to
+            # "no refresh token configured" - see _make_request's
+            # "Failed to refresh Trakt token" TraktAuthError, which
+            # previously carried no detail about WHY.
+            log_error(f"Trakt token refresh failed: HTTP {response.status_code}: {response.text}")
             return False
 
-        except requests.RequestException:
+        except requests.RequestException as e:
+            log_error(f"Trakt token refresh request failed: {e}")
             return False
 
     def revoke_token(self) -> bool:
@@ -345,11 +435,25 @@ class TraktClient(BaseAPIClient):
         return self._make_request("GET", "/users/settings")
 
     def get_username(self) -> Optional[str]:
-        """Get authenticated user's username."""
+        """Get authenticated user's username.
+
+        Returns None on any failure (every caller below already treats
+        None as "not authenticated" and reports its own generic message)
+        - but the REAL cause is logged first rather than silently
+        discarded, since a TraktAuthError here is very often "the token
+        refresh this request triggered just failed" (see _make_request),
+        which used to come out as the misleading "Cannot get lists: not
+        authenticated" with zero indication that a refresh was even
+        attempted, let alone why it failed.
+        """
         try:
             settings = self.get_user_settings()
             return settings.get("user", {}).get("username")
-        except (TraktAPIError, TraktAuthError):
+        except TraktAuthError as e:
+            log_warning(f"Trakt get_username failed (authentication): {e}")
+            return None
+        except TraktAPIError as e:
+            log_warning(f"Trakt get_username failed (API error): {e}")
             return None
 
     # =========================================================================
@@ -847,6 +951,89 @@ class TraktClient(BaseAPIClient):
         return self._make_request("GET", endpoint + params, authenticated=False)
 
 
+def save_trakt_tokens(
+    trakt_path: str,
+    access_token: str,
+    refresh_token: str,
+    created_at: Optional[int] = None,
+    expires_in: Optional[int] = None,
+) -> None:
+    """
+    Persist rotated Trakt tokens to trakt.yml.
+
+    The single, shared implementation TraktClient's own runtime
+    token_callback (see create_trakt_client below) AND utils/trakt_auth.py's
+    manual `python3 utils/trakt_auth.py` device-auth flow both call -
+    previously duplicated (trakt_auth.py had its own copy; create_trakt_client
+    passed no callback at all, so a refreshed token during a normal
+    recommender run was never saved anywhere - Trakt rotates refresh
+    tokens single-use, so the NEXT run then replayed an already-consumed
+    one and failed).
+
+    Atomic (temp file in the same directory + os.replace) so a crash
+    mid-write, or two recommenders (movie.py/tv.py, or a web-UI-triggered
+    run racing a cron run) refreshing at close to the same moment, can
+    never truncate/corrupt the file a third reader might load at the
+    same time. Permissions are re-hardened after every write
+    (harden_file_permissions) since this file holds live OAuth
+    credentials.
+
+    Every OTHER key/section in trakt.yml (export/import/discovery
+    settings, comments) survives untouched, since the file is read into
+    a dict first and only these specific keys are set on it - EXCEPT
+    comments specifically: this uses plain pyyaml, not ruamel.yaml's
+    round-trip mode (config_io.load_module/save_module's approach for
+    the web UI's own config-save routes), because ruamel.yaml is a
+    requirements-ui.txt-only dependency and this path runs on every
+    plain CLI/cron install (requirements.txt only, no UI stack) - adding
+    it here would mean every install pulls in the heavier UI dependency
+    just to keep a token refresh's rewrite comment-preserving. Comments
+    in trakt.yml are therefore NOT preserved across an automatic token
+    refresh (they already weren't across a manual `trakt_auth.py`
+    re-auth, before this change hoisted that script's own save_tokens
+    into this one shared function).
+
+    Args:
+        trakt_path: Full path to config/trakt.yml
+        access_token: New access token to save
+        refresh_token: New (rotated) refresh token to save
+        created_at: Unix timestamp the new access_token was issued at,
+            if known (see TraktClient.created_at) - stored as
+            token_created_at
+        expires_in: Seconds the new access_token is valid for, if known
+            (see TraktClient.expires_in) - stored as token_expires_in
+
+    Raises:
+        OSError: if trakt_path can't be read or the atomic write fails -
+            callers (create_trakt_client's token_callback below) catch
+            this so a persistence failure never crashes the run that
+            triggered the refresh; the refreshed tokens still work for
+            the REST of this process's lifetime either way, exactly as
+            before this function existed.
+    """
+    directory = os.path.dirname(trakt_path) or "."
+    with open(trakt_path, "r", encoding="utf-8") as f:
+        trakt_config = yaml.safe_load(f) or {}
+
+    trakt_config["access_token"] = access_token
+    trakt_config["refresh_token"] = refresh_token
+    if created_at is not None:
+        trakt_config["token_created_at"] = created_at
+    if expires_in is not None:
+        trakt_config["token_expires_in"] = expires_in
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", suffix=".yml", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.dump(trakt_config, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp_path, trakt_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    harden_file_permissions(trakt_path)
+
+
 def create_trakt_client(config: Dict) -> Optional[TraktClient]:
     """
     Create a TraktClient from config, if enabled.
@@ -871,9 +1058,36 @@ def create_trakt_client(config: Dict) -> Optional[TraktClient]:
 
     access_token = trakt_config.get("access_token")
     refresh_token = trakt_config.get("refresh_token")
+    created_at = trakt_config.get("token_created_at")
+    expires_in = trakt_config.get("token_expires_in")
+
+    trakt_path = os.path.join(get_project_root(), "config", "trakt.yml")
+
+    def _persist_refreshed_tokens(
+        new_access_token: str,
+        new_refresh_token: str,
+        new_created_at: Optional[int] = None,
+        new_expires_in: Optional[int] = None,
+    ) -> None:
+        try:
+            save_trakt_tokens(trakt_path, new_access_token, new_refresh_token, new_created_at, new_expires_in)
+        except OSError as e:
+            # Persistence failing must never crash the run that
+            # triggered the refresh - the refreshed token still works
+            # in memory for the rest of THIS process either way. Logged
+            # loud (error, not warning) since this is exactly the
+            # failure mode that made refreshed tokens a one-way trapdoor
+            # before this function existed - it must never go silent again.
+            log_error(f"Could not persist refreshed Trakt tokens to {trakt_path}: {e}")
 
     return TraktClient(
-        client_id=client_id, client_secret=client_secret, access_token=access_token, refresh_token=refresh_token
+        client_id=client_id,
+        client_secret=client_secret,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        created_at=created_at,
+        expires_in=expires_in,
+        token_callback=_persist_refreshed_tokens,
     )
 
 
