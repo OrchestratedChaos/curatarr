@@ -636,7 +636,7 @@ class TestInitPlex:
 
         config = {"plex": {"url": "http://localhost:32400", "token": "test_token"}}
 
-        with pytest.raises(Exception):
+        with pytest.raises(requests.RequestException, match="Connection refused"):
             init_plex(config)
 
         mock_log.assert_called_once()

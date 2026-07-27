@@ -201,7 +201,8 @@ def main():
         server_log_file.close()
         with open(server_log_path) as f:
             print(
-                f"[{args.scenario}] fake release server exited immediately (code {server_proc.returncode}):\n{f.read()}",
+                f"[{args.scenario}] fake release server exited immediately "
+                f"(code {server_proc.returncode}):\n{f.read()}",
                 flush=True,
             )
         raise SystemExit(f"[{args.scenario}] FAIL: fake release server never started")

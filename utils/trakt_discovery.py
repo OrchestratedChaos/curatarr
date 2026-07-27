@@ -337,7 +337,7 @@ def discover_from_trakt(
     anticipated_limit = discovery_config.get("anticipated_limit", DEFAULT_ANTICIPATED_LIMIT)
     recommendations_limit = discovery_config.get("recommendations_limit", DEFAULT_RECOMMENDATIONS_LIMIT)
 
-    results = {"trending": [], "popular": [], "anticipated": [], "recommendations": []}
+    results: Dict[str, List[Dict]] = {"trending": [], "popular": [], "anticipated": [], "recommendations": []}
 
     def filter_items(items: List[Dict]) -> List[Dict]:
         """Remove excluded items."""
@@ -413,7 +413,7 @@ def get_trakt_discovery_candidates(
         config, media_type, cache_dir, exclude_tmdb_ids=library_tmdb_ids, exclude_imdb_ids=exclude_imdb_ids
     )
 
-    candidates = {}
+    candidates: Dict[int, Any] = {}
 
     # Process each source with source attribution and tier priority
     for source, items in discovery.items():

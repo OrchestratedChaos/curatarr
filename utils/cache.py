@@ -9,7 +9,7 @@ import logging
 import os
 import tempfile
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from .config import CACHE_VERSION, check_cache_version
 from .display import log_warning
@@ -94,7 +94,12 @@ def load_media_cache(cache_path: str, media_key: str = "movies") -> Dict:
     Returns:
         Cache dictionary with media items, or empty structure if invalid/missing
     """
-    empty_cache = {media_key: {}, "last_updated": None, "library_count": 0, "cache_version": CACHE_VERSION}
+    empty_cache: Dict[str, Any] = {
+        media_key: {},
+        "last_updated": None,
+        "library_count": 0,
+        "cache_version": CACHE_VERSION,
+    }
 
     if not check_cache_version(cache_path, f"{media_key.title()} cache"):
         record_cache_lookup("miss")

@@ -198,7 +198,7 @@ class TestPlexTVRecommenderInit:
         mock_plex.return_value = mock_plex_inst
         mock_cache.return_value = Mock(cache={"shows": {}})
 
-        recommender = PlexTVRecommender("/path/to/config.yml")
+        PlexTVRecommender("/path/to/config.yml")
 
         mock_cache.assert_called_once()
 

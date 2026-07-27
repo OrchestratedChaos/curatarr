@@ -165,7 +165,7 @@ class TestPlexMovieRecommenderInit:
         mock_plex.return_value = Mock()
         mock_cache.return_value = Mock(cache={"movies": {}})
 
-        recommender = PlexMovieRecommender("/path/to/config.yml")
+        PlexMovieRecommender("/path/to/config.yml")
 
         mock_cache.assert_called_once()
 

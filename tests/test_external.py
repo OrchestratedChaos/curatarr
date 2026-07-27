@@ -39,6 +39,7 @@ from recommenders.external import (
     generate_combined_html,
     get_collection_details,
     get_imdb_id,
+    get_library_items,
     get_movie_genre_ids,
     get_movie_status,
     get_tmdb_id_from_imdb,
@@ -48,6 +49,7 @@ from recommenders.external import (
     load_cache,
     load_horizon_cache,
     load_huntarr_cache,
+    load_ignore_list,
     process_user,
     process_user_movie_library,
     process_user_tv_library,
@@ -274,7 +276,8 @@ class TestGenerateCombinedHtml:
     """Tests for generate_combined_html function"""
 
     def test_generates_html_file(self):
-        mock_get_imdb = lambda api_key, tmdb_id, media_type: "tt1234567"
+        def mock_get_imdb(api_key, tmdb_id, media_type):
+            return "tt1234567"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_movie = {
@@ -315,7 +318,8 @@ class TestGenerateCombinedHtml:
                 assert "Watchlist" in content
 
     def test_html_contains_tabs_for_multiple_users(self):
-        mock_get_imdb = lambda api_key, tmdb_id, media_type: "tt1234567"
+        def mock_get_imdb(api_key, tmdb_id, media_type):
+            return "tt1234567"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             all_users_data = [
@@ -342,7 +346,8 @@ class TestGenerateCombinedHtml:
                 assert "tab-btn" in content
 
     def test_html_contains_export_buttons(self):
-        mock_get_imdb = lambda api_key, tmdb_id, media_type: "tt1234567"
+        def mock_get_imdb(api_key, tmdb_id, media_type):
+            return "tt1234567"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             all_users_data = [
@@ -364,7 +369,8 @@ class TestGenerateCombinedHtml:
                 assert "exportSonarr()" in content
 
     def test_html_checkboxes_unchecked_by_default(self):
-        mock_get_imdb = lambda api_key, tmdb_id, media_type: "tt1234567"
+        def mock_get_imdb(api_key, tmdb_id, media_type):
+            return "tt1234567"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_movie = {
@@ -463,13 +469,6 @@ class TestTmdbProviders:
     def test_contains_disney_plus(self):
         assert 337 in TMDB_PROVIDERS
         assert TMDB_PROVIDERS[337] == "disney_plus"
-
-
-# Import additional functions for testing
-from recommenders.external import (
-    get_library_items,
-    load_ignore_list,
-)
 
 
 class TestGetLibraryItems:

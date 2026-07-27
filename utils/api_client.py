@@ -309,16 +309,16 @@ class BaseAPIClient:
             try:
                 read_response_capped(response)
             except ValueError as e:
-                raise self.exception_class(f"{self.api_name} response rejected: {e}")
+                raise self.exception_class(f"{self.api_name} response rejected: {e}") from e
             result = self._handle_response(response)
             outcome = "success"
             return result
 
-        except requests.exceptions.Timeout:
-            raise self.exception_class(f"Request timeout after {self.request_timeout}s")
-        except requests.exceptions.ConnectionError:
-            raise self.exception_class(f"Could not connect to {self.api_name}")
+        except requests.exceptions.Timeout as e:
+            raise self.exception_class(f"Request timeout after {self.request_timeout}s") from e
+        except requests.exceptions.ConnectionError as e:
+            raise self.exception_class(f"Could not connect to {self.api_name}") from e
         except requests.exceptions.RequestException as e:
-            raise self.exception_class(f"Request failed: {e}")
+            raise self.exception_class(f"Request failed: {e}") from e
         finally:
             record_api_call(self.api_name.lower(), outcome, time.time() - request_start)

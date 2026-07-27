@@ -152,6 +152,74 @@ def _isolated_metrics_dir(tmp_path_factory, monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_recommender_cache_dir(tmp_path_factory, monkeypatch):
+    """Same reasoning as _isolated_metrics_dir above, for
+    recommenders/base.py's BaseRecommender.__init__ (self.cache_dir =
+    get_project_root() + config['cache_dir']) and recommenders/
+    external.py's several standalone functions that resolve cache_dir
+    the same way - both hold their OWN `from utils import
+    get_project_root` name binding (same reason the three fixtures
+    above each patch their own consuming module rather than
+    utils.helpers.get_project_root itself - patching the origin
+    wouldn't touch a binding another module already copied at import
+    time).
+
+    Without this, any test that constructs a real (unmocked)
+    PlexMovieRecommender/PlexTVRecommender, or calls one of
+    recommenders/external.py's real cache-dir-resolving functions,
+    writes REAL watched_cache_plex_<user>.json /
+    tv_watched_cache_plex_<user>.json / external_recs_*.json files into
+    the real repo's cache/ directory - this is exactly how fake test
+    usernames (plex_bob, plex_user1, anime_plex_user1) ended up in the
+    live cache/ dir: tests/test_tv.py in particular never overrode
+    get_project_root at all before this fixture existed.
+
+    Still honors CURATARR_CONFIG_DIR (falls through to the real
+    override-branch behavior) rather than unconditionally replacing
+    get_project_root with a fixed path, so this can't break the tests
+    that deliberately exercise the REAL cache_dir resolution logic
+    against an explicit CURATARR_CONFIG_DIR (tests/test_base.py's
+    TestBaseRecommenderCacheDirResolution, tests/test_movie.py's
+    TestLibraryFetchedOnceNotSixTimes) - those still get the directory
+    THEY set, not this fixture's fallback tmp_path. Tests that
+    specifically exercise recommenders/external.py's own cache-dir
+    handling already patch recommenders.external.get_project_root
+    themselves per-test (see tests/test_external.py); this is a
+    safety net for the many that don't.
+
+    ALSO no-ops recommenders.base.migrate_legacy_cache_dir - discovered
+    the hard way while building this exact fixture: with get_project_root
+    faked out but migrate_legacy_cache_dir left real,
+    BaseRecommender.__init__'s own legacy_cache_dir (computed straight
+    off recommenders/base.py's __file__, bypassing get_project_root
+    entirely by design - see that function's docstring) still resolves
+    to the REAL repo cache/ directory, which the real
+    migrate_legacy_cache_dir would then treat as "legacy" relative to
+    this fixture's fake new_dir and shutil.move() every real file in it
+    into a throwaway tmp_path - silently DELETING real cache/ contents
+    on every test run that constructs a recommender, not just
+    preventing new writes. tests/test_helpers.py's own
+    migrate_legacy_cache_dir tests call the function directly (a
+    different name binding - see above), so they're unaffected;
+    tests/test_base.py already mocks this itself in every test that
+    needs to (its own @patch layers on top of this, same convention as
+    every other fixture here).
+    """
+    fallback_root = str(tmp_path_factory.mktemp("recommender_cache"))
+
+    def _fake_get_project_root():
+        override = os.environ.get("CURATARR_CONFIG_DIR")
+        if override:
+            os.makedirs(override, exist_ok=True)
+            return override
+        return fallback_root
+
+    monkeypatch.setattr("recommenders.base.get_project_root", _fake_get_project_root)
+    monkeypatch.setattr("recommenders.external.get_project_root", _fake_get_project_root)
+    monkeypatch.setattr("recommenders.base.migrate_legacy_cache_dir", lambda legacy_dir, new_dir: None)
+
+
 _FAKE_MOVIE_PY = """\
 import os
 import sys

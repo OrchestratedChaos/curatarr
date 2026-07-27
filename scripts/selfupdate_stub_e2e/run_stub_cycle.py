@@ -107,7 +107,7 @@ def launch_handoff_script(old_pid, current_exe_path, new_asset_path, port, targe
 
     env = dict(os.environ)
     if debug_log:
-        with open(debug_log, "ab") as f:
+        with open(debug_log, "ab"):
             pass
         popen_kwargs["stdout"] = open(debug_log, "ab")
         popen_kwargs["stderr"] = subprocess.STDOUT

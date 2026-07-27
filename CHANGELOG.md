@@ -2,6 +2,86 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.31] - 2026-07-26
+
+### Changed
+
+- **Lint and test-hygiene debt: `ruff check` clean, mypy reduced, real cache-dir test leak fixed.**
+
+  - `ruff check` was at 126 violations; all fixed or explicitly disabled
+    with a documented reason, and CI's `lint` job's `ruff check` step is
+    now blocking (its `continue-on-error` is removed, matching `ruff
+    format --check`'s own precedent from 2.10.14):
+    - `F401` (6 - the DANGEROUS ones): every one confirmed live by
+      grepping all callers, including tests, before touching anything -
+      `recommenders/external.py`'s `sync_watch_history_to_trakt`
+      (imported by `trakt_sync.py`'s entry point),
+      `SERVICE_DISPLAY_NAMES`/`get_tmdb_id_from_imdb` (imported by
+      `tests/test_external.py`), and `web/config_test_connection.py`'s
+      `RadarrAPIError`/`SonarrAPIError`/`TautulliAPIError` (imported by
+      `tests/test_web_config_test_connection.py` via its `cc` alias) are
+      all cross-module re-exports. Fixed with an explicit `__all__` in
+      each module (not deletion - see the [2.10.14] entry on a prior
+      `ruff --fix` pass that deleted six "unused" imports outright and
+      broke the suite).
+    - `E501` (57): mechanically split long `print()`/`log_warning()`/
+      `logger.debug()` f-string messages across adjacent string
+      literals (identical message content, just wrapped). The
+      `recommenders/external_render.py` (embedded HTML/CSS/JS template
+      strings) and `utils/self_update_handoff.py` (embedded PowerShell/
+      shell handoff scripts) cases are markup/script content, not
+      Python - wrapping those to fit the 120-column convention risks
+      altering the generated output for no readability gain, so both
+      get a one-line-justified `ruff.toml` per-file ignore instead. Two
+      `# pragma: no cover` explanatory comments (`curatarr_app.py` x2,
+      `web/update_apply.py`) that must stay on their annotated line get
+      a targeted `# noqa: E501` instead, matching `tests/harness.py`'s
+      existing precedent - a per-file ignore would be too broad for two
+      one-off lines in otherwise fully-compliant files.
+    - `F841`, `E402`, `B904`, `E731`, `B007`, `E741`, `B017`: fixed for
+      real (dropped pointless variable assignments while keeping the
+      exercised call, added `from e`/`from None` exception chaining,
+      rewrote test-only lambdas as `def`s, renamed genuinely-unused loop
+      variables to `_`-prefixed, renamed ambiguous `l` to a descriptive
+      name, narrowed one `pytest.raises(Exception)` to the specific
+      type actually raised).
+  - `mypy` (non-strict, still non-blocking in CI): reduced from 233 to
+    180 errors by adding explicit type annotations to every `[var-
+    annotated]` finding (44 of them) - a purely additive fix (no
+    runtime behavior change) that mypy can't infer on its own for a
+    dict/list/set literal. The remaining ~180 (mostly `[assignment]`/
+    `[attr-defined]`/`[str]`) are left for a future pass; this codebase
+    is only partially annotated by design.
+  - Tests were leaking fake per-user cache files (`tv_watched_cache_
+    plex_bob.json`, `tv_watched_cache_plex_user1.json`, `tv_watched_
+    cache_anime_plex_user1.json`) into the REAL `cache/` directory:
+    `recommenders/base.py`'s `BaseRecommender.__init__` and several
+    `recommenders/external.py` functions resolve `cache_dir` via
+    `get_project_root()` (`@lru_cache`'d), and most tests never
+    override `CURATARR_CONFIG_DIR` or mock it - `tests/test_tv.py` in
+    particular never did at all. Fixed with an autouse
+    `_isolated_recommender_cache_dir` fixture in `tests/conftest.py`,
+    matching the existing `_isolated_update_dismissal_dir`/
+    `_isolated_metrics_dir` pattern (patches the *consuming* module's
+    own `get_project_root` name binding, not the shared origin - each
+    importer copied its own reference at import time). Still honors an
+    explicitly-set `CURATARR_CONFIG_DIR` so it can't break the two
+    tests that deliberately exercise the real resolution logic against
+    one. Also discovered and fixed a related, more serious bug while
+    building this: with only `get_project_root` faked out,
+    `recommenders/base.py`'s `migrate_legacy_cache_dir` call (whose
+    `legacy_dir` argument bypasses `get_project_root()` by design, so it
+    still resolved to the REAL repo `cache/` directory) would treat that
+    real directory as "legacy" relative to the fixture's fake `new_dir`
+    and `shutil.move()` every real file out of it into a throwaway
+    `tmp_path` on every test run - silently deleting real cache/
+    contents, not just stopping new writes. The fixture also no-ops
+    `recommenders.base.migrate_legacy_cache_dir` during tests to close
+    that. Verified with a planted canary file that survives a full test
+    run. The three leaked fake-user files above were removed from the
+    real `cache/` directory (confirmed fake by content and username -
+    real users' cache files were never touched).
+
 ## [2.10.30] - 2026-07-26
 
 ### Changed

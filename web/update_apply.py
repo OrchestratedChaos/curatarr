@@ -887,6 +887,6 @@ def run_self_update_worker(argv) -> None:
 
 if (
     __name__ == "__main__"
-):  # pragma: no cover - detached-process entry point; the decision logic it calls (_run_worker and everything it calls) is exercised directly by tests/test_web_update_apply.py, but actually spawning/killing real processes from a unit test is neither safe nor meaningful - see that file's module docstring, matching this repo's existing precedent for excluding OS-process-boundary code (e.g. curatarr_app.py's _attach_or_setup_console).
+):  # pragma: no cover - detached-process entry point; the decision logic it calls (_run_worker and everything it calls) is exercised directly by tests/test_web_update_apply.py, but actually spawning/killing real processes from a unit test is neither safe nor meaningful - see that file's module docstring, matching this repo's existing precedent for excluding OS-process-boundary code (e.g. curatarr_app.py's _attach_or_setup_console).  # noqa: E501
     _args = _parse_worker_args(sys.argv[1:])
     _run_worker(_args.project_root, _args.pid, _args.host, _args.port)

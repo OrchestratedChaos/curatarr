@@ -22,16 +22,15 @@ import plexapi.exceptions
 import plexapi.server
 import requests
 import urllib3
-
-# Module-level logger
-logger = logging.getLogger("curatarr")
-
 from plexapi.myplex import MyPlexAccount
 
 from .config import PLEX_LONG_REQUEST_TIMEOUT, PLEX_REQUEST_TIMEOUT
 from .display import GREEN, RED, RESET, YELLOW, log_error, log_warning
 from .helpers import normalize_title, read_response_capped
 from .metrics import record_api_call
+
+# Module-level logger
+logger = logging.getLogger("curatarr")
 
 
 def _resolve_verify_ssl(config: dict) -> bool:
@@ -312,7 +311,7 @@ def fetch_plex_watch_history_movies(
 
         owner_id = "1"
         all_history_items = []
-        watched_movie_dates = {}
+        watched_movie_dates: Dict[str, Any] = {}
 
         for i, account_id in enumerate(account_ids, 1):
             print(f"  [{i}/{len(account_ids)}] Fetching history for account ID {account_id}...", end="")
@@ -390,8 +389,8 @@ def fetch_plex_watch_history_shows(
     print("")
     print(f"{GREEN}Fetching Plex watch history for {len(account_ids)} user(s)...{RESET}")
 
-    watched_show_ids = set()
-    show_timestamps = {}  # show_id -> latest viewedAt timestamp
+    watched_show_ids: Set[str] = set()
+    show_timestamps: Dict[str, Any] = {}  # show_id -> latest viewedAt timestamp
 
     for account_id in account_ids:
         print("")
@@ -466,9 +465,9 @@ def fetch_show_completion_data(config: Dict, account_ids: List[str], tv_section:
             'last_watched': int (timestamp),
         }
     """
-    show_data = {}
-    show_episodes = {}  # show_id -> set of episode rating keys
-    show_last_watched = {}  # show_id -> most recent viewedAt
+    show_data: Dict[str, Any] = {}
+    show_episodes: Dict[str, Set[int]] = {}  # show_id -> set of episode rating keys
+    show_last_watched: Dict[str, Any] = {}  # show_id -> most recent viewedAt
 
     # Fetch watched episode data from history
     for account_id in account_ids:
@@ -729,7 +728,7 @@ def update_plex_collection(
             try:
                 # Convert Recommended_username to PrivateCollection_username
                 private_label = label_name.replace("Recommended_", "PrivateCollection_")
-                current_labels = [l.tag for l in target_collection.labels]
+                current_labels = [label.tag for label in target_collection.labels]
                 if private_label not in current_labels:
                     target_collection.addLabel(private_label)
             except plexapi.exceptions.PlexApiException as e:
@@ -955,7 +954,7 @@ def extract_genres(item) -> List[str]:
     Returns:
         List of lowercase genre strings
     """
-    genres = []
+    genres: List[str] = []
     try:
         if not hasattr(item, "genres") or not item.genres:
             return genres

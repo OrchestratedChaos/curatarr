@@ -57,14 +57,21 @@ jobs:
     # violation and got `ruff format --check` clean on main, so that
     # step's continue-on-error was removed below - a real formatting
     # regression now fails this job for real, not just in the log.
-    # `ruff check` stays non-blocking: 128 violations remain that are
-    # deliberately NOT auto-fixed (removing them either changes
-    # behavior - see CHANGELOG.md's [2.10.14] entry on the six
-    # cross-module "unused" imports that are actually re-exports relied
-    # on elsewhere - or needs a human judgment call ruff can't make
-    # safely, e.g. an ambiguous variable rename or an `except:` that
-    # legitimately shouldn't chain `from`). `mypy` also stays
-    # non-blocking (255 pre-existing errors, unrelated to this pass -
+    #
+    # A later pass (lint/test-hygiene debt cleanup) worked the
+    # remaining 126 `ruff check` violations down to zero rule-by-rule -
+    # six cross-module "unused" imports that are actually live
+    # re-exports got explicit `__all__` (not deletion - see
+    # recommenders/external.py and web/config_test_connection.py),
+    # genuinely unfixable ones (embedded HTML/PowerShell/shell template
+    # content whose "long lines" are markup/script, not Python) got a
+    # one-line-justified per-file ignore in ruff.toml instead of
+    # sprinkling `# noqa` everywhere, and everything else (unused
+    # variables, ambiguous single-letter names, missing `raise ... from
+    # err`, etc.) was fixed for real. `ruff check`'s continue-on-error
+    # is removed below to match - a real regression now fails this job
+    # for real. `mypy` stays non-blocking (180 pre-existing errors,
+    # reduced from 255 but still unrelated to most day-to-day changes -
     # this codebase is only partially annotated).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -81,7 +88,6 @@ jobs:
           pip install ruff mypy
 
       - name: ruff check
-        continue-on-error: true
         run: ruff check .
 
       - name: ruff format --check

@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import requests
 
@@ -56,7 +56,7 @@ def flatten_categorized(categorized: Dict) -> List[Dict]:
     Returns a flat list of all items.
     """
     items = []
-    for key, value in categorized.items():
+    for _key, value in categorized.items():
         if isinstance(value, dict):  # user_services or other_services
             for service_items in value.values():
                 items.extend(service_items)
@@ -1133,8 +1133,8 @@ def sync_watch_history_to_trakt(
         return
 
     # Load TMDB IDs from cache files (fast - no API calls)
-    all_movie_tmdb_ids = set()
-    all_show_tmdb_ids = set()
+    all_movie_tmdb_ids: Set[int] = set()
+    all_show_tmdb_ids: Set[int] = set()
 
     if load_profile_func is None:
         print("  No profile loader provided - cannot load cached watch history")

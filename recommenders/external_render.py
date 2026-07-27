@@ -6,7 +6,7 @@ Generates markdown watchlists and combined HTML views.
 import html
 import os
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from urllib.parse import quote_plus
 
 from utils.cache import load_json_cache, save_json_cache
@@ -420,8 +420,8 @@ def generate_combined_html(
     imdb_cache = _load_imdb_cache(imdb_cache_path)
 
     # Collect all unique TMDB IDs that need IMDB lookup
-    all_imdb_ids = {}  # tmdb_id -> imdb_id
-    pending_lookups = []  # [(tmdb_id, media_type), ...]
+    all_imdb_ids: Dict[int, str] = {}  # tmdb_id -> imdb_id
+    pending_lookups: List[Tuple[int, str]] = []  # [(tmdb_id, media_type), ...]
 
     for user_data in all_users_data:
         _collect_tmdb_ids_from_categorized(

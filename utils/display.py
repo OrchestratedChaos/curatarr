@@ -8,7 +8,7 @@ import logging
 import re
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from .redact import redact
 
@@ -493,7 +493,7 @@ def user_select_recommendations(recommendations: List[Dict], operation_label: st
         return recommendations
 
     # Parse selection
-    selected_indices = set()
+    selected_indices: Set[int] = set()
     for part in choice.replace(" ", "").split(","):
         if "-" in part:
             try:

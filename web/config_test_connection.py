@@ -25,6 +25,15 @@ from utils.trakt import TraktClient
 
 from .security import redact
 
+# RadarrAPIError/SonarrAPIError/TautulliAPIError: imported above but never
+# referenced in this module - re-exported for tests to import FROM here
+# (web.config_test_connection, aliased as cc in
+# tests/test_web_config_test_connection.py) rather than from each
+# client's own utils.* module. Confirmed live by grepping every caller
+# before listing here, same convention as recommenders/external.py's
+# own __all__.
+__all__ = ["RadarrAPIError", "SonarrAPIError", "TautulliAPIError"]
+
 logger = logging.getLogger("curatarr")
 
 

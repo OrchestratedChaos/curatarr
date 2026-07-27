@@ -46,6 +46,24 @@ select = [
 # workaround.
 "utils/__init__.py" = ["F401"]
 
+# recommenders/external_render.py generates the external watchlist's HTML
+# page (recommenders/movie.py's/tv.py's counterparts render markdown, not
+# markup) via large embedded HTML/CSS/JS template strings - those lines
+# are markup, not Python control flow, and splitting a long <label>/
+# <button>/... tag across lines to satisfy the 120-column convention
+# would risk altering the generated HTML (e.g. injecting whitespace into
+# an inline onclick=/style= attribute) for zero readability benefit.
+"recommenders/external_render.py" = ["E501"]
+
+# utils/self_update_handoff.py generates the self-update swap+relaunch
+# handoff scripts (a PowerShell script on Windows, a POSIX shell script
+# elsewhere) as embedded string templates - those lines are shell/
+# PowerShell source, not Python, and the same reasoning as
+# external_render.py above applies: wrapping them to fit Python's line
+# length convention doesn't make the generated script more readable and
+# risks subtly changing it.
+"utils/self_update_handoff.py" = ["E501"]
+
 [lint.isort]
 # This codebase already groups "stdlib, then blank line, then
 # third-party/local" without stdlib/third-party/first-party

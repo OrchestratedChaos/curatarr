@@ -391,7 +391,7 @@ class TestMDBListClientAddItems:
         mock_request.return_value = {"added": 4, "existing": 0, "not_found": 0}
 
         client = MDBListClient("key")
-        result = client.add_items(123, movies=[1, 2], shows=[10, 20])
+        client.add_items(123, movies=[1, 2], shows=[10, 20])
 
         call_data = mock_request.call_args[1]["data"]
         assert len(call_data["movies"]) == 2

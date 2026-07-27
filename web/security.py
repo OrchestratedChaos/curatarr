@@ -21,6 +21,7 @@ import os
 import re
 import threading
 import time
+from typing import Dict, List
 
 from utils.display import log_warning
 from utils.redact import REDACTED, redact, redact_lines
@@ -345,7 +346,7 @@ _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_WINDOW_SECONDS = 60
 
 _login_failures_lock = threading.Lock()
-_login_failures = {}  # {ip: [monotonic timestamp, ...]} of FAILED attempts only
+_login_failures: Dict[str, List[float]] = {}  # {ip: [monotonic timestamp, ...]} of FAILED attempts only
 
 
 def _client_ip(request) -> str:

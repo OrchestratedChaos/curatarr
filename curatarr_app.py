@@ -87,7 +87,7 @@ import sys
 
 def _suppress_windows_crash_dialogs() -> (
     None
-):  # pragma: no cover - real Windows API call, same category as _attach_or_setup_console below (not unit-testable on non-Windows CI)
+):  # pragma: no cover - real Windows API call, same category as _attach_or_setup_console below (not unit-testable on non-Windows CI)  # noqa: E501
     """Call SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
     as the very first thing this process does, on every frozen Windows
     invocation - the normal UI launch, the self-update worker, and any
@@ -149,7 +149,7 @@ def _configure_windowed_launch() -> None:
 
 def _attach_or_setup_console(
     debug: bool,
-) -> None:  # pragma: no cover - real Windows console/ctypes API, exercised by the Windows build test in the release PR, not unit-testable on Linux CI
+) -> None:  # pragma: no cover - real Windows console/ctypes API, exercised by the Windows build test in the release PR, not unit-testable on Linux CI  # noqa: E501
     """Three cases, in order:
 
     1. Launched from an existing cmd/PowerShell: AttachConsole finds

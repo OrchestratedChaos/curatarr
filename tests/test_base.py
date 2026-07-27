@@ -307,7 +307,7 @@ class TestBaseCacheGetLanguage:
         mock_show = Mock()
         mock_show.episodes.return_value = [mock_episode]
 
-        result = cache._get_language(mock_show)
+        cache._get_language(mock_show)
 
         mock_show.episodes.assert_called_once()
 
@@ -468,7 +468,7 @@ class TestBaseRecommenderInit:
         mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
         mock_plex.return_value = Mock()
 
-        recommender = ConcreteRecommender("/path/to/config.yml")
+        ConcreteRecommender("/path/to/config.yml")
 
         mock_load.assert_called_once_with("/path/to/config.yml")
 
@@ -488,7 +488,7 @@ class TestBaseRecommenderInit:
         mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
         mock_plex.return_value = Mock()
 
-        recommender = ConcreteRecommender("/path/to/config.yml")
+        ConcreteRecommender("/path/to/config.yml")
 
         mock_plex.assert_called_once()
 
@@ -536,7 +536,7 @@ class TestBaseRecommenderInit:
             def _load_weights(self, weights_config):
                 return {"genre": 0.3, "actor": 0.3}
 
-        recommender = BadWeightsRecommender("/path/to/config.yml")
+        BadWeightsRecommender("/path/to/config.yml")
 
         mock_warn.assert_called()
 

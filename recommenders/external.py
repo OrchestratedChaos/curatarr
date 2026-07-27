@@ -24,11 +24,10 @@ import urllib3
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
 
-# Module-level logger
-logger = logging.getLogger("curatarr")
-
 # Import shared utilities - same as internal recommenders
 # Import export functions
+# Import output generation
+from recommenders.external_render import SERVICE_DISPLAY_NAMES, generate_combined_html, generate_markdown
 from recommenders.external_sync import (
     export_to_mdblist,
     export_to_radarr,
@@ -38,9 +37,6 @@ from recommenders.external_sync import (
     get_imdb_id,
     sync_watch_history_to_trakt,
 )
-
-# Import output generation
-from recommenders.external_render import SERVICE_DISPLAY_NAMES, generate_combined_html, generate_markdown
 from utils import (
     CYAN,
     DEFAULT_RATING_MULTIPLIERS,
@@ -79,6 +75,26 @@ from utils import (
     save_json_cache,
     smart_open_html,
 )
+
+# Module-level logger
+logger = logging.getLogger("curatarr")
+
+# Names imported above but never referenced in this module - re-exported
+# for other modules to import FROM here (not from their own original
+# definition module), so ruff would otherwise flag them F401
+# ("imported but unused"). Confirmed live by grepping every caller,
+# including tests, before listing here - see CHANGELOG.md's [2.10.14]
+# entry on a prior ruff --fix pass that deleted six of these outright
+# and broke the suite:
+#   - sync_watch_history_to_trakt: trakt_sync.py's entry point imports
+#     it from here (recommenders.external), not recommenders.external_sync.
+#   - SERVICE_DISPLAY_NAMES, get_tmdb_id_from_imdb: imported from here
+#     by tests/test_external.py.
+__all__ = [
+    "sync_watch_history_to_trakt",
+    "SERVICE_DISPLAY_NAMES",
+    "get_tmdb_id_from_imdb",
+]
 
 # TMDB Genre ID mappings
 TMDB_MOVIE_GENRES = {
@@ -240,7 +256,7 @@ def discover_candidates_by_profile(
     else:
         print(f"  Discovery iteration {iteration + 1}: expanding search...")
 
-    candidates = {}  # tmdb_id -> basic info
+    candidates: Dict[int, Dict] = {}  # tmdb_id -> basic info
     media = "movie" if media_type == "movie" else "tv"
 
     # Get genres for this iteration's range
@@ -383,7 +399,8 @@ def discover_candidates_by_profile(
                     similar_count += 1
 
     print(
-        f"    Iteration {iteration + 1}: {genre_count} from genres, {keyword_count} from keywords, {similar_count} from similar"
+        f"    Iteration {iteration + 1}: {genre_count} from genres, "
+        f"{keyword_count} from keywords, {similar_count} from similar"
     )
     return candidates
 
@@ -421,7 +438,7 @@ def discover_popular_by_genre(
     genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == "movie" else TMDB_TV_GENRE_IDS
     library_ids = set(library_data.keys()) if library_data else set()
 
-    recommendations = []
+    recommendations: List[Dict] = []
     seen_ids = set()
 
     # Fetch popular content for each genre
@@ -530,7 +547,8 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
 
         watched_count = cache_data.get("watched_count", len(profile["genres"]))
         print(
-            f"  {GREEN}Loaded {media_type} profile from cache: {watched_count} watched, {len(profile['keywords'])} keywords{RESET}"
+            f"  {GREEN}Loaded {media_type} profile from cache: {watched_count} watched, "
+            f"{len(profile['keywords'])} keywords{RESET}"
         )
 
         return profile
@@ -560,7 +578,7 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
     recency_config = config.get("recency_decay", {})
     recency_enabled = recency_config.get("enabled", True)
 
-    counters = {
+    counters: Dict[str, Any] = {
         "genres": Counter(),
         "directors": Counter(),  # movies
         "studios": Counter(),  # TV shows
@@ -570,8 +588,10 @@ def build_user_profile(plex: Any, config: Dict, username: str, media_type: str =
         "tmdb_ids": set(),
     }
 
-    # Get account for user checking
-    account = MyPlexAccount(token=config["plex"]["token"])
+    # Get account for user checking - construction alone validates the
+    # token (raises if invalid), same as before; the account object
+    # itself was never used past this point.
+    MyPlexAccount(token=config["plex"]["token"])
     tmdb_api_key = get_tmdb_config(config)["api_key"]
 
     watched_count = 0
@@ -698,7 +718,7 @@ def get_watch_providers(tmdb_api_key: str, tmdb_id: int, media_type: str = "movi
         - rent: rental providers (iTunes, Amazon, etc.)
         - buy: purchase providers
     """
-    empty_result = {"streaming": [], "rent": [], "buy": []}
+    empty_result: Dict[str, List] = {"streaming": [], "rent": [], "buy": []}
 
     # Check cache first
     cache_key = (tmdb_id, media_type)
@@ -905,7 +925,7 @@ def find_missing_sequels(
     print(f"{CYAN}  Scanning {total_items} movies for collections...{RESET}")
 
     # Step 1: Find all movies with collection IDs and track which are owned
-    collection_owned = {}  # collection_id -> set of owned tmdb_ids
+    collection_owned: Dict[int, Set[int]] = {}  # collection_id -> set of owned tmdb_ids
 
     # Use cached movie->collection mapping if available
     movie_collections = cache.get("movie_collections", {})
@@ -981,7 +1001,7 @@ def find_missing_sequels(
 
     print(f"{CYAN}  Checking collections for missing movies...{RESET}")
 
-    for i, (coll_id, owned_ids) in enumerate(collection_owned.items()):
+    for i, (coll_id, _owned_ids) in enumerate(collection_owned.items()):
         if i % 5 == 0:
             show_progress("  Checking collections", i + 1, total_collections)
 
@@ -1137,7 +1157,8 @@ def find_missing_sequels(
     )
 
     print(
-        f"{GREEN}  Found {len(missing_sequels)} missing movies across {collections_with_gaps} incomplete collections{RESET}"
+        f"{GREEN}  Found {len(missing_sequels)} missing movies across "
+        f"{collections_with_gaps} incomplete collections{RESET}"
     )
     return missing_sequels
 
@@ -1249,7 +1270,7 @@ def find_horizon_movies(tmdb_api_key: str, plex: Any, library_name: str, stale_d
     total_items = len(items)
     print(f"{CYAN}  Scanning {total_items} movies for collections...{RESET}")
 
-    collection_owned = {}
+    collection_owned: Dict[int, Set[int]] = {}
 
     for i, item in enumerate(items):
         if i % 50 == 0:
@@ -1306,7 +1327,7 @@ def find_horizon_movies(tmdb_api_key: str, plex: Any, library_name: str, stale_d
 
     print(f"{CYAN}  Checking collections for upcoming releases...{RESET}")
 
-    for i, (coll_id, owned_ids) in enumerate(collection_owned.items()):
+    for i, (coll_id, _owned_ids) in enumerate(collection_owned.items()):
         if i % 5 == 0:
             show_progress("  Checking collections", i + 1, total_collections)
 
@@ -1449,7 +1470,7 @@ def categorize_by_streaming_service(
         'all_items': [all items sorted by score with streaming info]
     }
     """
-    result = {"user_services": {}, "other_services": {}, "acquire": [], "all_items": []}
+    result: Dict[str, Any] = {"user_services": {}, "other_services": {}, "acquire": [], "all_items": []}
 
     for item in recommendations:
         tmdb_id = item["tmdb_id"]
@@ -1503,7 +1524,7 @@ def get_genre_distribution(plex: Any, config: Dict, username: str, media_type: s
         library_name = config["plex"].get("movie_library" if media_type == "movie" else "tv_library")
         library = plex.library.section(library_name)
 
-        genre_counts = {}
+        genre_counts: Dict[str, int] = {}
         total_items = 0
 
         # For admin user, check watched items directly
@@ -1652,7 +1673,7 @@ def find_similar_content_with_profile(
         print(f"  {CYAN}Language filter: {language_filter.upper()} only{RESET}")
 
     # Track state across iterations
-    quality_recs = []  # Items meeting quality bar
+    quality_recs: List[Dict] = []  # Items meeting quality bar
     seen_ids = set(exclude_cached_ids or set())  # Include cached IDs to skip
     scored_cache = {}  # tmdb_id -> scored item (avoid re-scoring)
     consecutive_zero_iterations = 0  # Track for early termination
@@ -1796,7 +1817,8 @@ def find_similar_content_with_profile(
         quality_recs.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
         print(
-            f"  {CYAN}Iteration {iteration + 1} ({iteration_threshold:.0%} threshold): {new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}"
+            f"  {CYAN}Iteration {iteration + 1} ({iteration_threshold:.0%} threshold): "
+            f"{new_quality_this_iteration} new quality items, {len(quality_recs)} total{RESET}"
         )
 
         # Early termination check - only if we're close to target
@@ -1806,7 +1828,8 @@ def find_similar_content_with_profile(
             progress_pct = len(quality_recs) / limit if limit > 0 else 1.0
             if consecutive_zero_iterations >= 2 and progress_pct >= 0.8:
                 print(
-                    f"  {CYAN}Early exit: 2 consecutive iterations with no new matches ({len(quality_recs)}/{limit}){RESET}"
+                    f"  {CYAN}Early exit: 2 consecutive iterations with no new matches "
+                    f"({len(quality_recs)}/{limit}){RESET}"
                 )
                 break
         else:
@@ -1988,7 +2011,8 @@ def _pu_clean_caches(config, movie_cache, show_cache, library_movies, library_sh
                 filtered_shows += 1
         if filtered_movies or filtered_shows:
             print(
-                f"{CYAN}Filtered {filtered_movies} movies and {filtered_shows} shows (not {language_filter.upper()}){RESET}"
+                f"{CYAN}Filtered {filtered_movies} movies and {filtered_shows} shows "
+                f"(not {language_filter.upper()}){RESET}"
             )
 
     # Remove acquired items from cache (now in library) - check TMDB IDs AND titles
@@ -2103,7 +2127,8 @@ def _pu_plan_discovery(config, user_prefs, movie_cache, show_cache):
             exclude_show_imdb_ids = trakt_client.get_watchlist_imdb_ids("shows")
             if exclude_movie_imdb_ids or exclude_show_imdb_ids:
                 print(
-                    f"Excluding {len(exclude_movie_imdb_ids)} movies, {len(exclude_show_imdb_ids)} shows from Trakt watchlist"
+                    f"Excluding {len(exclude_movie_imdb_ids)} movies, "
+                    f"{len(exclude_show_imdb_ids)} shows from Trakt watchlist"
                 )
 
     return (
@@ -2296,7 +2321,8 @@ def _pu_reconcile_caches(
         shows_list.extend(low_shows[: show_limit - len(shows_list)])
 
     print(
-        f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance * 100)}% threshold){RESET}"
+        f"{GREEN}Output: {len(movies_list)} movies "
+        f"({len(high_movies)} above {int(min_relevance * 100)}% threshold){RESET}"
     )
     print(
         f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance * 100)}% threshold){RESET}"
@@ -2647,7 +2673,8 @@ def process_user_movie_library(config, plex, username, library):
         movies_list.extend(low_movies[: movie_limit - len(movies_list)])
 
     print(
-        f"{GREEN}Output: {len(movies_list)} movies ({len(high_movies)} above {int(min_relevance * 100)}% threshold){RESET}"
+        f"{GREEN}Output: {len(movies_list)} movies "
+        f"({len(high_movies)} above {int(min_relevance * 100)}% threshold){RESET}"
     )
 
     user_services = config.get("streaming_services", [])

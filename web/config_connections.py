@@ -17,7 +17,7 @@ existing installs keep working without this screen ever writing those
 two fields again.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from flask import jsonify, redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap
@@ -161,7 +161,7 @@ def _existing_secret_lookup(data: Dict[str, CommentedMap], service: str) -> Dict
     if service in ("sonarr", "radarr"):
         return {"api_key": (data[service] or {}).get("api_key", "")}
     if service == "trakt":
-        trakt = data["trakt"] or {}
+        trakt: Dict[str, Any] = data["trakt"] or {}
         return {
             "client_secret": trakt.get("client_secret", ""),
             "access_token": trakt.get("access_token", ""),
@@ -175,9 +175,9 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
     on-disk values (or, after a failed submission, *overrides* merged
     over them) plus masked secret-status strings - never a raw secret."""
     core = data["core"]
-    sonarr = data["sonarr"] or {}
-    radarr = data["radarr"] or {}
-    trakt = data["trakt"] or {}
+    sonarr: Dict[str, Any] = data["sonarr"] or {}
+    radarr: Dict[str, Any] = data["radarr"] or {}
+    trakt: Dict[str, Any] = data["trakt"] or {}
     plex = core.get("plex") or {}
     tmdb = core.get("tmdb") or {}
     tautulli = core.get("tautulli") or {}

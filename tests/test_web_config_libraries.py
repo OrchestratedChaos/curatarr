@@ -29,7 +29,7 @@ def _read_config(root):
 
 
 def _lib(libs, lib_id):
-    return next(l for l in libs if l["id"] == lib_id)
+    return next(lib for lib in libs if lib["id"] == lib_id)
 
 
 # Base form for the two libraries seeded by tests/conftest.py's
@@ -123,7 +123,7 @@ class TestSave:
         c.post("/config/libraries", data=form)
 
         core = _read_config(root)
-        assert any(l["id"] == "movies" and l["name"] == "Feature Films" for l in core["libraries"])
+        assert any(lib["id"] == "movies" and lib["name"] == "Feature Films" for lib in core["libraries"])
 
     def test_adds_new_library(self, client):
         c, app, root = client
