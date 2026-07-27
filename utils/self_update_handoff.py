@@ -153,6 +153,23 @@ function Start-CuratarrDetached {{
     # sanitize_frozen_relaunch_env already strips these from this
     # script's OWN environment before it's launched - this is
     # deliberate belt-and-suspenders at the actual final launch point.
+    #
+    # Deliberately does NOT also re-handle LD_LIBRARY_PATH/
+    # DYLD_LIBRARY_PATH/DYLD_FRAMEWORK_PATH here (sanitize_frozen_
+    # relaunch_env DOES resolve those, using PyInstaller's own
+    # `<VAR>_ORIG` save/restore convention - see that function's
+    # docstring for the verified PyInstaller source reference): that
+    # resolution can only be done correctly ONCE, against the frozen
+    # worker's own freshly-inherited environment, where a genuine
+    # `<VAR>_ORIG` marker (if any) is still visible. By the time this
+    # script's own environment is inspected here, sanitize_frozen_
+    # relaunch_env has already consumed/resolved that marker - blindly
+    # re-stripping LD_LIBRARY_PATH etc. at this point, the way _PYI_*/
+    # _MEIPASS2 are unconditionally re-stripped above, would instead
+    # clobber a value that function may have just correctly RESTORED
+    # (e.g. a user's own pre-existing LD_LIBRARY_PATH), which is exactly
+    # the "never blindly delete a user's real setting" bug this whole
+    # mechanism exists to avoid.
     $staleKeys = @($psi.EnvironmentVariables.Keys) | Where-Object {{ $_ -eq '_MEIPASS2' -or $_ -like '_PYI_*' -or $_ -like '_PYINSTALLER_*' }}
     foreach ($key in $staleKeys) {{
         $psi.EnvironmentVariables.Remove($key) | Out-Null
@@ -300,6 +317,19 @@ launch_detached() {{
     # deliberate belt-and-suspenders at the actual final launch point.
     # Built dynamically (not a fixed list) since PyInstaller can add
     # more _PYI_*/_PYINSTALLER_* variables across versions.
+    #
+    # Deliberately does NOT also re-handle LD_LIBRARY_PATH/
+    # DYLD_LIBRARY_PATH/DYLD_FRAMEWORK_PATH here - see this same
+    # comment in _windows_script_content's Start-CuratarrDetached for
+    # why: sanitize_frozen_relaunch_env already resolves those against
+    # the frozen worker's own environment using PyInstaller's own
+    # `<VAR>_ORIG` save/restore convention, and that decision can only
+    # be made correctly ONCE, before this script's own (already
+    # resolved) environment is all that's left to inspect. Redoing it
+    # here with a blind unconditional unset (the way _PYI_*/_MEIPASS2
+    # are unconditionally re-stripped above) risks clobbering a value
+    # that function just correctly RESTORED for a user who genuinely
+    # set e.g. LD_LIBRARY_PATH themselves.
     unset_args=""
     for v in $(env | awk -F= '/^_PYI_/{{print $1}} /^_PYINSTALLER_/{{print $1}} /^_MEIPASS2=/{{print $1}}'); do
         unset_args="$unset_args -u $v"

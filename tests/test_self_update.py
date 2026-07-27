@@ -1302,6 +1302,158 @@ class TestSanitizeFrozenRelaunchEnv:
         assert "_PYI_ARCHIVE_FILE" in env
 
 
+class TestSanitizeFrozenRelaunchEnvDynamicLoaderPaths:
+    """LD_LIBRARY_PATH/DYLD_LIBRARY_PATH/DYLD_FRAMEWORK_PATH handling -
+    see _DYNAMIC_LOADER_PATH_VARS' own comment in utils/self_update.py
+    for the verified (against PyInstaller 6.21.0's own bootloader
+    source, both the compiled binaries this repo's release CI actually
+    ships and the upstream C source) per-platform PyInstaller behavior
+    this follows:
+      - LD_LIBRARY_PATH is confirmed to be unconditionally set by
+        curatarr's own Linux bootloader on every launch - "present, no
+        _ORIG" there can only mean the bootloader's own fresh
+        injection, safe to strip outright.
+      - DYLD_LIBRARY_PATH/DYLD_FRAMEWORK_PATH (macOS), and
+        LD_LIBRARY_PATH on any non-Linux platform, are NOT confirmed to
+        be touched by this build's bootloader at all (macOS: "No
+        changes to library search path are required... we rewrite the
+        library paths on collected binaries" - PyInstaller's own
+        source comment; curatarr bundles no Qt binding, the only other
+        code that ever touches these) - "present, no _ORIG" there must
+        be left alone, never stripped.
+
+    _BOOTLOADER_ALWAYS_SETS_ON_PLATFORM is computed once at import time
+    from the real sys.platform - tests monkeypatch it directly (same
+    convention already used elsewhere in this file for other
+    module-level constants) so both branches get real coverage
+    regardless of which OS actually runs this test suite.
+    """
+
+    def test_ld_library_path_removed_when_no_orig_on_linux(self, monkeypatch):
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", True)
+        env = {"PATH": "/usr/bin", "LD_LIBRARY_PATH": "/tmp/_MEI123456"}
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert "LD_LIBRARY_PATH" not in result
+        assert result["PATH"] == "/usr/bin"
+
+    def test_ld_library_path_restored_from_orig_on_linux(self, monkeypatch):
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", True)
+        env = {
+            "LD_LIBRARY_PATH": "/tmp/_MEI123456:/opt/real/libs",
+            "LD_LIBRARY_PATH_ORIG": "/opt/real/libs",
+        }
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result["LD_LIBRARY_PATH"] == "/opt/real/libs"
+        assert "LD_LIBRARY_PATH_ORIG" not in result
+
+    def test_ld_library_path_survives_untouched_when_no_orig_and_not_linux(self, monkeypatch):
+        """A user-set value with no PyInstaller involvement (this
+        build's bootloader is only confirmed to touch LD_LIBRARY_PATH
+        on Linux - see class docstring) must never be stripped just
+        because no `_ORIG` backup exists."""
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", False)
+        env = {"PATH": "/usr/bin", "LD_LIBRARY_PATH": "/opt/some/other/tool/libs"}
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result["LD_LIBRARY_PATH"] == "/opt/some/other/tool/libs"
+
+    def test_dyld_library_path_restored_from_orig(self):
+        """DYLD_LIBRARY_PATH restore-from-_ORIG must work regardless of
+        _BOOTLOADER_ALWAYS_SETS_ON_PLATFORM (that gate only controls
+        the unconditional-strip-when-absent branch, never restore)."""
+        env = {
+            "DYLD_LIBRARY_PATH": "/tmp/_MEI123456:/opt/real/libs",
+            "DYLD_LIBRARY_PATH_ORIG": "/opt/real/libs",
+        }
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result["DYLD_LIBRARY_PATH"] == "/opt/real/libs"
+        assert "DYLD_LIBRARY_PATH_ORIG" not in result
+
+    def test_dyld_library_path_survives_untouched_when_no_orig(self, monkeypatch):
+        """PyInstaller never sets DYLD_LIBRARY_PATH for a Qt-less build
+        like curatarr's (see class docstring) - a value present with no
+        `_ORIG` is a genuine user setting and must survive untouched,
+        even on the platform LD_LIBRARY_PATH itself WOULD be stripped
+        on (this assertion is what actually catches a future refactor
+        that accidentally treats all three vars identically)."""
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", True)
+        env = {"DYLD_LIBRARY_PATH": "/Users/me/some/tool/libs"}
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result["DYLD_LIBRARY_PATH"] == "/Users/me/some/tool/libs"
+
+    def test_dyld_framework_path_restored_from_orig(self):
+        env = {
+            "DYLD_FRAMEWORK_PATH": "/tmp/_MEI123456:/Library/Frameworks",
+            "DYLD_FRAMEWORK_PATH_ORIG": "/Library/Frameworks",
+        }
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result["DYLD_FRAMEWORK_PATH"] == "/Library/Frameworks"
+        assert "DYLD_FRAMEWORK_PATH_ORIG" not in result
+
+    def test_dyld_framework_path_survives_untouched_when_no_orig(self, monkeypatch):
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", True)
+        env = {"DYLD_FRAMEWORK_PATH": "/Library/Frameworks"}
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result["DYLD_FRAMEWORK_PATH"] == "/Library/Frameworks"
+
+    def test_all_three_orig_markers_never_survive_regardless_of_restore_outcome(self, monkeypatch):
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", True)
+        env = {
+            "LD_LIBRARY_PATH": "/tmp/_MEI/a",
+            "LD_LIBRARY_PATH_ORIG": "/a",
+            "DYLD_LIBRARY_PATH": "/tmp/_MEI/b",
+            "DYLD_LIBRARY_PATH_ORIG": "/b",
+            "DYLD_FRAMEWORK_PATH": "/tmp/_MEI/c",
+            "DYLD_FRAMEWORK_PATH_ORIG": "/c",
+        }
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result == {
+            "LD_LIBRARY_PATH": "/a",
+            "DYLD_LIBRARY_PATH": "/b",
+            "DYLD_FRAMEWORK_PATH": "/c",
+        }
+
+    def test_does_not_mutate_the_original_dict(self, monkeypatch):
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", True)
+        env = {"LD_LIBRARY_PATH": "/tmp/_MEI/a", "DYLD_LIBRARY_PATH_ORIG": "/b"}
+
+        self_update.sanitize_frozen_relaunch_env(env)
+
+        assert env == {"LD_LIBRARY_PATH": "/tmp/_MEI/a", "DYLD_LIBRARY_PATH_ORIG": "/b"}
+
+    def test_combined_with_pyinstaller_handoff_vars_in_one_call(self, monkeypatch):
+        """Realistic end-to-end shape: a real inherited frozen-process
+        environment carries both classes of hazard (_MEIPASS2/_PYI_*
+        AND a mutated LD_LIBRARY_PATH) at once - both must be resolved
+        correctly in the same call."""
+        monkeypatch.setattr(self_update, "_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM", True)
+        env = {
+            "PATH": "/usr/bin",
+            "_MEIPASS2": "/tmp/_MEI123456",
+            "_PYI_ARCHIVE_FILE": "/opt/curatarr/curatarr",
+            "LD_LIBRARY_PATH": "/tmp/_MEI123456",
+        }
+
+        result = self_update.sanitize_frozen_relaunch_env(env)
+
+        assert result == {"PATH": "/usr/bin"}
+
+
 # =============================================================================
 # Orchestration
 # =============================================================================

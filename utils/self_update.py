@@ -959,17 +959,138 @@ def swap_binary(current_path: str, new_binary_path: str) -> None:
 _PYINSTALLER_CHILD_ENV_VAR_PREFIXES = ("_PYI_", "_PYINSTALLER_")
 _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP = ("_MEIPASS2",)
 
+# Dynamic-loader search-path variables PyInstaller's onefile bootloader
+# is known to mutate - a second, DIFFERENT class of hand-off hazard
+# from _MEIPASS2/_PYI_*/_PYINSTALLER_* above, closed separately here:
+# a onefile parent prepends its own extraction directory onto one of
+# these so bundled shared libraries can be found, and a relaunched
+# CHILD that blindly inherits it can end up resolving dynamic libraries
+# against the PARENT build's (possibly different-version, possibly
+# already-torn-down) extraction directory instead of its own.
+#
+# Verified directly against PyInstaller 6.21.0's own bootloader source
+# (the exact version this repo's build-requirements.lock pins - both
+# the compiled bootloader binaries this project's own release CI
+# actually ships, and the upstream C source, were inspected; not
+# assumed from documentation or general recollection):
+#   - bootloader/src/pyi_utils_posix.c's pyi_utils_set_library_search_path()
+#     - called from bootloader/src/pyi_main.c's onefile-parent-process
+#     branch, specifically the `#else /* Other POSIX OSes */` case
+#     (i.e. Linux; AIX uses an analogous LIBPATH/LIBPATH_ORIG pair, not
+#     used here - no AIX builds) - PREPENDS the extraction directory
+#     onto LD_LIBRARY_PATH, and FIRST saves whatever value already
+#     existed there under LD_LIBRARY_PATH_ORIG, specifically so it can
+#     be restored later. Confirmed this runs on every normal (no splash
+#     screen, which curatarr's build never uses) onefile launch - not a
+#     conditional/rare code path.
+#   - The SAME pyi_main.c's `#elif defined(__APPLE__)` branch is a
+#     single comment: "No changes to library search path are required
+#     on macOS, because we rewrite the library paths on collected
+#     binaries [i.e. baked-in RPATH, not an env var]." Confirmed
+#     empirically too: the actual compiled Darwin-64bit bootloader
+#     binaries (run/run_d/runw/runw_d) contain no DYLD_LIBRARY_PATH,
+#     DYLD_FRAMEWORK_PATH, or `_ORIG` strings at all, unlike the Linux
+#     bootloader binary, which contains both `LD_LIBRARY_PATH` and
+#     `LD_LIBRARY_PATH_ORIG` verbatim. The only DYLD_LIBRARY_PATH/
+#     DYLD_FRAMEWORK_PATH-touching code anywhere in PyInstaller
+#     (PyInstaller/fake-modules/_pyi_rth_utils's
+#     prepend_path_to_environment_variable) is wired up ONLY by the
+#     PySide6/PyQt6 runtime hooks, which curatarr's build never
+#     triggers (no Qt binding in requirements.txt/curatarr.spec) - and
+#     even that function only ever prepends, it never saves an `_ORIG`
+#     backup at all, so it isn't this convention regardless.
+#
+# Net effect - NOT symmetric across platforms/variables, deliberately:
+#   - LD_LIBRARY_PATH IS confirmed to be unconditionally set by
+#     curatarr's own Linux bootloader on every launch - so on Linux,
+#     "present with no _ORIG" can ONLY mean "the bootloader set this
+#     fresh because nothing was there before it ran" (PyInstaller's own
+#     code only skips writing `_ORIG` in exactly that case), never a
+#     genuine pre-existing user value - safe to strip outright.
+#   - DYLD_LIBRARY_PATH/DYLD_FRAMEWORK_PATH (macOS) and LD_LIBRARY_PATH
+#     itself on any non-Linux platform (macOS; Windows, where PyInstaller
+#     uses SetDllDirectoryW instead, never an env var) are NOT
+#     confirmed to be touched by this build's bootloader at all - "no
+#     _ORIG" there is genuinely ambiguous (could easily be a value with
+#     nothing to do with PyInstaller) and must never be unconditionally
+#     stripped, per this same function's own no-blind-delete rule.
+#     `_ORIG`-restore is still honored everywhere as harmless,
+#     future-proofing insurance (a later PyInstaller version, or a
+#     future Qt dependency, could start doing this on macOS too - if it
+#     ever does and saves an `_ORIG`, this already handles it
+#     correctly), it just never triggers an unconditional strip.
+_DYNAMIC_LOADER_PATH_VARS = ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH")
+
+# The one (var, platform) combination confirmed above where PyInstaller's
+# own bootloader unconditionally sets the variable on every launch -
+# see _DYNAMIC_LOADER_PATH_VARS' own comment for why this is the only
+# case safe to strip outright when no `_ORIG` backup is present.
+_BOOTLOADER_ALWAYS_SETS_VAR = "LD_LIBRARY_PATH"
+_BOOTLOADER_ALWAYS_SETS_ON_PLATFORM = sys.platform.startswith("linux")
+
 
 def sanitize_frozen_relaunch_env(env: Mapping[str, str]) -> Dict[str, str]:
     """Returns a copy of `env` with PyInstaller onefile's internal
     bootloader hand-off variables removed - see the module-level
     comment above. Safe to call on a non-frozen/non-Windows env too
-    (no-op if the vars aren't present)."""
-    return {
+    (no-op if the vars aren't present).
+
+    Also resolves each of _DYNAMIC_LOADER_PATH_VARS (see that
+    constant's own comment for the verified, per-platform PyInstaller
+    behavior this follows) using PyInstaller's own `<VAR>_ORIG`
+    convention:
+      - `<VAR>_ORIG` present: that's the value which existed BEFORE
+        this process's own bootloader (or an ancestor's) ever touched
+        `<VAR>` - restore it as `<VAR>`'s real value and drop
+        `<VAR>_ORIG` itself (meaningless to a fresh child; carrying it
+        forward would just let it get "restored" again, redundantly,
+        by whatever next inherits this same env).
+      - `<VAR>_ORIG` absent AND this is _BOOTLOADER_ALWAYS_SETS_VAR on
+        _BOOTLOADER_ALWAYS_SETS_ON_PLATFORM (i.e. LD_LIBRARY_PATH on
+        Linux): `<VAR>` (if present at all) can only be something the
+        bootloader injected fresh with nothing legitimate underneath it
+        to preserve (PyInstaller's own code only skips writing
+        `<VAR>_ORIG` when `<VAR>` was unset beforehand) - remove it
+        outright.
+      - `<VAR>_ORIG` absent, anywhere else: leave `<VAR>` exactly as
+        found. There is no confirmed PyInstaller mechanism that sets it
+        on this platform, so it can just as easily be a value a user
+        genuinely set for reasons having nothing to do with PyInstaller
+        - removing it here would be exactly the "blindly delete a
+        legitimate user setting" bug this whole function exists to
+        avoid, not a fix for anything.
+
+    This `_ORIG` check (and the platform gate above) is why this whole
+    resolution can only safely happen HERE - reading the frozen
+    process's own freshly-inherited os.environ, before anything
+    downstream (e.g. the relaunch hand-off shell scripts in
+    utils/self_update_handoff.py) has already consumed or stripped that
+    marker. Once `<VAR>_ORIG` has been resolved away by this function,
+    there is no way for anything further downstream to redo this same
+    restore-or-remove decision correctly - which is exactly why the
+    hand-off scripts' own belt-and-suspenders re-stripping (see their
+    own comments) deliberately covers only the unconditionally-safe-to-
+    repeat _MEIPASS2/_PYI_*/_PYINSTALLER_* names above, never these.
+    """
+    result = {
         k: v
         for k, v in env.items()
         if k not in _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP and not k.startswith(_PYINSTALLER_CHILD_ENV_VAR_PREFIXES)
     }
+
+    for var in _DYNAMIC_LOADER_PATH_VARS:
+        orig_key = f"{var}_ORIG"
+        if orig_key in result:
+            result[var] = result[orig_key]
+            del result[orig_key]
+        elif var == _BOOTLOADER_ALWAYS_SETS_VAR and _BOOTLOADER_ALWAYS_SETS_ON_PLATFORM:
+            result.pop(var, None)
+        # else: no `_ORIG` to restore from, and this (var, platform)
+        # combination isn't a confirmed PyInstaller mutation - leave it
+        # untouched rather than risk clobbering a genuine, unrelated
+        # user setting.
+
+    return result
 
 
 # =============================================================================
