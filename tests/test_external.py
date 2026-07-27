@@ -181,7 +181,7 @@ class TestGetWatchProviders:
 class TestCategorizeByStreamingService:
     """Tests for categorize_by_streaming_service function"""
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_categorizes_by_user_services(self, mock_providers):
         mock_providers.return_value = {"streaming": ["netflix"], "rent": [], "buy": []}
 
@@ -202,7 +202,7 @@ class TestCategorizeByStreamingService:
         assert "netflix" in result["user_services"]
         assert len(result["user_services"]["netflix"]) == 1
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_categorizes_to_acquire(self, mock_providers):
         mock_providers.return_value = {"streaming": [], "rent": [], "buy": []}
 
@@ -221,7 +221,7 @@ class TestCategorizeByStreamingService:
 
         assert len(result["acquire"]) == 1
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_categorizes_other_services(self, mock_providers):
         mock_providers.return_value = {"streaming": ["disney_plus"], "rent": [], "buy": []}
 
@@ -2393,7 +2393,7 @@ class TestFindHorizonMovies:
 class TestCategorizeByStreamingServiceAllItems:
     """Tests for categorize_by_streaming_service with all_items structure"""
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_returns_all_items_list(self, mock_providers):
         """Test that categorized data includes all_items."""
         mock_providers.side_effect = [
@@ -2411,7 +2411,7 @@ class TestCategorizeByStreamingServiceAllItems:
         assert "all_items" in result
         assert len(result["all_items"]) == 2
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_all_items_sorted_by_score(self, mock_providers):
         """Test all_items are sorted by score descending."""
         mock_providers.return_value = {"streaming": [], "rent": [], "buy": []}
@@ -2426,7 +2426,7 @@ class TestCategorizeByStreamingServiceAllItems:
         scores = [item["score"] for item in result["all_items"]]
         assert scores == sorted(scores, reverse=True)
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_items_include_streaming_services_list(self, mock_providers):
         """Test each item has streaming_services list from API."""
         mock_providers.return_value = {"streaming": ["netflix", "hulu"], "rent": [], "buy": []}
@@ -2441,7 +2441,7 @@ class TestCategorizeByStreamingServiceAllItems:
         assert "netflix" in item["streaming_services"]
         assert "hulu" in item["streaming_services"]
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_items_include_on_user_services(self, mock_providers):
         """Test each item has on_user_services list."""
         mock_providers.return_value = {"streaming": ["netflix", "hulu"], "rent": [], "buy": []}
@@ -2457,7 +2457,7 @@ class TestCategorizeByStreamingServiceAllItems:
         assert "netflix" in item["on_user_services"]
         assert "hulu" not in item["on_user_services"]
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_acquire_items_have_no_streaming(self, mock_providers):
         """Test items with no providers go to acquire list."""
         mock_providers.return_value = {"streaming": [], "rent": [], "buy": []}
@@ -2470,7 +2470,7 @@ class TestCategorizeByStreamingServiceAllItems:
         assert len(result["acquire"]) == 1
         assert result["acquire"][0]["title"] == "Rare Movie"
 
-    @patch("recommenders.external.get_watch_providers")
+    @patch("recommenders.streaming.get_watch_providers")
     def test_user_service_items_categorized(self, mock_providers):
         """Test items on user's services go to user_services dict."""
         mock_providers.return_value = {"streaming": ["netflix"], "rent": [], "buy": []}

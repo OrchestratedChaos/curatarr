@@ -2,6 +2,34 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.44] - 2026-07-26
+
+### Changed
+
+- **Extracted streaming-service categorization (`categorize_by_streaming_service`) out of `recommenders/external.py` into `recommenders/streaming.py` (PR2 step 3, external.py architecture decomposition).**
+
+  - Pure relocation: `categorize_by_streaming_service` moved byte-for-byte;
+    only the import path changed. `recommenders/streaming.py` imports
+    `get_watch_providers` from `recommenders/huntarr.py` (the TMDB
+    watch-provider lookup helper Sequel Huntarr originally introduced).
+    `recommenders/external.py` still calls `categorize_by_streaming_service`
+    directly from several of its own functions (`process_user`,
+    `process_user_movie_library`, `process_user_tv_library`), so it
+    stays a normal top-level import there - not an `__all__`-only
+    re-export. `get_watch_providers` moved from "used internally" to
+    "re-export only" status in `external.py` now that its last internal
+    caller moved out too.
+  - Verified via the golden-output equivalence harness: watchlist
+    HTML/MD, Sequel/Horizon Huntarr results, and categorized-by-
+    streaming-service output are all byte-identical to pre-move golden
+    fixtures.
+  - `tests/test_external.py`'s `TestCategorizeByStreamingService` and
+    `TestCategorizeByStreamingServiceAllItems` patches updated from
+    `recommenders.external.get_watch_providers` to
+    `recommenders.streaming.get_watch_providers` - same reasoning as the
+    Sequel/Horizon Huntarr moves (a mocked function is looked up in
+    whichever module's own namespace calls it at runtime).
+
 ## [2.10.43] - 2026-07-26
 
 ### Changed
