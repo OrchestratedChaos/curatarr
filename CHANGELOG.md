@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.53] - 2026-07-27
+
+### Fixed
+
+- **Changing `collections.movie_name_template`/`tv_name_template` (#267) now renames the existing collection instead of orphaning it.** 2.10.52 documented this as a known limitation: switching templates left the previously-named collection behind in Plex, untouched and unmanaged, while a new one was created under the new name. Now, when a run's freshly-rendered collection name differs from what's currently in Plex, the existing collection is renamed in place - preserving its poster, sort title, added-at date, and any manual curation, none of which a delete-and-recreate would keep. Ownership is confirmed via the same `PrivateCollection_<user>` label curatarr already applies to every collection it manages (present regardless of whether `collections.private_collections` is on), never by guessing from the title - a collection curatarr didn't label is never touched. If both an old-named and a new-named collection already exist, nothing is renamed (that would create a duplicate title); both are logged and left alone for manual cleanup. New config key `collections.rename_on_template_change` (default `true`) controls this; set it `false` to keep the old orphan-in-place behavior.
+
 ## [2.10.52] - 2026-07-27
 
 ### Added

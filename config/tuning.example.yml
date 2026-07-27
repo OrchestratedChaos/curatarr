@@ -83,6 +83,18 @@ collections:
   movie_name_template: "🎬 {user} - Recommendation"
   tv_name_template: "📺 {user} - Recommendation"
 
+  # When a movie_name_template/tv_name_template edit changes a user's
+  # rendered collection name, RENAME the existing Plex collection to the
+  # new name instead of leaving it behind as an orphan (the previous
+  # collection's poster, sort title, added-at date and any manual
+  # curation are preserved - a delete-and-recreate would lose all of
+  # that). Identifies "the existing collection" via the same
+  # PrivateCollection_<user> label Curatarr already applies to every
+  # collection it manages, never by title guessing, so it will never
+  # touch a collection it didn't create. Set to false to leave old-named
+  # collections orphaned (the pre-existing behavior).
+  rename_on_template_change: true
+
   # Per-user label restrictions - each user's library Browse/Search only
   # shows their own recommendation collection, not other users' (Plex
   # label restrictions; Library tab only, does not apply to Home).

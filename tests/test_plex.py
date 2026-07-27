@@ -1842,6 +1842,240 @@ class TestUpdatePlexCollectionAdvanced:
         mock_logger.error.assert_called_once()
 
 
+class TestUpdatePlexCollectionRenameOnTemplateChange:
+    """Tests for update_plex_collection()'s rename-on-template-change
+    behavior (#267 follow-up): a movie_name_template/tv_name_template edit
+    that changes the rendered collection name renames the collection
+    previously identified by its PrivateCollection_<user> label, instead
+    of leaving it orphaned while a second one gets created."""
+
+    @staticmethod
+    def _make_collection(title, labels=()):
+        collection = Mock()
+        collection.title = title
+        collection.items.return_value = [Mock()]
+        collection.labels = [Mock(tag=t) for t in labels]
+        return collection
+
+    def test_renames_old_named_collection_found_by_label(self):
+        from utils.plex import update_plex_collection
+
+        stale = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale]
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+        )
+
+        assert result is True
+        stale.editTitle.assert_called_once_with("Recommended movies - Alice")
+        stale.addItems.assert_called_once()
+        mock_section.createCollection.assert_not_called()
+
+    def test_rename_compares_full_title_including_multi_library_suffix(self):
+        """The multi-library disambiguation suffix is part of collection_name
+        by the time it reaches this function - the rename must compare/act
+        on the full, final title, not a pre-suffix version."""
+        from utils.plex import update_plex_collection
+
+        stale = self._make_collection(
+            "🎬 Alice - Recommendation (Movies 4K)", labels=["PrivateCollection_alice_movies-4k"]
+        )
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale]
+
+        update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice (Movies 4K)",
+            [Mock()],
+            label_name="Recommended_alice_movies-4k",
+            private_label="PrivateCollection_alice_movies-4k",
+        )
+
+        stale.editTitle.assert_called_once_with("Recommended movies - Alice (Movies 4K)")
+
+    def test_no_op_when_old_named_collection_absent(self):
+        """No collection carries our private_label - nothing to rename,
+        just create as normal. No error."""
+        from utils.plex import update_plex_collection
+
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+        mock_section.createCollection.return_value = Mock(labels=[])
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+        )
+
+        assert result is True
+        mock_section.createCollection.assert_called_once()
+
+    def test_no_op_when_template_renders_unchanged(self):
+        """Existing collection's title already equals the freshly-rendered
+        name - no rename call, no duplicate creation."""
+        from utils.plex import update_plex_collection
+
+        current = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [current]
+
+        result = update_plex_collection(
+            mock_section,
+            "🎬 Alice - Recommendation",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+        )
+
+        assert result is True
+        current.editTitle.assert_not_called()
+        current.addItems.assert_called_once()
+        mock_section.createCollection.assert_not_called()
+
+    def test_does_not_rename_when_both_old_and_new_named_collections_exist(self):
+        """Both an old-named (stale-labeled) and a new-named (exact title
+        match) collection already exist - renaming would produce a
+        duplicate title. Leave both alone; sync continues against the
+        new-named one."""
+        from utils.plex import update_plex_collection
+
+        stale = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        current = self._make_collection("Recommended movies - Alice", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale, current]
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+        )
+
+        assert result is True
+        stale.editTitle.assert_not_called()
+        current.editTitle.assert_not_called()
+        current.addItems.assert_called_once()
+        mock_section.createCollection.assert_not_called()
+
+    def test_does_not_rename_when_ambiguous_multiple_stale_matches(self):
+        """More than one collection carries our private_label with a
+        mismatched title - never guess which to rename; leave all alone
+        and create a new one like pre-#267-rename behavior."""
+        from utils.plex import update_plex_collection
+
+        stale_1 = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        stale_2 = self._make_collection("Old duplicate - Alice", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale_1, stale_2]
+        mock_section.createCollection.return_value = Mock(labels=[])
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+        )
+
+        assert result is True
+        stale_1.editTitle.assert_not_called()
+        stale_2.editTitle.assert_not_called()
+        mock_section.createCollection.assert_called_once()
+
+    def test_rename_disabled_via_flag_creates_duplicate_instead(self):
+        """collections.rename_on_template_change: false - old orphaning
+        behavior is preserved verbatim."""
+        from utils.plex import update_plex_collection
+
+        stale = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale]
+        mock_section.createCollection.return_value = Mock(labels=[])
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+            rename_on_template_change=False,
+        )
+
+        assert result is True
+        stale.editTitle.assert_not_called()
+        mock_section.createCollection.assert_called_once()
+
+    def test_no_rename_search_without_private_label(self):
+        """No private_label given at all (e.g. a caller that never sets
+        one) - behaves exactly like before this feature existed."""
+        from utils.plex import update_plex_collection
+
+        stale = self._make_collection("🎬 Alice - Recommendation")
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale]
+
+        result = update_plex_collection(mock_section, "Recommended movies - Alice", [Mock()])
+
+        assert result is True
+        stale.editTitle.assert_not_called()
+        mock_section.createCollection.assert_called_once()
+
+    def test_rename_failure_falls_back_to_creating_new_collection(self):
+        """editTitle raising must not lose this run's sync - fall back to
+        creating a new collection rather than failing outright."""
+        from utils.plex import update_plex_collection
+
+        stale = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        stale.editTitle.side_effect = plexapi.exceptions.PlexApiException("locked field")
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale]
+        mock_section.createCollection.return_value = Mock(labels=[])
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+        )
+
+        assert result is True
+        mock_section.createCollection.assert_called_once()
+
+    def test_one_users_rename_never_touches_another_users_collection(self):
+        """Two users' collections coexist in the same library, each
+        carrying their own private_label - renaming alice's must never
+        touch bob's, even though both are stale relative to their own
+        new names."""
+        from utils.plex import update_plex_collection
+
+        alice_stale = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        bob_stale = self._make_collection("🎬 Bob - Recommendation", labels=["PrivateCollection_bob"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [alice_stale, bob_stale]
+
+        update_plex_collection(
+            mock_section,
+            "Recommended movies - Alice",
+            [Mock()],
+            label_name="Recommended_alice",
+            private_label="PrivateCollection_alice",
+        )
+
+        alice_stale.editTitle.assert_called_once_with("Recommended movies - Alice")
+        bob_stale.editTitle.assert_not_called()
+
+
 class TestCleanupOldCollectionsAdvanced:
     """Additional tests for cleanup_old_collections()."""
 

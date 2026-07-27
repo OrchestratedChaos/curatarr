@@ -1139,8 +1139,21 @@ class BaseRecommender(ABC):
         )
         rendered_name = render_collection_name(name_template, display_name, self.media_type)
         collection_name = f"{rendered_name}{self._library_suffix_for_collection_name()}"
+        # Default True: an old-named collection left behind by a template
+        # change is renamed (via the PrivateCollection_* label, never
+        # title-guessing) rather than orphaned - see
+        # config/tuning.example.yml's own comment and
+        # utils.plex.update_plex_collection's docstring for the exact
+        # ownership/collision rules.
+        rename_on_template_change = self.config.get("collections", {}).get("rename_on_template_change", True)
         success = update_plex_collection(
-            section, collection_name, final_items, logger, label_name=label_name, private_label=private_label
+            section,
+            collection_name,
+            final_items,
+            logger,
+            label_name=label_name,
+            private_label=private_label,
+            rename_on_template_change=rename_on_template_change,
         )
         if success:
             cleanup_old_collections(section, collection_name, username, emoji, logger)

@@ -1893,6 +1893,90 @@ class TestCollectionNameTemplate:
         assert collection_name == "TV custom - Alice"
 
 
+class TestSyncPlexCollectionRenameOnTemplateChangeWiring:
+    """_sync_plex_collection reads collections.rename_on_template_change
+    from config and passes it through to update_plex_collection - the
+    actual rename decision/logic is utils.plex.update_plex_collection's
+    own responsibility (see TestUpdatePlexCollectionRenameOnTemplateChange
+    in tests/test_plex.py)."""
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_defaults_true_when_unset(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        assert mock_update.call_args.kwargs["rename_on_template_change"] is True
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_honors_explicit_false(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        config = copy.deepcopy(SINGLE_MOVIE_LIBRARY_CONFIG)
+        config["collections"] = {"rename_on_template_change": False}
+        mock_load.return_value = config
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        assert mock_update.call_args.kwargs["rename_on_template_change"] is False
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_private_label_still_passed_through(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(
+            section, "Recommended_alice", [Mock()], username="alice", private_label="PrivateCollection_alice"
+        )
+
+        assert mock_update.call_args.kwargs["private_label"] == "PrivateCollection_alice"
+
+
 # ------------------------------------------------------------------------
 # Core recommendation-engine coverage: label management, candidate scoring,
 # and the TMDB/IMDb id-resolution chain shared by movie.py and tv.py.

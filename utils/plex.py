@@ -665,6 +665,30 @@ def fetch_watch_history_with_tmdb(
     return watched_items
 
 
+def _find_stale_owned_collections(all_collections: List[Any], collection_name: str, private_label: str) -> List[Any]:
+    """Every OTHER collection in this library carrying private_label whose
+    title isn't already collection_name - i.e. every rename_on_template_
+    change candidate this run's freshly-rendered collection_name could
+    apply to (see update_plex_collection's own docstring).
+
+    Trusts ONLY the PrivateCollection_<user> label already applied to the
+    collection object by this same function on every prior run (never
+    title pattern-matching) - that label is applied unconditionally
+    whenever private_label is passed in, independent of
+    collections.private_collections (that config key only gates the
+    cross-user Plex exclude-filter push in
+    utils.plex_policy.apply_user_label_restrictions, never whether the
+    label itself is set on the collection).
+
+    Steady state is exactly zero (nothing stale) or exactly one (last
+    run's rendered name, about to be renamed). More than one means
+    ownership is ambiguous - see the caller for how that's handled.
+    """
+    return [
+        c for c in all_collections if c.title != collection_name and private_label in [label.tag for label in c.labels]
+    ]
+
+
 def update_plex_collection(
     section: Any,
     collection_name: str,
@@ -672,6 +696,7 @@ def update_plex_collection(
     logger: Any = None,
     label_name: Optional[str] = None,
     private_label: Optional[str] = None,
+    rename_on_template_change: bool = True,
 ) -> bool:
     """
     Create or update a Plex collection with items in the specified order.
@@ -696,6 +721,20 @@ def update_plex_collection(
             which silently produced the wrong (unprefixed) label whenever
             label_name wasn't literally "Recommended_<user>" - e.g. every
             install running with collections.append_usernames: false.
+        rename_on_template_change: When True (default -
+            collections.rename_on_template_change in config/tuning.yml)
+            and private_label is given, a collections.movie_name_template/
+            tv_name_template (#267) edit that changes this run's rendered
+            collection_name RENAMES the previous run's collection (found
+            via private_label) instead of leaving it orphaned while a
+            second, identically-managed collection gets created under the
+            new name - renaming preserves the collection's poster, sort
+            title, added-at date and any manual curation, all of which a
+            delete-and-recreate would lose. Only ever fires when EXACTLY
+            one other collection carries private_label; see
+            _find_stale_owned_collections and the "both old- and
+            new-named collections already exist" branch below for the
+            conservative, no-guessing edge-case handling.
 
     Returns:
         True if successful, False otherwise
@@ -707,18 +746,80 @@ def update_plex_collection(
 
     try:
         existing_collection = None
-        for collection in section.collections():
+        all_collections = list(section.collections())
+        for collection in all_collections:
             if collection.title == collection_name:
                 existing_collection = collection
                 break
 
+        stale_owned_collections: List[Any] = []
+        if rename_on_template_change and private_label:
+            stale_owned_collections = _find_stale_owned_collections(all_collections, collection_name, private_label)
+
         target_collection = None
-        if existing_collection:
-            current_items = existing_collection.items()
+
+        if existing_collection and stale_owned_collections:
+            # Both the (already correct) new-named collection and at least
+            # one stale, still-labeled old-named one exist - renaming would
+            # create a second collection with the identical title. Leave
+            # both alone; this run just updates existing_collection as
+            # normal below. (Can happen if a prior run created the
+            # new-named collection before this feature existed, or a rename
+            # attempt failed previously.)
+            stale_titles = [c.title for c in stale_owned_collections]
+            msg = (
+                f"Collection {collection_name!r} already exists alongside "
+                f"{len(stale_owned_collections)} other collection(s) carrying "
+                f"label {private_label!r} ({stale_titles}) - not renaming (would "
+                f"produce a duplicate title); leaving all as-is"
+            )
+            if logger:
+                logger.warning(msg)
+            else:
+                print(f"WARNING: {msg}")
+        elif not existing_collection and len(stale_owned_collections) == 1:
+            stale_collection = stale_owned_collections[0]
+            old_title = stale_collection.title
+            try:
+                stale_collection.editTitle(collection_name)
+                target_collection = stale_collection
+                msg = f"Renamed collection {old_title!r} -> {collection_name!r} (template change)"
+                if logger:
+                    logger.info(msg)
+                else:
+                    print(msg)
+            except plexapi.exceptions.PlexApiException as e:
+                # Rename failed - fall through to the normal create path
+                # below rather than losing this run's sync entirely.
+                if logger:
+                    logger.warning(f"Could not rename collection {old_title!r} to {collection_name!r}: {e}")
+                else:
+                    print(f"WARNING: Could not rename collection {old_title!r} to {collection_name!r}: {e}")
+                target_collection = None
+        elif not existing_collection and len(stale_owned_collections) > 1:
+            # Ambiguous ownership (e.g. a leftover duplicate) - never guess
+            # which one to rename. Leave every candidate alone; a new
+            # collection gets created below like before this feature existed.
+            stale_titles = [c.title for c in stale_owned_collections]
+            msg = (
+                f"Found {len(stale_owned_collections)} collections carrying label "
+                f"{private_label!r} with a title other than {collection_name!r} "
+                f"({stale_titles}) - ownership is ambiguous, skipping rename"
+            )
+            if logger:
+                logger.warning(msg)
+            else:
+                print(f"WARNING: {msg}")
+
+        # A successful rename (if any) takes precedence; otherwise fall
+        # back to the exact-title match found above.
+        target_collection = target_collection or existing_collection
+
+        if target_collection:
+            current_items = target_collection.items()
             if current_items:
-                existing_collection.removeItems(current_items)
-            existing_collection.addItems(items)
-            target_collection = existing_collection
+                target_collection.removeItems(current_items)
+            target_collection.addItems(items)
             if logger:
                 logger.info(f"Updated collection: {collection_name} ({len(items)} items)")
             else:
