@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import tempfile
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, create_autospec, patch
 
 import requests
 
@@ -30,6 +30,7 @@ from recommenders.external_sync import (
     get_imdb_id,
     sync_watch_history_to_trakt,
 )
+from utils import MDBListClient, RadarrClient, SonarrClient  # noqa: E402
 
 
 class TestFlattenCategorized:
@@ -281,9 +282,11 @@ class TestExportToRadarr:
 
 
 def _mock_radarr_client():
-    """MagicMock RadarrClient that echoes routing args back so tests can
-    assert exactly what each per-library group resolved."""
-    client = MagicMock()
+    """autospec'd RadarrClient that echoes routing args back so tests can
+    assert exactly what each per-library group resolved. autospec (not a bare
+    MagicMock) enforces the real add_movie signature, so a call-site kwarg
+    typo raises TypeError here instead of silently passing."""
+    client = create_autospec(RadarrClient, instance=True)
     client.test_connection.return_value = None
     client.get_movies.return_value = []
     client.get_quality_profile_id.side_effect = lambda name: f"qp-{name}"
@@ -550,9 +553,11 @@ class TestExportToSonarr:
 
 
 def _mock_sonarr_client():
-    """MagicMock SonarrClient that echoes routing args back so tests can
-    assert exactly what each per-library group resolved."""
-    client = MagicMock()
+    """autospec'd SonarrClient that echoes routing args back so tests can
+    assert exactly what each per-library group resolved. autospec (not a bare
+    MagicMock) enforces the real add_series signature, so a call-site kwarg
+    typo raises TypeError here instead of silently passing."""
+    client = create_autospec(SonarrClient, instance=True)
     client.test_connection.return_value = None
     client.get_series.return_value = []
     client.get_quality_profile_id.side_effect = lambda name: f"qp-{name}"
@@ -615,7 +620,7 @@ class TestExportToSonarrPerLibraryRouting:
         assert kwargs["quality_profile_id"] == "qp-HD-1080p"
         assert kwargs["tag_ids"] == ["tag-Curatarr"]
         assert kwargs["monitored"] is True
-        assert kwargs["search_for_missing_episodes"] is True
+        assert kwargs["search_for_missing"] is True
         assert kwargs["season_folder"] is True
         assert kwargs["series_type"] == "standard"
 
@@ -1752,9 +1757,12 @@ class TestExportToSonarrNonCombinedMode:
 
 
 def _mock_mdblist_client():
-    """MagicMock MDBListClient for export_to_mdblist tests."""
-    client = MagicMock()
-    client.get_user_info.return_value = {"name": "jason"}
+    """autospec'd MDBListClient for export_to_mdblist tests. autospec
+    (not a bare MagicMock) enforces the real client's method set/signatures,
+    so a call to a nonexistent method like get_user_info raises AttributeError
+    here instead of silently passing."""
+    client = create_autospec(MDBListClient, instance=True)
+    client.test_connection.return_value = True
     client.get_or_create_list.side_effect = lambda name: {"id": abs(hash(name)) % 1000, "name": name}
     client.clear_list.return_value = True
     client.add_items.return_value = {"added": 2}
@@ -1768,7 +1776,7 @@ class TestExportToMdblistLogic:
     @patch("recommenders.external_sync.create_mdblist_client")
     def test_connection_error_logs_and_returns(self, mock_create):
         client = _mock_mdblist_client()
-        client.get_user_info.side_effect = MDBListAPIError("bad token")
+        client.test_connection.side_effect = MDBListAPIError("bad token")
         mock_create.return_value = client
         config = {"mdblist": {"enabled": True, "auto_sync": True}}
 

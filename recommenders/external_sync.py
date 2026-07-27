@@ -538,7 +538,7 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                         season_folder=season_folder,
                         series_type=series_type,
                         tag_ids=[tag_id],
-                        search_for_missing_episodes=search_for_series,  # type: ignore[call-arg]  # KNOWN PRE-EXISTING BUG (found during mypy remediation, not introduced/fixed here): SonarrClient.add_series's real param is `search_for_missing`, not `search_for_missing_episodes` - this call raises TypeError at runtime whenever it executes. Renaming it is a behavior change outside this typing-only PR's scope; tracked for a follow-up fix.
+                        search_for_missing=search_for_series,
                     )
                     added += 1
                     print(f"  {GREEN}Added: {series_data['title']}{RESET}")
@@ -599,7 +599,7 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                         season_folder=season_folder,
                         series_type=series_type,
                         tag_ids=[tag_id],
-                        search_for_missing_episodes=search_for_series,  # type: ignore[call-arg]  # KNOWN PRE-EXISTING BUG (found during mypy remediation, not introduced/fixed here): SonarrClient.add_series's real param is `search_for_missing`, not `search_for_missing_episodes` - this call raises TypeError at runtime whenever it executes. Renaming it is a behavior change outside this typing-only PR's scope; tracked for a follow-up fix.
+                        search_for_missing=search_for_series,
                     )
                     added += 1
                     print(f"    {GREEN}Added: {series_data['title']}{RESET}")
@@ -871,9 +871,8 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
 
     # Test connection
     try:
-        user_info = mdblist_client.get_user_info()  # type: ignore[attr-defined]  # KNOWN PRE-EXISTING BUG (found during mypy remediation, not introduced/fixed here): MDBListClient has no get_user_info method at all - this raises AttributeError (not caught by the except MDBListAPIError below) whenever this code path executes. Fixing it is a behavior change outside this typing-only PR's scope; tracked for a follow-up fix.
+        mdblist_client.test_connection()
         print(f"\n{CYAN}=== Exporting to MDBList ==={RESET}")
-        print(f"  Connected as: {user_info.get('name', 'Unknown')}")
     except MDBListAPIError as e:
         log_error(f"Could not connect to MDBList: {e}")
         return

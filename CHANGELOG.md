@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.47] - 2026-07-27
+
+### Fixed
+
+- **Two runtime crashes found during the 2.10.46 mypy pass (both were left as documented `# type: ignore[...]` there on purpose, since fixing them was a behavior change outside that typing-only PR's scope) are now actually fixed.**
+
+  - `export_to_sonarr()` called `SonarrClient.add_series()` with `search_for_missing_episodes=` - the real parameter is `search_for_missing`. Every send-to-Sonarr export raised `TypeError` the moment it ran (both the combined-mode and per-user/mapping-mode call sites). Fixed by renaming the kwarg to match the actual signature; behavior is otherwise unchanged (it's now what the per-library `search` setting always should have done - actually starting a search for missing episodes on add, instead of crashing before the add ever happened).
+  - `export_to_mdblist()` called `MDBListClient.get_user_info()`, which doesn't exist on that class at all (MDBList's client only ever implemented list management, never a user-info endpoint) - every MDBList export raised `AttributeError` (not caught by the surrounding `except MDBListAPIError`, so it propagated as an unhandled exception) the moment it ran. Fixed by calling `test_connection()` instead - the same "verify the API key works, then print the section header" pattern already used by `export_to_sonarr()`/`export_to_radarr()`/`export_to_simkl()`. The "Connected as: {name}" line is removed since no real user-info data was ever available to back it.
+  - **Root cause of why neither was caught by tests:** both call sites were exercised only against a bare `unittest.mock.MagicMock()`, which accepts any attribute name and any keyword argument silently - so a call-site kwarg typo or a call to a method that doesn't exist on the real class both passed clean. Every `SonarrClient`/`RadarrClient`/`MDBListClient` test double in `tests/test_external_sync.py` is now built via `unittest.mock.create_autospec(...)` instead, which enforces the real class's method set and call signatures - reverting either fix locally and re-running the suite now fails loudly (`TypeError`/`AttributeError`) instead of passing. Radarr's `add_movie()` call sites and every other Sonarr/Radarr/MDBList client call in `external_sync.py` were audited for the same class of kwarg mismatch; none found.
+
 ## [2.10.46] - 2026-07-27
 
 ### Changed
