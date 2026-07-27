@@ -628,8 +628,8 @@ class TestGetLibraries:
             "sonarr": {"enabled": True, "root_folder": "/data/tv", "series_type": "anime"},
         }
         libraries = get_libraries(config)
-        movie_lib = next(l for l in libraries if l["media_type"] == MEDIA_TYPE_MOVIE)
-        tv_lib = next(l for l in libraries if l["media_type"] == MEDIA_TYPE_TV)
+        movie_lib = next(lib for lib in libraries if lib["media_type"] == MEDIA_TYPE_MOVIE)
+        tv_lib = next(lib for lib in libraries if lib["media_type"] == MEDIA_TYPE_TV)
 
         movie_arr = get_effective_arr_config(config, movie_lib)
         assert movie_arr["enabled"] is True

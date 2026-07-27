@@ -332,7 +332,7 @@ def migrate_config(config_path: str, dry_run: bool = False) -> dict:
         print(f"config.yml (slimmed to {len(core_config)} sections)")
         if tuning_config:
             print(f"tuning.yml ({len(tuning_config)} sections)")
-        for feature, cfg in feature_configs.items():
+        for feature, _cfg in feature_configs.items():
             print(f"{feature}.yml")
         if libraries:
             print(f"config.yml would gain a 'libraries' section ({len(libraries)} entries)")

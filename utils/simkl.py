@@ -167,12 +167,12 @@ class SimklClient(BaseAPIClient):
 
             return response.json()
 
-        except requests.exceptions.Timeout:
-            raise SimklAPIError(f"Request timeout after {SIMKL_REQUEST_TIMEOUT}s")
-        except requests.exceptions.ConnectionError:
-            raise SimklAPIError("Could not connect to Simkl API")
+        except requests.exceptions.Timeout as e:
+            raise SimklAPIError(f"Request timeout after {SIMKL_REQUEST_TIMEOUT}s") from e
+        except requests.exceptions.ConnectionError as e:
+            raise SimklAPIError("Could not connect to Simkl API") from e
         except requests.exceptions.RequestException as e:
-            raise SimklAPIError(f"Simkl request failed: {e}")
+            raise SimklAPIError(f"Simkl request failed: {e}") from e
         finally:
             record_api_call("simkl", outcome, time.time() - request_start)
 
@@ -210,7 +210,7 @@ class SimklClient(BaseAPIClient):
             }
 
         except requests.RequestException as e:
-            raise SimklAuthError(f"Failed to get PIN code: {e}")
+            raise SimklAuthError(f"Failed to get PIN code: {e}") from e
 
     def poll_for_token(self, user_code: str, interval: int = 5, expires_in: int = 900) -> bool:
         """

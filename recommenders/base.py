@@ -16,7 +16,7 @@ import time
 import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import plexapi.exceptions
 import requests
@@ -177,7 +177,8 @@ class BaseCache(ABC):
             print(f"Found {len(new_items)} new {self.media_key} to analyze")
 
             for i, item in enumerate(new_items, 1):
-                msg = f"\r{CYAN}Processing {self.media_type} {i}/{len(new_items)} ({int((i / len(new_items)) * 100)}%){RESET}"
+                pct_done = int((i / len(new_items)) * 100)
+                msg = f"\r{CYAN}Processing {self.media_type} {i}/{len(new_items)} ({pct_done}%){RESET}"
                 sys.stdout.write(msg)
                 sys.stdout.flush()
 
@@ -233,7 +234,7 @@ class BaseCache(ABC):
         print(f"\n{CYAN}Backfilling collection data for {total} movies (one-time migration)...{RESET}")
 
         updated = 0
-        for i, (item_id, info) in enumerate(movies_needing_collection, 1):
+        for i, (_item_id, info) in enumerate(movies_needing_collection, 1):
             pct = int((i / total) * 100)
             sys.stdout.write(f"\r{CYAN}Processing {i}/{total} ({pct}%) - Found {updated} collections{RESET}")
             sys.stdout.flush()
@@ -326,7 +327,7 @@ class BaseCache(ABC):
         Returns:
             Dict with 'tmdb_id', 'imdb_id', 'keywords', 'rating', 'vote_count'
         """
-        result = {
+        result: Dict[str, Any] = {
             "tmdb_id": None,
             "imdb_id": None,
             "keywords": [],
@@ -446,10 +447,10 @@ class BaseRecommender(ABC):
 
         # Initialize counters and caches
         self.cached_watched_count = 0
-        self.watched_data_counters = {}
-        self.plex_tmdb_cache = {}
-        self.tmdb_keywords_cache = {}
-        self.label_dates = {}
+        self.watched_data_counters: Dict[str, Any] = {}
+        self.plex_tmdb_cache: Dict[str, Any] = {}
+        self.tmdb_keywords_cache: Dict[str, Any] = {}
+        self.label_dates: Dict[str, Any] = {}
         self.users = get_configured_users(self.config)
 
         # Set for tracking watched item IDs
@@ -800,7 +801,8 @@ class BaseRecommender(ABC):
             print(f"Excluded {excluded_count} {self.media_key} based on genre filters")
         if quality_filtered_count > 0:
             log_warning(
-                f"Filtered {quality_filtered_count} {self.media_key} below quality thresholds (rating: {min_rating}+, votes: {min_vote_count}+)"
+                f"Filtered {quality_filtered_count} {self.media_key} below quality thresholds "
+                f"(rating: {min_rating}+, votes: {min_vote_count}+)"
             )
 
         if not unwatched_items:
@@ -924,7 +926,7 @@ class BaseRecommender(ABC):
         if total_labeled > 0:
             print(f"  Scoring {total_labeled} existing labeled items...", end="", flush=True)
 
-        for i, item in enumerate(unwatched_labeled, 1):
+        for _i, item in enumerate(unwatched_labeled, 1):
             item_id = int(item.ratingKey)
             item_info = media_cache.cache[self.media_key].get(str(item_id))
             if item_info:

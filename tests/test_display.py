@@ -60,7 +60,7 @@ class TestColoredFormatter:
             name="test", level=logging.DEBUG, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
-        formatted = formatter.format(record)
+        formatter.format(record)
 
         assert CYAN in record.levelname
 
@@ -71,7 +71,7 @@ class TestColoredFormatter:
             name="test", level=logging.INFO, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
-        formatted = formatter.format(record)
+        formatter.format(record)
 
         assert GREEN in record.levelname
 
@@ -82,7 +82,7 @@ class TestColoredFormatter:
             name="test", level=logging.WARNING, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
-        formatted = formatter.format(record)
+        formatter.format(record)
 
         assert YELLOW in record.levelname
 
@@ -93,7 +93,7 @@ class TestColoredFormatter:
             name="test", level=logging.ERROR, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
-        formatted = formatter.format(record)
+        formatter.format(record)
 
         assert RED in record.levelname
 
@@ -104,7 +104,7 @@ class TestColoredFormatter:
             name="test", level=logging.CRITICAL, pathname="", lineno=0, msg="Test message", args=(), exc_info=None
         )
 
-        formatted = formatter.format(record)
+        formatter.format(record)
 
         assert RED in record.levelname
 
@@ -115,7 +115,7 @@ class TestTeeLogger:
     def test_write_to_file_strips_ansi(self):
         """Test that file output has ANSI codes stripped."""
         mock_logfile = StringIO()
-        tee = TeeLogger(mock_logfile)
+        TeeLogger(mock_logfile)
 
         # Directly manipulate to test file writing
         colored_text = f"{GREEN}Success{RESET}"

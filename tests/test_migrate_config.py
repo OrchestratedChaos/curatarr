@@ -399,8 +399,8 @@ class TestMigrateConfigLibraries:
 
         assert "libraries" in migrated
         assert len(migrated["libraries"]) == 2
-        movie_lib = next(l for l in migrated["libraries"] if l["media_type"] == "movie")
-        tv_lib = next(l for l in migrated["libraries"] if l["media_type"] == "tv")
+        movie_lib = next(lib for lib in migrated["libraries"] if lib["media_type"] == "movie")
+        tv_lib = next(lib for lib in migrated["libraries"] if lib["media_type"] == "tv")
         assert movie_lib["arr"]["root_folder"] == "/data/movies"
         assert movie_lib["arr"]["quality_profile"] == "4K"
         assert tv_lib["arr"]["root_folder"] == "/data/tv"

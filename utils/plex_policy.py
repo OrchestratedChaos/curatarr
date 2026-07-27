@@ -170,7 +170,7 @@ def apply_user_label_restrictions(
         logger.debug(f"Plex users available for restrictions: {list(plex_users.keys())}")
 
         all_success = True
-        for username, user_label in all_user_labels.items():
+        for username, _user_label in all_user_labels.items():
             # Admin can't have restrictions
             if username.lower() == admin_username:
                 logger.debug(f"Skipping restrictions for admin user: {username}")

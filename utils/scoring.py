@@ -360,7 +360,7 @@ def _normalize_user_genre_counts(user_genre_counter: Counter) -> Tuple[Dict[str,
     1 when the user has no genre data, matching
     calculate_similarity_score()'s pre-existing fallback.
     """
-    normalized_user_genres = {}
+    normalized_user_genres: Dict[str, int] = {}
     for genre, count in user_genre_counter.items():
         norm_genre = normalize_genre(genre)
         if norm_genre in normalized_user_genres:
@@ -412,7 +412,8 @@ def _score_genre_component(
                 penalty = rarity * TFIDF_GENRE_PENALTY
                 genre_penalty += penalty
                 details.append(
-                    f"{genre} (TF-IDF: count {genre_count:.1f} < threshold {tfidf_threshold_count:.1f}, penalty: {round(penalty, 2)})"
+                    f"{genre} (TF-IDF: count {genre_count:.1f} < threshold {tfidf_threshold_count:.1f}, "
+                    f"penalty: {round(penalty, 2)})"
                 )
             else:
                 # Genre is common in user's profile - good match
@@ -646,7 +647,8 @@ def _score_keyword_component(
                 penalty = rarity * TFIDF_KEYWORD_PENALTY
                 keyword_penalty += penalty
                 details.append(
-                    f"{kw} (TF-IDF: count {count:.1f} < threshold {tfidf_kw_threshold:.1f}, penalty: {round(penalty, 2)})"
+                    f"{kw} (TF-IDF: count {count:.1f} < threshold {tfidf_kw_threshold:.1f}, "
+                    f"penalty: {round(penalty, 2)})"
                 )
             else:
                 # Keyword is common in user's profile - good match
@@ -704,7 +706,7 @@ def _apply_active_weight_redistribution(
     if lost_weight > 0 and active_weights:
         total_active_weight = sum(w for w, _ in active_weights.values())
         if total_active_weight > 0:
-            for comp, (weight, ratio) in active_weights.items():
+            for _comp, (weight, ratio) in active_weights.items():
                 extra_weight = lost_weight * (weight / total_active_weight)
                 extra_score = extra_weight * ratio
                 score += extra_score

@@ -78,10 +78,6 @@ class TestTraktAuthSaveTokens:
             yaml.dump(initial_config, f)
 
         # Patch the path resolution
-        import utils.trakt_auth as trakt_auth_module
-
-        original_func = trakt_auth_module.save_tokens
-
         def patched_save_tokens(access_token, refresh_token):
             with open(config_path, "r") as f:
                 config = yaml.safe_load(f)

@@ -7,7 +7,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 import math
 import traceback
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+# Import base classes
+from recommenders.base import BaseCache, BaseRecommender
 
 # Import shared utilities
 from utils import (
@@ -46,9 +49,6 @@ from utils import (
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger("curatarr")
-
-# Import base classes
-from recommenders.base import BaseCache, BaseRecommender
 
 
 class MovieCache(BaseCache):
@@ -150,9 +150,9 @@ class PlexMovieRecommender(BaseRecommender):
         # Movie-specific initialization
         self.cached_unwatched_count = 0
         self.cached_library_movie_count = 0
-        self.synced_movie_ids = set()
-        self.cached_unwatched_movies = []
-        self.plex_watched_rating_keys = set()
+        self.synced_movie_ids: Set[int] = set()
+        self.cached_unwatched_movies: List[Any] = []
+        self.plex_watched_rating_keys: Set[int] = set()
         # movies.show_director: is the documented location (config/tuning.example.yml);
         # fall back to the legacy root-level general.show_director for back-compat.
         self.show_director = self.media_config.get(
@@ -247,9 +247,9 @@ class PlexMovieRecommender(BaseRecommender):
 
         movies_section = self.plex.library.section(self.library_title)
         counters = create_empty_counters("movie")
-        watched_ids = set()
-        watched_movie_dates = {}  # Store watch timestamps for recency decay
-        user_ratings = {}  # Store user ratings for each movie
+        watched_ids: Set[int] = set()
+        watched_movie_dates: Dict[int, Any] = {}  # Store watch timestamps for recency decay
+        user_ratings: Dict[int, float] = {}  # Store user ratings for each movie
         watched_movie_views = {}  # Store view counts for rewatch weighting
         not_found_count = 0
 
@@ -340,7 +340,8 @@ class PlexMovieRecommender(BaseRecommender):
                 if multiplier < 0:
                     negative_signal_count += 1
                     logger.debug(
-                        f"Negative signal: {movie_info.get('title')} (rating: {user_ratings.get(movie_id)}, weight: {multiplier:.2f})"
+                        f"Negative signal: {movie_info.get('title')} "
+                        f"(rating: {user_ratings.get(movie_id)}, weight: {multiplier:.2f})"
                     )
 
                 # Process with weighted counters
@@ -504,7 +505,8 @@ class PlexMovieRecommender(BaseRecommender):
             score = min(1.0, score * (1 + bonus))
             breakdown["collection_bonus"] = round(bonus, 3)
             breakdown["details"]["collection"] = (
-                f"{movie_info.get('collection_name', 'Unknown')} (watched: {collection_count:.1f}, bonus: {round(bonus * 100, 1)}%)"
+                f"{movie_info.get('collection_name', 'Unknown')} "
+                f"(watched: {collection_count:.1f}, bonus: {round(bonus * 100, 1)}%)"
             )
 
         return score, breakdown

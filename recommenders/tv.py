@@ -8,7 +8,10 @@ import logging
 import math
 import re
 import traceback
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+# Import base classes
+from recommenders.base import BaseCache, BaseRecommender
 
 # Import shared utilities
 from utils import (
@@ -49,9 +52,6 @@ from utils import (
 
 # Module-level logger - configured by setup_logging() in main()
 logger = logging.getLogger("curatarr")
-
-# Import base classes
-from recommenders.base import BaseCache, BaseRecommender
 
 
 class ShowCache(BaseCache):
@@ -141,9 +141,9 @@ class PlexTVRecommender(BaseRecommender):
         # TV-specific initialization
         self.cached_unwatched_count = 0
         self.cached_library_show_count = 0
-        self.synced_show_ids = set()
-        self.cached_unwatched_shows = []
-        self.plex_watched_rating_keys = set()
+        self.synced_show_ids: Set[int] = set()
+        self.cached_unwatched_shows: List[Any] = []
+        self.plex_watched_rating_keys: Set[int] = set()
 
         # Create show cache
         self.show_cache = ShowCache(self.cache_dir, recommender=self)
@@ -248,7 +248,7 @@ class PlexTVRecommender(BaseRecommender):
 
         shows_section = self.plex.library.section(self.library_title)
         counters = create_empty_counters("tv")
-        watched_ids = set()
+        watched_ids: Set[int] = set()
         not_found_count = 0
 
         log_warning("Querying Plex watch history directly...")
@@ -296,7 +296,9 @@ class PlexTVRecommender(BaseRecommender):
                     if show_id in show_completion_data:
                         data = show_completion_data[show_id]
                         logger.debug(
-                            f"Dropped: {data.get('title')} ({data['watched_episodes']}/{data['total_episodes']} eps, {data['completion_percent']:.0f}%)"
+                            f"Dropped: {data.get('title')} "
+                            f"({data['watched_episodes']}/{data['total_episodes']} eps, "
+                            f"{data['completion_percent']:.0f}%)"
                         )
 
         # Build rewatch data and user ratings for shows
@@ -332,11 +334,12 @@ class PlexTVRecommender(BaseRecommender):
         normal_watched = watched_ids - dropped_show_ids
         print("")
         print(
-            f"Processing {len(normal_watched)} watched shows with recency decay (excluding {len(dropped_show_ids)} dropped):"
+            f"Processing {len(normal_watched)} watched shows with recency decay "
+            f"(excluding {len(dropped_show_ids)} dropped):"
         )
 
         # Track production companies for franchise/spinoff bonus
-        production_companies = {}  # production_company_id -> weighted count
+        production_companies: Dict[int, float] = {}  # production_company_id -> weighted count
 
         for i, show_id in enumerate(normal_watched, 1):
             show_progress("Processing", i, len(normal_watched))

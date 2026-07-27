@@ -6,7 +6,7 @@ Handles adding, removing, and categorizing Plex labels.
 import logging
 import re
 from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from .display import GREEN, RESET, log_info
 
@@ -67,7 +67,7 @@ def categorize_labeled_items(
     # Convert to list to allow multiple iterations (MediaContainer is single-use)
     labeled_items = list(labeled_items)
 
-    result = {
+    result: Dict[str, List[Any]] = {
         "fresh": [],
         "watched": [],
         "stale": [],  # Always empty now - score-based eviction handles rotation

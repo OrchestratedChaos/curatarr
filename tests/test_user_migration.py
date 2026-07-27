@@ -242,7 +242,7 @@ class TestRenameUserInUsersList:
         new_text, changed = rename_user_in_users_list(SAMPLE_CONFIG_TEXT, "testuser_alpha", "jsmith_new")
 
         assert changed is True
-        list_line = [l for l in new_text.splitlines() if l.strip().startswith("list:")][0]
+        list_line = [line for line in new_text.splitlines() if line.strip().startswith("list:")][0]
         assert "jsmith_new" in list_line
         assert "testuser_alpha" not in list_line
         # Other users on the same line preserved, formatting/commas intact

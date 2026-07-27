@@ -4,7 +4,7 @@ Handles preference counting and profile building.
 """
 
 from collections import Counter
-from typing import Dict
+from typing import Any, Dict
 
 from .config import DEFAULT_NEGATIVE_THRESHOLD, get_negative_multiplier, get_rating_multipliers
 from .display import log_warning
@@ -21,7 +21,7 @@ def create_empty_counters(media_type: str = "movie") -> Dict:
     Returns:
         Dictionary with Counter objects for each category
     """
-    counters = {
+    counters: Dict[str, Any] = {
         "genres": Counter(),
         "actors": Counter(),
         "languages": Counter(),

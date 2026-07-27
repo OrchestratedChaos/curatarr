@@ -177,7 +177,7 @@ class TraktClient(BaseAPIClient):
             return response.json()
 
         except requests.RequestException as e:
-            raise TraktAPIError(f"Trakt request failed: {e}")
+            raise TraktAPIError(f"Trakt request failed: {e}") from e
         finally:
             record_api_call("trakt", outcome, time.time() - request_start)
 

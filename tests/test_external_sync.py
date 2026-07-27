@@ -2267,7 +2267,9 @@ class TestSyncWatchHistoryToTrakt:
             "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "per_user"}},
             "cache_dir": tmp_cache,
         }
-        load_profile_func = lambda cfg, u, mt: {"tmdb_ids": {100}} if mt == "movie" else None
+
+        def load_profile_func(cfg, u, mt):
+            return {"tmdb_ids": {100}} if mt == "movie" else None
 
         sync_watch_history_to_trakt(config, "tmdb-key", users=["jason"], load_profile_func=load_profile_func)
 
@@ -2291,7 +2293,9 @@ class TestSyncWatchHistoryToTrakt:
             "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "per_user"}},
             "cache_dir": tmp_cache,
         }
-        load_profile_func = lambda cfg, u, mt: {"tmdb_ids": {100}} if mt == "movie" else None
+
+        def load_profile_func(cfg, u, mt):
+            return {"tmdb_ids": {100}} if mt == "movie" else None
 
         sync_watch_history_to_trakt(config, "tmdb-key", users=["jason"], load_profile_func=load_profile_func)
 
@@ -2310,7 +2314,9 @@ class TestSyncWatchHistoryToTrakt:
             "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "per_user"}},
             "cache_dir": tmp_cache,
         }
-        load_profile_func = lambda cfg, u, mt: {"tmdb_ids": {100}} if mt == "movie" else None
+
+        def load_profile_func(cfg, u, mt):
+            return {"tmdb_ids": {100}} if mt == "movie" else None
 
         sync_watch_history_to_trakt(config, "tmdb-key", users=["jason"], load_profile_func=load_profile_func)
 
@@ -2329,7 +2335,9 @@ class TestSyncWatchHistoryToTrakt:
             "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "per_user"}},
             "cache_dir": tmp_cache,
         }
-        load_profile_func = lambda cfg, u, mt: {"tmdb_ids": {100}} if mt == "movie" else None
+
+        def load_profile_func(cfg, u, mt):
+            return {"tmdb_ids": {100}} if mt == "movie" else None
 
         sync_watch_history_to_trakt(config, "tmdb-key", users=["jason"], load_profile_func=load_profile_func)
 
@@ -2352,7 +2360,9 @@ class TestSyncWatchHistoryToTrakt:
             "trakt": {"enabled": True, "export": {"auto_sync": True, "user_mode": "per_user"}},
             "cache_dir": tmp_cache,
         }
-        load_profile_func = lambda cfg, u, mt: {"tmdb_ids": {100}} if mt == "movie" else None
+
+        def load_profile_func(cfg, u, mt):
+            return {"tmdb_ids": {100}} if mt == "movie" else None
 
         sync_watch_history_to_trakt(config, "tmdb-key", users=["jason"], load_profile_func=load_profile_func)
 
