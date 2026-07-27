@@ -1381,7 +1381,7 @@ class TestFindMissingSequels:
         plex.library.section.side_effect = Exception("plex unreachable")
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1393,7 +1393,7 @@ class TestFindMissingSequels:
         plex = _plex_with_libraries([])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1428,7 +1428,7 @@ class TestFindMissingSequels:
         plex = _plex_with_libraries([_library_item(1)])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", ["netflix"])
@@ -1444,7 +1444,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1474,7 +1474,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "", ["netflix"])
@@ -1506,7 +1506,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
@@ -1528,7 +1528,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)) as mock_get,
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
@@ -1544,7 +1544,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
@@ -1598,7 +1598,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)) as mock_get,
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
@@ -1622,7 +1622,7 @@ class TestFindMissingSequels:
             raise AssertionError(f"unexpected url {url}")
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_fake_get),
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
@@ -1633,7 +1633,7 @@ class TestFindMissingSequels:
         plex = _plex_with_libraries([_library_item(malformed_guid=True), _library_item(tmdb_id=None)])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
@@ -1657,7 +1657,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             find_missing_sequels("key", plex, "Movies", "", [])
@@ -1695,7 +1695,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
@@ -1732,7 +1732,7 @@ class TestFindMissingSequels:
         plex, url_map, tv_section = self._tv_special_setup([episode])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1747,7 +1747,7 @@ class TestFindMissingSequels:
         plex, url_map, _ = self._tv_special_setup([episode])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1777,7 +1777,7 @@ class TestFindMissingSequels:
         )
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1805,7 +1805,7 @@ class TestFindMissingSequels:
         )
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1820,7 +1820,7 @@ class TestFindMissingSequels:
         plex, url_map, _ = self._tv_special_setup([episode])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1836,7 +1836,7 @@ class TestFindMissingSequels:
         plex, url_map, _ = self._tv_special_setup([episode])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1849,7 +1849,7 @@ class TestFindMissingSequels:
         tv_section.search.side_effect = Exception("search backend down")
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1883,7 +1883,7 @@ class TestFindMissingSequels:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "TV Shows", [])
@@ -1895,7 +1895,7 @@ class TestFindMissingSequels:
         plex, url_map, _ = self._tv_special_setup([])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.huntarr.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_missing_sequels("key", plex, "Movies", "", [])
