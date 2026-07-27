@@ -152,6 +152,58 @@ class TestDashboard:
         assert resp.status_code == 200
         assert b"_watchlist.html" not in resp.data
 
+    def test_scheduler_disabled_by_default(self, client):
+        c, app, root = client
+        resp = c.get("/")
+        assert b"Scheduler:" in resp.data
+        assert b"disabled" in resp.data
+
+    def test_scheduler_shows_next_run_when_enabled(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setenv("TZ", "UTC")
+        config_path = os.path.join(root, "config", "config.yml")
+        with open(config_path, "w") as f:
+            f.write(
+                'plex:\n  url: "http://localhost:32400"\n  token: "not-a-real-token"\n'
+                'users:\n  list: "alice"\n'
+                'schedule:\n  enabled: true\n  time: "03:00"\n'
+            )
+        resp = c.get("/")
+        assert b"next run" in resp.data
+
+    def test_scheduler_shows_error_for_invalid_schedule(self, client):
+        c, app, root = client
+        config_path = os.path.join(root, "config", "config.yml")
+        with open(config_path, "w") as f:
+            f.write(
+                'plex:\n  url: "http://localhost:32400"\n  token: "not-a-real-token"\n'
+                'users:\n  list: "alice"\n'
+                'schedule:\n  enabled: true\n  time: "not-a-time"\n'
+            )
+        resp = c.get("/")
+        assert b"invalid schedule" in resp.data
+
+    def test_scheduler_shows_last_attempt_when_thread_attached(self, client):
+        """app.scheduler_thread is None under create_app() by default
+        (see that attribute's own comment) - a real SchedulerThread is
+        only attached by main(), so this simulates that to prove the
+        dashboard reads its state correctly when one IS attached."""
+        from datetime import datetime, timezone
+        from unittest.mock import Mock
+
+        c, app, root = client
+        fake_thread = Mock()
+        fake_thread.state.snapshot.return_value = {
+            "last_attempt_at": datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc),
+            "last_result": "skipped - A run is already in progress",
+        }
+        app.scheduler_thread = fake_thread
+
+        resp = c.get("/")
+
+        assert b"last scheduled attempt" in resp.data
+        assert b"skipped" in resp.data
+
     def test_handles_missing_config_gracefully(self, tmp_path):
         (tmp_path / "logs").mkdir()
         (tmp_path / "recommendations" / "external").mkdir(parents=True)

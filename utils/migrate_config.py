@@ -34,6 +34,23 @@ TUNING_SECTIONS = [
 ]
 
 # Sections that stay in main config.yml
+#
+# #264 note: this is a hardcoded whitelist, not "everything not routed
+# elsewhere" - build_core_config() below only ever copies sections
+# listed HERE into the migrated config.yml, so any top-level config.yml
+# section missing from this list is silently DROPPED (not preserved
+# anywhere) the moment a config triggers migration (needs_migration()
+# below - which, notably, includes every install still using the
+# single-library plex.movie_library/tv_library format instead of an
+# explicit 'libraries:' list, i.e. most fresh installs). "schedule"
+# is added here for exactly that reason - #264 shipped this as a new
+# config.yml section, and without this it would have been silently
+# wiped on a fresh install's very first migration. "huntarr" and
+# "tautulli" have the identical, PRE-EXISTING problem (confirmed by
+# reproducing it in a real container while verifying #264) and are
+# NOT included in this fix - that's a separate bug, reported rather
+# than silently fixed here, since it affects two unrelated features
+# and deserves its own look/decision.
 CORE_SECTIONS = [
     "plex",
     "tmdb",
@@ -43,6 +60,7 @@ CORE_SECTIONS = [
     "logging",
     "platform",
     "libraries",
+    "schedule",
 ]
 
 # Feature modules (each gets its own file)

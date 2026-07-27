@@ -437,6 +437,26 @@ fieldset.plex-fetch legend {
   font-size: 0.85rem;
 }
 
+/* #264 Scheduling fieldset (Settings screen) */
+.weekday-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0 12px;
+}
+
+.weekday-checkbox {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  margin: 0 !important;
+  width: auto;
+}
+
+.schedule-status {
+  margin-top: 10px;
+}
+
 .config-form h3 {
   color: var(--gold);
   font-size: 0.78rem;

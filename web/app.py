@@ -54,6 +54,7 @@ from werkzeug.datastructures import Headers
 
 from utils import (
     __version__,
+    describe_next_run,
     get_integration_status,
     get_project_root,
     get_update_mode,
@@ -68,6 +69,7 @@ from utils import (
 
 from .config_app import register_config_routes
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
+from .scheduler_runner import SchedulerThread
 from .security import redact, register_origin_host_guard, register_token_auth
 from .status import find_user_watchlist, get_last_run_status, list_log_files, read_log_tail
 from .update_apply import (
@@ -224,6 +226,15 @@ def create_app(
     # attachment (every route reads them back the same way), not a typo.
     app.job_manager = JobManager(project_root, logs_dir, code_root=code_root)  # type: ignore[attr-defined]
     app.update_manager = UpdateManager(project_root, logs_dir)  # type: ignore[attr-defined]
+    # #264: None here - every existing test/caller that only calls
+    # create_app() directly (which is nearly all of them) never gets a
+    # real background thread. Only main() (this module's own, and
+    # web/docker_server.py's) constructs a real SchedulerThread and
+    # replaces this, right before actually start()-ing it - see there
+    # for why it's deliberately NOT wired up inside create_app() itself.
+    # Every route that reads this must treat None as "scheduler not
+    # running" (e.g. under the test client), never assume it's set.
+    app.scheduler_thread = None  # type: ignore[attr-defined]
     app.test_client_class = _BrowserLikeTestClient
 
     register_origin_host_guard(app)
@@ -290,6 +301,13 @@ def create_app(
             _config_cache["mtimes"] = mtimes
             _config_cache["config"] = config
         return config
+
+    # #264: exposed so main() (this module's own, and web/docker_server.py's)
+    # can hand the SAME cached loader to the scheduler background
+    # thread it constructs - a schedule saved through the web UI takes
+    # effect on the thread's very next tick, no restart needed, exactly
+    # like every other config value this cache already serves.
+    app.load_config_cached = _load_config  # type: ignore[attr-defined]
 
     def _load_users():
         config = _load_config()
@@ -616,7 +634,18 @@ def create_app(
             }
             for user in (get_users_from_config(config) if config else [])
         ]
-        return render_template("dashboard.html", rows=rows, job=app.job_manager.status())
+        # #264: "next run"/"last scheduled attempt" - visible here rather
+        # than only on Settings, so a skipped occurrence (run lock held
+        # elsewhere) or a disabled/misconfigured schedule is never a
+        # silent mystery. app.scheduler_thread is None under the test
+        # client and any caller that only calls create_app() directly
+        # (see create_app's own comment on that attribute) - never
+        # assume it's set.
+        scheduler_status = describe_next_run(config or {})
+        scheduler_status["last_attempt"] = (
+            app.scheduler_thread.state.snapshot() if app.scheduler_thread is not None else None
+        )
+        return render_template("dashboard.html", rows=rows, job=app.job_manager.status(), scheduler=scheduler_status)
 
     @app.get("/run")
     def run_form():
@@ -804,6 +833,16 @@ def main():
     """
     port = int(os.environ.get("CURATARR_UI_PORT", DEFAULT_PORT))
     app = create_app()
+
+    # #264: started here (main()), never inside create_app() itself -
+    # every test/caller that only calls create_app() directly (nearly
+    # all of them) must never spawn a real background thread. Daemon
+    # thread (see SchedulerThread) - no explicit stop() wired into
+    # shutdown below; a scheduled run already in flight is killed the
+    # same way any other run is (JobManager.terminate_running(), right
+    # below - the scheduler and the web UI share one JobManager).
+    app.scheduler_thread = SchedulerThread(app.job_manager, app.load_config_cached)
+    app.scheduler_thread.start()
 
     # H3: a server shutdown (Ctrl+C, SIGTERM from a process manager, or
     # a clean interpreter exit) must never leave an orphaned recommender

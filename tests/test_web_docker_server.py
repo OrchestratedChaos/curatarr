@@ -44,6 +44,22 @@ def _restore_process_signal_handlers():
     signal.signal(signal.SIGTERM, original_sigterm)
 
 
+@pytest.fixture(autouse=True)
+def _mock_scheduler_thread():
+    """#264: main() now also constructs and start()s a real
+    SchedulerThread - every TestMain test below calls main() with
+    waitress.serve mocked out, so without this, each one would leave a
+    REAL (if idle - fake_app is a bare Mock, so every tick just hits
+    the "invalid schedule config" path once and goes quiet) background
+    thread running for the rest of the test session. Mocked out here so
+    no test in this module ever spawns one; TestSchedulerWiring below
+    explicitly un-mocks this to assert main() wires it up correctly.
+    """
+    with patch.object(docker_server, "SchedulerThread") as mock_cls:
+        mock_cls.return_value = Mock()
+        yield mock_cls
+
+
 class TestMain:
     """CURATARR_AUTH_TOKEN (or CURATARR_TRUSTED_NETWORK=true) is now
     required for every one of these to actually reach create_app()/
@@ -260,3 +276,34 @@ class TestShutdownHandling:
             sigint_handler(signal.SIGINT, None)
 
         fake_app.job_manager.terminate_running.assert_called_once()
+
+
+class TestSchedulerWiring:
+    """#264: main() must construct a real SchedulerThread (using the
+    app's job_manager and load_config_cached) and start() it - the
+    _mock_scheduler_thread autouse fixture above intercepts the class
+    itself, so these tests inspect what it was CALLED with rather than
+    letting a real thread spawn."""
+
+    def test_constructs_scheduler_thread_with_job_manager_and_config_loader(self, monkeypatch, _mock_scheduler_thread):
+        monkeypatch.setenv("CURATARR_AUTH_TOKEN", _STRONG_TOKEN)
+        fake_app = Mock()
+        with (
+            patch.object(docker_server, "create_app", return_value=fake_app),
+            patch.object(docker_server.waitress, "serve"),
+        ):
+            docker_server.main()
+
+        _mock_scheduler_thread.assert_called_once_with(fake_app.job_manager, fake_app.load_config_cached)
+
+    def test_starts_the_scheduler_thread(self, monkeypatch, _mock_scheduler_thread):
+        monkeypatch.setenv("CURATARR_AUTH_TOKEN", _STRONG_TOKEN)
+        fake_app = Mock()
+        with (
+            patch.object(docker_server, "create_app", return_value=fake_app),
+            patch.object(docker_server.waitress, "serve"),
+        ):
+            docker_server.main()
+
+        fake_scheduler_thread = _mock_scheduler_thread.return_value
+        fake_scheduler_thread.start.assert_called_once()

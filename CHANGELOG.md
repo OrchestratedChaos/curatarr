@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.55] - 2026-07-27
+
+### Added
+
+- **In-app scheduler (#264).** Settings -> Scheduling: enable a daily time (24-hour, optionally restricted to specific weekdays) to run the full pipeline (movie + tv + external) from inside the web UI process itself - no host cron or separate container needed. Off by default.
+  - Timezone is always the container's own `TZ` environment variable (falls back to UTC if unset) - there's no separate timezone setting, so there's exactly one clock to reason about. The Settings screen shows the resolved timezone and the computed next-run time.
+  - Shares the exact same cross-container run lock the existing `docker-compose.yml` `schedule` profile / host-cron approach already uses - a scheduled run can never overlap a run triggered any other way. If the scheduled time arrives while a run is already in progress, that occurrence is skipped and logged (never queued) - the dashboard shows the last scheduled attempt and its result.
+  - Never fires a missed occurrence on restart or redeploy - only the next real occurrence ever fires. Correctly handles both DST transitions: a time inside a spring-forward gap runs shortly after the gap closes rather than being skipped for the day; a fall-back-repeated hour fires once, not twice.
+  - **This does not replace host cron / the compose `schedule` profile - they coexist.** `docs/DOCKER.md` now documents both as explicit alternatives and states plainly to use only one: the shared run lock prevents the two from overlapping, but nothing prevents both from firing at different times of day if you enable the in-app scheduler while also running host cron/the compose profile. There's no reliable way to detect that combination from inside the container (no Docker socket access, no host crontab visibility), so this is a documentation warning, not an automatic check.
+
 ## [2.10.54] - 2026-07-27
 
 ### Fixed

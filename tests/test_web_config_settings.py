@@ -305,3 +305,106 @@ class TestNullSection:
 
         tuning = _read_yaml(root, "tuning")
         assert tuning["negative_signals"]["bad_ratings"]["threshold"] == 3
+
+
+class TestScheduleSettings:
+    """#264: the Scheduling fieldset on /config/settings - reads/writes
+    config.yml's schedule: section, validated via the same
+    utils.scheduler.parse_schedule_config() the background thread uses."""
+
+    def test_get_renders_defaults_when_unset(self, client):
+        c, app, root = client
+        resp = c.get("/config/settings")
+        assert resp.status_code == 200
+        assert b'name="schedule_time" value="03:00"' in resp.data
+        assert b"Scheduler is currently disabled" in resp.data
+
+    def test_saves_enabled_schedule_with_time_and_weekdays(self, client):
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form.update(
+            {
+                "schedule_enabled": "on",
+                "schedule_time": "04:30",
+                "schedule_weekday_monday": "on",
+                "schedule_weekday_friday": "on",
+            }
+        )
+        resp = c.post("/config/settings", data=form)
+
+        assert resp.status_code == 303
+        core = _read_yaml(root, "config")
+        assert core["schedule"]["enabled"] is True
+        assert core["schedule"]["time"] == "04:30"
+        assert set(core["schedule"]["weekdays"]) == {"monday", "friday"}
+
+    def test_no_weekdays_checked_omits_weekdays_key(self, client):
+        """Every day - see _apply_settings' own comment for why this is
+        an omitted key, not an empty list, on disk."""
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form["schedule_enabled"] = "on"
+        form["schedule_time"] = "03:00"
+        resp = c.post("/config/settings", data=form)
+
+        assert resp.status_code == 303
+        core = _read_yaml(root, "config")
+        assert "weekdays" not in core["schedule"]
+
+    def test_disabled_schedule_still_saves_time_for_next_time(self, client):
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form["schedule_time"] = "05:00"
+        resp = c.post("/config/settings", data=form)
+
+        assert resp.status_code == 303
+        core = _read_yaml(root, "config")
+        assert core["schedule"]["enabled"] is False
+        assert core["schedule"]["time"] == "05:00"
+
+    def test_invalid_time_rejected_with_field_error(self, client):
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form["schedule_enabled"] = "on"
+        form["schedule_time"] = "25:99"
+        resp = c.post("/config/settings", data=form)
+
+        assert resp.status_code == 400
+        assert b"HH:MM" in resp.data
+        core = _read_yaml(root, "config")
+        assert core.get("schedule", {}).get("time") != "25:99"  # the bad value never reached disk
+
+    def test_get_shows_next_run_when_enabled(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setenv("TZ", "UTC")
+        config_path = module_path(root, "config")
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(
+                'plex:\n  url: "http://localhost:32400"\n  token: "not-a-real-token"\n'
+                'users:\n  list: "alice"\n'
+                'schedule:\n  enabled: true\n  time: "03:00"\n'
+            )
+
+        resp = c.get("/config/settings")
+
+        assert resp.status_code == 200
+        assert b"Next run" in resp.data
+        assert b"UTC" in resp.data
+
+    def test_get_shows_error_for_invalid_saved_schedule(self, client):
+        """A hand-edited tuning.yml/config.yml with a bad schedule.time
+        must show why, not 500 or silently show nothing (#264:
+        describe_next_run() never raises)."""
+        c, app, root = client
+        config_path = module_path(root, "config")
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(
+                'plex:\n  url: "http://localhost:32400"\n  token: "not-a-real-token"\n'
+                'users:\n  list: "alice"\n'
+                'schedule:\n  enabled: true\n  time: "not-a-time"\n'
+            )
+
+        resp = c.get("/config/settings")
+
+        assert resp.status_code == 200
+        assert b"Schedule is invalid" in resp.data
