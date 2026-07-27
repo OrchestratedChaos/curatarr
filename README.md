@@ -440,7 +440,9 @@ configs keep working unchanged; new installs get `update_mode: notify`.
 ### Tuning (Optional)
 ```yaml
 movies:
-  limit_results: 50           # Recommendations per user
+  limit_results: 50           # Recommendations per user (the final
+                              # collection count - see general.limit_plex_results
+                              # below for the internal scoring buffer)
   quality_filters:
     min_rating: 5.0           # TMDB rating threshold
     min_vote_count: 50        # Minimum votes
@@ -453,6 +455,10 @@ recency_decay:
 
 collections:
   stale_removal_days: 7       # Rotate unwatched Plex collection labels
+
+general:
+  limit_plex_results: 100     # Advanced: candidate-scoring buffer per run
+                              # (defaults to 2x limit_results; rarely needs changing)
 
 external_recommendations:
   min_relevance_score: 0.65   # See note below

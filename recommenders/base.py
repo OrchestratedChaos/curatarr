@@ -24,7 +24,9 @@ from plexapi.myplex import MyPlexAccount
 
 from utils import (
     CACHE_VERSION,
+    CANDIDATE_BUFFER_MULTIPLIER,
     CYAN,
+    DEFAULT_LIMIT_RESULTS,
     DEFAULT_NEGATIVE_THRESHOLD,
     GREEN,
     RATING_MULTIPLIER_2_STAR,
@@ -502,9 +504,24 @@ class BaseRecommender(ABC):
 
         # Load display options
         self.confirm_operations = general_config.get("confirm_operations", False)
-        # Generate 2x the collection target to ensure best items compete with existing labeled
-        # Collection target is 50 movies / 20 TV, so generate 100 / 40 candidates
-        default_limit = 100 if self.media_type == "movie" else 40
+
+        # Final recommendation/collection count (config/tuning.yml movies:/tv:
+        # limit_results - documented but never read prior to this fix, see
+        # CHANGELOG). This is now the single source of truth for how many
+        # items end up in the recommendation collection - manage_plex_labels()
+        # below reads self.limit_results directly as its target_count.
+        self.limit_results = self.media_config.get("limit_results", DEFAULT_LIMIT_RESULTS[self.media_type])
+
+        # Internal candidate-scoring buffer: generate CANDIDATE_BUFFER_MULTIPLIER x
+        # limit_results scoring candidates per run, so the best-scoring items can
+        # compete against whatever a prior run already labeled instead of being
+        # capped at exactly the final collection size (see manage_plex_labels()).
+        # general.limit_plex_results remains an advanced override of this buffer
+        # only - it no longer drives the final collection size (limit_results does
+        # that now) - and an explicit override here is honored exactly as
+        # configured, never clamped up to limit_results: this preserves the
+        # existing documented/tested behavior for installs that already set it.
+        default_limit = self.limit_results * CANDIDATE_BUFFER_MULTIPLIER
         self.limit_plex_results = general_config.get("limit_plex_results", default_limit)
         self.randomize_recommendations = self.media_config.get(
             "randomize_recommendations", general_config.get("randomize_recommendations", True)
@@ -1103,8 +1120,12 @@ class BaseRecommender(ABC):
             # Remove outdated labels and get fresh items
             unwatched_labeled = self._remove_outdated_labels(section, label_name, stale_days)
 
-            # Build candidates with scores
-            target_count = self.config["general"].get("limit_plex_results", 50 if self.media_type == "movie" else 20)
+            # Build candidates with scores - target_count is limit_results
+            # (config/tuning.yml movies:/tv:), resolved once in __init__ (see
+            # its comment there for why this no longer reads
+            # general.limit_plex_results, which is the candidate-buffer size,
+            # not the final collection size).
+            target_count = self.limit_results
             print(f"{GREEN}Building optimal collection of top {target_count} recommendations...{RESET}")
 
             all_candidates = self._build_scored_candidates(unwatched_labeled, selected_items, items_found)

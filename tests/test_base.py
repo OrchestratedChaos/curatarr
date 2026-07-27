@@ -732,6 +732,95 @@ class TestBaseRecommenderMediaSectionConfig:
 
         assert recommender.weights == {"genre": 0.1, "actor": 0.9}
 
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_limit_results_unset_keeps_old_50_20_defaults(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        """PR1 (limit_results dead config audit finding): limit_results
+        unset must not change behavior for existing installs - movies
+        default to 50, tv to 20, and the candidate buffer
+        (limit_plex_results) still defaults to 2x that (100/40), exactly
+        matching pre-fix behavior."""
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        movie_recommender = ConcreteRecommender("/path/to/config.yml")
+        assert movie_recommender.limit_results == 50
+        assert movie_recommender.limit_plex_results == 100
+
+        tv_recommender = ConcreteTVRecommender("/path/to/config.yml")
+        assert tv_recommender.limit_results == 20
+        assert tv_recommender.limit_plex_results == 40
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movies_section_limit_results_is_honored(self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex):
+        """PR1: config/tuning.yml movies: limit_results now actually
+        controls the final recommendation/collection count - previously
+        documented but never read anywhere (see CHANGELOG). The candidate
+        buffer scales with it (2x), so the buffer >= limit_results
+        invariant holds by construction whenever limit_plex_results is
+        left unset."""
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "movies": {"limit_results": 15},
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+
+        assert recommender.limit_results == 15
+        assert recommender.limit_plex_results == 30
+        assert recommender.limit_plex_results >= recommender.limit_results
+
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_explicit_limit_plex_results_override_still_honored_exactly(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex
+    ):
+        """An explicit general.limit_plex_results (the advanced/internal
+        candidate-buffer override) is honored exactly as configured, even
+        when it's smaller than limit_results - matches this repo's existing
+        documented/tested behavior (see
+        TestBaseRecommenderInit.test_init_loads_display_options), which PR1
+        must not change: the buffer >= limit_results invariant is only
+        guaranteed for the *computed default* buffer, not an admin's
+        explicit override."""
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {"limit_plex_results": 5},
+            "movies": {"limit_results": 50},
+            "weights": {"genre": 0.5, "actor": 0.5},
+        }
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+
+        assert recommender.limit_results == 50
+        assert recommender.limit_plex_results == 5
+
 
 class TestBaseRecommenderCacheDirResolution:
     """Tests for BaseRecommender's cache_dir setup (recommenders/base.py).
@@ -1995,6 +2084,19 @@ class TestManagePlexLabelsFullFlow:
         result = recommender.manage_plex_labels([{"title": "Movie"}])
 
         assert result is False
+
+    @patch("recommenders.base.build_label_name", return_value="Recommended_alice")
+    def test_target_count_uses_limit_results(self, mock_build_label):
+        """PR1: the final collection size (target_count) is
+        self.limit_results, resolved once in __init__ - not a second,
+        independent 50/20 default re-derived here from the undocumented
+        general.limit_plex_results key."""
+        recommender = self._base_recommender()
+        recommender.limit_results = 7
+
+        recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        assert recommender._update_labels_by_rank.call_args[0][3] == 7
 
 
 class TestManagePlexLabelsExceptionHandling:

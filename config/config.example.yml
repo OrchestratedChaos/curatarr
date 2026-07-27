@@ -39,6 +39,16 @@ users:
 general:
   plex_only: true  # Only recommend from Plex library
   log_retention_days: 7
+  # Internal candidate-scoring buffer for the Plex-library recommender
+  # (recommenders/movie.py / tv.py) - advanced, rarely needed. Each run
+  # scores this many candidates before trimming to the final
+  # movies:/tv: limit_results count (see tuning.example.yml), so the
+  # best-scoring items can compete against whatever a prior run already
+  # added to the recommendation collection. Defaults to 2x
+  # limit_results if unset (e.g. 100 for the default movies
+  # limit_results: 50); an explicit value smaller than limit_results is
+  # honored exactly as configured, never clamped up.
+  # limit_plex_results: 100
   # notify (default): show a one-line CLI notice / web UI banner when a
   #   newer release exists, never applies anything automatically.
   # force: auto-apply verified signed updates on launch, no prompt

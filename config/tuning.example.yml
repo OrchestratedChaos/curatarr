@@ -6,7 +6,10 @@
 # MOVIE SETTINGS
 # =============================================================================
 movies:
-  limit_results: 50  # Max recommendations per user
+  # Max recommendations per user - the final recommendation/collection
+  # count (see general.limit_plex_results in config.example.yml for the
+  # internal candidate-scoring buffer this feeds).
+  limit_results: 50
   randomize_recommendations: false  # Randomize from top pool
 
   # Display options for recommendations output
@@ -34,7 +37,7 @@ movies:
 # TV SHOW SETTINGS
 # =============================================================================
 tv:
-  limit_results: 20
+  limit_results: 20  # Max recommendations per user
   randomize_recommendations: false
   normalize_counters: true  # Normalize across different show lengths
 

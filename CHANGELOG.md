@@ -2,6 +2,70 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.34] - 2026-07-26
+
+### Fixed
+
+- **`limit_results` was dead config - wire it to actually control the final recommendation/collection count (audit remediation, PR1).**
+
+  - `config/tuning.yml`'s documented `movies:`/`tv:` `limit_results` key was
+    parsed by the web UI and written back to disk, but nothing in
+    `recommenders/base.py` ever read it. The real output count was
+    driven entirely by an undocumented `general.limit_plex_results`,
+    resolved independently (with two different hardcoded 100/40-vs-50/20
+    defaults) at two separate call sites: once for the number of
+    candidates scored/printed per run (`self.limit_plex_results`), and
+    again, completely independently, for the number of items that
+    actually survive into the Plex collection (`target_count` inside
+    `manage_plex_labels()`).
+  - **Assumption implemented (stated per the task, override if wrong):**
+    `limit_results` is the user-facing *final* recommendation/collection
+    count; `limit_plex_results` is the internal candidate-scoring buffer,
+    which must be at least as large as `limit_results` (candidates get
+    filtered/ranked down to the final count, so the buffer can never be
+    smaller in the computed-default case). `self.limit_results` now
+    resolves from `movies:`/`tv:` `limit_results` (falling back to the
+    same 50/20 defaults as before when unset - `DEFAULT_LIMIT_RESULTS` in
+    `utils/config.py`), and `target_count` in `manage_plex_labels()` now
+    reads `self.limit_results` directly instead of re-deriving its own
+    independent 50/20 default from `general.limit_plex_results`.
+  - The candidate buffer (`self.limit_plex_results`) is now derived from
+    `self.limit_results * CANDIDATE_BUFFER_MULTIPLIER` (2x, matching the
+    pre-existing "generate 2x the collection target" comment) when
+    `general.limit_plex_results` is left unset - so the buffer-holds-at-
+    least-the-limit invariant holds by construction for every install
+    that hasn't touched either key.
+  - **No behavior change for any install that hasn't set `limit_results`**:
+    with both keys unset, `limit_results` resolves to the same 50/20
+    defaults, and `limit_plex_results` still resolves to the same 100/40
+    defaults, as before this fix.
+  - **Behavior change for the narrow, previously-undocumented case of an
+    install that explicitly set `general.limit_plex_results` to influence
+    the final collection size**: that key no longer drives the final
+    collection size - only `limit_results` does now. This is the actual
+    bug being fixed (the audit specifically flagged `limit_plex_results`
+    as the undocumented driver of "the actual output count"). An explicit
+    `general.limit_plex_results` override is still honored exactly as
+    configured for the candidate buffer itself (not clamped up to
+    `limit_results`), matching this repo's existing tested behavior for
+    that key.
+  - Retired the dead, movie-only `DEFAULT_LIMIT_PLEX_RESULTS = 100`
+    constant (added in a prior pass but never wired to anything) in favor
+    of `DEFAULT_LIMIT_RESULTS` (a `{"movie": 50, "tv": 20}` dict, the
+    actual pre-existing defaults) and `CANDIDATE_BUFFER_MULTIPLIER = 2`.
+  - Documented both `movies:`/`tv:` `limit_results` and
+    `general.limit_plex_results` in `config/tuning.example.yml`,
+    `config/config.example.yml`, and `README.md` - previously only
+    `limit_results` had even a one-line comment, and
+    `limit_plex_results` wasn't documented anywhere.
+  - Tests added to `tests/test_base.py`: `limit_results` unset (old 50/20
+    +100/40 behavior preserved), `limit_results` set (honored, buffer
+    scales 2x), the buffer `>=` limit invariant for the computed default,
+    an explicit `general.limit_plex_results` override still honored
+    exactly (regression guard for the existing, unchanged
+    `test_init_loads_display_options` test), and `manage_plex_labels()`'s
+    `target_count` now reading `self.limit_results`.
+
 ## [2.10.33] - 2026-07-26
 
 ### Fixed
