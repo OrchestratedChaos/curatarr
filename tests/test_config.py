@@ -567,6 +567,9 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
         # defaults render_collection_name() falls back to.
         assert collections["movie_name_template"] == DEFAULT_MOVIE_NAME_TEMPLATE
         assert collections["tv_name_template"] == DEFAULT_TV_NAME_TEMPLATE
+        # rename-on-template-change: BaseRecommender._sync_plex_collection's
+        # own fallback default.
+        assert collections["rename_on_template_change"] is True
 
     def test_external_recommendations_defaults_match(self):
         from recommenders.external import MAX_DISCOVERY_ITERATIONS, OUTPUT_MIN_VOTES
