@@ -2,6 +2,52 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.32] - 2026-07-26
+
+### Fixed
+
+- **Single-user runs could delete every other configured user's cache
+  (#233 audit remediation batch D / PR1(b) follow-up, found in
+  pre-release review).**
+
+  - `utils.cli.run_recommender_main`'s cache-orphan pruning (added in
+    2.10.31 alongside per-library caching) collected `resolved_usernames`
+    only from the users actually processed *this run*, then pruned
+    `cache/` against that set unconditionally. Single-user mode (`python3
+    recommenders/movie.py alice`, or any web-UI-triggered per-user job)
+    narrows the processed-user list to just that one user, so every
+    OTHER configured user's cache was misclassified as orphaned - logged
+    as a false "would remove" candidate under the `dry_run: true`
+    default, and actually deleted the first time an admin flipped
+    `general.cache_prune.dry_run` to `false` (a reasonable next step
+    after reviewing dry-run output), forcing a full Plex re-scan for
+    every user but the one just run.
+  - Fixed by skipping the prune step entirely on single-user runs -
+    `resolved_usernames` only ever reflects every currently-configured
+    user on a full run (cron, the web UI's "full" engine, or a bare
+    `python3 recommenders/movie.py` with no username), which is the only
+    case this feature can tell "removed from config" apart from "just
+    not in this run". A user genuinely removed from config is still
+    caught on the next full run, so the feature keeps working exactly as
+    designed for its actual purpose.
+  - Considered instead passing every configured user (not just this
+    run's) into the prune call, but that requires re-deriving each
+    user's *resolved* form (e.g. `admin` -> the real Plex account
+    username - see `utils.cache_prune.find_orphaned_cache_files`'s own
+    docstring on why the caller must pass resolved, not raw config,
+    names) for users never actually processed this run, without
+    duplicating `resolve_admin_username`'s Plex API call for every
+    configured user on every single-user run. Skipping is simpler and
+    carries none of that risk of inverting into the same bug the other
+    direction (deleting a live cache because its raw config name doesn't
+    match its resolved cache-file name).
+  - Added regression coverage: a single-user run leaves another
+    configured user's cache untouched even with `dry_run: false`; a full
+    run still prunes a user genuinely removed from `users.list`; and a
+    full run classifies by the *resolved* admin username, not the raw
+    `admin` config string, so this can't silently invert into deleting a
+    live cache in a future change.
+
 ## [2.10.31] - 2026-07-26
 
 ### Changed

@@ -409,8 +409,25 @@ def run_recommender_main(
         # Conservative by default: dry_run only *logs* candidates, so this
         # never deletes anything unless a config explicitly opts in via
         # general.cache_prune.dry_run: false.
+        # Single-user runs narrow all_users to just the one user being
+        # processed (see the `if single_user: all_users = [single_user]`
+        # above), so resolved_usernames here only ever contains that one
+        # user - never every other currently-configured user. Pruning
+        # against that narrowed set would misclassify every OTHER
+        # configured user's still-live cache as orphaned (found in
+        # pre-release review: a single-user run - e.g. a web-UI-triggered
+        # per-user job, or `python3 recommenders/movie.py alice` - would
+        # log false "would remove" candidates for every other user under
+        # the dry_run default, and actually delete them the first time an
+        # admin flips general.cache_prune.dry_run to false). Scoped to
+        # full runs only: a user genuinely removed from config is still
+        # caught on the next full run (cron / web UI's "full" engine /
+        # a bare `python3 recommenders/movie.py` with no username) - that
+        # is the only case where resolved_usernames reflects every
+        # currently-configured user, which is what this feature actually
+        # needs to tell "removed" apart from "just not in this run".
         cache_prune_config = general.get("cache_prune", {}) or {}
-        if cache_prune_config.get("enabled", True):
+        if not single_user and cache_prune_config.get("enabled", True):
             prune_orphaned_cache_files(cache_dir, resolved_usernames, dry_run=cache_prune_config.get("dry_run", True))
 
         outcome = "success"
