@@ -35,8 +35,22 @@ jobs:
           # body/message (which `-v` would print to stdout — we never pass
           # `-v`) can never end up in VERIFY_OUTPUT regardless of git
           # version.
-          VERIFY_OUTPUT="$(git verify-tag "$GITHUB_REF_NAME" 2>&1 1>/dev/null)"
-          VERIFY_EXIT=$?
+          #
+          # The assignment lives in the `if` condition itself (not a bare
+          # `VERIFY_OUTPUT=$(...)` followed by a separate `VERIFY_EXIT=$?`)
+          # because GitHub Actions runs this script as `bash -e {0}` and
+          # this step's own `set -uo pipefail` does not clear that
+          # inherited -e - a bare failing assignment here would abort the
+          # script on the spot, silently skipping both the diagnostic
+          # `echo "$VERIFY_OUTPUT"` below and the `::error::` annotation,
+          # even though the step would still (correctly) fail red. Same
+          # class of bug fixed in post-release-smoke-test.yml's
+          # cosign-verify job; see that job's comment for the full story.
+          if VERIFY_OUTPUT="$(git verify-tag "$GITHUB_REF_NAME" 2>&1 1>/dev/null)"; then
+            VERIFY_EXIT=0
+          else
+            VERIFY_EXIT=$?
+          fi
           echo "$VERIFY_OUTPUT"
 
           if [ "$VERIFY_EXIT" -ne 0 ]; then
