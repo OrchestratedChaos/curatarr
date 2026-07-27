@@ -584,3 +584,83 @@ class TestLoginRateLimiting:
         )
         assert any(self.IP in msg for msg in logged)
         assert not any("wrong" in msg for msg in logged)  # never log the attempted token
+
+    def test_dict_size_bounded_under_distributed_flood(self, monkeypatch):
+        """PR5: a distributed one-request-per-IP flood (each IP hits the
+        endpoint exactly once, never revisiting itself) must not grow
+        _login_failures without bound - nothing else would ever prune
+        those one-shot entries (see _sweep_login_failures_locked)."""
+        import web.security as security_module
+
+        monkeypatch.setattr(security_module, "_LOGIN_FAILURES_MAX_TRACKED_IPS", 5)
+
+        for i in range(50):
+            security_module._record_login_failure(f"203.0.113.{i}")
+
+        assert len(_login_failures) <= 5
+
+    def test_active_lockout_survives_flood_of_other_ips(self, curatarr_web_root, monkeypatch):
+        """An attacker cannot use a flood of throwaway one-shot IPs to
+        push a DIFFERENT, already-locked-out IP's entry out of the
+        tracker and let it straight back in early."""
+        import web.security as security_module
+
+        monkeypatch.setattr(security_module, "_LOGIN_FAILURES_MAX_TRACKED_IPS", 5)
+        c = self._client(curatarr_web_root, monkeypatch)
+        self._fail(c, 5, ip=self.IP)  # locks out self.IP
+
+        for i in range(50):
+            security_module._record_login_failure(f"198.51.100.{i}")
+
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert resp.headers["Location"] == "/login?error=locked"
+
+    def test_legitimate_user_still_succeeds_after_unrelated_ip_flood(self, curatarr_web_root, monkeypatch):
+        """A flood of unrelated one-shot IPs filling up the tracker must
+        not prevent a normal user (under the failure threshold) from
+        logging in with the correct token afterward - eviction may or may
+        not remove their own (not-locked-out) entry, and either outcome
+        must still let them through."""
+        import web.security as security_module
+
+        monkeypatch.setattr(security_module, "_LOGIN_FAILURES_MAX_TRACKED_IPS", 5)
+        c = self._client(curatarr_web_root, monkeypatch)
+        self._fail(c, 2, ip=self.IP)  # under threshold
+
+        for i in range(50):
+            security_module._record_login_failure(f"198.51.100.{i}")
+
+        resp = c.post(
+            "/login",
+            data={"token": self.TOKEN},
+            follow_redirects=False,
+            environ_overrides={"REMOTE_ADDR": self.IP},
+        )
+        assert resp.status_code == 303
+        assert "curatarr_token" in resp.headers.get("Set-Cookie", "")
+
+    def test_expired_entries_pruned_before_evicting_active_ones(self, monkeypatch):
+        """The sweep drops naturally-expired entries first, before ever
+        considering eviction - a batch of one-shot IPs that has simply
+        aged out of the window costs nothing once the window has passed,
+        even without a fresh request from any of them."""
+        import web.security as security_module
+
+        fake_now = [1000.0]
+        monkeypatch.setattr(security_module.time, "monotonic", lambda: fake_now[0])
+        monkeypatch.setattr(security_module, "_LOGIN_FAILURES_MAX_TRACKED_IPS", 5)
+
+        for i in range(5):
+            security_module._record_login_failure(f"198.51.100.{i}")
+        assert len(_login_failures) == 5
+
+        fake_now[0] += security_module._LOGIN_WINDOW_SECONDS + 1  # everything above ages out
+
+        security_module._record_login_failure("203.0.113.1")  # triggers a sweep (6 > 5)
+
+        assert set(_login_failures.keys()) == {"203.0.113.1"}
