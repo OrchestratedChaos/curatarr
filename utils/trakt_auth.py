@@ -6,17 +6,16 @@ Run this script to authenticate with Trakt using device code flow.
 Tokens are saved to trakt.yml for future use.
 """
 
+import argparse
 import os
 import sys
-
-import yaml
+from typing import Optional
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import load_config as _load_canonical_config
-from utils.helpers import harden_file_permissions
-from utils.trakt import TraktAuthError, TraktClient
+from utils.trakt import TraktAuthError, TraktClient, save_trakt_tokens
 
 
 def get_config_dir():
@@ -39,24 +38,50 @@ def load_config():
     return _load_canonical_config(config_path)
 
 
-def save_tokens(access_token: str, refresh_token: str):
-    """Save tokens to trakt.yml"""
+def save_tokens(
+    access_token: str,
+    refresh_token: str,
+    created_at: Optional[int] = None,
+    expires_in: Optional[int] = None,
+):
+    """Save tokens to trakt.yml.
+
+    Thin wrapper around utils.trakt.save_trakt_tokens - the SAME
+    persistence TraktClient's own runtime token_callback uses when a
+    token is refreshed mid-run (see utils/trakt.py's
+    create_trakt_client) - so a manual `python3 utils/trakt_auth.py`
+    re-auth and an automatic in-run refresh persist identically instead
+    of two divergent implementations (this used to have its own
+    separate yaml.safe_load/dump + harden_file_permissions copy).
+    """
     trakt_path = os.path.join(get_config_dir(), "trakt.yml")
-
-    with open(trakt_path, "r") as f:
-        trakt_config = yaml.safe_load(f)
-
-    trakt_config["access_token"] = access_token
-    trakt_config["refresh_token"] = refresh_token
-
-    with open(trakt_path, "w") as f:
-        yaml.dump(trakt_config, f, default_flow_style=False, sort_keys=False)
-    harden_file_permissions(trakt_path)
-
+    save_trakt_tokens(trakt_path, access_token, refresh_token, created_at, expires_in)
     print("\033[92mTokens saved to config/trakt.yml\033[0m")
 
 
-def main():
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Trakt device-code authentication for Curatarr")
+    parser.add_argument(
+        "--reauth",
+        "--force",
+        dest="reauth",
+        action="store_true",
+        help=(
+            "Re-authenticate even if config/trakt.yml already has an access_token "
+            "(e.g. after a refresh failure/rejected token) instead of requiring a "
+            "manual hand-edit of the file first."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    """argv defaults to sys.argv[1:] (argparse's own default) - an
+    explicit list (e.g. []) lets tests/callers invoke this without
+    picking up whatever's actually in sys.argv (e.g. pytest's own CLI
+    args when this is called directly from a test)."""
+    args = parse_args(argv)
+
     print("\033[96m=== Trakt Authentication ===\033[0m")
     print()
 
@@ -82,10 +107,13 @@ def main():
         print("Add them to config/trakt.yml")
         sys.exit(1)
 
-    # Check if already authenticated
-    if trakt_config.get("access_token") and trakt_config.get("access_token") != "null":
+    # Check if already authenticated - skipped entirely with --reauth/--force
+    # (e.g. after a refresh failure/rejected token: Docker/frozen-binary
+    # users can't reasonably hand-edit trakt.yml and shell in to remove
+    # access_token first, and even a source install shouldn't have to).
+    if not args.reauth and trakt_config.get("access_token") and trakt_config.get("access_token") != "null":
         print("Already authenticated!")
-        print("To re-authenticate, remove access_token from config/trakt.yml first.")
+        print("To re-authenticate, run: python3 utils/trakt_auth.py --reauth")
         sys.exit(0)
 
     # Create client

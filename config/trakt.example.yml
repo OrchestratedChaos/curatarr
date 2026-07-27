@@ -7,10 +7,17 @@ enabled: true
 client_id: YOUR_CLIENT_ID
 client_secret: YOUR_CLIENT_SECRET
 
-# OAuth tokens - set automatically after authentication
+# OAuth tokens - set automatically after authentication, and kept up
+# to date automatically as they're refreshed (access tokens currently
+# last about 24 hours - refreshed transparently before/on expiry, no
+# action needed unless the refresh itself is rejected, in which case
+# re-run trakt_auth.py below with --reauth).
 # Run: python3 utils/trakt_auth.py
 access_token: null
 refresh_token: null
+# token_created_at / token_expires_in: also set automatically (used to
+# refresh proactively, before expiry, rather than only reactively on a
+# failed request) - never set these by hand.
 
 # =============================================================================
 # EXPORT SETTINGS

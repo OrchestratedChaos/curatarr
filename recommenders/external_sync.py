@@ -34,15 +34,32 @@ from utils import (
     get_authenticated_trakt_client,
     get_effective_arr_config,
     get_libraries_for_media_type,
+    get_project_root,
     log_error,
     log_warning,
     print_status,
+    record_integration_status,
 )
 
 logger = logging.getLogger("curatarr")
 
 # Batch size for Trakt sync operations
 TRAKT_BATCH_SIZE = 100
+
+# Name this module records its Trakt export attempts under (see
+# utils/integration_status.py) - read back by web/app.py's dashboard
+# banner/status.json, so a Trakt auth/export failure is visible without
+# opening a log file.
+TRAKT_EXPORT_STATUS_NAME = "trakt_export"
+
+
+def _cache_dir(config: Dict) -> str:
+    """Same cache_dir resolution every other cache/status file in this
+    module's config already uses (see sync_watch_history_to_trakt's own
+    sync_cache_file below) - get_project_root() so this respects
+    CURATARR_CONFIG_DIR (Docker) same as everything else, rather than a
+    second, independent __file__-relative computation."""
+    return os.path.join(get_project_root(), config.get("cache_dir", "cache"))
 
 
 def flatten_categorized(categorized: Dict) -> List[Dict]:
@@ -201,14 +218,28 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         return
     if not export_config.get("enabled", True):
         return
-    # Check if auto_sync is enabled (can still manually export via HTML)
-    if not export_config.get("auto_sync", True):
+    # Check if auto_sync is enabled (can still manually export via HTML).
+    # Default False (#trakt-token-refresh-persistence): config/trakt.
+    # example.yml, setup.sh, web/config_settings.py, and
+    # web/config_connections.py have always documented/displayed this as
+    # False - only this one code fallback disagreed. Silently writing
+    # recommendations to someone's external Trakt account must never be
+    # the default when the key is merely absent from trakt.yml.
+    if not export_config.get("auto_sync", False):
         return
 
     # Get authenticated Trakt client
     trakt_client = get_authenticated_trakt_client(config)
     if not trakt_client:
         log_warning("Trakt not authenticated - run setup wizard to authenticate")
+        record_integration_status(
+            _cache_dir(config),
+            TRAKT_EXPORT_STATUS_NAME,
+            False,
+            "Trakt client not authenticated - a token refresh may have failed "
+            "(see logs) or the account was never linked. Run "
+            "`python3 utils/trakt_auth.py --reauth` to re-link.",
+        )
         return
 
     list_prefix = export_config.get("list_prefix", "Curatarr")
@@ -279,11 +310,15 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
                 print_status(f"  Combined: {len(all_show_imdb_ids)} shows -> Trakt", "success")
                 print(f"    {clickable_link(show_url)}")
 
+            record_integration_status(_cache_dir(config), TRAKT_EXPORT_STATUS_NAME, True)
         except (TraktAPIError, TraktAuthError) as e:
             log_error(f"Failed to export combined list to Trakt: {e}")
+            record_integration_status(_cache_dir(config), TRAKT_EXPORT_STATUS_NAME, False, str(e))
         return
 
     # Per-user or mapping mode - separate list per user
+    had_failure = False
+    failure_detail = ""
     for user_data in users_to_export:
         display_name = user_data["display_name"]
         movies_categorized = user_data["movies_categorized"]
@@ -321,6 +356,10 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
 
         except (TraktAPIError, TraktAuthError) as e:
             log_error(f"Failed to export {display_name} to Trakt: {e}")
+            had_failure = True
+            failure_detail = f"{display_name}: {e}"
+
+    record_integration_status(_cache_dir(config), TRAKT_EXPORT_STATUS_NAME, not had_failure, failure_detail)
 
 
 def _resolve_library_groups(config: Dict, users_to_export: List[Dict], media_type: str) -> List[Any]:
@@ -1104,6 +1143,14 @@ def sync_watch_history_to_trakt(
     trakt_client = get_authenticated_trakt_client(config)
     if not trakt_client:
         log_warning("Trakt not authenticated - run setup wizard to authenticate")
+        record_integration_status(
+            _cache_dir(config),
+            TRAKT_EXPORT_STATUS_NAME,
+            False,
+            "Trakt client not authenticated - a token refresh may have failed "
+            "(see logs) or the account was never linked. Run "
+            "`python3 utils/trakt_auth.py --reauth` to re-link.",
+        )
         return
 
     user_mode = export_config.get("user_mode", "mapping")
@@ -1263,5 +1310,7 @@ def sync_watch_history_to_trakt(
         total_shows_added = _sync_items_in_batches(new_show_imdb, trakt_client, "shows", "episodes")
 
         print_status(f"  Synced to Trakt: {total_movies_added} movies, {total_shows_added} shows", "success")
+        record_integration_status(_cache_dir(config), TRAKT_EXPORT_STATUS_NAME, True)
     except (TraktAPIError, TraktAuthError) as e:
         log_error(f"Failed to sync watch history to Trakt: {e}")
+        record_integration_status(_cache_dir(config), TRAKT_EXPORT_STATUS_NAME, False, str(e))

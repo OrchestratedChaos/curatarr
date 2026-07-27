@@ -132,7 +132,7 @@ class TestTraktAuthMain:
         mock_load.side_effect = FileNotFoundError()
 
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main([])
         assert exc_info.value.code == 1
 
     @patch("utils.trakt_auth.load_config")
@@ -143,7 +143,7 @@ class TestTraktAuthMain:
         mock_load.return_value = {"trakt": {"enabled": False}}
 
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main([])
         assert exc_info.value.code == 1
 
     @patch("utils.trakt_auth.load_config")
@@ -154,7 +154,7 @@ class TestTraktAuthMain:
         mock_load.return_value = {"trakt": {"enabled": True, "client_id": None, "client_secret": "secret"}}
 
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main([])
         assert exc_info.value.code == 1
 
     @patch("utils.trakt_auth.load_config")
@@ -167,8 +167,62 @@ class TestTraktAuthMain:
         }
 
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main([])
         assert exc_info.value.code == 0
+
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
+    def test_reauth_flag_bypasses_already_authenticated_check(self, mock_load, mock_client_class):
+        """--reauth (recovery flag - FIX 5) lets a user with an already-
+        present (possibly refresh-rejected/dead) access_token restart
+        device auth without hand-editing trakt.yml first - important for
+        Docker/frozen-binary users who can't reasonably shell in to do
+        that edit."""
+        from utils.trakt_auth import main
+
+        mock_load.return_value = {
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": "existing_token"}
+        }
+
+        mock_client = Mock()
+        mock_client.get_device_code.return_value = {
+            "device_code": "abc123",
+            "user_code": "XYZ789",
+            "verification_url": "https://trakt.tv/activate",
+            "interval": 5,
+            "expires_in": 600,
+        }
+        mock_client.poll_for_token.return_value = True
+        mock_client.get_username.return_value = "testuser"
+        mock_client_class.return_value = mock_client
+
+        # Should proceed to the device-auth flow instead of exiting 0.
+        main(["--reauth"])
+
+        mock_client.get_device_code.assert_called_once()
+
+    @patch("utils.trakt_auth.TraktClient")
+    @patch("utils.trakt_auth.load_config")
+    def test_force_is_an_alias_for_reauth(self, mock_load, mock_client_class):
+        from utils.trakt_auth import main
+
+        mock_load.return_value = {
+            "trakt": {"enabled": True, "client_id": "id", "client_secret": "secret", "access_token": "existing_token"}
+        }
+
+        mock_client = Mock()
+        mock_client.get_device_code.return_value = {
+            "device_code": "abc123",
+            "user_code": "XYZ789",
+            "verification_url": "https://trakt.tv/activate",
+        }
+        mock_client.poll_for_token.return_value = True
+        mock_client.get_username.return_value = "testuser"
+        mock_client_class.return_value = mock_client
+
+        main(["--force"])
+
+        mock_client.get_device_code.assert_called_once()
 
     @patch("utils.trakt_auth.TraktClient")
     @patch("utils.trakt_auth.load_config")
@@ -193,7 +247,7 @@ class TestTraktAuthMain:
         mock_client_class.return_value = mock_client
 
         # Should complete without exit
-        main()
+        main([])
 
         mock_client.get_device_code.assert_called_once()
         mock_client.poll_for_token.assert_called_once()
@@ -218,7 +272,7 @@ class TestTraktAuthMain:
         mock_client_class.return_value = mock_client
 
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main([])
         assert exc_info.value.code == 1
 
     @patch("utils.trakt_auth.TraktClient")
@@ -236,7 +290,7 @@ class TestTraktAuthMain:
         mock_client_class.return_value = mock_client
 
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main([])
         assert exc_info.value.code == 1
 
     @patch("utils.trakt_auth.TraktClient")
@@ -254,5 +308,5 @@ class TestTraktAuthMain:
         mock_client_class.return_value = mock_client
 
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main([])
         assert exc_info.value.code == 1
