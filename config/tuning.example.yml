@@ -67,7 +67,6 @@ collections:
   add_label: true  # Add 'Recommended' label to items
   label_name: Recommended
   append_usernames: true  # Include username in collection name
-  remove_previous_recommendations: false
   # Private collections - each user only sees their own recommendations
   # Uses Plex label restrictions (only works on Library tab, not Home)
   # Note: Server admin always sees all collections (Plex limitation)

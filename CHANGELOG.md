@@ -2,6 +2,61 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.36] - 2026-07-26
+
+### Changed
+
+- **`collections.remove_previous_recommendations` removed from `config/tuning.example.yml` - concluded it cannot be implemented as described without either being a no-op or regressing every existing install's default behavior (audit remediation, PR3).**
+
+  - Confirmed zero code consumers anywhere in the codebase (including web
+    UI forms and tests) before touching anything - this key was purely
+    documentation.
+  - **Provenance is NOT the blocker** (unlike the concern the task
+    anticipated): the Plex `Recommended_<user>` label IS a reliable
+    tool-added marker (`utils/labels.py`), and `recommenders/base.py`'s
+    `manage_plex_labels()` collection sync
+    (`utils/plex.py`'s `update_plex_collection`) only ever operates on
+    items carrying that label - it would never touch a user's manually-
+    curated collection.
+  - **The actual blocker: the described behavior is already unconditional,
+    always-on, default behavior today - there is nothing left to gate.**
+    Traced the full label/collection lifecycle in
+    `recommenders/base.py`/`utils/plex.py`:
+    - `_update_labels_by_rank()` already removes the `Recommended_<user>`
+      label from any item that falls out of the current top-`target_count`
+      ranking, on every single run, unconditionally (score-based
+      eviction - see that method and its docstring; a comment there notes
+      staleness-day removal was already retired in favor of this).
+    - `_sync_plex_collection()` -> `update_plex_collection()` then, also
+      unconditionally, calls `existing_collection.removeItems(current_items)`
+      before `addItems(final_items)` - i.e. the Plex *collection* itself is
+      fully reset to exactly this run's top-ranked items every single run,
+      regardless of any config.
+    - In other words: "when a recommendation collection is refreshed,
+      remove items that were previously recommended and no longer are" -
+      literally the feature this key was meant to gate - is precisely
+      what already happens by default, unconditionally, today.
+  - Wiring `remove_previous_recommendations` as a literal on/off toggle,
+    honoring its shipped `false` default, would require making that
+    already-unconditional eviction *conditional* on this flag - i.e.
+    inverting today's default from "always evict stale recommendations"
+    to "never evict unless explicitly enabled" for every install that
+    hasn't touched this dead key (100% of them, since nothing reads it).
+    That would make Plex recommendation collections grow without bound
+    by default - a worse regression than the key doing nothing.
+  - Unverified but plausible (labeled explicitly as a theory, not fact -
+    not asserted anywhere in this fix): `git log -S` on this key across
+    the whole repo history shows no dedicated "wire this flag" commit -
+    it most likely predates (or was copied in alongside) the
+    score-based-eviction rewrite that made removal unconditional, and was
+    simply never deleted once that rewrite superseded whatever gated
+    behavior it may once have controlled.
+  - No code or behavior changed by this PR - documentation only.
+    Removed from `config/tuning.example.yml` (the tracked template);
+    left the local, gitignored `config/tuning.yml` runtime file alone
+    (not part of this repo - `config/*.yml` is gitignored, only
+    `*.example.yml` files are tracked).
+
 ## [2.10.35] - 2026-07-26
 
 ### Fixed
