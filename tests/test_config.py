@@ -14,6 +14,7 @@ from utils.config import (
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
     UPDATE_MODES,
+    _deep_merge_dicts,
     check_cache_version,
     get_config_section,
     get_effective_arr_config,
@@ -751,6 +752,203 @@ class TestModularConfigLoading:
             assert result["movies"]["limit_results"] == 200
         finally:
             shutil.rmtree(config_dir)
+
+    def test_module_file_deep_merges_shared_dict_key_instead_of_replacing(self):
+        """Regression: a shallow `config[key] = value` merge would let
+        tuning.yml's `users` completely replace config.yml's `users`,
+        silently wiping sub-keys tuning.yml doesn't mention (e.g.
+        `users.list`). Deep-merge must preserve them."""
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write(
+                    "plex:\n  url: http://localhost:32400\n"
+                    "users:\n"
+                    "  list: user1, user2\n"
+                    "  preferences:\n"
+                    "    user1:\n"
+                    "      display_name: User One\n"
+                )
+
+            tuning_path = os.path.join(config_dir, "tuning.yml")
+            with open(tuning_path, "w") as f:
+                f.write("users:\n  preferences:\n    user2:\n      max_rating: PG-13\n")
+
+            result = load_config(config_path)
+
+            # config.yml's users.list must survive - this is the exact
+            # bug: tuning.yml doesn't mention `list` at all.
+            assert result["users"]["list"] == "user1, user2"
+            # config.yml's user1 preference (not mentioned by tuning.yml)
+            # must also survive.
+            assert result["users"]["preferences"]["user1"]["display_name"] == "User One"
+            # tuning.yml's user2 preference must win/be added.
+            assert result["users"]["preferences"]["user2"]["max_rating"] == "PG-13"
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_example_config_shape_regression_shipped_examples_both_define_users(self):
+        """Regression for the exact shape shipped in config/config.example.yml
+        + config/tuning.example.yml: both define a top-level `users:` key,
+        but tuning.example.yml only defines `users.preferences` (commented
+        out entirely in the shipped example, but structurally present) -
+        never `users.list`. A shallow merge wipes `users.list`."""
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write(
+                    "plex:\n  url: http://localhost:32400\n"
+                    "tmdb:\n  api_key: test_key\n"
+                    "users:\n"
+                    "  list: user1, user2, kids\n"
+                    "  preferences:\n"
+                    "    user1:\n"
+                    "      display_name: User One\n"
+                    "      exclude_genres:\n"
+                    "        - horror\n"
+                )
+
+            tuning_path = os.path.join(config_dir, "tuning.yml")
+            with open(tuning_path, "w") as f:
+                # Mirrors tuning.example.yml's shape: a `users:` section
+                # that only carries `preferences` (empty/commented in the
+                # shipped example), no `list`.
+                f.write("users:\n  preferences: {}\n")
+
+            result = load_config(config_path)
+
+            assert result["users"]["list"] == "user1, user2, kids"
+            assert result["users"]["preferences"]["user1"]["display_name"] == "User One"
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_module_file_defining_only_some_subkeys_preserves_others(self):
+        """A module file that defines only a subset of a dict's sub-keys
+        must not clobber sibling sub-keys it doesn't mention.
+
+        Uses `general:` (a CORE_SECTION) rather than a TUNING_SECTION like
+        `movies:` so the fixture doesn't also trip auto-migration (which
+        would move `movies:` out of config.yml and regenerate tuning.yml,
+        confounding what this test is checking).
+        """
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\ngeneral:\n  limit_results: 50\n  show_summary: true\n")
+
+            tuning_path = os.path.join(config_dir, "tuning.yml")
+            with open(tuning_path, "w") as f:
+                f.write("general:\n  limit_results: 200\n")
+
+            result = load_config(config_path)
+
+            # tuning.yml's explicit override wins.
+            assert result["general"]["limit_results"] == 200
+            # config.yml's sub-key tuning.yml never mentioned survives.
+            assert result["general"]["show_summary"] is True
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_list_valued_key_is_replaced_not_merged(self):
+        """Lists are replaced outright by the module file's value, never
+        concatenated/deduped - documented behavior, not a bug. Uses
+        `general:` for the same auto-migration-avoidance reason as above.
+        """
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\ngeneral:\n  streaming_services:\n    - netflix\n")
+
+            tuning_path = os.path.join(config_dir, "tuning.yml")
+            with open(tuning_path, "w") as f:
+                f.write("general:\n  streaming_services:\n    - hulu\n    - disney_plus\n")
+
+            result = load_config(config_path)
+
+            # Replaced wholesale, not merged/deduped with config.yml's list.
+            assert result["general"]["streaming_services"] == ["hulu", "disney_plus"]
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_feature_module_deep_merges_into_existing_same_named_section(self):
+        """The trakt/radarr/sonarr module-file path also deep-merges
+        rather than replacing outright, in case config already carries a
+        same-named section.
+
+        Calls `_load_module_configs` directly (rather than through
+        `load_config`) because a root `trakt:` key in config.yml would
+        itself trip auto-migration - which extracts/regenerates trakt.yml
+        from config.yml's legacy fields, confounding what this test is
+        checking (the merge behavior itself, not migration).
+        """
+        from utils.config import _load_module_configs
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            trakt_path = os.path.join(config_dir, "trakt.yml")
+            with open(trakt_path, "w") as f:
+                f.write("enabled: true\n")
+
+            config = {
+                "plex": {"url": "http://localhost:32400"},
+                "trakt": {"enabled": False, "client_id": "legacy_id"},
+            }
+            result = _load_module_configs(config, config_dir)
+
+            # trakt.yml's explicit override wins.
+            assert result["trakt"]["enabled"] is True
+            # Pre-existing client_id, not mentioned by trakt.yml, survives.
+            assert result["trakt"]["client_id"] == "legacy_id"
+        finally:
+            import shutil
+
+            shutil.rmtree(config_dir)
+
+
+class TestDeepMergeDicts:
+    """Unit tests for the `_deep_merge_dicts` helper directly."""
+
+    def test_disjoint_keys_are_unioned(self):
+        assert _deep_merge_dicts({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
+
+    def test_override_scalar_wins(self):
+        assert _deep_merge_dicts({"a": 1}, {"a": 2}) == {"a": 2}
+
+    def test_nested_dicts_merge_recursively(self):
+        base = {"users": {"list": "a, b", "preferences": {"a": {"display_name": "A"}}}}
+        override = {"users": {"preferences": {"b": {"max_rating": "PG"}}}}
+        result = _deep_merge_dicts(base, override)
+        assert result["users"]["list"] == "a, b"
+        assert result["users"]["preferences"]["a"]["display_name"] == "A"
+        assert result["users"]["preferences"]["b"]["max_rating"] == "PG"
+
+    def test_list_replaces_not_concatenates(self):
+        assert _deep_merge_dicts({"a": [1, 2]}, {"a": [3]}) == {"a": [3]}
+
+    def test_dict_replaced_by_non_dict_is_replaced(self):
+        # If override changes a key's type entirely (dict -> scalar), the
+        # override's type wins outright rather than erroring.
+        assert _deep_merge_dicts({"a": {"x": 1}}, {"a": None}) == {"a": None}
+
+    def test_base_and_override_are_not_mutated(self):
+        base = {"a": {"x": 1}}
+        override = {"a": {"y": 2}}
+        result = _deep_merge_dicts(base, override)
+        assert base == {"a": {"x": 1}}
+        assert override == {"a": {"y": 2}}
+        assert result == {"a": {"x": 1, "y": 2}}
 
 
 class TestConfigMigration:
