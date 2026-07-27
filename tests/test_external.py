@@ -1916,7 +1916,7 @@ class TestFindHorizonMovies:
         plex.library.section.side_effect = Exception("plex unreachable")
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -1928,7 +1928,7 @@ class TestFindHorizonMovies:
         plex = _plex_with_libraries([])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -1954,7 +1954,7 @@ class TestFindHorizonMovies:
         plex = _plex_with_libraries([_library_item(1)])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -1980,7 +1980,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -1998,7 +1998,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2009,7 +2009,7 @@ class TestFindHorizonMovies:
         plex = _plex_with_libraries([_library_item(malformed_guid=True), _library_item(tmdb_id=None)])
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get") as mock_get,
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2025,7 +2025,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2049,7 +2049,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)) as mock_get,
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2070,7 +2070,7 @@ class TestFindHorizonMovies:
             raise AssertionError(f"unexpected url {url}")
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_fake_get),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2114,7 +2114,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)) as mock_get,
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2143,7 +2143,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2165,7 +2165,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)) as mock_get,
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2191,7 +2191,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2214,7 +2214,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2237,7 +2237,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2274,7 +2274,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2301,7 +2301,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")
@@ -2324,7 +2324,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             find_horizon_movies("key", plex, "Movies")
@@ -2380,7 +2380,7 @@ class TestFindHorizonMovies:
         }
 
         with (
-            patch("recommenders.external.get_project_root", return_value=str(tmp_path)),
+            patch("recommenders.horizon.get_project_root", return_value=str(tmp_path)),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             result = find_horizon_movies("key", plex, "Movies")

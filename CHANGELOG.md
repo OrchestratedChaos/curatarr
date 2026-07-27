@@ -2,6 +2,32 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.43] - 2026-07-26
+
+### Changed
+
+- **Extracted Horizon Huntarr (`find_horizon_movies`) out of `recommenders/external.py` into `recommenders/horizon.py` (PR2 step 2, external.py architecture decomposition).**
+
+  - Pure relocation: `find_horizon_movies`, `load_horizon_cache`,
+    `save_horizon_cache`, `get_movie_status`, and
+    `HORIZON_HUNTARR_CACHE_VERSION` moved byte-for-byte; only import paths
+    changed. `recommenders/horizon.py` imports `get_collection_details`
+    and `load_huntarr_cache` from `recommenders/huntarr.py` (Horizon
+    Huntarr is a deliberate sibling of Sequel Huntarr - same collection
+    data model, same cache reuse it already had before this move).
+    `recommenders/external.py` re-exports everything external
+    callers/tests still need, so no other module's imports needed to
+    change.
+  - Verified via the golden-output equivalence harness: watchlist
+    HTML/MD, Sequel/Horizon Huntarr results, and categorized-by-
+    streaming-service output are all byte-identical to pre-move golden
+    fixtures.
+  - `tests/test_external.py`'s `TestFindHorizonMovies` class patches
+    updated from `recommenders.external.get_project_root` to
+    `recommenders.horizon.get_project_root` - same reasoning as 2.10.42's
+    Sequel Huntarr move (`get_project_root()` is looked up in whichever
+    module's own namespace calls it at runtime).
+
 ## [2.10.42] - 2026-07-26
 
 ### Changed
