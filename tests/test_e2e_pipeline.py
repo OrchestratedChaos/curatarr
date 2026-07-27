@@ -74,14 +74,16 @@ docstring):
     _update_labels_by_rank, update_plex_collection, content-rating
     filtering via get_max_rating_for_user/is_rating_allowed). Mocked
     wholesale per this test's mandate.
-  - TV quality_filters: confirmed while building this fixture that
-    recommenders/tv.py's ShowCache._process_item never populates
-    "rating"/"vote_count" on show cache entries (only MovieCache does, via
-    TMDB), so BaseRecommender.get_recommendations()'s quality-filter check
-    is a no-op for TV in production today, not just in this test. tv:
-    quality_filters is therefore left at 0.0/0 here (a nonzero threshold
-    would silently exclude every show) and this test asserts genre
-    exclusion for TV but does not claim TV quality-filter coverage.
+  - TV quality_filters: recommenders/tv.py's ShowCache._process_item was
+    fixed to populate "rating"/"vote_count" on show cache entries the same
+    way MovieCache always has (see CHANGELOG) - TV quality_filters is no
+    longer a production no-op. This fixture's SHOW_CATALOG still doesn't
+    carry rating/vote_count values, so tv: quality_filters stays at 0.0/0
+    here (a nonzero threshold would exclude every show in *this* catalog,
+    same as it would for any pre-fix on-disk show cache) and this test
+    asserts genre exclusion for TV but does not claim TV quality-filter
+    coverage - that's covered directly by tests/test_base.py and
+    tests/test_tv.py instead.
   - Negative-signal ratings/rewatch weighting and TV's dropped-show
     detection (negative_signals.dropped_shows) - explicitly disabled in
     this fixture's config to keep the fake watch-history HTTP layer to a
@@ -171,9 +173,9 @@ def _write_project_root(tmp_path, *, movies_randomize: bool, tv_randomize: bool)
         "tv": {
             "limit_results": 3,
             "randomize_recommendations": tv_randomize,
-            # Left at 0.0/0 deliberately - see module docstring: TV cache
-            # entries never carry rating/vote_count in production, so a
-            # nonzero threshold here would silently exclude every show.
+            # Left at 0.0/0 deliberately - see module docstring: this
+            # fixture's SHOW_CATALOG doesn't carry rating/vote_count
+            # values, so a nonzero threshold here would exclude every show.
             "quality_filters": {"min_rating": 0.0, "min_vote_count": 0},
             "weights": {"genre": 0.30, "studio": 0.10, "actor": 0.15, "keyword": 0.40, "language": 0.05},
         },

@@ -359,7 +359,9 @@ class BaseCache(ABC):
             # Get keywords
             result["keywords"] = get_tmdb_keywords(tmdb_api_key, result["tmdb_id"], self.media_type)
 
-            # Get rating/vote_count/collection (movies only)
+            # Get rating/vote_count for both media types (used by
+            # quality_filters); collection info is movie-only (sequel
+            # bonus), production companies are TV-only (franchise bonus).
             if self.media_type == "movie":
                 detail_data = fetch_tmdb_with_retry(
                     f"https://api.themoviedb.org/3/movie/{result['tmdb_id']}", {"api_key": tmdb_api_key}
@@ -373,12 +375,13 @@ class BaseCache(ABC):
                         result["collection_id"] = collection.get("id")
                         result["collection_name"] = collection.get("name")
 
-            # Get production companies for TV (for franchise/spinoff bonus)
             elif self.media_type == "tv":
                 detail_data = fetch_tmdb_with_retry(
                     f"https://api.themoviedb.org/3/tv/{result['tmdb_id']}", {"api_key": tmdb_api_key}
                 )
                 if detail_data:
+                    result["rating"] = detail_data.get("vote_average")
+                    result["vote_count"] = detail_data.get("vote_count")
                     production_companies = detail_data.get("production_companies", [])
                     result["production_company_ids"] = [pc["id"] for pc in production_companies]
 

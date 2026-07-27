@@ -2,6 +2,20 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.48] - 2026-07-27
+
+### Fixed
+
+- **`tv:` `quality_filters` (`min_rating`/`min_vote_count`) has never actually filtered anything - YOUR TV RECOMMENDATIONS WILL LOOK DIFFERENT after upgrading if you have a nonzero threshold set.**
+
+  `recommenders/tv.py`'s `ShowCache` never populated `rating`/`vote_count` on cached show entries - only `MovieCache` did. `BaseRecommender.get_recommendations()`'s quality-filter check (the same code shared by both movies and TV) reads those two fields from each cached item and defaults to `0`/`0` when they're absent, so every TV show was invisible to the filter no matter what threshold you configured under `tv: quality_filters:` in `tuning.yml` - identical in spirit to the 2.10.23 `movies:`/`tv:` config-wiring bug, but this one was in the cache-population path, not config resolution. Movies were never affected.
+
+  Fixed by having `ShowCache._process_item()` fetch and store `rating`/`vote_count` from TMDB the same way `MovieCache._process_item()` always has (`recommenders/base.py`'s shared `_get_tmdb_data()` now fetches them for TV too, alongside the `production_company_ids` it already fetched). Concretely, this means:
+  - If you have `tv: quality_filters: min_rating`/`min_vote_count` set above `0` in `tuning.yml`, low-rated/low-vote-count shows that were slipping through before will now actually be filtered out of your TV recommendations.
+  - If you've left it at the documented default (`0.0`/`0`), nothing changes - this was already a no-op for you and stays one.
+
+  **Existing show caches:** `CACHE_VERSION` is bumped (4 -> 5) so every existing `all_shows_cache.json` (and, since this constant isn't tracked per-media-type, `all_movies_cache.json` too) is deleted and fully rebuilt from TMDB on the next run after upgrading - a one-time slower run, no partial/half-migrated state. This is deliberate: without the bump, existing show cache entries would be missing `rating`/`vote_count` entirely, and the quality-filter code's `0`/`0` default would make every one of those shows look like it scored zero and get wrongly dropped the instant you set a real threshold, with no warning. The rebuild guarantees nobody hits that window. A show TMDB genuinely can't match still has no rating data after the rebuild and is filtered the same way an unmatched movie always has been (unchanged, symmetric behavior) - it isn't a new failure mode, just parity.
+
 ## [2.10.47] - 2026-07-27
 
 ### Fixed

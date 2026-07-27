@@ -11,10 +11,17 @@ from typing import Dict, List, Optional
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.47"
+__version__ = "2.10.48"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
-CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
+CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
+# tv: quality_filters (min_rating/min_vote_count) actually apply - they were
+# previously silently a no-op for TV (see CHANGELOG). Bumping this forces a
+# one-time full rebuild of BOTH the movie and show caches on next run (this
+# constant isn't tracked per-media-type) - existing cache files are deleted
+# and every item is re-fetched from TMDB from scratch, so no show is ever
+# left with a half-populated/missing rating that would be misread as 0 and
+# wrongly filtered out.
 
 # Common constants used across recommenders
 TOP_CAST_COUNT = 3  # Number of top actors to consider
