@@ -171,6 +171,72 @@ class TestShowCache:
         assert result["year"] is None
         assert result["genres"] == []
 
+    @patch("recommenders.base.load_media_cache")
+    def test_process_item_includes_rating_and_vote_count(self, mock_load):
+        """Regression test for the tv: quality_filters no-op bug: with a
+        tmdb_api_key, _process_item must carry rating/vote_count through
+        from _get_tmdb_data into the cached show entry (mirrors
+        MovieCache._process_item - see CHANGELOG), so
+        BaseRecommender.get_recommendations()'s quality-filter check
+        actually has data to filter on for TV."""
+        mock_load.return_value = {"shows": {}, "library_count": 0}
+
+        cache = ShowCache("/tmp/cache")
+        cache._get_tmdb_data = Mock(
+            return_value={
+                "tmdb_id": 123,
+                "imdb_id": "tt123",
+                "keywords": [],
+                "rating": 8.4,
+                "vote_count": 2000,
+                "production_company_ids": [],
+            }
+        )
+
+        mock_show = Mock()
+        mock_show.title = "Test Show"
+        mock_show.year = 2020
+        mock_show.genres = []
+        mock_show.studio = "HBO"
+        mock_show.roles = []
+        mock_show.summary = "A test show"
+        mock_show.guids = []
+
+        result = cache._process_item(mock_show, "api_key")
+
+        assert result["rating"] == 8.4
+        assert result["vote_count"] == 2000
+
+    @patch("recommenders.base.load_media_cache")
+    def test_process_item_rating_and_vote_count_none_without_tmdb_key(self, mock_load):
+        """Without a tmdb_api_key, _get_tmdb_data is never called (see the
+        `if tmdb_api_key else {...}` fallback dict) - rating/vote_count
+        must come back None rather than the key being absent entirely, so
+        downstream .get("rating") calls behave identically (None, not a
+        KeyError) whether or not TMDB was reachable for this item. A show
+        with no rating data (this case, or a genuine TMDB lookup miss on a
+        real run) is filtered the same way a movie with no rating data
+        already is - not silently exempted, not crashed on, just treated
+        as below any positive threshold like it always has been for
+        movies (parity, not a new special case)."""
+        mock_load.return_value = {"shows": {}, "library_count": 0}
+
+        cache = ShowCache("/tmp/cache")
+
+        mock_show = Mock()
+        mock_show.title = "Test Show"
+        mock_show.year = 2020
+        mock_show.genres = []
+        mock_show.studio = "HBO"
+        mock_show.roles = []
+        mock_show.summary = "A test show"
+        mock_show.guids = []
+
+        result = cache._process_item(mock_show, None)
+
+        assert result["rating"] is None
+        assert result["vote_count"] is None
+
 
 class TestPlexTVRecommenderInit:
     """Tests for PlexTVRecommender initialization."""

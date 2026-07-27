@@ -74,7 +74,7 @@ class ShowCache(BaseCache):
         tmdb_data = (
             self._get_tmdb_data(show, tmdb_api_key)
             if tmdb_api_key
-            else {"tmdb_id": None, "imdb_id": None, "keywords": []}
+            else {"tmdb_id": None, "imdb_id": None, "keywords": [], "rating": None, "vote_count": None}
         )
 
         return {
@@ -88,6 +88,12 @@ class ShowCache(BaseCache):
             "tmdb_keywords": tmdb_data["keywords"],
             "tmdb_id": tmdb_data["tmdb_id"],
             "imdb_id": tmdb_data["imdb_id"],
+            # rating/vote_count feed tv: quality_filters (min_rating/
+            # min_vote_count) in BaseRecommender.get_recommendations() -
+            # previously omitted here, so those thresholds were a no-op
+            # for TV (see CHANGELOG). Mirrors MovieCache._process_item.
+            "rating": tmdb_data.get("rating"),
+            "vote_count": tmdb_data.get("vote_count"),
             "production_company_ids": tmdb_data.get("production_company_ids", []),
         }
 

@@ -415,6 +415,74 @@ class TestBaseCacheGetTmdbData:
 
         assert mock_recommender.plex_tmdb_cache["456"] == 123
 
+    @patch("recommenders.base.fetch_tmdb_with_retry")
+    @patch("recommenders.base.get_tmdb_keywords")
+    @patch("recommenders.base.extract_ids_from_guids")
+    @patch("recommenders.base.load_media_cache")
+    def test_get_tmdb_data_fetches_tv_rating(self, mock_load, mock_extract, mock_keywords, mock_fetch):
+        """Test that TV show rating/vote_count is fetched from TMDB too,
+        mirroring test_get_tmdb_data_fetches_movie_rating above. Regression
+        test for the tv: quality_filters no-op bug - ShowCache never
+        carried these fields before (see CHANGELOG); this proves the
+        underlying _get_tmdb_data fetch itself populates them for
+        media_type="tv", alongside the pre-existing production_company_ids
+        fetch (which must keep working unchanged)."""
+        mock_load.return_value = {"shows": {}, "library_count": 0}
+        mock_extract.return_value = {"imdb_id": None, "tmdb_id": 123}
+        mock_keywords.return_value = []
+        mock_fetch.return_value = {
+            "vote_average": 8.4,
+            "vote_count": 2000,
+            "production_companies": [{"id": 42, "name": "Test Studio"}],
+        }
+
+        class TVCache(BaseCache):
+            media_type = "tv"
+            media_key = "shows"
+            cache_filename = "test_shows.json"
+
+            def _process_item(self, item, tmdb_api_key):
+                return {}
+
+        cache = TVCache("/tmp/cache")
+        mock_item = Mock()
+
+        result = cache._get_tmdb_data(mock_item, "api_key")
+
+        assert result["rating"] == 8.4
+        assert result["vote_count"] == 2000
+        assert result["production_company_ids"] == [42]
+
+    @patch("recommenders.base.fetch_tmdb_with_retry")
+    @patch("recommenders.base.get_tmdb_keywords")
+    @patch("recommenders.base.extract_ids_from_guids")
+    @patch("recommenders.base.load_media_cache")
+    def test_get_tmdb_data_movie_rating_unaffected_by_tv_change(
+        self, mock_load, mock_extract, mock_keywords, mock_fetch
+    ):
+        """Movie path regression check: a movie's _get_tmdb_data result
+        must still carry rating/vote_count/collection info and never
+        production_company_ids, unchanged by the TV branch fix above."""
+        mock_load.return_value = {"movies": {}, "library_count": 0}
+        mock_extract.return_value = {"imdb_id": None, "tmdb_id": 123}
+        mock_keywords.return_value = []
+        mock_fetch.return_value = {
+            "vote_average": 7.1,
+            "vote_count": 300,
+            "belongs_to_collection": {"id": 9, "name": "Test Collection"},
+        }
+
+        cache = ConcreteCache("/tmp/cache")
+        mock_item = Mock()
+
+        result = cache._get_tmdb_data(mock_item, "api_key")
+
+        assert result["rating"] == 7.1
+        assert result["vote_count"] == 300
+        assert result["collection_id"] == 9
+        assert result["collection_name"] == "Test Collection"
+        assert result["production_company_ids"] == []
+
 
 class ConcreteRecommender(BaseRecommender):
     """Concrete implementation of BaseRecommender for testing."""
@@ -2292,6 +2360,81 @@ class TestGetRecommendationsBranches:
 
         titles = [i["title"] for i in result["plex_recommendations"]]
         assert "Bad" not in titles
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_quality_filter_excludes_low_rated_tv_shows(self, mock_excl):
+        """TV parity for test_quality_filter_excludes_low_rated above.
+        Regression test for the tv: quality_filters no-op bug: once
+        ShowCache._process_item actually populates rating/vote_count (see
+        CHANGELOG), this shared filter must apply to "shows"-keyed cache
+        entries exactly the way it already does for "movies"-keyed ones -
+        proving the fix isn't just that the fields exist, but that they
+        actually drive real filtering for TV end to end."""
+        recommender = _make_recommender(
+            config={
+                "plex": {"url": "http://localhost", "token": "abc", "tv_library": "TV Shows"},
+                "general": {},
+                "weights": {"genre": 0.5, "actor": 0.5},
+            },
+            recommender_cls=ConcreteTVRecommender,
+        )
+        media_cache = Mock()
+        media_cache.cache = {
+            "shows": {
+                "1": {"title": "Good Show", "rating": 8.0, "vote_count": 500, "genres": []},
+                "2": {"title": "Bad Show", "rating": 2.0, "vote_count": 5, "genres": []},
+            }
+        }
+        media_cache._save_cache = Mock()
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = set()
+        recommender.profile_hash = "hash1"
+        recommender.exclude_genres = []
+        recommender.user_preferences = {}
+        recommender.randomize_recommendations = False
+        recommender.media_config = {"quality_filters": {"min_rating": 5.0, "min_vote_count": 100}}
+
+        result = recommender.get_recommendations()
+
+        titles = [i["title"] for i in result["plex_recommendations"]]
+        assert "Bad Show" not in titles
+        assert "Good Show" in titles
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_quality_filter_tv_show_missing_rating_treated_as_zero_not_crashed(self, mock_excl):
+        """A show cache entry with no rating/vote_count data at all (the
+        exact shape every existing on-disk show cache has today, before
+        this fix's CACHE_VERSION bump forces a rebuild) must not crash the
+        filter, and is treated the same way a movie with no rating data
+        already is: as below any positive threshold, not specially
+        exempted. In production this is a non-issue for pre-fix caches
+        specifically because bumping CACHE_VERSION deletes and fully
+        rebuilds them on the next run (see utils/config.py CACHE_VERSION
+        comment / CHANGELOG) - this test documents the fallback behavior
+        for the narrower, ongoing case of a genuine per-item TMDB lookup
+        miss, which is symmetric with movies and unchanged by this fix."""
+        recommender = _make_recommender(
+            config={
+                "plex": {"url": "http://localhost", "token": "abc", "tv_library": "TV Shows"},
+                "general": {},
+                "weights": {"genre": 0.5, "actor": 0.5},
+            },
+            recommender_cls=ConcreteTVRecommender,
+        )
+        media_cache = Mock()
+        media_cache.cache = {"shows": {"1": {"title": "No TMDB Match", "genres": []}}}
+        media_cache._save_cache = Mock()
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = set()
+        recommender.profile_hash = "hash1"
+        recommender.exclude_genres = []
+        recommender.user_preferences = {}
+        recommender.randomize_recommendations = False
+        recommender.media_config = {"quality_filters": {"min_rating": 5.0, "min_vote_count": 100}}
+
+        result = recommender.get_recommendations()  # must not raise
+
+        assert result["plex_recommendations"] == []
 
     @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
     def test_uses_cached_score_when_profile_hash_matches(self, mock_excl):
