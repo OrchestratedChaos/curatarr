@@ -17,6 +17,8 @@ existing installs keep working without this screen ever writing those
 two fields again.
 """
 
+import os
+import sys
 from typing import Any, Dict, Optional
 
 from flask import jsonify, redirect, render_template, request, url_for
@@ -251,6 +253,20 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
             "auto_sync": pick("trakt", "auto_sync", bool(trakt_export.get("auto_sync", False))),
             "user_mode": pick("trakt", "user_mode", trakt_export.get("user_mode", "mapping")),
             "plex_users": pick("trakt", "plex_users", format_csv_list(trakt_export.get("plex_users"))),
+        },
+        # Which re-auth instructions to show below the Trakt fields -
+        # the device-code flow itself (utils/trakt_auth.py) is the same
+        # everywhere, but how a user actually RUNS it differs by
+        # deployment shape: `docker exec` into the running container in
+        # Docker (a source install's `python3 -m utils.trakt_auth`
+        # can't reach a Docker container's shell at all), and not
+        # reachable yet at all from a packaged (frozen) binary - no
+        # loose utils/trakt_auth.py to run, and no --run-recommender-
+        # style dispatch for it (unlike movie/tv/external/full) has
+        # been built. See config_connections.html for the exact text.
+        "trakt_reauth": {
+            "docker": os.environ.get("RUNNING_IN_DOCKER") == "true",
+            "frozen": getattr(sys, "frozen", False),
         },
         "user_mode_choices": USER_MODE_CHOICES,
     }

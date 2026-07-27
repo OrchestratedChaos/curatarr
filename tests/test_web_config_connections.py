@@ -65,6 +65,54 @@ class TestGet:
         assert b"configured" in resp.data
 
 
+class TestTraktReauthHint:
+    """The Trakt re-auth instructions shown below the fields must match
+    how a user can actually reach this screen in the first place - a
+    Docker user can't shell into a source-checkout venv, and a
+    packaged (frozen) binary user has no loose utils/trakt_auth.py or
+    --run-recommender-style dispatch to run it with at all. See
+    web/config_connections.py's own _connections_view docstring on
+    "trakt_reauth"."""
+
+    @staticmethod
+    def _text(resp):
+        """Collapse the template's own line-wrapping (real whitespace
+        the browser would collapse too) so multi-word assertions below
+        don't depend on exactly where a line happens to wrap in the
+        .html source."""
+        return " ".join(resp.data.decode().split())
+
+    def test_source_install_shows_module_invocation_and_venv_hint(self, client, monkeypatch):
+        monkeypatch.delenv("RUNNING_IN_DOCKER", raising=False)
+        c, app, root = client
+        resp = c.get("/config/connections")
+        text = self._text(resp)
+        assert "python3 -m utils.trakt_auth</code> to link/relink" in text
+        assert "virtual environment active" in text
+        assert "docker exec" not in text
+
+    def test_docker_shows_docker_exec_command(self, client, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        c, app, root = client
+        resp = c.get("/config/connections")
+        text = self._text(resp)
+        assert "docker exec -it" in text
+        assert "python3 -m utils.trakt_auth" in text
+
+    def test_frozen_states_gap_plainly_instead_of_a_dead_command(self, client, monkeypatch):
+        monkeypatch.delenv("RUNNING_IN_DOCKER", raising=False)
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        c, app, root = client
+        resp = c.get("/config/connections")
+        text = self._text(resp)
+        assert "isn't available yet" in text
+        assert "docker exec" not in text
+        # Never claim the module invocation works here - it can't
+        # (recommenders/<x>.py's own equivalent is --run-recommender,
+        # not a loose script - see this module's docstring).
+        assert "python3 -m utils.trakt_auth</code> to link" not in text
+
+
 class TestSave:
     def test_saves_plex_and_tmdb_to_config_yml(self, client):
         c, app, root = client

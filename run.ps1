@@ -662,7 +662,8 @@ except Exception as e:
 
             if ($traktError) {
                 Write-Red "Failed to get device code: $traktError"
-                Write-Yellow "You can authenticate later with: python utils/trakt_auth.py"
+                Write-Yellow "You can authenticate later with: python -m utils.trakt_auth"
+                Write-Yellow "(activate your virtual environment first, if you're using one)"
             } elseif ($traktCode) {
                 Write-Host ""
                 Write-Host "1. Go to: " -NoNewline; Write-Cyan $traktUrl
@@ -691,7 +692,8 @@ else:
                 if ($traktAccessToken) {
                     Write-Green "OK Trakt authenticated!"
                 } else {
-                    Write-Yellow "Authentication not completed. You can retry later with: python utils/trakt_auth.py"
+                    Write-Yellow "Authentication not completed. You can retry later with: python -m utils.trakt_auth"
+                    Write-Yellow "(activate your virtual environment first, if you're using one)"
                 }
             }
 

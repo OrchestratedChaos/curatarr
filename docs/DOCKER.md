@@ -356,3 +356,16 @@ docker compose build --no-cache
   expected: `/healthz` is only served by the `web` mode. A one-shot
   `recommend` container is meant to run to completion and exit, not
   stay up.
+- **Re-linking or re-authenticating Trakt** - the Connections screen
+  can't complete Trakt's device-code OAuth flow itself (it's a live
+  poll loop, not a single form submit); run it inside the container
+  instead:
+
+  ```bash
+  docker exec -it curatarr python3 -m utils.trakt_auth
+  ```
+
+  (`curatarr` is this image's container name in `docker-compose.yml` -
+  substitute your own if you run/named it differently.) Add `--reauth`
+  to relink an account that's already linked (e.g. after a refresh
+  failure) instead of hand-editing `config/trakt.yml` first.
