@@ -2343,12 +2343,23 @@ def _main_impl():
     huntarr_config = config.get("huntarr", {})
     run_sequel_huntarr = huntarr_config.get("sequel_huntarr", True)
     run_horizon_huntarr = huntarr_config.get("horizon_huntarr", True)
-    run_recommendations = not args.huntarr_only
+    # external_recommendations.enabled: default True, matching the
+    # documented example and every install's effective behavior before
+    # this was wired up - this key was previously read nowhere at all
+    # (config/tuning.example.yml documented it, but no code path ever
+    # checked it), so anyone who set it false was silently still getting
+    # external recommendations anyway. Gates ONLY the recommendations/
+    # watchlist-building pass below, never Huntarr (a separate feature
+    # under its own huntarr.* keys, already independently gated above).
+    external_recommendations_enabled = config.get("external_recommendations", {}).get("enabled", True)
+    run_recommendations = not args.huntarr_only and external_recommendations_enabled
 
     if args.huntarr_only:
         print(f"\n{GREEN}=== Huntarr: Collection Movie Finder ==={RESET}")
     else:
         print(f"\n{GREEN}=== External Recommendations Generator ==={RESET}")
+        if not external_recommendations_enabled:
+            print(f"{YELLOW}Skipping recommendations (external_recommendations.enabled is false in config){RESET}")
         if run_sequel_huntarr:
             print(f"{CYAN}Sequel Huntarr enabled{RESET}")
         if run_horizon_huntarr:

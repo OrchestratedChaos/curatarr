@@ -115,6 +115,7 @@ from .helpers import (
     TITLE_SUFFIXES_TO_STRIP,
     cleanup_old_logs,
     compute_profile_hash,
+    get_code_root,
     get_project_root,
     map_path,
     migrate_legacy_cache_dir,
@@ -480,6 +481,7 @@ __all__ = [
     "process_counters_from_cache",
     # Helpers
     "TITLE_SUFFIXES_TO_STRIP",
+    "get_code_root",
     "get_project_root",
     "migrate_legacy_cache_dir",
     "normalize_title",

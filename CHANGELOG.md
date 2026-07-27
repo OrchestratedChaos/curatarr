@@ -2,6 +2,21 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.51] - 2026-07-27
+
+### Fixed
+
+- **The web UI's Run button now actually starts a run in Docker - the second half of issue #260.** PR1 (2.10.49) fixed the 403 that blocked the request from reaching the server at all; the run itself was still silently broken behind it. `JobManager` resolved `recommenders/<engine>.py` and `run.sh`/`run.ps1` against `CURATARR_CONFIG_DIR` (the *config/data* directory - `/data` in the Docker image) instead of the directory the code actually lives in (`/app`) - every movie/tv/external/full run launched from the web UI in Docker failed immediately with `can't open file '/data/recommenders/movie.py'`, while the HTTP request itself still returned a normal 200/redirect, so nothing in the UI indicated the run never happened.
+
+  Fixed with a new `utils.helpers.get_code_root()` - deliberately separate from `get_project_root()` (which answers "where's config/cache/logs", not "where's the code" - the two happen to coincide for a plain source checkout, which is exactly why this went unnoticed until Docker deliberately splits them). `JobManager` now resolves scripts against this instead.
+
+  Verified end-to-end in all four ways curatarr actually ships, not just that the HTTP request returns 200: a real Docker container (movie/tv/external all launch and produce real log output, including a real recommenders/movie.py traceback instead of a file-not-found error - full/run.sh also now launches, though it separately hits a pip-install step that isn't expected to succeed inside this image and needs its own look), a real PyInstaller frozen binary build (all three engines launch via `--run-recommender`), a native (non-Docker) web-mode run, and the existing source-checkout test suite. Issue #260 stays open until this ships and the reporter confirms.
+
+- **Two `config/tuning.example.yml` documentation mismatches, surfaced by the guardrail test added in 2.10.49, now resolved:**
+  - `external_recommendations.max_iterations`: the example documented `5`; the code's actual fallback has been `8` for months and every install has been running on `8` the whole time (nothing ever wrote a real `tuning.yml` - see 2.10.49's #261 notes for why that's been true of every fresh install). The example was corrected to `8` to match reality, not the other way around - changing the code to `5` would have silently altered discovery behavior for every existing install to match a doc that was simply wrong. The web UI Settings screen's own "if not set" default (`web/config_settings.py`) was corrected to match.
+  - **`external_recommendations.enabled` is now actually honored - this changes output for anyone who had set it to `false`.** The example has always documented this key, but nothing in `recommenders/external.py` ever read it - every install got external recommendations regardless of what this was set to. It's now wired up (defaulting `true`, so nobody's current setup changes unless they'd already set it `false`). **If you have `external_recommendations.enabled: false` in your `tuning.yml`, external recommendations/watchlist generation will now actually stop** - Huntarr (`huntarr.sequel_huntarr`/`huntarr.horizon_huntarr`) is unaffected, since it's a separate feature under its own config keys. This is the behavior you configured; it just wasn't being honored before.
+  - The guardrail test now passes clean across every top-level section of `tuning.example.yml` with no known mismatches remaining.
+
 ## [2.10.50] - 2026-07-27
 
 ### Fixed

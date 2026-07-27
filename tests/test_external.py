@@ -3113,6 +3113,115 @@ class TestMainOutputGenerationBranches:
     @patch("recommenders.external.load_config")
     @patch("recommenders.external.get_project_root")
     @patch("sys.argv", ["external.py"])
+    def test_external_recommendations_enabled_false_skips_recommendations_not_huntarr(
+        self,
+        mock_root,
+        mock_load_config,
+        mock_get_tmdb,
+        mock_plex_server,
+        mock_process_user,
+        mock_sequels,
+        mock_horizon,
+        mock_html,
+        mock_trakt,
+        mock_sonarr,
+        mock_radarr,
+        mock_mdblist,
+        mock_simkl,
+    ):
+        """external_recommendations.enabled: false (newly wired up, was
+        previously read nowhere) must skip the recommendations/watchlist
+        pass - but NOT Huntarr, which is a separate feature under its
+        own huntarr.* keys and stays independently gated."""
+        mock_root.return_value = "/fake/root"
+        mock_load_config.return_value = self._base_config(
+            external_recommendations={"enabled": False},
+            huntarr={"sequel_huntarr": True, "horizon_huntarr": True},
+        )
+        mock_get_tmdb.return_value = {"api_key": "key", "use_keywords": True}
+        mock_plex_server.return_value = Mock()
+        mock_html.return_value = None
+        mock_sequels.return_value = []
+        mock_horizon.return_value = []
+
+        from recommenders.external import main
+
+        main()
+
+        mock_process_user.assert_not_called()
+        mock_trakt.assert_not_called()
+        mock_sonarr.assert_not_called()
+        mock_radarr.assert_not_called()
+        mock_mdblist.assert_not_called()
+        mock_simkl.assert_not_called()
+        mock_sequels.assert_called_once()
+        mock_horizon.assert_called_once()
+
+    @patch("recommenders.external.export_to_simkl")
+    @patch("recommenders.external.export_to_mdblist")
+    @patch("recommenders.external.export_to_radarr")
+    @patch("recommenders.external.export_to_sonarr")
+    @patch("recommenders.external.export_to_trakt")
+    @patch("recommenders.external.generate_combined_html")
+    @patch("recommenders.external.process_user")
+    @patch("recommenders.external.PlexServer")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.load_config")
+    @patch("recommenders.external.get_project_root")
+    @patch("sys.argv", ["external.py"])
+    def test_external_recommendations_enabled_defaults_true_when_unset(
+        self,
+        mock_root,
+        mock_load_config,
+        mock_get_tmdb,
+        mock_plex_server,
+        mock_process_user,
+        mock_html,
+        mock_trakt,
+        mock_sonarr,
+        mock_radarr,
+        mock_mdblist,
+        mock_simkl,
+    ):
+        """No external_recommendations.enabled key at all (the state of
+        every install before this was wired up) must behave exactly like
+        enabled: true - nobody's working setup changes by accident."""
+        mock_root.return_value = "/fake/root"
+        mock_load_config.return_value = self._base_config()
+        mock_get_tmdb.return_value = {"api_key": "key", "use_keywords": True}
+        mock_plex_server.return_value = Mock()
+        mock_html.return_value = None
+        mock_process_user.return_value = {
+            "username": "alice",
+            "display_name": "alice",
+            "movies_categorized": {"user_services": {}, "other_services": {}, "acquire": []},
+            "shows_categorized": {"user_services": {}, "other_services": {}, "acquire": []},
+            "movie_profile": {},
+            "show_profile": {},
+            "user_services": [],
+            "library_id": None,
+        }
+
+        from recommenders.external import main
+
+        main()
+
+        mock_process_user.assert_called()
+
+    @patch("recommenders.external.export_to_simkl")
+    @patch("recommenders.external.export_to_mdblist")
+    @patch("recommenders.external.export_to_radarr")
+    @patch("recommenders.external.export_to_sonarr")
+    @patch("recommenders.external.export_to_trakt")
+    @patch("recommenders.external.generate_combined_html")
+    @patch("recommenders.external.find_horizon_movies")
+    @patch("recommenders.external.find_missing_sequels")
+    @patch("recommenders.external.process_user")
+    @patch("recommenders.external.PlexServer")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.load_config")
+    @patch("recommenders.external.get_project_root")
+    @patch("sys.argv", ["external.py"])
     def test_process_user_exception_is_isolated_per_user(
         self,
         mock_root,

@@ -16,10 +16,49 @@ from .config import MAX_LOG_FILE_BYTES
 from .display import log_info, log_warning
 
 
+def get_code_root() -> str:
+    """
+    Get the directory the curatarr *code* (recommenders/, utils/, web/,
+    run.sh/run.ps1) actually lives in on disk - deliberately NOT the
+    same thing get_project_root() below returns.
+
+    get_project_root() answers "where does config/cache/logs/
+    recommendations live" - for a source checkout or a Docker image
+    those two questions happen to have the same answer (the repo root),
+    which is exactly why this distinction was missing for so long and
+    why #260's second half (JobManager launching movie/tv/external
+    subprocesses) went unnoticed until Docker: CURATARR_CONFIG_DIR
+    deliberately makes get_project_root() point at a separate, mounted
+    *data* volume (/data) while the code stays at the image's fixed
+    WORKDIR (/app) - anything that needs to find recommenders/<x>.py or
+    run.sh/run.ps1 on disk (see web/job_runner.py's JobManager, the only
+    current caller) must resolve against THIS, never against
+    get_project_root().
+
+    Not meaningful for a frozen (PyInstaller --onefile) binary - there
+    is no on-disk recommenders/<x>.py to point at once packaged (they're
+    bundled into the executable, not shipped as loose .py files - see
+    curatarr_app.py's dispatcher) - callers must branch on
+    `sys.frozen` themselves and never call this in that branch (see
+    JobManager._build_command's `if frozen: ... else:` split, which
+    already does exactly this for an unrelated reason: re-invoking the
+    packaged exe with --run-recommender instead of a script path).
+
+    Returns:
+        Absolute path to the directory containing utils/ (this file's
+        own parent's parent) - always the on-disk code location,
+        regardless of CURATARR_CONFIG_DIR or sys.frozen.
+    """
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 @lru_cache(maxsize=1)
 def get_project_root() -> str:
     """
-    Get the project root directory path.
+    Get the project root directory path - i.e. where config/cache/logs/
+    recommendations live, NOT necessarily where the code itself lives
+    (see get_code_root() above for that, and for why the two can
+    genuinely differ).
 
     For a normal source checkout / Docker image this is the parent of
     utils/ (repo root), same as always.
@@ -62,7 +101,7 @@ def get_project_root() -> str:
             root = os.path.join(os.path.expanduser("~"), ".curatarr")
         os.makedirs(root, exist_ok=True)
         return root
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return get_code_root()
 
 
 def migrate_legacy_cache_dir(legacy_dir: str, new_dir: str) -> None:

@@ -13,6 +13,7 @@ from utils.helpers import (
     TITLE_SUFFIXES_TO_STRIP,
     cleanup_old_logs,
     compute_profile_hash,
+    get_code_root,
     get_project_root,
     map_path,
     migrate_legacy_cache_dir,
@@ -386,6 +387,53 @@ class TestComputeProfileHash:
         result = compute_profile_hash(profile)
         assert len(result) == 16
         assert isinstance(result, str)
+
+
+class TestGetCodeRoot:
+    """Tests for get_code_root() - #260's second half.
+
+    Unlike get_project_root(), this is NOT @lru_cache'd (nothing here
+    is expensive enough to need caching) and deliberately ignores
+    CURATARR_CONFIG_DIR entirely - that's the whole point of it
+    existing as a separate function (see its own docstring).
+    """
+
+    def test_returns_repo_root(self):
+        root = get_code_root()
+        assert os.path.isdir(os.path.join(root, "utils"))
+        assert os.path.isdir(os.path.join(root, "web"))
+        assert os.path.isdir(os.path.join(root, "recommenders"))
+
+    def test_ignores_config_dir_env_override(self, tmp_path, monkeypatch):
+        """The exact divergence #260's second half was about: in Docker,
+        CURATARR_CONFIG_DIR points get_project_root() at a separate,
+        mounted data volume while the code stays at the image's fixed
+        WORKDIR - get_code_root() must never follow that override."""
+        monkeypatch.setenv("CURATARR_CONFIG_DIR", str(tmp_path))
+
+        code_root = get_code_root()
+
+        assert code_root != str(tmp_path)
+        assert os.path.isdir(os.path.join(code_root, "recommenders"))
+
+    def test_differs_from_project_root_when_config_dir_overridden(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CURATARR_CONFIG_DIR", str(tmp_path))
+        get_project_root.cache_clear()
+        try:
+            assert get_code_root() != get_project_root()
+        finally:
+            get_project_root.cache_clear()
+
+    def test_same_as_project_root_when_config_dir_unset(self, monkeypatch):
+        """Plain source checkout / Docker with no override: the two
+        genuinely coincide - this is exactly why the bug was invisible
+        until CURATARR_CONFIG_DIR diverged them."""
+        monkeypatch.delenv("CURATARR_CONFIG_DIR", raising=False)
+        get_project_root.cache_clear()
+        try:
+            assert get_code_root() == get_project_root()
+        finally:
+            get_project_root.cache_clear()
 
 
 class TestGetProjectRoot:
