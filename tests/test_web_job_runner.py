@@ -29,7 +29,12 @@ def _wait_until_done(job, timeout=10):
 
 
 def _manager(root):
-    return JobManager(root, os.path.join(root, "logs"))
+    # code_root=root: this fixture directory also contains fake
+    # recommenders/*.py + run.sh/run.ps1 (see curatarr_web_root/
+    # _make_root below) precisely so JobManager finds THOSE instead of
+    # the real repo's - see web/app.py's create_app docstring for why
+    # code_root is independent of project_root (#260).
+    return JobManager(root, os.path.join(root, "logs"), code_root=root)
 
 
 def _make_root(tmp_path, movie_py):
@@ -51,6 +56,92 @@ def _make_root(tmp_path, movie_py):
     (root / "run.sh").write_text("#!/bin/bash\necho full done\n", encoding="utf-8")
     (root / "run.ps1").write_text('Write-Host "full done"\n', encoding="utf-8")
     return str(root)
+
+
+class TestBuildCommandCodeRootDivergence:
+    """#260 (second half) regression: JobManager must resolve
+    recommenders/<x>.py and run.sh/run.ps1 against the CODE directory,
+    never against project_root (the *data* dir - config/cache/logs).
+    In Docker, CURATARR_CONFIG_DIR points project_root at a separately
+    mounted /data while the code stays at the image's fixed /app - the
+    exact divergence that made every UI-triggered movie/tv/external/full
+    run fail with "can't open file '/data/recommenders/movie.py'" while
+    the /run POST itself still returned a normal redirect (a 200/303
+    with a dead subprocess behind it - the failure #260 was actually
+    about, on top of the 403 PR1 fixed in front of it).
+
+    Uses two DELIBERATELY DIFFERENT directories for project_root and
+    code_root (neither needs to exist on disk - _build_command only
+    constructs the path string, it doesn't open the file) so a
+    regression that resolves against the wrong one is caught
+    immediately, not masked by a fixture where both happen to coincide.
+    """
+
+    def _manager(self, project_root, code_root):
+        return JobManager(project_root, os.path.join(project_root, "logs"), code_root=code_root)
+
+    def test_movie_script_path_uses_code_root_not_project_root(self):
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("movie", "alice")
+        script = cmd[1]
+        assert script.startswith("/app")
+        assert not script.startswith("/data")
+        assert script == os.path.join("/app", "recommenders", "movie.py")
+
+    def test_tv_script_path_uses_code_root_not_project_root(self):
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("tv", "alice")
+        script = cmd[1]
+        assert script == os.path.join("/app", "recommenders", "tv.py")
+
+    def test_external_script_path_uses_code_root_not_project_root(self):
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("external", "all")
+        script = cmd[1]
+        assert script == os.path.join("/app", "recommenders", "external.py")
+
+    def test_full_engine_run_sh_uses_code_root_not_project_root(self):
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[1]
+        assert script == os.path.join("/app", "run.sh")
+
+    def test_full_engine_run_ps1_uses_code_root_not_project_root(self, monkeypatch):
+        monkeypatch.setattr(job_runner_mod.os, "name", "nt")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[4]
+        assert script == os.path.join("/app", "run.ps1")
+
+    def test_code_root_defaults_to_get_code_root_when_not_given(self):
+        """No code_root passed at all - must resolve to the real
+        installed code location (utils.helpers.get_code_root()),
+        never silently fall back to project_root."""
+        from utils.helpers import get_code_root
+
+        manager = JobManager("/some/data/dir", "/some/data/dir/logs")
+        cmd, _env, _log_name = manager._build_command("movie", "alice")
+        script = cmd[1]
+        assert script == os.path.join(get_code_root(), "recommenders", "movie.py")
+        assert not script.startswith("/some/data/dir")
+
+    def test_frozen_branch_unaffected_by_code_root_divergence(self, monkeypatch):
+        """The 4th deployment shape (PyInstaller --onefile binary) never
+        had this bug: it doesn't reference a code_root-resolved script
+        path at all, re-invoking sys.executable itself with
+        --run-recommender instead (see this module's own docstring for
+        why - recommenders/<x>.py isn't shipped as loose files once
+        packaged). Confirms this PR's fix left that branch untouched
+        even with project_root/code_root pointing at completely
+        different, nonexistent directories."""
+        monkeypatch.setattr(job_runner_mod.sys, "frozen", True, raising=False)
+        manager = self._manager("/data", "/app")
+
+        for engine, user in (("movie", "alice"), ("tv", "alice"), ("external", "all"), ("full", "all")):
+            cmd, _env, _log_name = manager._build_command(engine, user)
+            assert cmd[0] == job_runner_mod.sys.executable
+            assert "--run-recommender" in cmd
+            assert not any("/data" in part or "/app" in part for part in cmd)
 
 
 class TestJobManagerStart:

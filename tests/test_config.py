@@ -567,19 +567,26 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
 
         tuning = self._load_example_tuning()
         external = tuning["external_recommendations"]
+        # #260/#261-guardrail follow-up: this WAS a mismatch (example
+        # said 5, MAX_DISCOVERY_ITERATIONS was 8) - every install has
+        # been running 8 for months, so the example was corrected to
+        # match longstanding real behavior rather than the code changed
+        # to match a doc that was simply wrong. web/config_settings.py's
+        # own "if unset" display default was fixed to match too.
+        assert external["max_iterations"] == 8
+        assert MAX_DISCOVERY_ITERATIONS == 8
+        # enabled: previously documented here but read by NOTHING in
+        # recommenders/external.py - now wired up (main()/_main_impl()),
+        # defaulting True to match the example and every install's
+        # prior (accidental, since the key was never honored) effective
+        # behavior.
+        assert external["enabled"] is True
         assert external["movie_limit"] == 50
         assert external["show_limit"] == 20
         assert external["min_relevance_score"] == 0.65
         assert external["auto_open_html"] is False
         assert external["min_votes"] == OUTPUT_MIN_VOTES
         assert external["language"] is None
-        # KNOWN MISMATCH surfaced by this guardrail, reported rather than
-        # silently "fixed" (see this PR's description) - the example
-        # documents 5, the code fallback (MAX_DISCOVERY_ITERATIONS) is 8.
-        # Pinned here on both sides so whichever way this is resolved,
-        # this test forces a deliberate update instead of drifting further.
-        assert external["max_iterations"] == 5
-        assert MAX_DISCOVERY_ITERATIONS == 8
 
     def test_recency_decay_defaults_match(self):
         """utils/scoring.py's calculate_recency_multiplier reads every one

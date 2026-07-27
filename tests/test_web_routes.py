@@ -20,7 +20,12 @@ from web.app import BIND_RETRY_ATTEMPTS, _run_with_bind_retry, _wait_for_listeni
 
 @pytest.fixture
 def client(curatarr_web_root):
-    app = create_app(project_root=curatarr_web_root)
+    # code_root=curatarr_web_root too: that fixture also contains fake
+    # recommenders/*.py + run.sh/run.ps1 precisely so a POST /run in
+    # these tests launches THOSE instead of the real repo's (#260 -
+    # see web/app.py's create_app docstring for why project_root and
+    # code_root are independent).
+    app = create_app(project_root=curatarr_web_root, code_root=curatarr_web_root)
     app.testing = True
     return app.test_client(), app, curatarr_web_root
 

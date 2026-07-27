@@ -90,7 +90,7 @@ external_recommendations:
   auto_open_html: false  # Open watchlist in browser after generation
   # Discovery iteration settings
   min_votes: 50  # Minimum TMDB votes for reliability (filters garbage entries)
-  max_iterations: 5  # Max discovery passes before giving up (more = slower but more thorough)
+  max_iterations: 8  # Max discovery passes before giving up (more = slower but more thorough)
   # Language filter - only recommend content in this language (ISO 639-1 code)
   # Examples: "en" (English), "es" (Spanish), "ja" (Japanese), "ko" (Korean)
   # Set to null or omit to disable language filtering

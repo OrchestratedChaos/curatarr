@@ -36,7 +36,7 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from utils.helpers import no_window_kwargs
+from utils.helpers import get_code_root, no_window_kwargs
 from utils.run_lock import PosixRunLock, run_lock_path
 
 from .security import redact
@@ -202,9 +202,17 @@ class Job:
 class JobManager:
     """Owns the single-run lock and launches recommender subprocesses."""
 
-    def __init__(self, project_root: str, logs_dir: str):
+    def __init__(self, project_root: str, logs_dir: str, code_root: Optional[str] = None):
         self.project_root = project_root
         self.logs_dir = logs_dir
+        # #260 (second half): defaults to get_code_root() - the real
+        # on-disk code location - independently of project_root (the
+        # *data* dir: config/cache/logs, see get_project_root()'s
+        # docstring for why these two genuinely differ in Docker).
+        # Overridable (see web/app.py's create_app) so tests can point
+        # both at the same throwaway fixture root, same as before this
+        # split existed.
+        self.code_root = code_root if code_root is not None else get_code_root()
         self._lock = threading.Lock()
         self._current: Optional[Job] = None
 
@@ -351,18 +359,33 @@ class JobManager:
         on disk, so this re-invokes the packaged exe itself with
         `--run-recommender <engine> [user]` - see curatarr_app.py's
         dispatcher and this module's docstring.
+
+        #260 (second half): the non-frozen script/run.sh/run.ps1 paths
+        below are resolved against get_code_root() - where the code
+        actually lives - NEVER against self.project_root, which is
+        get_project_root()'s *data* dir (config/cache/logs). Those are
+        the same directory for a plain source checkout, which is
+        exactly why this was never caught until Docker, where
+        CURATARR_CONFIG_DIR points self.project_root at the separately
+        mounted /data while the code stays at the image's fixed /app -
+        every engine here failed with "can't open file
+        '/data/recommenders/movie.py'" (or run.sh) before this fix, with
+        the web UI still reporting a 200 because the HTTP request
+        itself succeeded even though the subprocess it launched never
+        started. See utils/helpers.get_code_root's own docstring.
         """
         env = dict(os.environ)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         frozen = getattr(sys, "frozen", False)
+        code_root = self.code_root
 
         if engine == "full":
             if frozen:
                 cmd = [sys.executable, "--run-recommender", "full"]
             elif os.name == "nt":
-                cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", os.path.join(self.project_root, "run.ps1")]
+                cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", os.path.join(code_root, "run.ps1")]
             else:
-                cmd = ["bash", os.path.join(self.project_root, "run.sh")]
+                cmd = ["bash", os.path.join(code_root, "run.sh")]
             # Skip the interactive setup wizard / auto-update git-checkout
             # dance for UI-triggered runs - config is assumed already
             # set up, same bypass run.sh already supports for Docker.
@@ -372,7 +395,7 @@ class JobManager:
             if frozen:
                 cmd = [sys.executable, "--run-recommender", engine]
             else:
-                script = os.path.join(self.project_root, "recommenders", f"{engine}.py")
+                script = os.path.join(code_root, "recommenders", f"{engine}.py")
                 cmd = [sys.executable, script]
             if user != "all":
                 cmd.append(user)
@@ -381,7 +404,7 @@ class JobManager:
             if frozen:
                 cmd = [sys.executable, "--run-recommender", "external"]
             else:
-                script = os.path.join(self.project_root, "recommenders", "external.py")
+                script = os.path.join(code_root, "recommenders", "external.py")
                 cmd = [sys.executable, script]
             target = "all"
         else:  # pragma: no cover - guarded by start()'s validation above

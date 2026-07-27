@@ -171,7 +171,7 @@ def _settings_view(
             "show_limit": external.get("show_limit", 20),
             "min_relevance_score": external.get("min_relevance_score", 0.65),
             "min_votes": external.get("min_votes", 50),
-            "max_iterations": external.get("max_iterations", 5),
+            "max_iterations": external.get("max_iterations", 8),
             "language": external.get("language") or "",
             "auto_open_html": bool(external.get("auto_open_html", False)),
         },

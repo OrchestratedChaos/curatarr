@@ -181,7 +181,9 @@ class _BrowserLikeTestClient(FlaskClient):
         return super().open(*args, **kwargs)
 
 
-def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = None) -> Flask:
+def create_app(
+    project_root: Optional[str] = None, bind_host: Optional[str] = None, code_root: Optional[str] = None
+) -> Flask:
     """Application factory. project_root is overridable so tests can
     point the app at a throwaway fixture repo instead of the real one.
 
@@ -194,6 +196,19 @@ def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = No
     only caller that ever sets that env var) else '127.0.0.1', so every
     existing call site - including every test - that doesn't pass this
     explicitly keeps today's loopback-only, no-token-required behavior.
+
+    code_root is passed straight through to JobManager (see that
+    module's docstring, and utils.helpers.get_code_root's) - it's
+    deliberately independent of project_root: the latter defaults to
+    get_project_root() (the *data* dir - config/cache/logs, which
+    CURATARR_CONFIG_DIR points at a separate volume in Docker), while
+    JobManager needs to know where recommenders/<x>.py and run.sh/
+    run.ps1 actually live on disk to launch a UI-triggered run (#260) -
+    get_code_root() by default when this is left unset, exactly like
+    every real caller (native web/app.py's main(), web/docker_server.py)
+    wants. Only tests that also stand up a fake recommenders/ tree (see
+    tests/conftest.py's curatarr_web_root fixture) need to pass this
+    explicitly, pointed at that same fixture root.
     """
     project_root = project_root or get_project_root()
     bind_host = bind_host or os.environ.get("CURATARR_UI_HOST", "127.0.0.1")
@@ -206,7 +221,7 @@ def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = No
     app.config["EXTERNAL_DIR"] = external_dir
     # Flask's stub doesn't declare these - real, deliberate attribute
     # attachment (every route reads them back the same way), not a typo.
-    app.job_manager = JobManager(project_root, logs_dir)  # type: ignore[attr-defined]
+    app.job_manager = JobManager(project_root, logs_dir, code_root=code_root)  # type: ignore[attr-defined]
     app.update_manager = UpdateManager(project_root, logs_dir)  # type: ignore[attr-defined]
     app.test_client_class = _BrowserLikeTestClient
 
