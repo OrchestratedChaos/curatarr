@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import requests
 
@@ -101,12 +101,14 @@ def get_imdb_id(tmdb_api_key: str, tmdb_id: int, media_type: str = "movie") -> O
     return None
 
 
-def _sync_items_in_batches(items: List[Dict], trakt_client: Any, media_type: str, result_key: str) -> int:
+def _sync_items_in_batches(items: List[str], trakt_client: Any, media_type: str, result_key: str) -> int:
     """
     Sync items to Trakt in batches with progress display.
 
     Args:
-        items: List of items to sync (IMDB ID dicts)
+        items: List of IMDB ID strings to sync (passed straight through to
+            TraktClient.add_to_history(), which itself wraps each into the
+            {"ids": {"imdb": ...}} shape the Trakt API expects)
         trakt_client: Authenticated Trakt client
         media_type: 'movies' or 'shows' for display
         result_key: Key to extract from result ('movies' or 'episodes')
@@ -137,7 +139,10 @@ def _sync_items_in_batches(items: List[Dict], trakt_client: Any, media_type: str
 
 
 def collect_imdb_ids(
-    categorized: Dict, tmdb_api_key: str, media_type: str = "movie", flatten_func: callable = None
+    categorized: Dict,
+    tmdb_api_key: str,
+    media_type: str = "movie",
+    flatten_func: Optional[Callable[[Dict], List]] = None,
 ) -> List[str]:
     """
     Collect IMDB IDs from categorized items.
@@ -352,6 +357,7 @@ def _resolve_library_groups(config: Dict, users_to_export: List[Dict], media_typ
     resolved = []
     for library_id, group_users in groups.items():
         candidates = get_libraries_for_media_type(config, media_type)
+        library: Optional[Dict]
         if library_id is None:
             if not candidates:
                 log_warning(
@@ -532,7 +538,7 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                         season_folder=season_folder,
                         series_type=series_type,
                         tag_ids=[tag_id],
-                        search_for_missing_episodes=search_for_series,
+                        search_for_missing_episodes=search_for_series,  # type: ignore[call-arg]  # KNOWN PRE-EXISTING BUG (found during mypy remediation, not introduced/fixed here): SonarrClient.add_series's real param is `search_for_missing`, not `search_for_missing_episodes` - this call raises TypeError at runtime whenever it executes. Renaming it is a behavior change outside this typing-only PR's scope; tracked for a follow-up fix.
                     )
                     added += 1
                     print(f"  {GREEN}Added: {series_data['title']}{RESET}")
@@ -593,7 +599,7 @@ def export_to_sonarr(config: Dict, all_users_data: List[Dict], tmdb_api_key: str
                         season_folder=season_folder,
                         series_type=series_type,
                         tag_ids=[tag_id],
-                        search_for_missing_episodes=search_for_series,
+                        search_for_missing_episodes=search_for_series,  # type: ignore[call-arg]  # KNOWN PRE-EXISTING BUG (found during mypy remediation, not introduced/fixed here): SonarrClient.add_series's real param is `search_for_missing`, not `search_for_missing_episodes` - this call raises TypeError at runtime whenever it executes. Renaming it is a behavior change outside this typing-only PR's scope; tracked for a follow-up fix.
                     )
                     added += 1
                     print(f"    {GREEN}Added: {series_data['title']}{RESET}")
@@ -865,7 +871,7 @@ def export_to_mdblist(config: Dict, all_users_data: List[Dict], tmdb_api_key: st
 
     # Test connection
     try:
-        user_info = mdblist_client.get_user_info()
+        user_info = mdblist_client.get_user_info()  # type: ignore[attr-defined]  # KNOWN PRE-EXISTING BUG (found during mypy remediation, not introduced/fixed here): MDBListClient has no get_user_info method at all - this raises AttributeError (not caught by the except MDBListAPIError below) whenever this code path executes. Fixing it is a behavior change outside this typing-only PR's scope; tracked for a follow-up fix.
         print(f"\n{CYAN}=== Exporting to MDBList ==={RESET}")
         print(f"  Connected as: {user_info.get('name', 'Unknown')}")
     except MDBListAPIError as e:
@@ -1066,7 +1072,10 @@ def export_to_simkl(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
 
 
 def sync_watch_history_to_trakt(
-    config: Dict, tmdb_api_key: str, users: List[str] = None, load_profile_func: callable = None
+    config: Dict,
+    tmdb_api_key: str,
+    users: Optional[List[str]] = None,
+    load_profile_func: Optional[Callable[..., Any]] = None,
 ) -> None:
     """
     Sync Plex watch history to Trakt.

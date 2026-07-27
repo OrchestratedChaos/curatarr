@@ -16,7 +16,7 @@ import os
 import re
 import shutil
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -277,7 +277,7 @@ def migrate_config(config_path: str, dry_run: bool = False) -> dict:
     Returns:
         Dict with keys: 'migrated' (bool), 'files_created' (list), 'backup_path' (str or None)
     """
-    result = {
+    result: Dict[str, Any] = {
         "migrated": False,
         "files_created": [],
         "backup_path": None,

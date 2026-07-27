@@ -25,7 +25,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -124,7 +124,7 @@ def find_horizon_movies(tmdb_api_key: str, plex: Any, library_name: str, stale_d
         for guid in item.guids:
             if "tmdb://" in guid.id:
                 try:
-                    tmdb_id = int(guid.id.split("tmdb://")[1])
+                    tmdb_id: Optional[int] = int(guid.id.split("tmdb://")[1])
                     library_tmdb_ids.add(tmdb_id)
                     break
                 except (ValueError, IndexError):

@@ -106,7 +106,7 @@ def _pid_alive(pid: int) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=3,
-                **no_window_kwargs(),
+                **no_window_kwargs(),  # type: ignore[call-overload]  # mypy can't resolve subprocess.run's overloads against a **dict splat
             )
             return str(pid) in result.stdout
         except Exception:

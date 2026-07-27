@@ -95,10 +95,15 @@ class BaseCache(ABC):
     Subclasses must implement media-specific processing.
     """
 
-    # Subclasses must define these
-    media_type: str = None  # 'movie' or 'tv'
-    media_key: str = None  # 'movies' or 'shows'
-    cache_filename: str = None  # e.g., 'all_movies_cache.json'
+    # Subclasses must define these as literal class attributes (e.g.
+    # media_type = "movie") - bare annotations only here (no runtime
+    # default) so mypy treats every subclass's self.media_type/media_key/
+    # cache_filename as a plain str (matching how they're actually used
+    # downstream) rather than inferring Optional[str] from a `= None`
+    # placeholder that no concrete subclass ever leaves unset.
+    media_type: str  # 'movie' or 'tv'
+    media_key: str  # 'movies' or 'shows'
+    cache_filename: str  # e.g., 'all_movies_cache.json'
 
     def __init__(self, cache_dir: str, recommender=None):
         """
@@ -394,15 +399,24 @@ class BaseRecommender(ABC):
     managing caches, and generating recommendations.
     """
 
-    # Subclasses must define these
-    media_type: str = None  # 'movie' or 'tv'
-    library_config_key: str = None  # e.g., 'movie_library_title'
-    default_library_name: str = None  # e.g., 'Movies'
+    # Subclasses must define these as literal class attributes - bare
+    # annotations only (see BaseCache's identical comment above).
+    media_type: str  # 'movie' or 'tv'
+    media_key: str  # 'movies' or 'shows'
+    library_config_key: str  # e.g., 'movie_library_title'
+    default_library_name: str  # e.g., 'Movies'
+
+    # Instance attributes set by subclasses' own __init__ (movie.py/tv.py) -
+    # bare annotations only (no runtime default) so BaseRecommender's own
+    # methods that reference self.watched_cache_path/self.profile_hash
+    # type-check without changing subclass assignment behavior.
+    watched_cache_path: str
+    profile_hash: str
 
     def __init__(
         self,
         config_path: str,
-        single_user: str = None,
+        single_user: Optional[str] = None,
         library: Optional[Dict] = None,
         library_items_cache: Optional[Dict[str, List]] = None,
     ):
@@ -662,7 +676,12 @@ class BaseRecommender(ABC):
 
     def _refresh_watched_data(self):
         """Force refresh of watched data from Plex."""
-        self.watched_data_counters = None
+        # {} (not None) - every consumer below only ever checks this
+        # attribute's truthiness (hasattr(...) and self.watched_data_counters),
+        # never `is None`, so an empty dict forces the same "no cached
+        # data yet" bypass without widening this attribute's type to
+        # Optional everywhere it's used.
+        self.watched_data_counters = {}
         self.watched_ids = set()
         self.watched_data_counters = self._get_watched_data()
         self._save_watched_cache()

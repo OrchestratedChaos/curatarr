@@ -6,7 +6,7 @@ Provides watch history import, discovery, and list export for anime/TV/movies.
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -68,7 +68,12 @@ class SimklClient(BaseAPIClient):
     max_429_retries = SIMKL_MAX_429_RETRIES
     max_retry_after_seconds = SIMKL_MAX_RETRY_AFTER_SECONDS
 
-    def __init__(self, client_id: str, access_token: Optional[str] = None, token_callback: Optional[callable] = None):
+    def __init__(
+        self,
+        client_id: str,
+        access_token: Optional[str] = None,
+        token_callback: Optional[Callable[[str], None]] = None,
+    ):
         """
         Initialize Simkl client.
 
@@ -467,7 +472,7 @@ class SimklClient(BaseAPIClient):
         Returns:
             Content object or None if not found
         """
-        params = {}
+        params: Dict[str, Any] = {}
         if tmdb_id:
             params["tmdb"] = tmdb_id
             params["type"] = media_type
@@ -522,7 +527,9 @@ def create_simkl_client(config: Dict) -> Optional[SimklClient]:
     return SimklClient(client_id=client_id, access_token=access_token)
 
 
-def get_authenticated_simkl_client(config: Dict, token_callback: Optional[callable] = None) -> Optional[SimklClient]:
+def get_authenticated_simkl_client(
+    config: Dict, token_callback: Optional[Callable[[str], None]] = None
+) -> Optional[SimklClient]:
     """
     Get or create an authenticated Simkl client.
 

@@ -105,7 +105,7 @@ def _read_dismissal() -> Optional[dict]:
         return None
 
 
-def is_dismissed(version: str, now: Optional[float] = None) -> bool:
+def is_dismissed(version: Optional[str], now: Optional[float] = None) -> bool:
     """True if `version` is currently snoozed - see module docstring for
     the exact-version-match + DISMISS_SNOOZE_DAYS-elapsed contract.
 

@@ -210,7 +210,7 @@ def check_verified_update(project_root: str, timeout: float = CHECK_TIMEOUT_SECO
             capture_output=True,
             text=True,
             timeout=timeout,
-            **no_window_kwargs(),
+            **no_window_kwargs(),  # type: ignore[call-overload]  # mypy can't resolve subprocess.run's overloads against a **dict splat (creationflags is a real, valid kwarg here)
         )
         if result.returncode != 0:
             return None
@@ -421,7 +421,7 @@ class UpdateManager:
         else:
             popen_kwargs["start_new_session"] = True
 
-        subprocess.Popen(cmd, **popen_kwargs)
+        subprocess.Popen(cmd, **popen_kwargs)  # type: ignore[call-overload]  # mypy can't resolve Popen's overloads against a dynamically-built **dict splat
         logger.info(f"Update worker started for {host}:{port} (log: {log_path})")
 
 
@@ -443,7 +443,7 @@ def _pid_alive(pid: int) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=3,
-                **no_window_kwargs(),
+                **no_window_kwargs(),  # type: ignore[call-overload]  # mypy can't resolve subprocess.run's overloads against a **dict splat
             )
             return str(pid) in result.stdout
         except Exception:
@@ -531,7 +531,7 @@ def _shut_down_old_server(pid: int, timeout: float) -> None:
                 [_windows_taskkill_path(), "/F", "/PID", str(pid)],
                 capture_output=True,
                 timeout=5,
-                **no_window_kwargs(),
+                **no_window_kwargs(),  # type: ignore[call-overload]  # mypy can't resolve subprocess.run's overloads against a **dict splat
             )
         else:
             os.kill(pid, signal.SIGTERM)
@@ -817,7 +817,7 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
                 capture_output=True,
                 text=True,
                 timeout=APPLY_TIMEOUT_SECONDS,
-                **no_window_kwargs(),
+                **no_window_kwargs(),  # type: ignore[call-overload]  # mypy can't resolve subprocess.run's overloads against a **dict splat
             )
             output = (result.stdout or "").strip()
             print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)

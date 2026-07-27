@@ -112,7 +112,9 @@ def _suppress_windows_crash_dialogs() -> (
     SEM_FAILCRITICALERRORS = 0x0001
     SEM_NOGPFAULTERRORBOX = 0x0002
     try:
-        ctypes.windll.kernel32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
+        ctypes.windll.kernel32.SetErrorMode(  # type: ignore[attr-defined]  # Windows-only ctypes attribute, absent from typeshed on other platforms
+            SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+        )
     except Exception:
         pass  # best-effort - must never block startup even if this itself somehow fails
 
@@ -167,7 +169,7 @@ def _attach_or_setup_console(
        at a log file instead so nothing ever crashes trying to write to
        them, and the output isn't just silently lost either.
     """
-    kernel32 = ctypes.windll.kernel32
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]  # Windows-only ctypes attribute, absent from typeshed on other platforms
     attach_parent_process = -1
     attached = bool(kernel32.AttachConsole(attach_parent_process))
     if not attached and debug:

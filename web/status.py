@@ -8,7 +8,7 @@ import glob
 import os
 import re
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .security import redact, safe_join
 
@@ -107,7 +107,7 @@ def list_log_files(logs_dir: str) -> List[Dict]:
     """List every logs/*.log file, newest first, with size + mtime."""
     if not os.path.isdir(logs_dir):
         return []
-    entries = []
+    entries: List[Dict[str, Any]] = []
     for name in os.listdir(logs_dir):
         if not name.endswith(".log"):
             continue

@@ -6,12 +6,12 @@ Handles config loading, section access, and rating multipliers.
 import json
 import os
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.45"
+__version__ = "2.10.46"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -165,7 +165,7 @@ def check_cache_version(cache_path: str, cache_type: str = "cache") -> bool:
         return False
 
 
-def get_config_section(config: Dict, key: str, default: Dict = None) -> Dict:
+def get_config_section(config: Dict, key: str, default: Optional[Dict] = None) -> Dict:
     """
     Get a config section case-insensitively.
 
@@ -396,7 +396,7 @@ def get_update_mode(config: dict) -> str:
     return "notify"
 
 
-def get_rating_multipliers(config: dict = None) -> dict:
+def get_rating_multipliers(config: Optional[dict] = None) -> dict:
     """
     Get rating multipliers from config or use defaults.
 
@@ -437,7 +437,7 @@ def get_rating_multipliers(config: dict = None) -> dict:
     }
 
 
-def get_negative_signals_config(config: dict = None) -> dict:
+def get_negative_signals_config(config: Optional[dict] = None) -> dict:
     """
     Get negative signals configuration with defaults.
 
@@ -488,7 +488,7 @@ def get_negative_signals_config(config: dict = None) -> dict:
     }
 
 
-def get_negative_multiplier(rating: int, config: dict = None) -> float:
+def get_negative_multiplier(rating: int, config: Optional[dict] = None) -> float:
     """
     Get the negative multiplier for a low rating.
 

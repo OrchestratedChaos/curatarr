@@ -86,6 +86,7 @@ import logging
 import os
 import subprocess
 import tempfile
+from typing import IO, Union
 
 from .helpers import get_project_root, resolve_system_executable
 from .self_update import sanitize_frozen_relaunch_env
@@ -545,7 +546,7 @@ def write_and_launch_handoff_script(
     # unvalidated value would let anything that can set this process's
     # environment make it open an arbitrary file on disk.
     debug_log_path = env.get("CURATARR_HANDOFF_DEBUG_LOG")
-    stdio_target = subprocess.DEVNULL
+    stdio_target: Union[int, IO] = subprocess.DEVNULL
     if debug_log_path and not _is_safe_debug_log_path(debug_log_path):
         logger.warning(f"Ignoring CURATARR_HANDOFF_DEBUG_LOG={debug_log_path!r}: not under an allowed log directory")
         debug_log_path = None
@@ -590,5 +591,5 @@ def write_and_launch_handoff_script(
     else:
         popen_kwargs["start_new_session"] = True
 
-    subprocess.Popen(cmd, **popen_kwargs)
+    subprocess.Popen(cmd, **popen_kwargs)  # type: ignore[call-overload]  # mypy can't resolve Popen's overloads against a dynamically-built **dict splat
     logger.info(f"Self-update hand-off script launched (script: {script_path})")

@@ -144,7 +144,8 @@ def _existing_url_lookup(data: Dict[str, CommentedMap], service: str) -> Optiona
     if service == "tautulli":
         return (core.get("tautulli") or {}).get("url", "") or ""
     if service in ("sonarr", "radarr"):
-        return (data[service] or {}).get("url", "") or ""
+        service_config: Dict[str, Any] = data[service] or {}
+        return service_config.get("url", "") or ""
     return None
 
 
@@ -159,7 +160,8 @@ def _existing_secret_lookup(data: Dict[str, CommentedMap], service: str) -> Dict
     if service == "tautulli":
         return {"api_key": (core.get("tautulli") or {}).get("api_key", "")}
     if service in ("sonarr", "radarr"):
-        return {"api_key": (data[service] or {}).get("api_key", "")}
+        service_config: Dict[str, Any] = data[service] or {}
+        return {"api_key": service_config.get("api_key", "")}
     if service == "trakt":
         trakt: Dict[str, Any] = data["trakt"] or {}
         return {

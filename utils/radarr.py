@@ -44,7 +44,7 @@ class RadarrClient(BaseAPIClient):
         super().__init__()
         self.url = url.rstrip("/")
         self.api_key = api_key
-        self._existing_movies: Optional[Dict[str, int]] = None
+        self._existing_movies: Optional[Dict[int, int]] = None
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests."""

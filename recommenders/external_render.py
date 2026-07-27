@@ -6,7 +6,7 @@ Generates markdown watchlists and combined HTML views.
 import html
 import os
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
 
 from utils.cache import load_json_cache, save_json_cache
@@ -85,9 +85,9 @@ JUSTWATCH_SEARCH_URL = "https://www.justwatch.com/us/search?q={title}"
 def render_streaming_icons(
     services: List[str],
     user_services: List[str],
-    rent_services: List[str] = None,
-    buy_services: List[str] = None,
-    title: str = None,
+    rent_services: Optional[List[str]] = None,
+    buy_services: Optional[List[str]] = None,
+    title: Optional[str] = None,
 ) -> str:
     """
     Render HTML streaming service icons/badges with optional search links.
@@ -381,11 +381,11 @@ def generate_combined_html(
     output_dir: str,
     tmdb_api_key: str,
     get_imdb_id_func,
-    movie_counts: Dict[str, int] = None,
-    show_counts: Dict[str, int] = None,
+    movie_counts: Optional[Dict[str, int]] = None,
+    show_counts: Optional[Dict[str, int]] = None,
     total_users: int = 1,
-    missing_sequels: List[Dict] = None,
-    horizon_movies: List[Dict] = None,
+    missing_sequels: Optional[List[Dict]] = None,
+    horizon_movies: Optional[List[Dict]] = None,
 ) -> str:
     """
     Generate single HTML watchlist with tabs for all users.

@@ -101,7 +101,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from typing import Dict, NamedTuple, Optional
+from typing import Dict, Mapping, NamedTuple, Optional
 
 import requests
 from cryptography.exceptions import InvalidSignature
@@ -701,6 +701,10 @@ def determine_update_target(force_refresh: bool = True) -> str:
         raise NoUpdateAvailableError(
             f"No newer verified release available (current v{current}, latest known v{latest or 'unknown'})"
         )
+    # update_available()'s own contract: is_newer is only ever True when
+    # latest is a known, parseable version - never on "unknown" (see its
+    # docstring), so this is never actually None once is_newer is True.
+    assert latest is not None
     return latest
 
 
@@ -956,7 +960,7 @@ _PYINSTALLER_CHILD_ENV_VAR_PREFIXES = ("_PYI_", "_PYINSTALLER_")
 _PYINSTALLER_CHILD_ENV_VARS_TO_STRIP = ("_MEIPASS2",)
 
 
-def sanitize_frozen_relaunch_env(env: dict) -> dict:
+def sanitize_frozen_relaunch_env(env: Mapping[str, str]) -> Dict[str, str]:
     """Returns a copy of `env` with PyInstaller onefile's internal
     bootloader hand-off variables removed - see the module-level
     comment above. Safe to call on a non-frozen/non-Windows env too

@@ -6,14 +6,16 @@ Handles adding, removing, and categorizing Plex labels.
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from .display import GREEN, RESET, log_info
 
 logger = logging.getLogger("curatarr")
 
 
-def build_label_name(base_label: str, users: List[str], single_user: str = None, append_usernames: bool = True) -> str:
+def build_label_name(
+    base_label: str, users: List[str], single_user: Optional[str] = None, append_usernames: bool = True
+) -> str:
     """
     Build a label name with optional username suffix.
 
@@ -42,7 +44,7 @@ def build_label_name(base_label: str, users: List[str], single_user: str = None,
 def categorize_labeled_items(
     labeled_items: List,
     watched_ids: set,
-    excluded_genres: List[str],
+    excluded_genres: Iterable[str],
     label_name: str,
     label_dates: Dict,
     stale_days: int = 7,

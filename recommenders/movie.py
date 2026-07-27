@@ -128,7 +128,7 @@ class PlexMovieRecommender(BaseRecommender):
     def __init__(
         self,
         config_path: str,
-        single_user: str = None,
+        single_user: Optional[str] = None,
         library: Optional[Dict] = None,
         library_items_cache: Optional[Dict] = None,
     ):
@@ -198,8 +198,9 @@ class PlexMovieRecommender(BaseRecommender):
 
         if (not cache_exists) or (current_watched_count != self.cached_watched_count):
             print("Watched count changed or no cache found; gathering watched data now. This may take a while...\n")
-            # Clear existing data to force actual fetch (prevents early returns in fetch functions)
-            self.watched_data_counters = None
+            # Clear existing data to force actual fetch (prevents early returns in fetch
+            # functions) - {} not None, see BaseRecommender._refresh_watched_data's comment.
+            self.watched_data_counters = {}
             self.watched_ids = set()
             if self.users["plex_users"]:
                 self.watched_data = self._get_plex_watched_data()
@@ -320,10 +321,17 @@ class PlexMovieRecommender(BaseRecommender):
 
             movie_info = self.movie_cache.cache["movies"].get(str(movie_id))
             if movie_info:
-                # Calculate recency multiplier for this movie
-                viewed_at = watched_movie_dates.get(movie_id)
+                # Calculate recency multiplier for this movie. Named
+                # viewed_at_str (not viewed_at, which is already a plain
+                # int elsewhere in this method) - watched_movie_dates
+                # stores str(viewed_at) (see above), and reusing the same
+                # name for both the int and str forms in one function
+                # scope is exactly what confuses static type inference.
+                viewed_at_str = watched_movie_dates.get(movie_id)
                 recency_multiplier = (
-                    calculate_recency_multiplier(viewed_at, self.config.get("recency_decay", {})) if viewed_at else 1.0
+                    calculate_recency_multiplier(viewed_at_str, self.config.get("recency_decay", {}))
+                    if viewed_at_str
+                    else 1.0
                 )
 
                 # Calculate rating multiplier based on user's star rating (can be negative for disliked content)
@@ -413,7 +421,7 @@ class PlexMovieRecommender(BaseRecommender):
             # Extract IDs using utility
             ids = extract_ids_from_guids(movie)
             imdb_id = ids["imdb_id"]
-            audience_rating = 0
+            audience_rating: float = 0
             tmdb_keywords = []
             directors = []
 

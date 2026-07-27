@@ -4,7 +4,7 @@ Handles preference counting and profile building.
 """
 
 from collections import Counter
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .config import DEFAULT_NEGATIVE_THRESHOLD, get_negative_multiplier, get_rating_multipliers
 from .display import log_warning
@@ -37,7 +37,7 @@ def create_empty_counters(media_type: str = "movie") -> Dict:
     return counters
 
 
-def _apply_capped_weight(counter: Counter, key: str, weight: float, cap_penalty: float = 0.5) -> None:
+def _apply_capped_weight(counter: Dict[str, float], key: str, weight: float, cap_penalty: float = 0.5) -> None:
     """
     Apply weight to counter with optional capping for negative values.
 
@@ -46,7 +46,9 @@ def _apply_capped_weight(counter: Counter, key: str, weight: float, cap_penalty:
     the negative signal (-1) shouldn't reduce action below cap_penalty * max_positive.
 
     Args:
-        counter: Counter object to update
+        counter: Counter object to update (typed Dict[str, float] - a
+            real Counter satisfies this structurally, and its values are
+            floats in practice, not the int typeshed's Counter stub assumes)
         key: Key to update in counter
         weight: Weight to add (can be negative)
         cap_penalty: For negative weights, don't reduce below this fraction of current value
@@ -71,13 +73,13 @@ def process_counters_from_cache(
     media_info: Dict,
     counters: Dict,
     view_count: int = 1,
-    viewed_at: int = None,
-    rating: float = None,
-    recency_config: dict = None,
-    rating_multipliers: dict = None,
+    viewed_at: Optional[int] = None,
+    rating: Optional[float] = None,
+    recency_config: Optional[dict] = None,
+    rating_multipliers: Optional[dict] = None,
     media_type: str = "movie",
-    negative_signals_config: dict = None,
-    weight: float = None,
+    negative_signals_config: Optional[dict] = None,
+    weight: Optional[float] = None,
     cap_penalty: float = 0.5,
 ) -> bool:
     """

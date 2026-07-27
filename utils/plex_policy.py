@@ -49,7 +49,7 @@ MOVIE_RATING_HIERARCHY = ["G", "PG", "PG-13", "R", "NC-17"]
 TV_RATING_HIERARCHY = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"]
 
 
-def get_max_rating_for_user(user_preferences: dict, username: str = None) -> Optional[str]:
+def get_max_rating_for_user(user_preferences: dict, username: Optional[str] = None) -> Optional[str]:
     """
     Get the maximum content rating allowed for a user.
 
@@ -67,7 +67,7 @@ def get_max_rating_for_user(user_preferences: dict, username: str = None) -> Opt
     return user_prefs.get("max_rating")
 
 
-def is_rating_allowed(content_rating: str, max_rating: str, media_type: str = "movie") -> bool:
+def is_rating_allowed(content_rating: Optional[str], max_rating: Optional[str], media_type: str = "movie") -> bool:
     """
     Check if a content rating is allowed given the user's max_rating.
 

@@ -168,6 +168,7 @@ def _powershell_parse_check(script_path: str):
         "$errors | ForEach-Object { $_.Message }"
     )
     exe = shutil.which("powershell") or shutil.which("pwsh")
+    assert exe is not None, "powershell/pwsh not found on PATH - this check only runs on Windows"
     result = subprocess.run([exe, "-NoProfile", "-Command", ps_check], capture_output=True, text=True, timeout=15)
     return [line for line in result.stdout.splitlines() if line.strip()]
 
