@@ -2,6 +2,17 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.45] - 2026-07-26
+
+### Added
+
+- **End-to-end recommendation-pipeline test (`tests/test_e2e_pipeline.py`, `tests/e2e_plex_fixture.py`) - the first test in this suite to drive config -> Plex fetch -> watched-history build -> profile -> scoring -> selection -> output/labels top to bottom, for both movies and TV.**
+
+  - Drives the real production entrypoints - `utils.cli.run_recommender_main` (flagship movie/TV tests, with `recommenders/movie.py`'s/`tv.py`'s own `process_recommendations` as the real `process_func`) and `PlexMovieRecommender.get_recommendations()` directly (narrower isolation/determinism tests) - against a synthetic-but-realistic 30-movie/20-show Plex library and real, on-disk `config.yml`/`tuning.yml` files (via a real `CURATARR_CONFIG_DIR` override, the same mechanism Docker installs use).
+  - The only seams mocked: `recommenders.base.init_plex` (a duck-typed `FakePlexServer`), `utils.plex._capped_get`/`utils.plex.MyPlexAccount` (the raw-HTTP/plexapi-account layer behind the watch-history functions - real XML parsing/business logic runs against synthetic XML instead of a live server), and `PlexMovieRecommender`/`PlexTVRecommender.manage_plex_labels` (the collection/label-writing stage, replaced with a plain function that captures what it would have written without ever reaching `FakeSection`/`FakePlexServer` - both raise if the real label-writing code path is reached by mistake). The movie/show metadata cache is pre-seeded so `BaseCache.update_cache()` takes its real "cache is up to date" branch, mirroring `tests/harness.py`'s own established fixture convention rather than re-deriving metadata from a fake TMDB.
+  - Asserts on real observable outcomes: exact per-user watched-item sets and watched-genre profiles (proving per-user isolation at its source, not just call counts), already-watched exclusion, global and per-user genre exclusion, quality-filter thresholds applied against real per-item cache data, and reproducibility of both the deterministic (`randomize_recommendations: false`) and seeded-random tiered-selection paths.
+  - Confirmed while building this fixture: `recommenders/tv.py`'s `ShowCache._process_item()` never populates `rating`/`vote_count` on show cache entries (only `MovieCache` does, via TMDB), so `tv:` `quality_filters` is a no-op in production today, not just in this fixture - documented in the test's own module docstring rather than silently worked around.
+
 ## [2.10.44] - 2026-07-26
 
 ### Changed
