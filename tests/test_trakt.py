@@ -14,6 +14,7 @@ from utils.trakt import (
     TraktAuthError,
     TraktClient,
     create_trakt_client,
+    derive_trakt_list_slug,
 )
 
 
@@ -1064,6 +1065,70 @@ class TestTraktClientListManagement:
         assert result is not None
         assert result["name"] == "My List"
 
+    @patch("utils.trakt.requests.request")
+    def test_get_or_create_direct_lookup_slug_hits_for_hyphen_separated_name(self, mock_request):
+        """Regression test: get_or_create_list's speculative direct-
+        lookup slug used to be a naive `name.lower().replace(" ",
+        "-").replace("_", "-")`, which for "Curatarr - Jason - Movies"
+        guesses "curatarr---jason---movies" (wrong - 404s) instead of
+        Trakt's real "curatarr-jason-movies", forcing every such name
+        through the slower get_lists()-and-search-by-name fallback on
+        EVERY sync. With the corrected derivation the direct lookup
+        should hit on the first try - only two requests total (username
+        + the direct GET), no get_lists() call at all."""
+        list_name = "Curatarr - Jason - Movies"
+
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        existing_list = Mock(status_code=200)
+        existing_list.json.return_value = {"name": list_name, "ids": {"slug": "curatarr-jason-movies"}}
+
+        mock_request.side_effect = [settings, existing_list]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.get_or_create_list(list_name)
+
+        assert result["ids"]["slug"] == "curatarr-jason-movies"
+        # The direct-lookup GET's own URL is the real proof the guessed
+        # slug was correct - the second call's endpoint must contain
+        # the real slug, not the broken triple-hyphen guess.
+        # requests.request is called with keyword args (method=, url=,
+        # ...) - see utils/api_client.py's _send_with_retries.
+        direct_lookup_call = mock_request.call_args_list[1]
+        assert "curatarr-jason-movies" in direct_lookup_call.kwargs["url"]
+        assert mock_request.call_count == 2
+
+
+class TestDeriveTraktListSlug:
+    """Unit tests for derive_trakt_list_slug - see its own docstring
+    for why this exists and what it's a fallback for."""
+
+    def test_collapses_space_hyphen_space_runs_to_a_single_hyphen(self):
+        """The exact reported bug: 'Curatarr - Jason - Movies' must
+        produce Trakt's real, confirmed-live slug
+        'curatarr-jason-movies', not 'curatarr---jason---movies'."""
+        assert derive_trakt_list_slug("Curatarr - Jason - Movies") == "curatarr-jason-movies"
+
+    def test_plain_spaces_become_single_hyphens(self):
+        assert derive_trakt_list_slug("TV Shows") == "tv-shows"
+
+    def test_underscores_become_hyphens(self):
+        assert derive_trakt_list_slug("my_list_name") == "my-list-name"
+
+    def test_mixed_separators_collapse_together(self):
+        assert derive_trakt_list_slug("Fam - TV") == "fam-tv"
+
+    def test_leading_and_trailing_separators_are_stripped(self):
+        assert derive_trakt_list_slug("  - Movies -  ") == "movies"
+
+    def test_consecutive_literal_hyphens_collapse(self):
+        assert derive_trakt_list_slug("a--b") == "a-b"
+
+    def test_empty_and_none_are_safe(self):
+        assert derive_trakt_list_slug("") == ""
+        assert derive_trakt_list_slug(None) == ""
+
 
 class TestTraktClientSyncList:
     """Tests for list sync functionality."""
@@ -1107,6 +1172,7 @@ class TestTraktClientSyncList:
         result = client.sync_list("Test", movies=["tt123", "tt456"])
 
         assert result["added"]["movies"] == 2
+        assert result["list_slug"] == "test"
 
     @patch("utils.trakt.requests.request")
     def test_sync_list_clears_and_adds(self, mock_request):
@@ -1141,6 +1207,51 @@ class TestTraktClientSyncList:
         result = client.sync_list("Test", movies=["tt123"])
 
         assert result["added"]["movies"] == 1
+        assert result["list_slug"] == "test"
+
+    @patch("utils.trakt.requests.request")
+    def test_sync_list_returns_real_slug_not_a_naive_derivation(self, mock_request):
+        """Regression test for the real bug: a list literally named
+        'Curatarr - Jason - Movies' has a REAL Trakt slug of
+        'curatarr-jason-movies' (confirmed against the live API) - not
+        'curatarr---jason---movies', which naively replacing each space
+        independently produces. sync_list()'s returned "list_slug" must
+        be the slug Trakt's own API response carried (here, the
+        existing-list lookup's `ids.slug`), never a locally re-derived
+        one - callers (recommenders/external_sync.py) build a clickable
+        URL directly from this value."""
+        list_name = "Curatarr - Jason - Movies"
+
+        settings = Mock(status_code=200)
+        settings.json.return_value = {"user": {"username": "testuser"}}
+
+        # get_or_create_list's own speculative direct-lookup slug guess
+        # ("curatarr-jason-movies", now correctly derived - see
+        # derive_trakt_list_slug) happens to hit on the first try here,
+        # simulating the list already existing.
+        existing_list = Mock(status_code=200)
+        existing_list.json.return_value = {"name": list_name, "ids": {"slug": "curatarr-jason-movies"}}
+
+        empty_items = Mock(status_code=200)
+        empty_items.json.return_value = []
+
+        added = Mock(status_code=200)
+        added.json.return_value = {"added": {"movies": 1, "shows": 0}}
+
+        mock_request.side_effect = [
+            settings,  # get_username for get_or_create_list
+            existing_list,  # get_list (direct-lookup slug guess hits)
+            settings,  # get_username for get_list_items
+            empty_items,  # get_list_items
+            settings,  # get_username for add_to_list
+            added,  # add_to_list
+        ]
+
+        client = TraktClient("id", "secret", access_token="token")
+        result = client.sync_list(list_name, movies=["tt123"])
+
+        assert result["list_slug"] == "curatarr-jason-movies"
+        assert result["list_slug"] != "curatarr---jason---movies"
 
 
 class TestTraktClientImport:

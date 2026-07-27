@@ -6,6 +6,7 @@ Handles OAuth device authentication, token management, and API requests.
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -73,6 +74,43 @@ class TraktAPIError(Exception):
     """Raised when Trakt API request fails."""
 
     pass
+
+
+def derive_trakt_list_slug(name: str) -> str:
+    """
+    Best-effort LOCAL approximation of the slug Trakt itself assigns to
+    a list name - a fallback for the rare case a real slug genuinely
+    isn't available yet, never a substitute for it. The real slug
+    Trakt actually assigned is always authoritative and must be
+    preferred everywhere it's available (get_or_create_list/sync_list
+    below hand it back from the API response's own `ids.slug` for
+    exactly this reason) - this function exists only for:
+      - get_or_create_list's speculative direct GET-by-slug lookup
+        below, tried before falling back to a full by-name search
+        (Trakt's API has no "look up by name" endpoint).
+      - recommenders/external_sync.py's printed list-URL fallback, for
+        the (should-never-happen) case sync_list()'s own return value
+        doesn't include a slug.
+
+    Any local reimplementation of Trakt's actual slugification rules
+    will drift from theirs over time (apostrophes, ampersands,
+    unicode, and whatever else Trakt's own rules handle aren't
+    replicated here) - this only guarantees the one property that
+    actually matters for both call sites above: whitespace/underscore
+    runs collapse to a single hyphen, and the resulting hyphen runs
+    ALSO collapse to one, so a name like "Curatarr - Jason - Movies"
+    (word " - " word, not just word-space-word) produces
+    "curatarr-jason-movies" - not "curatarr---jason---movies", which a
+    naive `name.lower().replace(" ", "-")` produces instead (each of
+    the three spaces around the two literal hyphens replaced
+    independently) and which 404s against Trakt's real slug. Confirmed
+    against a real Trakt list literally named "Curatarr - Jason -
+    Movies", whose real `ids.slug` (GET /users/me/lists) came back as
+    "curatarr-jason-movies".
+    """
+    slug = re.sub(r"[\s_]+", "-", (name or "").strip().lower())
+    slug = re.sub(r"-+", "-", slug)
+    return slug.strip("-")
 
 
 class TraktClient(BaseAPIClient):
@@ -544,8 +582,12 @@ class TraktClient(BaseAPIClient):
         Returns:
             List object
         """
-        # Generate expected slug from name
-        expected_slug = name.lower().replace(" ", "-").replace("_", "-")
+        # Speculative direct-lookup slug - Trakt has no "look up by
+        # name" endpoint, so this is a best-effort guess tried before
+        # falling back to a full by-name search below (see
+        # derive_trakt_list_slug's own docstring for why this is only
+        # ever a fallback, never authoritative).
+        expected_slug = derive_trakt_list_slug(name)
 
         # Check if list exists
         existing = self.get_list(expected_slug)
@@ -678,7 +720,15 @@ class TraktClient(BaseAPIClient):
             description: List description
 
         Returns:
-            Dict with sync results
+            Dict with sync results, plus the list's REAL slug (as
+            assigned by Trakt itself, from this same list object's own
+            `ids.slug`) under the "list_slug" key - callers that need
+            to print/build a `trakt.tv/users/<user>/lists/<slug>` URL
+            (see recommenders/external_sync.py) should use THIS value
+            rather than re-deriving one from list_name themselves: a
+            locally re-derived slug can diverge from the one Trakt
+            actually assigned (see derive_trakt_list_slug's docstring)
+            and silently 404 even though the sync itself succeeded.
         """
         # Get or create the list
         lst = self.get_or_create_list(list_name, description)
@@ -710,10 +760,16 @@ class TraktClient(BaseAPIClient):
         # Add new items
         result = {"added": {"movies": 0, "shows": 0}}
         if add_movies or add_shows:
-            result = self.add_to_list(list_slug, add_movies or None, add_shows or None)
+            # _make_request (and therefore add_to_list) can return None
+            # for a 204 response - not expected from this particular
+            # endpoint (Trakt documents a body with added/existing/
+            # not_found counts), but result["list_slug"] below must
+            # never blow up on a NoneType if that ever happens.
+            result = self.add_to_list(list_slug, add_movies or None, add_shows or None) or {}
 
         logger.info(f"Synced Trakt list '{list_name}': {len(movies or [])} movies, {len(shows or [])} shows")
 
+        result["list_slug"] = list_slug
         return result
 
     # =========================================================================

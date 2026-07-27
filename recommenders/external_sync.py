@@ -31,6 +31,7 @@ from utils import (
     create_simkl_client,
     create_sonarr_client,
     create_sonarr_client_from,
+    derive_trakt_list_slug,
     get_authenticated_trakt_client,
     get_effective_arr_config,
     get_libraries_for_media_type,
@@ -194,6 +195,36 @@ def collect_imdb_ids(
     return imdb_ids
 
 
+def _trakt_list_url(trakt_username: Optional[str], list_name: str, sync_result: Any) -> str:
+    """Build the clickable `trakt.tv/users/<user>/lists/<slug>` URL
+    printed after a successful sync_list() call, using the REAL slug
+    Trakt assigned (returned under sync_result["list_slug"] - see
+    utils.trakt.TraktClient.sync_list's docstring) rather than
+    re-deriving one from list_name. A previous version of this function
+    naively did `list_name.lower().replace(" ", "-").replace("_", "-")`
+    here, which 404s for any name containing " - " (each space replaced
+    independently instead of collapsing the whole run to one hyphen -
+    e.g. "Curatarr - Jason - Movies" produced
+    "curatarr---jason---movies" instead of Trakt's real
+    "curatarr-jason-movies", confirmed against a real list against the
+    live API).
+
+    Falls back to utils.trakt.derive_trakt_list_slug's local
+    approximation ONLY if sync_result doesn't carry a "list_slug" -
+    should never happen against the real client (sync_list always
+    returns one on success), a defensive fallback for e.g. a test
+    double or a future refactor that forgets to plumb it through.
+    """
+    list_slug = sync_result.get("list_slug") if isinstance(sync_result, dict) else None
+    if not list_slug:
+        logger.debug(
+            f"sync_list() for {list_name!r} returned no list_slug - falling back to a locally "
+            "derived approximation for the printed URL, which may not exactly match Trakt's own slug"
+        )
+        list_slug = derive_trakt_list_slug(list_name)
+    return f"https://trakt.tv/users/{trakt_username}/lists/{list_slug}"
+
+
 def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str) -> None:
     """
     Export recommendations to Trakt lists.
@@ -290,23 +321,21 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         try:
             if all_movie_imdb_ids:
                 movie_list_name = f"{list_prefix} - Movies"
-                trakt_client.sync_list(
+                sync_result = trakt_client.sync_list(
                     movie_list_name,
                     movies=all_movie_imdb_ids,
                     description="Combined movie recommendations from Curatarr",
                 )
-                movie_slug = movie_list_name.lower().replace(" ", "-").replace("_", "-")
-                movie_url = f"https://trakt.tv/users/{trakt_username}/lists/{movie_slug}"
+                movie_url = _trakt_list_url(trakt_username, movie_list_name, sync_result)
                 print_status(f"  Combined: {len(all_movie_imdb_ids)} movies -> Trakt", "success")
                 print(f"    {clickable_link(movie_url)}")
 
             if all_show_imdb_ids:
                 show_list_name = f"{list_prefix} - TV"
-                trakt_client.sync_list(
+                sync_result = trakt_client.sync_list(
                     show_list_name, shows=all_show_imdb_ids, description="Combined TV recommendations from Curatarr"
                 )
-                show_slug = show_list_name.lower().replace(" ", "-").replace("_", "-")
-                show_url = f"https://trakt.tv/users/{trakt_username}/lists/{show_slug}"
+                show_url = _trakt_list_url(trakt_username, show_list_name, sync_result)
                 print_status(f"  Combined: {len(all_show_imdb_ids)} shows -> Trakt", "success")
                 print(f"    {clickable_link(show_url)}")
 
@@ -332,25 +361,23 @@ def export_to_trakt(config: Dict, all_users_data: List[Dict], tmdb_api_key: str)
         try:
             if movie_imdb_ids:
                 movie_list_name = f"{list_prefix} - {display_name} - Movies"
-                trakt_client.sync_list(
+                sync_result = trakt_client.sync_list(
                     movie_list_name,
                     movies=movie_imdb_ids,
                     description=f"Movie recommendations for {display_name} from Curatarr",
                 )
-                movie_slug = movie_list_name.lower().replace(" ", "-").replace("_", "-")
-                movie_url = f"https://trakt.tv/users/{trakt_username}/lists/{movie_slug}"
+                movie_url = _trakt_list_url(trakt_username, movie_list_name, sync_result)
                 print_status(f"  {display_name}: {len(movie_imdb_ids)} movies -> Trakt", "success")
                 print(f"    {clickable_link(movie_url)}")
 
             if show_imdb_ids:
                 show_list_name = f"{list_prefix} - {display_name} - TV"
-                trakt_client.sync_list(
+                sync_result = trakt_client.sync_list(
                     show_list_name,
                     shows=show_imdb_ids,
                     description=f"TV recommendations for {display_name} from Curatarr",
                 )
-                show_slug = show_list_name.lower().replace(" ", "-").replace("_", "-")
-                show_url = f"https://trakt.tv/users/{trakt_username}/lists/{show_slug}"
+                show_url = _trakt_list_url(trakt_username, show_list_name, sync_result)
                 print_status(f"  {display_name}: {len(show_imdb_ids)} shows -> Trakt", "success")
                 print(f"    {clickable_link(show_url)}")
 

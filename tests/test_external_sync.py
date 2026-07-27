@@ -20,6 +20,7 @@ from recommenders.external_sync import (
     TraktAuthError,
     _resolve_library_groups,
     _sync_items_in_batches,
+    _trakt_list_url,
     collect_imdb_ids,
     export_to_mdblist,
     export_to_radarr,
@@ -1345,6 +1346,104 @@ class TestExportToTraktLogic:
         ]
 
         export_to_trakt(config, all_users_data, "tmdb-key")  # should not raise
+
+
+class TestTraktListUrl:
+    """Tests for _trakt_list_url - the printed clickable Trakt list
+    URL builder. Regression coverage for the real bug: a list named
+    'Curatarr - Jason - Movies' has a REAL Trakt slug of
+    'curatarr-jason-movies' (confirmed against the live API) - the old
+    code derived 'curatarr---jason---movies' instead (each space
+    replaced independently) and printed a URL that 404s."""
+
+    def test_uses_the_real_slug_from_sync_result(self):
+        sync_result = {"added": {"movies": 5, "shows": 0}, "list_slug": "curatarr-jason-movies"}
+
+        url = _trakt_list_url("traktuser", "Curatarr - Jason - Movies", sync_result)
+
+        assert url == "https://trakt.tv/users/traktuser/lists/curatarr-jason-movies"
+
+    def test_falls_back_to_derived_slug_when_sync_result_has_none(self):
+        """Only reached if sync_list() itself somehow didn't return a
+        list_slug (should never happen against the real client) - the
+        fallback derivation must still collapse ' - ' correctly rather
+        than reintroduce the original triple-hyphen bug."""
+        url = _trakt_list_url("traktuser", "Curatarr - Jason - Movies", {"added": {"movies": 1}})
+
+        assert url == "https://trakt.tv/users/traktuser/lists/curatarr-jason-movies"
+
+    def test_falls_back_when_sync_result_is_not_a_dict(self):
+        url = _trakt_list_url("traktuser", "Curatarr - Jason - Movies", None)
+
+        assert url == "https://trakt.tv/users/traktuser/lists/curatarr-jason-movies"
+
+
+class TestExportToTraktPrintedUrl:
+    """End-to-end (through export_to_trakt itself, not just
+    _trakt_list_url in isolation) regression coverage: the printed
+    clickable link for a list name containing ' - ' must use Trakt's
+    real returned slug, not a naive local re-derivation."""
+
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
+    def test_per_user_mode_prints_url_with_real_slug_not_triple_hyphen(self, mock_get_client, mock_get_imdb, capsys):
+        client = _mock_trakt_client(username="jason")
+        mock_get_client.return_value = client
+        mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
+        # Simulates Trakt's real API response shape: sync_list()
+        # returns the list's REAL slug, which for "Curatarr - Jason -
+        # Movies" is "curatarr-jason-movies" - confirmed against the
+        # live API, not "curatarr---jason---movies".
+        client.sync_list.return_value = {"added": {"movies": 1, "shows": 0}, "list_slug": "curatarr-jason-movies"}
+
+        config = {
+            "trakt": {
+                "enabled": True,
+                "export": {"auto_sync": True, "user_mode": "mapping", "plex_users": ["jason"]},
+            }
+        }
+        all_users_data = [
+            {
+                "username": "jason",
+                "display_name": "Jason",
+                "movies_categorized": {"acquire": [{"tmdb_id": 1}], "user_services": {}, "other_services": {}},
+                "shows_categorized": {"acquire": [], "user_services": {}, "other_services": {}},
+            }
+        ]
+
+        export_to_trakt(config, all_users_data, "tmdb-key")
+
+        printed = capsys.readouterr().out
+        assert "https://trakt.tv/users/jason/lists/curatarr-jason-movies" in printed
+        assert "curatarr---jason---movies" not in printed
+
+    @patch("recommenders.external_sync.get_imdb_id")
+    @patch("recommenders.external_sync.get_authenticated_trakt_client")
+    def test_combined_mode_prints_url_with_real_slug(self, mock_get_client, mock_get_imdb, capsys):
+        client = _mock_trakt_client(username="jason")
+        mock_get_client.return_value = client
+        mock_get_imdb.side_effect = lambda api, tmdb, media: f"tt{tmdb}"
+        client.sync_list.return_value = {"added": {"movies": 1, "shows": 0}, "list_slug": "fam-movies"}
+
+        config = {
+            "trakt": {
+                "enabled": True,
+                "export": {"auto_sync": True, "user_mode": "combined", "list_prefix": "Fam"},
+            }
+        }
+        all_users_data = [
+            {
+                "username": "a",
+                "display_name": "A",
+                "movies_categorized": {"acquire": [{"tmdb_id": 1}], "user_services": {}, "other_services": {}},
+                "shows_categorized": {"acquire": [], "user_services": {}, "other_services": {}},
+            }
+        ]
+
+        export_to_trakt(config, all_users_data, "tmdb-key")
+
+        printed = capsys.readouterr().out
+        assert "https://trakt.tv/users/jason/lists/fam-movies" in printed
 
 
 class TestExportToRadarrNonCombinedMode:
