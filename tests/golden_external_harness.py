@@ -246,15 +246,15 @@ def run() -> dict:
         plex = _plex_with_movies([_library_item(1), _library_item(2)])
 
         with (
-            # find_missing_sequels() looks up get_project_root() via its own
-            # module (recommenders.huntarr)'s namespace since the PR2 Huntarr
-            # extraction - patching recommenders.external.get_project_root
-            # alone no longer reaches it (unlike requests.get, which is a
-            # shared module singleton regardless of which file imports it).
-            # find_horizon_movies() (still in recommenders.external) still
-            # needs its own patch target too.
+            # find_missing_sequels()/find_horizon_movies() each look up
+            # get_project_root() via their own module's namespace since the
+            # PR2 Huntarr/Horizon extractions - patching
+            # recommenders.external.get_project_root alone no longer reaches
+            # either (unlike requests.get, which is a shared module
+            # singleton regardless of which file imports it).
             patch("recommenders.external.get_project_root", return_value=tmp_root),
             patch("recommenders.huntarr.get_project_root", return_value=tmp_root),
+            patch("recommenders.horizon.get_project_root", return_value=tmp_root),
             patch("recommenders.external.requests.get", side_effect=_strict_get_dispatcher(url_map)),
         ):
             missing_sequels = find_missing_sequels(TMDB_API_KEY, plex, "Movies", "", ["netflix"])
