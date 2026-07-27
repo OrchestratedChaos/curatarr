@@ -89,6 +89,47 @@ class TestCoreSectionsIncludesLibraries:
         assert "libraries" in CORE_SECTIONS
 
 
+class TestCoreSectionsIncludesSchedule:
+    """#264 regression: build_core_config() only ever copies sections
+    listed in CORE_SECTIONS into the migrated config.yml - anything
+    else is silently dropped. Confirmed for real (in a live container,
+    verifying #264) that "schedule" would otherwise vanish the moment
+    a single-library (plex.movie_library/tv_library, no explicit
+    'libraries:' list) install ran its first migration - which is most
+    fresh installs, not an edge case."""
+
+    def test_schedule_in_core_sections(self):
+        assert "schedule" in CORE_SECTIONS
+
+    def test_schedule_section_survives_a_real_migration(self, tmp_path):
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            "plex:\n"
+            "  url: http://localhost:32400\n"
+            "  token: faketoken\n"
+            "  movie_library: Movies\n"
+            "  tv_library: TV Shows\n"
+            "users:\n"
+            "  list: alice\n"
+            "schedule:\n"
+            "  enabled: true\n"
+            '  time: "03:00"\n',
+            encoding="utf-8",
+        )
+
+        from utils.migrate_config import migrate_config
+
+        result = migrate_config(str(config_path))
+        assert result["migrated"] is True
+
+        import yaml
+
+        with open(config_path, encoding="utf-8") as f:
+            migrated = yaml.safe_load(f)
+
+        assert migrated.get("schedule") == {"enabled": True, "time": "03:00"}
+
+
 class TestMigrateToLibraries:
     """Tests for migrate_to_libraries (#157 Phase 1)"""
 

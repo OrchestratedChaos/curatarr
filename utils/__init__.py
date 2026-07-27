@@ -208,6 +208,15 @@ from .radarr import (
     create_radarr_client_from,
 )
 
+# Scheduler utilities (#264)
+from .scheduler import (
+    WEEKDAY_NAMES,
+    compute_next_run,
+    describe_next_run,
+    parse_schedule_config,
+    resolve_scheduler_timezone,
+)
+
 # Scoring utilities
 from .scoring import (
     GENRE_NORMALIZATION,
@@ -528,6 +537,11 @@ __all__ = [
     "DEFAULT_TV_NAME_TEMPLATE",
     "fetch_plex_users",
     "fetch_plex_libraries",
+    "resolve_scheduler_timezone",
+    "parse_schedule_config",
+    "compute_next_run",
+    "describe_next_run",
+    "WEEKDAY_NAMES",
     "get_configured_users",
     "get_current_users",
     "get_excluded_genres_for_user",

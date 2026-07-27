@@ -178,9 +178,49 @@ access; neither is a substitute for the other.
 
 ## Scheduling recommendation runs
 
+There are TWO ways to schedule recurring runs. **Pick exactly one.**
+Both ultimately call the same recommender code and share the same
+cross-container run lock (`utils/run_lock.py`), so they can never
+*overlap* each other or a manual web-UI-triggered run - but that lock
+only prevents overlap, not duplication: if you enable the in-app
+scheduler below *and* also have host cron or the `schedule` profile
+active, you will get two separate runs at two different times of day,
+each thinking it's the only one scheduled. Nothing in curatarr can
+reliably detect that from inside the container (no Docker socket
+access, no visibility into a sibling container's compose profile or
+the host's crontab), so this is on you to avoid - use one mechanism,
+not both.
+
+### Option A: the in-app scheduler (recommended if you don't want to touch compose/cron)
+
+Settings -> Scheduling: enable it, set a daily time (24-hour, in the
+container's own `TZ` - see below), optionally restrict to specific
+weekdays. Runs the `full` pipeline (movie, tv, external) from inside
+this same container - no host cron, no second container, no compose
+file editing.
+
+- **Timezone** is always the container's `TZ` environment variable
+  (`-e TZ=Australia/Melbourne`, etc.), falling back to UTC if unset -
+  there's no separate timezone setting to configure or get out of sync.
+  The Settings screen shows the resolved timezone and the computed
+  next-run time so it's never ambiguous which clock is in play.
+- If the scheduled time arrives while another run is already in
+  progress (a web-UI-triggered run, or - see Option B below - the
+  `schedule` profile's sibling container), that occurrence is **skipped
+  and logged**, never queued. The dashboard shows the last scheduled
+  attempt and its result (started / skipped / error).
+- A missed occurrence (e.g. the container was down at the scheduled
+  time) is **never** made up on the next start - only the next real
+  occurrence ever fires. This matters for `docker compose up -d`,
+  which happens on every redeploy: without this, a redeploy loop could
+  trigger a surprise run (or several) every time, hammering Plex/TMDB.
+- Off by default.
+
+### Option B: host cron / the `schedule` compose profile
+
 The web UI can trigger runs itself, but for a fully unattended/cron
-style setup, run the recommender as a one-shot container instead of
-the long-running web service:
+style setup independent of the web container's own uptime, run the
+recommender as a one-shot container instead:
 
 ```bash
 docker run --rm \
@@ -195,8 +235,8 @@ or `movie` / `tv` / `external` individually; any extra arguments (e.g.
 `--debug`, a specific username) are passed straight through to the
 underlying recommender script.
 
-**Host cron** (the clean MVP for scheduling - this image doesn't bundle
-its own cron daemon):
+**Host cron** (the original MVP for scheduling, still fully supported -
+this image doesn't bundle its own cron daemon):
 
 ```cron
 # Daily at 3 AM
@@ -207,6 +247,10 @@ its own cron daemon):
 `schedule` profile specifically for this - it's never started by a
 plain `docker compose up`, only when explicitly targeted (by name, as
 above, or via `docker compose --profile schedule up`).
+
+This approach is recommended if you're already comfortable with
+compose/cron, or want scheduling to keep working independently of
+whether the web UI container happens to be up.
 
 ## Updating
 

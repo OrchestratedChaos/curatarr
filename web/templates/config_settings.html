@@ -179,6 +179,43 @@
     {{ field_error(errors, 'logging_level') }}
   </fieldset>
 
+  <fieldset>
+    <legend>Scheduling</legend>
+    <p class="muted">
+      Runs the full recommendation pipeline (movie + tv + external) at a fixed daily time from inside this process -
+      no host cron or separate container needed. Coexists with, does NOT replace, host cron / the
+      docker-compose.yml <code>schedule</code> profile - if you already use one of those, pick only ONE scheduling
+      mechanism, or you'll get two separate runs at different times of day.
+    </p>
+    <label><input type="checkbox" name="schedule_enabled" {% if schedule.enabled %}checked{% endif %}> Enabled</label>
+    <label>Time (24-hour, in the timezone below)
+      <input type="time" name="schedule_time" value="{{ schedule.time }}">
+    </label>
+    {{ field_error(errors, 'schedule_time') }}
+    <label>Days - leave all unchecked to run every day</label>
+    <div class="weekday-checkboxes">
+      {% for day in weekday_choices %}
+      <label class="weekday-checkbox">
+        <input type="checkbox" name="schedule_weekday_{{ day }}" {% if day in schedule.weekdays %}checked{% endif %}>
+        {{ day|capitalize }}
+      </label>
+      {% endfor %}
+    </div>
+    {% if schedule_status %}
+    <p class="muted schedule-status">
+      Timezone: <strong>{{ schedule_status.timezone }}</strong> (the container's own <code>TZ</code> environment
+      variable - falls back to UTC if unset).
+      {% if not schedule_status.enabled %}
+        Scheduler is currently disabled.
+      {% elif schedule_status.error %}
+        Schedule is invalid: {{ schedule_status.error }}
+      {% elif schedule_status.next_run %}
+        Next run: <strong>{{ schedule_status.next_run.strftime('%Y-%m-%d %H:%M %Z') }}</strong>.
+      {% endif %}
+    </p>
+    {% endif %}
+  </fieldset>
+
   <button type="submit">Save</button>
 </form>
 {% endblock %}

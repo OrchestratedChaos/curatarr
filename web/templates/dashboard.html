@@ -10,6 +10,24 @@
 </p>
 {% endif %}
 
+{% if scheduler %}
+<p class="muted scheduler-summary">
+  Scheduler:
+  {% if not scheduler.enabled %}
+    disabled (<a href="{{ url_for('config_settings') }}">enable on Settings</a>)
+  {% elif scheduler.error %}
+    <span class="field-error">invalid schedule - {{ scheduler.error }}</span>
+    (<a href="{{ url_for('config_settings') }}">fix on Settings</a>)
+  {% elif scheduler.next_run %}
+    next run <strong>{{ scheduler.next_run.strftime('%Y-%m-%d %H:%M %Z') }}</strong>
+  {% endif %}
+  {% if scheduler.last_attempt and scheduler.last_attempt.last_attempt_at %}
+    - last scheduled attempt: {{ scheduler.last_attempt.last_attempt_at.strftime('%Y-%m-%d %H:%M UTC') }}
+    ({{ scheduler.last_attempt.last_result }})
+  {% endif %}
+</p>
+{% endif %}
+
 <div class="table-scroll">
 <table class="status-table">
   <thead>

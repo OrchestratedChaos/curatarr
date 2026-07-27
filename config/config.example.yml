@@ -70,6 +70,37 @@ general:
   #   enabled: true
   #   dry_run: true
 
+# Optional: in-app scheduler (#264) - runs the full recommendation
+# pipeline (movie + tv + external, same as `full` on the Run screen) at
+# a fixed daily time from inside this same process, no host cron or
+# separate container needed. Off by default.
+#
+# Coexists with, does NOT replace, the host-cron / docker-compose.yml
+# `schedule` profile approach documented in docs/DOCKER.md - pick ONE.
+# The two share the same cross-container run lock, so they can never
+# OVERLAP, but nothing stops both firing at different times of day if
+# you enable this while host cron/the compose profile is also active.
+#
+# Timezone is always this container's own TZ environment variable
+# (falls back to UTC if TZ is unset) - there is no separate timezone
+# key here, so there's exactly one clock to reason about, not two that
+# could disagree. The web UI's Settings screen shows the resolved
+# timezone and the computed next-run time so it's never ambiguous.
+#
+# If a scheduled run's target time arrives while another run (web-UI-
+# triggered, or the compose `schedule` profile's sibling container) is
+# already in progress, that occurrence is skipped (logged) - never
+# queued. Missed occurrences (e.g. the container was down at 3am) are
+# never caught up on the next start - only the next real occurrence
+# ever fires.
+schedule:
+  enabled: false
+  time: "03:00"  # 24-hour HH:MM, local to the TZ above
+  # weekdays:               # optional; omit (or leave empty) for every day
+  #   - monday
+  #   - wednesday
+  #   - friday
+
 # Huntarr: Find missing/upcoming movies from collections
 huntarr:
   sequel_huntarr: true    # Missing movies from collections you've started

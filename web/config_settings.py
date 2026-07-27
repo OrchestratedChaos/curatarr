@@ -15,6 +15,7 @@ from flask import redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap
 
 from utils.config import UPDATE_MODES, get_update_mode
+from utils.scheduler import WEEKDAY_NAMES, describe_next_run, parse_schedule_config
 
 from .config_io import (
     USER_MODE_CHOICES,
@@ -53,6 +54,7 @@ def register_settings_routes(app) -> None:
             "config_settings.html",
             saved=request.args.get("saved") == "1",
             errors={},
+            schedule_status=describe_next_run(core),
             **_settings_view(tuning, core, sonarr, radarr, trakt),
         )
 
@@ -71,6 +73,13 @@ def register_settings_routes(app) -> None:
                 "config_settings.html",
                 saved=False,
                 errors=errors,
+                # Pre-save on-disk schedule, not the (possibly invalid)
+                # submission - describe_next_run never raises, but a
+                # bad schedule_time here already has its own field error
+                # above; showing the CURRENT real status alongside it
+                # avoids implying a next-run time from input that
+                # didn't actually get saved.
+                schedule_status=describe_next_run(core),
                 **_settings_view(tuning, core, sonarr, radarr, trakt, overrides=parsed),
             ), 400
 
@@ -82,6 +91,7 @@ def register_settings_routes(app) -> None:
                 "config_settings.html",
                 saved=False,
                 errors={"_global": f"Could not save: {commit_error}"},
+                schedule_status=describe_next_run(reloaded[1]),
                 **_settings_view(*reloaded),
             ), 500
         return redirect(url_for("config_settings", saved="1"), code=303)
@@ -115,6 +125,7 @@ def _settings_view(
     external = tuning.get("external_recommendations") or {}
     general = core.get("general") or {}
     logging_cfg = core.get("logging") or {}
+    schedule_cfg = core.get("schedule") or {}
     trakt_export = trakt.get("export") or {}
 
     return {
@@ -187,6 +198,12 @@ def _settings_view(
         "logging": {
             "level": logging_cfg.get("level", "INFO"),
         },
+        "schedule": {
+            "enabled": bool(schedule_cfg.get("enabled", False)),
+            "time": schedule_cfg.get("time", "03:00"),
+            "weekdays": [str(d).strip().lower() for d in (schedule_cfg.get("weekdays") or [])],
+        },
+        "weekday_choices": WEEKDAY_NAMES,
         "sync_safety": {
             "sonarr": {
                 "auto_sync": bool(sonarr.get("auto_sync", False)),
@@ -314,6 +331,20 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
     logging_level = form.get("logging_level", "INFO")
     validate_choice(logging_level, "logging_level", errors, LOG_LEVEL_CHOICES)
 
+    # #264: reuses utils.scheduler.parse_schedule_config for validation
+    # instead of duplicating its HH:MM/weekday-name rules here - the
+    # scheduler thread and this form must always agree on what counts
+    # as valid.
+    schedule = {
+        "enabled": flag("schedule_enabled"),
+        "time": form.get("schedule_time", "03:00").strip(),
+        "weekdays": [day for day in WEEKDAY_NAMES if flag(f"schedule_weekday_{day}")],
+    }
+    try:
+        parse_schedule_config(schedule)
+    except ValueError as e:
+        errors["schedule_time"] = str(e)
+
     sync_safety = {}
     for svc in ("sonarr", "radarr", "trakt"):
         user_mode = form.get(f"{svc}_user_mode", "mapping")
@@ -333,6 +364,8 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
         "external": external,
         "general": general,
         "logging": {"level": logging_level},
+        "schedule": schedule,
+        "weekday_choices": WEEKDAY_NAMES,
         "sync_safety": sync_safety,
         "log_level_choices": LOG_LEVEL_CHOICES,
         "user_mode_choices": USER_MODE_CHOICES,
@@ -395,6 +428,19 @@ def _apply_settings(
 
     ensure_section(core, "general").update(parsed["general"])
     ensure_section(core, "logging")["level"] = parsed["logging"]["level"]
+
+    schedule_section = ensure_section(core, "schedule")
+    schedule_section["enabled"] = parsed["schedule"]["enabled"]
+    schedule_section["time"] = parsed["schedule"]["time"]
+    if parsed["schedule"]["weekdays"]:
+        schedule_section["weekdays"] = parsed["schedule"]["weekdays"]
+    else:
+        # Omit the key entirely for "every day" rather than writing an
+        # empty list - matches how the example documents it (commented
+        # out) and how utils.scheduler.parse_schedule_config treats a
+        # missing key and an empty list identically anyway, so this is
+        # purely a tidier on-disk file, not a behavior difference.
+        schedule_section.pop("weekdays", None)
 
     sonarr["auto_sync"] = parsed["sync_safety"]["sonarr"]["auto_sync"]
     sonarr["user_mode"] = parsed["sync_safety"]["sonarr"]["user_mode"]

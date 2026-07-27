@@ -46,6 +46,7 @@ import sys
 import waitress
 
 from .app import create_app
+from .scheduler_runner import SchedulerThread
 from .security import (
     AUTH_TOKEN_ENV_VAR,
     MIN_AUTH_TOKEN_LENGTH,
@@ -133,6 +134,16 @@ def main() -> None:
     host = os.environ.get("CURATARR_UI_HOST", "0.0.0.0")
     _require_auth_token_or_exit(host)
     app = create_app(bind_host=host)
+
+    # #264: same scheduler wiring as web/app.py's own main() (native
+    # mode) - started here, never inside create_app() itself, so every
+    # test that only calls create_app() directly never spawns a real
+    # background thread. This is the primary intended use case for the
+    # in-app scheduler (see utils/scheduler.py's module docstring) - "a
+    # continuous docker running the web UI" is the exact scenario #264
+    # was reported against.
+    app.scheduler_thread = SchedulerThread(app.job_manager, app.load_config_cached)  # type: ignore[attr-defined]
+    app.scheduler_thread.start()  # type: ignore[attr-defined]
 
     # #263: this process is PID 1 in the container (no init system in
     # front of it), and until this fix it caught SIGINT but never
