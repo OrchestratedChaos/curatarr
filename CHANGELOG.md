@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.52] - 2026-07-27
+
+### Added
+
+- **Running version is now shown in the web UI, not just /healthz and /status.json (#265).** Every page's top bar now shows `v2.10.52` (or whatever's actually running) next to the Curatarr logo - useful given how often new versions ship.
+
+- **"Fetch from Plex" on the Users and Libraries settings screens (#266).** Both screens now have a button that connects to your already-configured Plex server/account and lists real users (server owner, Home/managed users, shared friends) or real library sections that aren't configured yet, with a checklist to add exactly the ones you want in one save - no more typing usernames/section names by hand and risking a typo that silently doesn't match anything in Plex. Re-run it any time your Plex users or libraries change. Read-only until you actually check boxes and save; a broken/unreachable Plex connection shows a message instead of breaking the page.
+
+- **Custom collection-name templates (#267).** `collections.movie_name_template` / `collections.tv_name_template` in `tuning.yml` let you control what curatarr's generated collections are called, with `{user}` (the resolved display name) and `{media_type}` ("Movie"/"TV") placeholders - e.g. `"Recommended movies - {user}"`. Leaving these unset (the default) produces byte-for-byte the same name curatarr has always used (`🎬 {user} - Recommendation` / `📺 {user} - Recommendation`), so nobody's collections get renamed unless they opt in. An invalid template (unknown placeholder, malformed `{}`) falls back to the default and logs a warning rather than breaking a run. The multi-library disambiguation suffix (e.g. `(Movies 4K)`) is still always appended after the template renders, regardless of what it says, so a custom template can't reintroduce a same-media-type naming collision across libraries.
+
+  **Known limitation, not solved by this change:** changing the template later doesn't rename or clean up the collection under its previous name - the old one is left behind in Plex, same as if you changed `collections.label_name` or a user's `display_name` today. If you want the old name gone, remove it in Plex yourself after switching templates.
+
 ## [2.10.51] - 2026-07-27
 
 ### Fixed

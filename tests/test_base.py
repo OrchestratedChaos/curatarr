@@ -1702,6 +1702,197 @@ class TestBaseRecommenderCollectionNaming:
         assert "PrivateCollection_movies-4k" in call_base_labels
 
 
+class TestCollectionNameTemplate:
+    """#267: collections.movie_name_template/tv_name_template - custom
+    collection-name templates, with {user}/{media_type} placeholders,
+    a safe fallback on an invalid template, and the multi-library
+    suffix still applied unconditionally afterward."""
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_default_template_unchanged_from_pre_267_format(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        """No collections.movie_name_template set - byte-for-byte the
+        same name a pre-#267 install would have produced."""
+        mock_load.return_value = SINGLE_MOVIE_LIBRARY_CONFIG
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "🎬 Alice - Recommendation"
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_custom_movie_template_with_user_placeholder(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        config = copy.deepcopy(SINGLE_MOVIE_LIBRARY_CONFIG)
+        config["collections"] = {"movie_name_template": "Recommended movies - {user}"}
+        mock_load.return_value = config
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "Recommended movies - Alice"
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_media_type_placeholder_renders_title_case(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        config = copy.deepcopy(SINGLE_MOVIE_LIBRARY_CONFIG)
+        config["collections"] = {"movie_name_template": "{media_type} picks for {user}"}
+        mock_load.return_value = config
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "Movie picks for Alice"
+
+    @patch("utils.labels.log_warning")
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_invalid_template_falls_back_to_default_and_warns(
+        self,
+        mock_makedirs,
+        mock_load,
+        mock_tmdb,
+        mock_users,
+        mock_plex,
+        mock_update,
+        mock_cleanup,
+        mock_cleanup_legacy,
+        mock_warn,
+    ):
+        """A bad placeholder (typo'd {usr} instead of {user}) must never
+        crash a run - falls back to the default template instead.
+        Patches utils.labels.log_warning (not recommenders.base's own
+        reference) since that's where render_collection_name's warning
+        actually gets emitted from."""
+        config = copy.deepcopy(SINGLE_MOVIE_LIBRARY_CONFIG)
+        config["collections"] = {"movie_name_template": "Oops {usr}"}
+        mock_load.return_value = config
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "🎬 Alice - Recommendation"
+        mock_warn.assert_called_once()
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_custom_template_still_gets_multi_library_suffix(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        """A custom template can't accidentally break the multi-library
+        disambiguation guarantee (#157) - the suffix is always appended
+        after the template renders, regardless of what the template is."""
+        config = copy.deepcopy(MULTI_MOVIE_LIBRARY_CONFIG)
+        config["collections"] = {"movie_name_template": "Recommended movies - {user}"}
+        mock_load.return_value = config
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteRecommender("/path/to/config.yml", library=LIB_MOVIES_4K)
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "Recommended movies - Alice (Movies 4K)"
+
+    @patch("recommenders.base.cleanup_legacy_unnamed_collection")
+    @patch("recommenders.base.cleanup_old_collections")
+    @patch("recommenders.base.update_plex_collection")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_movie_and_tv_templates_are_independent(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_update, mock_cleanup, mock_cleanup_legacy
+    ):
+        config = copy.deepcopy(SINGLE_MOVIE_LIBRARY_CONFIG)
+        config["collections"] = {
+            "movie_name_template": "Movie custom - {user}",
+            "tv_name_template": "TV custom - {user}",
+        }
+        mock_load.return_value = config
+        mock_users.return_value = {"plex_users": [], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_plex.return_value = Mock()
+        mock_update.return_value = True
+
+        recommender = ConcreteTVRecommender("/path/to/config.yml")
+        section = Mock()
+
+        recommender._sync_plex_collection(section, "Recommended_alice", [Mock()], username="alice")
+
+        collection_name = mock_update.call_args[0][1]
+        assert collection_name == "TV custom - Alice"
+
+
 # ------------------------------------------------------------------------
 # Core recommendation-engine coverage: label management, candidate scoring,
 # and the TMDB/IMDb id-resolution chain shared by movie.py and tv.py.

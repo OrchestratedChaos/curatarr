@@ -13,6 +13,7 @@
   <div class="page-wrapper">
     <header class="topbar">
       <a class="brand" href="{{ url_for('dashboard') }}">Curatarr</a>
+      <span class="version-tag" title="Running version">v{{ curatarr_version }}</span>
       <nav>
         <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.path == url_for('dashboard') }}">Dashboard</a>
         <a href="{{ url_for('run_form') }}" class="{{ 'active' if request.path == url_for('run_form') }}">Run</a>

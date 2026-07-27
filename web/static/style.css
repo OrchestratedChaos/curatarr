@@ -140,6 +140,14 @@ body {
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3));
 }
 
+.topbar .version-tag {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
 .topbar nav {
   display: flex;
   flex-wrap: wrap;
@@ -391,6 +399,42 @@ button:disabled {
   letter-spacing: 1.5px;
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+/* #266 "Fetch from Plex" checklists (Users/Libraries screens) - not
+   nested inside .config-form (it's its own, separate form/action from
+   the main Save form above it), so it needs its own copy of the same
+   panel look rather than inheriting .config-form's descendant rules. */
+fieldset.plex-fetch {
+  background: var(--panel-gradient);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 22px 22px;
+  margin-bottom: 20px;
+  box-shadow:
+    0 8px 25px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+fieldset.plex-fetch legend {
+  padding: 0 10px;
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.plex-fetch-list {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+}
+
+.plex-fetch-list li {
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .config-form h3 {

@@ -26,7 +26,9 @@ from utils import (
     CACHE_VERSION,
     CANDIDATE_BUFFER_MULTIPLIER,
     CYAN,
+    DEFAULT_MOVIE_NAME_TEMPLATE,
     DEFAULT_NEGATIVE_THRESHOLD,
+    DEFAULT_TV_NAME_TEMPLATE,
     GREEN,
     RATING_MULTIPLIER_2_STAR,
     RATING_MULTIPLIER_3_STAR,
@@ -76,6 +78,7 @@ from utils import (
     print_similarity_breakdown,
     process_counters_from_cache,
     remove_labels_from_items,
+    render_collection_name,
     resolve_media_type_overrides,
     save_media_cache,
     save_watched_cache,
@@ -1113,8 +1116,29 @@ class BaseRecommender(ABC):
         else:
             display_name = username.capitalize()
 
+        # emoji is still needed below, independent of the #267 naming
+        # template - cleanup_old_collections/cleanup_legacy_unnamed_
+        # collection match OLD, hardcoded "{emoji} ..." patterns to find
+        # orphaned collections left behind by a prior run/config, and
+        # that legacy-pattern matching is unaffected by whatever NEW
+        # template collections.movie_name_template/tv_name_template may
+        # now be set to.
         emoji = "🎬" if self.media_type == "movie" else "📺"
-        collection_name = f"{emoji} {display_name} - Recommendation{self._library_suffix_for_collection_name()}"
+
+        # #267: collections.movie_name_template/tv_name_template (see
+        # config/tuning.example.yml) - defaults are byte-for-byte the
+        # pre-#267 hardcoded "{emoji} {display_name} - Recommendation"
+        # format, so an install that never sets these sees zero change.
+        # The multi-library disambiguation suffix is appended
+        # unconditionally AFTER the template renders (see
+        # render_collection_name's own docstring for why) - a custom
+        # template can't accidentally break that correctness guarantee.
+        name_template = self.config.get("collections", {}).get(
+            f"{self.media_type}_name_template",
+            DEFAULT_MOVIE_NAME_TEMPLATE if self.media_type == "movie" else DEFAULT_TV_NAME_TEMPLATE,
+        )
+        rendered_name = render_collection_name(name_template, display_name, self.media_type)
+        collection_name = f"{rendered_name}{self._library_suffix_for_collection_name()}"
         success = update_plex_collection(
             section, collection_name, final_items, logger, label_name=label_name, private_label=private_label
         )

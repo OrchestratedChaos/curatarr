@@ -5,7 +5,67 @@ Tests for utils/labels.py - Label management functions.
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
-from utils.labels import add_labels_to_items, build_label_name, categorize_labeled_items, remove_labels_from_items
+from utils.labels import (
+    DEFAULT_MOVIE_NAME_TEMPLATE,
+    DEFAULT_TV_NAME_TEMPLATE,
+    add_labels_to_items,
+    build_label_name,
+    categorize_labeled_items,
+    remove_labels_from_items,
+    render_collection_name,
+)
+
+
+class TestRenderCollectionName:
+    """Tests for render_collection_name() - #267 custom collection-name
+    templates."""
+
+    def test_default_movie_template_matches_pre_267_format(self):
+        result = render_collection_name(DEFAULT_MOVIE_NAME_TEMPLATE, "Alice", "movie")
+        assert result == "🎬 Alice - Recommendation"
+
+    def test_default_tv_template_matches_pre_267_format(self):
+        result = render_collection_name(DEFAULT_TV_NAME_TEMPLATE, "Alice", "tv")
+        assert result == "📺 Alice - Recommendation"
+
+    def test_custom_template_with_user_placeholder(self):
+        result = render_collection_name("Recommended movies - {user}", "Alice", "movie")
+        assert result == "Recommended movies - Alice"
+
+    def test_media_type_placeholder_movie_renders_title_case(self):
+        result = render_collection_name("{media_type} picks - {user}", "Alice", "movie")
+        assert result == "Movie picks - Alice"
+
+    def test_media_type_placeholder_tv_renders_title_case(self):
+        result = render_collection_name("{media_type} picks - {user}", "Alice", "tv")
+        assert result == "TV picks - Alice"
+
+    def test_template_with_no_placeholders_at_all(self):
+        """A template that drops {user} entirely is still valid - not
+        every install wants the username in the collection title."""
+        result = render_collection_name("My Curated Picks", "Alice", "movie")
+        assert result == "My Curated Picks"
+
+    @patch("utils.labels.log_warning")
+    def test_unknown_placeholder_falls_back_to_movie_default_and_warns(self, mock_warn):
+        result = render_collection_name("Oops {typo}", "Alice", "movie")
+        assert result == "🎬 Alice - Recommendation"
+        mock_warn.assert_called_once()
+
+    @patch("utils.labels.log_warning")
+    def test_unknown_placeholder_falls_back_to_tv_default_and_warns(self, mock_warn):
+        result = render_collection_name("Oops {typo}", "Alice", "tv")
+        assert result == "📺 Alice - Recommendation"
+        mock_warn.assert_called_once()
+
+    @patch("utils.labels.log_warning")
+    def test_bad_positional_placeholder_falls_back_and_warns(self, mock_warn):
+        """A bare {} (positional, no args passed to .format) raises
+        IndexError - must fall back exactly like an unknown named
+        placeholder (KeyError) does."""
+        result = render_collection_name("Oops {}", "Alice", "movie")
+        assert result == "🎬 Alice - Recommendation"
+        mock_warn.assert_called_once()
 
 
 class TestBuildLabelName:

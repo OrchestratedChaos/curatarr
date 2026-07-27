@@ -6,6 +6,7 @@ round-trip of unrelated config.yml keys (plex/users)."""
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -253,3 +254,124 @@ class TestValidation:
         c.post("/config/libraries", data=_base_form(**{"media_type_0": "not-a-type"}))
         after = _read_config(root)
         assert after == before
+
+
+class TestFetchFromPlex:
+    """#266: 'Fetch from Plex' checklist - POST /config/libraries/fetch-plex
+    (preview, never writes) and POST /config/libraries/add-plex (saves
+    the checked selection). Fixture already has 'Movies' (movie) and
+    'TV Shows' (tv) configured - see _CONFIG_YML in tests/conftest.py."""
+
+    def test_fetch_shows_only_sections_not_already_configured(self, client):
+        c, app, root = client
+        fetched = [
+            {"section": "Movies", "media_type": "movie"},
+            {"section": "Kids Movies", "media_type": "movie"},
+        ]
+        with patch("web.config_libraries.fetch_plex_libraries", return_value=fetched):
+            resp = c.post("/config/libraries/fetch-plex")
+
+        assert resp.status_code == 200
+        assert b"Kids Movies" in resp.data
+        assert b'value="Kids Movies::movie"' in resp.data
+        assert b'value="Movies::movie"' not in resp.data
+
+    def test_fetch_all_already_configured_shows_nothing_to_add(self, client):
+        c, app, root = client
+        fetched = [
+            {"section": "Movies", "media_type": "movie"},
+            {"section": "TV Shows", "media_type": "tv"},
+        ]
+        with patch("web.config_libraries.fetch_plex_libraries", return_value=fetched):
+            resp = c.post("/config/libraries/fetch-plex")
+
+        assert resp.status_code == 200
+        assert b"already configured" in resp.data
+
+    def test_fetch_missing_credentials_shows_message(self, client):
+        c, app, root = client
+        config_path = module_path(root, "config")
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write('plex:\n  url: ""\n  token: ""\nusers:\n  list: "alice"\n')
+
+        resp = c.post("/config/libraries/fetch-plex")
+
+        assert resp.status_code == 200
+        assert b"not configured yet" in resp.data
+
+    def test_fetch_connection_failure_shows_redacted_message(self, client):
+        c, app, root = client
+        with patch(
+            "web.config_libraries.fetch_plex_libraries",
+            side_effect=Exception("boom X-Plex-Token=abcdef123456"),
+        ):
+            resp = c.post("/config/libraries/fetch-plex")
+
+        assert resp.status_code == 200
+        assert b"Could not fetch libraries from Plex" in resp.data
+        assert b"abcdef123456" not in resp.data
+
+    def test_add_plex_appends_selected_libraries(self, client):
+        c, app, root = client
+        resp = c.post(
+            "/config/libraries/add-plex",
+            data={"selected_library": ["Kids Movies::movie", "Anime::tv"]},
+        )
+
+        assert resp.status_code == 303
+        core = _read_config(root)
+        sections = {lib["section"] for lib in core["libraries"]}
+        assert "Movies" in sections
+        assert "TV Shows" in sections
+        assert "Kids Movies" in sections
+        assert "Anime" in sections
+
+        kids = next(lib for lib in core["libraries"] if lib["section"] == "Kids Movies")
+        assert kids["media_type"] == "movie"
+        assert kids["name"] == "Kids Movies"
+        assert kids["id"]
+
+    def test_add_plex_skips_already_configured_section(self, client):
+        c, app, root = client
+        resp = c.post("/config/libraries/add-plex", data={"selected_library": ["Movies::movie", "Anime::tv"]})
+
+        assert resp.status_code == 303
+        core = _read_config(root)
+        sections = [lib["section"] for lib in core["libraries"]]
+        assert sections.count("Movies") == 1
+        assert "Anime" in sections
+
+    def test_add_plex_preserves_existing_arr_routing(self, client):
+        c, app, root = client
+        c.post("/config/libraries/add-plex", data={"selected_library": ["Anime::tv"]})
+
+        core = _read_config(root)
+        movies = next(lib for lib in core["libraries"] if lib["section"] == "Movies")
+        assert movies["arr"]["root_folder"] == "/data/movies"
+
+    def test_add_plex_no_selection_is_a_noop(self, client):
+        c, app, root = client
+        resp = c.post("/config/libraries/add-plex", data={})
+
+        assert resp.status_code == 303
+        core = _read_config(root)
+        assert len(core["libraries"]) == 2
+
+    def test_add_plex_derives_unique_id_on_slug_collision(self, client):
+        """'Movies!!!' is a different section name than the existing
+        'Movies' (so it isn't filtered out as already-configured), but
+        _derive_library_id() strips non-alphanumerics - both slugify to
+        the same 'movies' id. Must not silently produce two libraries
+        sharing one id (see this module's docstring for why id
+        collisions matter - cache keys, --library-id, etc.)."""
+        c, app, root = client
+        resp = c.post(
+            "/config/libraries/add-plex",
+            data={"selected_library": ["Movies!!!::movie"]},
+        )
+
+        assert resp.status_code == 303
+        core = _read_config(root)
+        ids = [lib["id"] for lib in core["libraries"]]
+        assert len(ids) == len(set(ids))
+        assert "movies-2" in ids

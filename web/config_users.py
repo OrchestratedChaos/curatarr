@@ -14,14 +14,16 @@ _parse_users_form/_apply_users below are the only places that shape is
 read or written, so that's a contained change when #157 lands.
 """
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from flask import redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap
 
+from utils.plex import fetch_plex_users
 from utils.plex_policy import MOVIE_RATING_HIERARCHY, TV_RATING_HIERARCHY
 
 from .config_io import commit_modules, ensure_section, format_csv_list, load_module, module_path, parse_csv_list
+from .security import redact
 
 RATING_CHOICES = MOVIE_RATING_HIERARCHY + TV_RATING_HIERARCHY
 
@@ -60,6 +62,41 @@ def register_users_routes(app) -> None:
             ), 400
 
         modules = _apply_users(project_root, core, parsed)
+        commit_error = commit_modules(project_root, modules)
+        if commit_error:
+            return render_template(
+                "config_users.html",
+                saved=False,
+                errors={"_global": f"Could not save: {commit_error}"},
+                **_users_view(load_module(module_path(project_root, "config"))),
+            ), 500
+        return redirect(url_for("config_users", saved="1"), code=303)
+
+    @app.post("/config/users/fetch-plex")
+    def config_users_fetch_plex():
+        """#266: preview step - connect to the already-configured Plex
+        server/account and list its users that aren't in users.list yet,
+        for the checklist below. Never writes anything - see
+        config_users_add_plex for the follow-up that actually saves a
+        selection."""
+        core = load_module(module_path(project_root, "config"))
+        return render_template(
+            "config_users.html",
+            saved=False,
+            errors={},
+            plex_fetch=_fetch_plex_users_view(core),
+            **_users_view(core),
+        )
+
+    @app.post("/config/users/add-plex")
+    def config_users_add_plex():
+        """#266: add every checked username from the Fetch-from-Plex
+        checklist to users.list in one save - each gets no preferences
+        yet, same as a single manually-added user (editable on a
+        follow-up visit)."""
+        core = load_module(module_path(project_root, "config"))
+        selected = request.form.getlist("selected_username")
+        modules = _apply_users_from_plex(core, selected)
         commit_error = commit_modules(project_root, modules)
         if commit_error:
             return render_template(
@@ -147,6 +184,61 @@ def _parse_users_form(form, errors: Dict[str, str]) -> Dict:
         )
 
     return {"users": rows, "new_username": ""}
+
+
+def _fetch_plex_users_view(core: CommentedMap) -> Dict:
+    """#266: fetch real Plex account users and filter out ones already
+    in users.list - the context config_users.html renders as the
+    "Fetch from Plex" checklist. Fails open (never raises) exactly like
+    web/config_test_connection.py's test_plex - a broken/unreachable
+    Plex must never break this screen, just show why the fetch didn't
+    work."""
+    plex_config = core.get("plex") or {}
+    token = plex_config.get("token", "")
+    if not token:
+        return {
+            "ok": False,
+            "message": "Plex token is not configured yet - set it on the Connections screen first.",
+            "available": [],
+        }
+    try:
+        fetched = fetch_plex_users({"plex": {"token": token}})
+    except Exception as exc:
+        return {"ok": False, "message": redact(f"Could not fetch users from Plex: {exc}"), "available": []}
+
+    users_section = core.get("users") or {}
+    raw_list = users_section.get("list", "")
+    if isinstance(raw_list, str):
+        existing = {u.strip().lower() for u in raw_list.split(",") if u.strip()}
+    else:
+        existing = {str(u).strip().lower() for u in (raw_list or [])}
+
+    available = [u for u in fetched if u["username"].lower() not in existing]
+    return {"ok": True, "message": "", "available": available}
+
+
+def _apply_users_from_plex(core: CommentedMap, selected_usernames: List[str]) -> Dict[str, CommentedMap]:
+    """#266: append *selected_usernames* (checked on the Fetch-from-Plex
+    checklist) to users.list, skipping any already present - WITHOUT
+    writing to disk (see config_connections._apply_connections'
+    docstring for why). New entries get no preferences yet, same as a
+    single manually-added user via 'new_username' in _apply_users."""
+    users_section = ensure_section(core, "users")
+    raw_list = users_section.get("list", "")
+    if isinstance(raw_list, str):
+        existing_usernames = [u.strip() for u in raw_list.split(",") if u.strip()]
+    else:
+        existing_usernames = list(raw_list or [])
+
+    existing_lower = {u.lower() for u in existing_usernames}
+    for username in selected_usernames:
+        username = username.strip()
+        if username and username.lower() not in existing_lower:
+            existing_usernames.append(username)
+            existing_lower.add(username.lower())
+
+    users_section["list"] = ", ".join(existing_usernames)
+    return {"config": core}
 
 
 def _apply_users(project_root: str, core: CommentedMap, parsed: Dict) -> Dict[str, CommentedMap]:

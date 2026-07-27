@@ -555,12 +555,18 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
         """recommenders/base.py's manage_plex_labels() reads every one of
         these directly off self.config["collections"] with these exact
         fallback defaults."""
+        from utils.labels import DEFAULT_MOVIE_NAME_TEMPLATE, DEFAULT_TV_NAME_TEMPLATE
+
         tuning = self._load_example_tuning()
         collections = tuning["collections"]
         assert collections["add_label"] is True
         assert collections["label_name"] == "Recommended"
         assert collections["append_usernames"] is True  # #261
         assert collections["private_collections"] is True
+        # #267: documented example templates must match the code
+        # defaults render_collection_name() falls back to.
+        assert collections["movie_name_template"] == DEFAULT_MOVIE_NAME_TEMPLATE
+        assert collections["tv_name_template"] == DEFAULT_TV_NAME_TEMPLATE
 
     def test_external_recommendations_defaults_match(self):
         from recommenders.external import MAX_DISCOVERY_ITERATIONS, OUTPUT_MIN_VOTES

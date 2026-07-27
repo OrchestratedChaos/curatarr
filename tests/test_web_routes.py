@@ -97,6 +97,23 @@ class TestConfigLoadCaching:
         assert b"carol" in second.data
 
 
+class TestVersionDisplay:
+    """#265: the running version is shown in the UI, not just exposed
+    via /healthz and /status.json - on every page (the topbar), not
+    just Settings (the issue's literal ask), since a page reload is all
+    it takes to check it either way."""
+
+    def test_version_shown_on_dashboard(self, client):
+        c, app, root = client
+        resp = c.get("/")
+        assert f"v{app_module.__version__}".encode() in resp.data
+
+    def test_version_shown_on_settings_page(self, client):
+        c, app, root = client
+        resp = c.get("/config/settings")
+        assert f"v{app_module.__version__}".encode() in resp.data
+
+
 class TestDashboard:
     """Tests for GET /"""
 

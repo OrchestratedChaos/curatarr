@@ -4,6 +4,7 @@ streaming_services), and validation/round-trip behavior."""
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -219,3 +220,98 @@ class TestNullSection:
 
         core = _read_config(root)
         assert core["users"]["preferences"]["alice"]["display_name"] == "Alice A"
+
+
+class TestFetchFromPlex:
+    """#266: 'Fetch from Plex' checklist - POST /config/users/fetch-plex
+    (preview, never writes) and POST /config/users/add-plex (saves the
+    checked selection)."""
+
+    def test_fetch_shows_only_users_not_already_configured(self, client):
+        c, app, root = client
+        fetched = [
+            {"username": "alice", "title": "Alice", "is_admin": True},
+            {"username": "charlie", "title": "Charlie", "is_admin": False},
+        ]
+        with patch("web.config_users.fetch_plex_users", return_value=fetched):
+            resp = c.post("/config/users/fetch-plex")
+
+        assert resp.status_code == 200
+        # alice is already configured (see _CONFIG_YML fixture) - must
+        # not be offered again on the Fetch-from-Plex checklist
+        # specifically (the regular users table above still has its
+        # own, unrelated value="alice" hidden field for the existing
+        # row - only the checklist's checkbox is what must exclude it).
+        assert b"Charlie" in resp.data
+        assert b'name="selected_username" value="charlie"' in resp.data
+        assert b'name="selected_username" value="alice"' not in resp.data
+
+    def test_fetch_all_already_configured_shows_nothing_to_add(self, client):
+        c, app, root = client
+        fetched = [
+            {"username": "alice", "title": "Alice", "is_admin": True},
+            {"username": "bob", "title": "Bob", "is_admin": False},
+        ]
+        with patch("web.config_users.fetch_plex_users", return_value=fetched):
+            resp = c.post("/config/users/fetch-plex")
+
+        assert resp.status_code == 200
+        assert b"already configured" in resp.data
+
+    def test_fetch_missing_token_shows_message(self, client):
+        c, app, root = client
+        config_path = module_path(root, "config")
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write('plex:\n  url: "http://localhost:32400"\nusers:\n  list: "alice"\n')
+
+        resp = c.post("/config/users/fetch-plex")
+
+        assert resp.status_code == 200
+        assert b"Plex token is not configured" in resp.data
+
+    def test_fetch_connection_failure_shows_redacted_message(self, client):
+        c, app, root = client
+        with patch("web.config_users.fetch_plex_users", side_effect=Exception("boom X-Plex-Token=abcdef123456")):
+            resp = c.post("/config/users/fetch-plex")
+
+        assert resp.status_code == 200
+        assert b"Could not fetch users from Plex" in resp.data
+        assert b"abcdef123456" not in resp.data
+
+    def test_add_plex_appends_selected_users(self, client):
+        c, app, root = client
+        resp = c.post("/config/users/add-plex", data={"selected_username": ["charlie", "dave"]})
+
+        assert resp.status_code == 303
+        core = _read_config(root)
+        usernames = [u.strip() for u in core["users"]["list"].split(",")]
+        assert "alice" in usernames
+        assert "bob" in usernames
+        assert "charlie" in usernames
+        assert "dave" in usernames
+
+    def test_add_plex_skips_already_configured_duplicate(self, client):
+        c, app, root = client
+        resp = c.post("/config/users/add-plex", data={"selected_username": ["alice", "eve"]})
+
+        assert resp.status_code == 303
+        core = _read_config(root)
+        usernames = [u.strip() for u in core["users"]["list"].split(",")]
+        assert usernames.count("alice") == 1
+        assert "eve" in usernames
+
+    def test_add_plex_preserves_existing_preferences(self, client):
+        c, app, root = client
+        c.post("/config/users/add-plex", data={"selected_username": ["charlie"]})
+
+        core = _read_config(root)
+        assert core["users"]["preferences"]["alice"]["display_name"] == "Alice A"
+
+    def test_add_plex_no_selection_is_a_noop(self, client):
+        c, app, root = client
+        resp = c.post("/config/users/add-plex", data={})
+
+        assert resp.status_code == 303
+        core = _read_config(root)
+        usernames = [u.strip() for u in core["users"]["list"].split(",")]
+        assert usernames == ["alice", "bob"]
