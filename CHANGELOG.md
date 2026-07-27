@@ -2,6 +2,32 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.42] - 2026-07-26
+
+### Changed
+
+- **Extracted Sequel Huntarr (`find_missing_sequels`) out of `recommenders/external.py` into `recommenders/huntarr.py` (PR2 step 1, external.py architecture decomposition).**
+
+  - Pure relocation: `find_missing_sequels`, `load_huntarr_cache`,
+    `save_huntarr_cache`, and the TMDB detail-fetching helpers Sequel
+    Huntarr introduced (`get_watch_providers`, `get_collection_details` -
+    also reused by Horizon Huntarr and streaming-service categorization,
+    both still in `external.py` for now) moved byte-for-byte; only import
+    paths changed. `recommenders/external.py` re-exports everything
+    external callers/tests still need from it, so no other module's
+    import statements needed to change.
+  - Verified via the golden-output equivalence harness added in
+    2.10.41: watchlist HTML/MD, Sequel/Horizon Huntarr results, and
+    categorized-by-streaming-service output are all byte-identical to
+    pre-move golden fixtures.
+  - `tests/test_external.py`'s `TestFindMissingSequels` class patches
+    updated from `recommenders.external.get_project_root` to
+    `recommenders.huntarr.get_project_root` - `get_project_root()` is
+    looked up in whichever module's own namespace calls it at runtime
+    (a `from utils import get_project_root` name binding, not a shared
+    module object like `requests`), so patching the old path silently
+    stopped reaching `find_missing_sequels` once it moved.
+
 ## [2.10.41] - 2026-07-26
 
 ### Added
