@@ -54,6 +54,7 @@ from recommenders.huntarr import (
     load_huntarr_cache,
     save_huntarr_cache,
 )
+from recommenders.streaming import categorize_by_streaming_service
 from utils import (
     CYAN,
     DEFAULT_RATING_MULTIPLIERS,
@@ -109,15 +110,20 @@ logger = logging.getLogger("curatarr")
 #     by tests/test_external.py.
 #   - TMDB_ANIMATION_GENRE_ID, TMDB_PROVIDERS, TV_MOVIE_GENRE_ID,
 #     HUNTARR_CACHE_VERSION, save_huntarr_cache, _watch_provider_cache,
-#     get_collection_details, load_huntarr_cache: find_missing_sequels/
-#     get_watch_providers moved to recommenders/huntarr.py (PR2 external.py
-#     decomposition - see CHANGELOG). get_collection_details/
-#     load_huntarr_cache were still called from find_horizon_movies (this
-#     module) until PR2 step 2 moved that too - now nothing in this module
-#     calls them, but tests/test_external.py still imports them from here.
+#     get_collection_details, load_huntarr_cache: find_missing_sequels
+#     moved to recommenders/huntarr.py (PR2 external.py decomposition -
+#     see CHANGELOG). get_collection_details/load_huntarr_cache were
+#     still called from find_horizon_movies (this module) until PR2 step
+#     2 moved that too - now nothing in this module calls them, but
+#     tests/test_external.py still imports them from here.
 #   - HORIZON_HUNTARR_CACHE_VERSION, load_horizon_cache, save_horizon_cache,
 #     get_movie_status: same story, find_horizon_movies moved to
 #     recommenders/horizon.py (PR2 step 2), tests still import these from here.
+#   - get_watch_providers: moved to recommenders/huntarr.py along with
+#     find_missing_sequels (PR2 step 1); still called from this module's
+#     categorize_by_streaming_service until PR2 step 3 moved that to
+#     recommenders/streaming.py too - now nothing in this module calls it,
+#     but tests/test_external.py still imports it from here.
 __all__ = [
     "sync_watch_history_to_trakt",
     "SERVICE_DISPLAY_NAMES",
@@ -130,6 +136,7 @@ __all__ = [
     "_watch_provider_cache",
     "get_collection_details",
     "load_huntarr_cache",
+    "get_watch_providers",
     "HORIZON_HUNTARR_CACHE_VERSION",
     "load_horizon_cache",
     "save_horizon_cache",
@@ -799,68 +806,6 @@ def fetch_similar_from_tmdb(
         logger.debug(f"Error fetching similar for TMDB {tmdb_id}: {e}")
 
     return candidates
-
-
-def categorize_by_streaming_service(
-    recommendations: List[Dict], tmdb_api_key: str, user_services: List[str], media_type: str = "movie"
-) -> Dict:
-    """
-    Categorize recommendations by streaming availability.
-    Each item gets streaming_services, rent_services, buy_services, and on_user_services added.
-
-    Returns dict: {
-        'user_services': {service_name: [items]},
-        'other_services': {service_name: [items]},
-        'acquire': [items],
-        'all_items': [all items sorted by score with streaming info]
-    }
-    """
-    result: Dict[str, Any] = {"user_services": {}, "other_services": {}, "acquire": [], "all_items": []}
-
-    for item in recommendations:
-        tmdb_id = item["tmdb_id"]
-        providers = get_watch_providers(tmdb_api_key, tmdb_id, media_type)
-
-        # Attach streaming info to item
-        streaming = providers.get("streaming", [])
-        item["streaming_services"] = streaming
-        item["rent_services"] = providers.get("rent", [])
-        item["buy_services"] = providers.get("buy", [])
-        item["on_user_services"] = [s for s in streaming if s in user_services]
-
-        # Add to all_items for flat display
-        result["all_items"].append(item)
-
-        if not streaming:
-            # Not available on any subscription streaming service
-            result["acquire"].append(item)
-        else:
-            # Check which services have it - add to FIRST matching service only
-            # Priority: user's services first, then other services
-            placed = False
-
-            # First try user's services
-            for service in streaming:
-                if service in user_services:
-                    if service not in result["user_services"]:
-                        result["user_services"][service] = []
-                    result["user_services"][service].append(item)
-                    placed = True
-                    break  # Only add to ONE service
-
-            # If not on user's services, add to first other service
-            if not placed:
-                for service in streaming:
-                    if service not in user_services:
-                        if service not in result["other_services"]:
-                            result["other_services"][service] = []
-                        result["other_services"][service].append(item)
-                        break  # Only add to ONE service
-
-    # Sort all_items by score (highest first)
-    result["all_items"].sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    return result
 
 
 def get_genre_distribution(plex: Any, config: Dict, username: str, media_type: str = "movie") -> Tuple[Dict, int]:
