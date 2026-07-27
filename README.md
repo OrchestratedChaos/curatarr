@@ -310,6 +310,8 @@ users:
   preferences:
     john:
       display_name: John
+      # Adds to (never replaces) the top-level streaming_services list -
+      # same merge behavior as exclude_genres above.
       streaming_services: [netflix, hulu, disney_plus]
     sarah:
       display_name: Sarah

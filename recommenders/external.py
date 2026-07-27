@@ -60,6 +60,7 @@ from utils import (
     get_libraries_for_media_type,
     get_plex_account_ids,
     get_project_root,
+    get_streaming_services_for_user,
     get_tmdb_config,
     get_tmdb_id_from_imdb,
     get_tmdb_keywords,
@@ -2331,12 +2332,17 @@ def _pu_reconcile_caches(
     return (movies_list, shows_list)
 
 
-def _pu_categorize_and_stamp(config, movies_list, shows_list, tmdb_api_key, movie_library, tv_library):
+def _pu_categorize_and_stamp(config, movies_list, shows_list, tmdb_api_key, movie_library, tv_library, username):
     """process_user stage: categorize the final movie/show lists by
     streaming-service availability and stamp each item with its source
     library id (#157 Phase 3 provenance) (see process_user)."""
-    # Get household streaming services from top-level config
-    user_services = config.get("streaming_services", [])
+    # Household streaming services from top-level config, merged with
+    # this user's personal override if they have one
+    # (users.preferences.<user>.streaming_services) - mirrors
+    # get_excluded_genres_for_user()'s global-plus-per-user merge
+    # semantics (see get_streaming_services_for_user).
+    user_prefs_all = config.get("users", {}).get("preferences", {})
+    user_services = get_streaming_services_for_user(config.get("streaming_services", []), user_prefs_all, username)
 
     # Categorize by streaming service availability
     print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
@@ -2452,7 +2458,7 @@ def process_user(config, plex, username, movie_library=None, tv_library=None):
     )
 
     movies_categorized, shows_categorized, user_services = _pu_categorize_and_stamp(
-        config, movies_list, shows_list, tmdb_api_key, movie_library, tv_library
+        config, movies_list, shows_list, tmdb_api_key, movie_library, tv_library, username
     )
 
     _pu_finalize_output(username, display_name, movies_categorized, shows_categorized)
@@ -2677,7 +2683,11 @@ def process_user_movie_library(config, plex, username, library):
         f"({len(high_movies)} above {int(min_relevance * 100)}% threshold){RESET}"
     )
 
-    user_services = config.get("streaming_services", [])
+    # Household streaming services, merged with this user's personal
+    # override if they have one - see get_streaming_services_for_user.
+    user_services = get_streaming_services_for_user(
+        config.get("streaming_services", []), config.get("users", {}).get("preferences", {}), username
+    )
 
     print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
     movies_categorized = categorize_by_streaming_service(movies_list, tmdb_api_key, user_services, "movie")
@@ -2885,7 +2895,11 @@ def process_user_tv_library(config, plex, username, library):
         f"{GREEN}Output: {len(shows_list)} shows ({len(high_shows)} above {int(min_relevance * 100)}% threshold){RESET}"
     )
 
-    user_services = config.get("streaming_services", [])
+    # Household streaming services, merged with this user's personal
+    # override if they have one - see get_streaming_services_for_user.
+    user_services = get_streaming_services_for_user(
+        config.get("streaming_services", []), config.get("users", {}).get("preferences", {}), username
+    )
 
     print(f"{CYAN}Categorizing by streaming service availability...{RESET}")
     shows_categorized = categorize_by_streaming_service(shows_list, tmdb_api_key, user_services, "tv")

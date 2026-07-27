@@ -2,6 +2,46 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.35] - 2026-07-26
+
+### Fixed
+
+- **Per-user `streaming_services` was dead config (audit remediation, PR2).**
+
+  - `users.preferences.<user>.streaming_services` was settable via the web
+    UI and shown in both example configs, but `recommenders/external.py`
+    only ever read the single top-level global `streaming_services` list
+    at all 3 of its per-user call sites (`process_user`'s
+    `_pu_categorize_and_stamp` stage, `process_user_movie_library`, and
+    `process_user_tv_library`) - a user's personal override was silently
+    ignored everywhere.
+  - **Assumption implemented (stated per the task, override if wrong):**
+    followed the sibling per-user preference `exclude_genres`'s exact
+    semantics rather than inventing new ones. `exclude_genres` is the only
+    other per-user preference with a real global counterpart to reconcile
+    against (`get_excluded_genres_for_user` in `utils/plex.py`), and it
+    **merges** (global set UNION per-user list) rather than overriding.
+    `max_rating` was considered too, but has no global counterpart at all
+    to override/merge against, so it wasn't a useful precedent for a
+    list-shaped preference like `streaming_services`. New
+    `get_streaming_services_for_user()` in `utils/plex.py` mirrors
+    `get_excluded_genres_for_user()` line-for-line: a per-user
+    `streaming_services` override is UNIONed onto the global list
+    (de-duplicated, original order preserved), never replacing it - so a
+    user with a personal override still benefits from services the
+    household/global config already lists.
+  - **No behavior change for any user with no personal override**: the
+    merge is a no-op when `users.preferences.<user>.streaming_services`
+    isn't set, exactly matching today's global-list-only behavior.
+  - Threaded `username` through to `_pu_categorize_and_stamp` (previously
+    had no username parameter at all) so all 3 call sites can resolve the
+    per-user override.
+  - Tests added: `utils/plex.py`'s new function directly (no override, merge,
+    de-dup, no-username, user-with-no-override-unaffected) in
+    `tests/test_plex.py`, plus wiring tests at all 3 call sites in
+    `tests/test_external.py` (including a same-config-different-user test
+    proving one user's override never leaks onto another user's run).
+
 ## [2.10.34] - 2026-07-26
 
 ### Fixed
