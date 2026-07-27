@@ -1,0 +1,158 @@
+{
+  "movies": {
+    "acquire": [
+      {
+        "added_date": "2026-01-01T09:00:00",
+        "buy_services": [],
+        "on_user_services": [],
+        "original_language": "en",
+        "rating": 6.1,
+        "rent_services": [],
+        "score": 0.69,
+        "streaming_services": [],
+        "title": "Quiet Static",
+        "tmdb_id": 12,
+        "vote_count": 500,
+        "year": "2022"
+      }
+    ],
+    "all_items": [
+      {
+        "added_date": "2026-01-01T09:00:00",
+        "buy_services": [],
+        "on_user_services": [
+          "netflix"
+        ],
+        "original_language": "en",
+        "rating": 7.2,
+        "rent_services": [],
+        "score": 0.81,
+        "streaming_services": [
+          "netflix"
+        ],
+        "title": "Signal Drift",
+        "tmdb_id": 10,
+        "vote_count": 500,
+        "year": "2024"
+      },
+      {
+        "added_date": "2026-01-01T09:00:00",
+        "buy_services": [],
+        "on_user_services": [],
+        "original_language": "en",
+        "rating": 6.8,
+        "rent_services": [],
+        "score": 0.77,
+        "streaming_services": [
+          "max"
+        ],
+        "title": "Glass Horizon",
+        "tmdb_id": 11,
+        "vote_count": 500,
+        "year": "2023"
+      },
+      {
+        "added_date": "2026-01-01T09:00:00",
+        "buy_services": [],
+        "on_user_services": [],
+        "original_language": "en",
+        "rating": 6.1,
+        "rent_services": [],
+        "score": 0.69,
+        "streaming_services": [],
+        "title": "Quiet Static",
+        "tmdb_id": 12,
+        "vote_count": 500,
+        "year": "2022"
+      }
+    ],
+    "other_services": {
+      "max": [
+        {
+          "added_date": "2026-01-01T09:00:00",
+          "buy_services": [],
+          "on_user_services": [],
+          "original_language": "en",
+          "rating": 6.8,
+          "rent_services": [],
+          "score": 0.77,
+          "streaming_services": [
+            "max"
+          ],
+          "title": "Glass Horizon",
+          "tmdb_id": 11,
+          "vote_count": 500,
+          "year": "2023"
+        }
+      ]
+    },
+    "user_services": {
+      "netflix": [
+        {
+          "added_date": "2026-01-01T09:00:00",
+          "buy_services": [],
+          "on_user_services": [
+            "netflix"
+          ],
+          "original_language": "en",
+          "rating": 7.2,
+          "rent_services": [],
+          "score": 0.81,
+          "streaming_services": [
+            "netflix"
+          ],
+          "title": "Signal Drift",
+          "tmdb_id": 10,
+          "vote_count": 500,
+          "year": "2024"
+        }
+      ]
+    }
+  },
+  "shows": {
+    "acquire": [],
+    "all_items": [
+      {
+        "added_date": "2026-01-01T09:00:00",
+        "buy_services": [],
+        "on_user_services": [
+          "netflix"
+        ],
+        "original_language": "en",
+        "rating": 8.0,
+        "rent_services": [],
+        "score": 0.85,
+        "streaming_services": [
+          "netflix"
+        ],
+        "title": "Nightfall Station",
+        "tmdb_id": 20,
+        "vote_count": 500,
+        "year": "2021"
+      }
+    ],
+    "other_services": {},
+    "user_services": {
+      "netflix": [
+        {
+          "added_date": "2026-01-01T09:00:00",
+          "buy_services": [],
+          "on_user_services": [
+            "netflix"
+          ],
+          "original_language": "en",
+          "rating": 8.0,
+          "rent_services": [],
+          "score": 0.85,
+          "streaming_services": [
+            "netflix"
+          ],
+          "title": "Nightfall Station",
+          "tmdb_id": 20,
+          "vote_count": 500,
+          "year": "2021"
+        }
+      ]
+    }
+  }
+}

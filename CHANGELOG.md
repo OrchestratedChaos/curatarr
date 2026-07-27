@@ -2,6 +2,31 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.41] - 2026-07-26
+
+### Added
+
+- **Golden-output equivalence harness for the upcoming `recommenders/external.py` architecture decomposition (PR2 prep, no production code touched).**
+
+  - `tests/golden_external_harness.py`: runs `find_missing_sequels()`
+    (Sequel Huntarr), `find_horizon_movies()` (Horizon Huntarr),
+    `categorize_by_streaming_service()`, and the
+    `generate_markdown()`/`generate_combined_html()` render pipeline
+    against fixed synthetic Plex/TMDB fixtures (no real watch history),
+    and compares the result byte-for-byte against committed golden
+    files (`tests/fixtures/external_golden/`). `datetime.now()` is
+    pinned (both render functions embed a live "generated at" timestamp)
+    so any two runs against unchanged code are byte-identical.
+  - `tests/test_golden_external_harness.py` is the actual CI-enforced
+    gate: every subsequent PR in the external.py decomposition sequence
+    must leave it passing, or stop and report the diff rather than
+    merge - a failure means moved/refactored code produced different
+    output than current main did.
+  - Deliberately does NOT exercise `find_similar_content_with_profile()`'s
+    iterative TMDB-Discover candidate loop or `build_user_profile()`'s
+    Plex watch-history scan - neither is a relocation target in this PR
+    sequence; see the harness's own docstring for the full reasoning.
+
 ## [2.10.40] - 2026-07-26
 
 ### Fixed
