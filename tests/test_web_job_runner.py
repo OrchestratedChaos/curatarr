@@ -7,6 +7,7 @@ fast and hermetic - they never touch Plex/TMDB or the real repo.
 """
 
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -144,6 +145,75 @@ class TestBuildCommandCodeRootDivergence:
             assert not any("/data" in part or "/app" in part for part in cmd)
 
 
+class TestBuildCommandDockerFullEngine:
+    """#260 (second half, continued): the `full` engine still failed
+    inside the real Docker image even after the code_root fix above -
+    run.sh's own is_first_run() does an identical SCRIPT_DIR-relative
+    config/config.yml check (and its dependency-install step assumes
+    requirements.lock/.txt are on disk, which they never are in the
+    runtime image - see Dockerfile) - both false in Docker, where
+    SCRIPT_DIR (/app) and the real data directory (/data,
+    CURATARR_CONFIG_DIR) are different places. Inside the real image
+    (RUNNING_IN_DOCKER=true), `full` now bypasses run.sh entirely and
+    chains movie -> tv -> external directly instead - the same order
+    docker-entrypoint.sh's own `recommend full` mode (and frozen's
+    `--run-recommender full`) already use in this same image.
+    """
+
+    def _manager(self, project_root, code_root):
+        return JobManager(project_root, os.path.join(project_root, "logs"), code_root=code_root)
+
+    def test_docker_full_engine_bypasses_run_sh(self, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        assert cmd[0] == "bash"
+        assert cmd[1] == "-c"
+        assert "run.sh" not in cmd[2]
+
+    def test_docker_full_engine_chains_movie_tv_external_in_order(self, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[2]
+        assert " && " in script
+        movie_pos = script.index("movie.py")
+        tv_pos = script.index("tv.py")
+        external_pos = script.index("external.py")
+        assert movie_pos < tv_pos < external_pos
+
+    def test_docker_full_engine_uses_code_root_not_project_root(self, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[2]
+        assert os.path.join("/app", "recommenders", "movie.py") in script
+        assert "/data" not in script
+
+    def test_docker_full_engine_invokes_sys_executable(self, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[2]
+        assert script.count(shlex.quote(job_runner_mod.sys.executable)) == 3
+
+    def test_non_docker_full_engine_still_uses_run_sh(self, monkeypatch):
+        monkeypatch.delenv("RUNNING_IN_DOCKER", raising=False)
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        assert cmd == ["bash", os.path.join("/app", "run.sh")]
+
+    def test_frozen_full_engine_wins_even_if_running_in_docker_is_set(self, monkeypatch):
+        """The frozen check is first in the if/elif chain - it must
+        never be shadowed by RUNNING_IN_DOCKER (not a real combination
+        today, but the ordering itself is what makes that safe)."""
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        monkeypatch.setattr(job_runner_mod.sys, "frozen", True, raising=False)
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        assert cmd == [job_runner_mod.sys.executable, "--run-recommender", "full"]
+
+
 class TestJobManagerStart:
     """Tests for JobManager.start()"""
 
@@ -170,6 +240,24 @@ class TestJobManagerStart:
         _wait_until_done(job)
         assert job.returncode == 0
         assert any("full run" in line for line in job.lines)
+
+    def test_runs_full_engine_in_docker_without_run_sh(self, curatarr_web_root, monkeypatch):
+        """#260: inside the real Docker image, `full` bypasses run.sh
+        entirely (see TestBuildCommandDockerFullEngine) and chains the
+        three recommenders directly instead - confirms that actually
+        executes end to end (not just that _build_command constructs
+        the right argv), in the right order, exit code 0."""
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = _manager(curatarr_web_root)
+        job = manager.start("full", "all", ["alice", "bob"])
+        _wait_until_done(job)
+        assert job.returncode == 0
+        assert not any("full run" in line for line in job.lines)  # run.sh never ran
+
+        movie_idx = job.lines.index("Movie recommendations done")
+        tv_idx = job.lines.index("TV recommendations done")
+        external_idx = job.lines.index("External watchlists done")
+        assert movie_idx < tv_idx < external_idx
 
     def test_runs_external_engine(self, curatarr_web_root):
         manager = _manager(curatarr_web_root)
