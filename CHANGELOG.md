@@ -2,6 +2,33 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.40] - 2026-07-26
+
+### Fixed
+
+- **`_load_module_configs()` shallow top-level merge silently wiped root config keys when a module file redefined the same key.**
+
+  - `utils/config.py`'s `_load_module_configs()` merged `tuning.yml` into
+    the root config with `for key, value in tuning.items(): config[key] = value` -
+    a shallow replace. If both `config.yml` and `tuning.yml` defined the
+    same top-level key, tuning.yml's value replaced config.yml's entirely,
+    even for sub-keys tuning.yml never mentioned. Both shipped example
+    files (`config/config.example.yml`, `config/tuning.example.yml`)
+    define a top-level `users:` key - following them as-is silently wipes
+    `config.yml`'s `users.list` because `tuning.example.yml` only defines
+    `users.preferences`.
+  - Fixed with a new `_deep_merge_dicts()` helper: dict-valued keys are
+    merged recursively (a module file only needs to specify the sub-keys
+    it wants to change; sibling sub-keys survive), while non-dict values
+    - including lists - are still replaced outright, never concatenated.
+    Precedence: the module file wins for any key/sub-key it defines; root
+    keys it doesn't mention are preserved. Applied to both the
+    tuning.yml-into-root merge and the trakt/radarr/sonarr feature-module
+    merge.
+  - Not currently biting the live install (its `tuning.yml` has no
+    `users:` section), but any install following the shipped examples
+    verbatim would hit it.
+
 ## [2.10.39] - 2026-07-26
 
 ### Fixed

@@ -11,7 +11,7 @@ from typing import Dict, List
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.39"
+__version__ = "2.10.40"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -200,12 +200,44 @@ def get_tmdb_config(config: Dict) -> Dict:
     }
 
 
+def _deep_merge_dicts(base: dict, override: dict) -> dict:
+    """
+    Recursively merge `override` on top of `base`, returning a new dict.
+
+    Precedence: `override` wins for any key it defines. Root/base keys that
+    `override` does not mention are preserved untouched.
+
+    - If both `base[key]` and `override[key]` are dicts, they are merged
+      recursively (so `override` only needs to specify the sub-keys it
+      wants to change; sibling sub-keys from `base` survive).
+    - Any other value type - including lists - is replaced outright by
+      `override`'s value. Lists are NOT concatenated/deduped; redefining a
+      list means replacing it wholesale, which matches how config authors
+      expect to override a list (e.g. `users.list`, exclude-genre lists).
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_dicts(base_value, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def _load_module_configs(config: dict, config_dir: str) -> dict:
     """
     Load and merge modular config files into the main config.
 
     Loads tuning.yml, trakt.yml, radarr.yml, sonarr.yml if they exist.
-    Module files take precedence over main config.yml.
+
+    Precedence: for any top-level key a module file defines, that module
+    file wins. Dict-valued keys are deep-merged (see `_deep_merge_dicts`),
+    so e.g. tuning.yml's `users.preferences` does not silently wipe
+    config.yml's `users.list` just because both files happen to define a
+    top-level `users:` key - only the sub-keys tuning.yml actually
+    specifies are overridden. Non-dict values (including lists) are
+    replaced outright, never merged.
     """
     # Tuning modules merge their sections into root
     tuning_path = os.path.join(config_dir, "tuning.yml")
@@ -214,13 +246,14 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
             with open(tuning_path, "r", encoding="utf-8") as f:
                 tuning = yaml.safe_load(f)
                 if tuning:
-                    for key, value in tuning.items():
-                        config[key] = value
+                    config = _deep_merge_dicts(config, tuning)
                     print("  Loaded tuning.yml")
         except Exception as e:
             print(f"\033[93mWarning: Could not load tuning.yml: {e}\033[0m")
 
-    # Feature modules go under their key
+    # Feature modules go under their key, but still deep-merge in case
+    # config.yml already carries a same-named section (e.g. pre-migration
+    # leftovers) - same precedence rule as above applies within that key.
     for module in ["trakt", "radarr", "sonarr"]:
         module_path = os.path.join(config_dir, f"{module}.yml")
         if os.path.exists(module_path):
@@ -228,7 +261,11 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
                 with open(module_path, "r", encoding="utf-8") as f:
                     module_config = yaml.safe_load(f)
                     if module_config:
-                        config[module] = module_config
+                        existing = config.get(module)
+                        if isinstance(existing, dict):
+                            config[module] = _deep_merge_dicts(existing, module_config)
+                        else:
+                            config[module] = module_config
                         print(f"  Loaded {module}.yml")
             except Exception as e:
                 print(f"\033[93mWarning: Could not load {module}.yml: {e}\033[0m")
