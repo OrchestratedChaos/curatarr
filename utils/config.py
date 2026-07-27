@@ -10,8 +10,10 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from .display import log_error, log_info, log_warning
+
 # Project version - single source of truth
-__version__ = "2.10.49"
+__version__ = "2.10.50"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
@@ -254,9 +256,9 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
                 tuning = yaml.safe_load(f)
                 if tuning:
                     config = _deep_merge_dicts(config, tuning)
-                    print("  Loaded tuning.yml")
+                    log_info("Loaded tuning.yml")
         except Exception as e:
-            print(f"\033[93mWarning: Could not load tuning.yml: {e}\033[0m")
+            log_warning(f"Could not load tuning.yml: {e}")
 
     # Feature modules go under their key, but still deep-merge in case
     # config.yml already carries a same-named section (e.g. pre-migration
@@ -273,9 +275,9 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
                             config[module] = _deep_merge_dicts(existing, module_config)
                         else:
                             config[module] = module_config
-                        print(f"  Loaded {module}.yml")
+                        log_info(f"Loaded {module}.yml")
             except Exception as e:
-                print(f"\033[93mWarning: Could not load {module}.yml: {e}\033[0m")
+                log_warning(f"Could not load {module}.yml: {e}")
 
     return config
 
@@ -325,7 +327,23 @@ def load_config(config_path: str) -> dict:
     try:
         with open(config_path, "r", encoding="utf-8") as file:
             config = yaml.safe_load(file)
-            print(f"Successfully loaded configuration from {config_path}")
+            # #262: this (and every print() in _load_module_configs
+            # above) fired on EVERY load_config() call with no level
+            # control - web/app.py calls load_config() 1-2x per page
+            # render (dashboard/config context-processor/route handler),
+            # so a container's logs filled with "Loaded tuning.yml"-style
+            # lines on every request, which read as if the container
+            # were repeatedly restarting. Converted to the project
+            # logger: the CLI (utils/cli.py) always calls setup_logging()
+            # first, which attaches a handler at INFO by default, so
+            # normal CLI runs see exactly the same lines as before at
+            # the same default visibility. web/app.py and
+            # web/docker_server.py never call setup_logging() at all,
+            # so with no handler configured these fall through to
+            # Python's WARNING-only last-resort handler and are silent
+            # by default there - see web/app.py's own config-load cache
+            # (added in this same PR) for the other half of this fix.
+            log_info(f"Successfully loaded configuration from {config_path}")
 
         config_dir = os.path.dirname(config_path) or "."
 
@@ -348,11 +366,11 @@ def load_config(config_path: str) -> dict:
                 if section not in config:
                     config[section] = {}
                 config[section][key] = value
-                print(f"  Using {env_var} from environment")
+                log_info(f"Using {env_var} from environment")
 
         return config
     except Exception as e:
-        print(f"\033[91mError loading config from {config_path}: {e}\033[0m")
+        log_error(f"Error loading config from {config_path}: {e}")
         raise
 
 

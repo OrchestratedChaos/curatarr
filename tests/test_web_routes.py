@@ -34,6 +34,64 @@ def _wait_until_idle(app, timeout=10):
     raise AssertionError("job did not finish in time")
 
 
+class TestConfigLoadCaching:
+    """#262: load_config() re-read+re-parsed config.yml (plus every
+    module file it merges in) from disk on EVERY call, and web/app.py
+    called it 1-2x per page render - which read as a container that was
+    repeatedly restarting. Pins both halves of the fix: a render costs
+    at most one real load_config() call, AND a config change made
+    through the web UI is still picked up on the very next request (no
+    stale cache surviving a save).
+    """
+
+    def test_dashboard_render_triggers_at_most_one_config_load(self, client):
+        c, app, root = client
+        with patch("web.app.load_config", wraps=app_module.load_config) as mock_load_config:
+            resp = c.get("/")
+        assert resp.status_code == 200
+        assert mock_load_config.call_count == 1
+
+    def test_repeated_renders_reuse_the_cached_config(self, client):
+        c, app, root = client
+        with patch("web.app.load_config", wraps=app_module.load_config) as mock_load_config:
+            c.get("/")
+            c.get("/")
+            c.get("/")
+        # Three renders, config.yml/tuning.yml untouched in between -
+        # still exactly one real disk load, not three.
+        assert mock_load_config.call_count == 1
+
+    def test_web_ui_save_invalidates_the_cache_immediately(self, client):
+        """The critical round-trip: a save through /config/users must be
+        visible on the very next dashboard render, not served stale from
+        the cache populated by an earlier render."""
+        c, app, root = client
+        first = c.get("/")
+        assert b"alice" in first.data
+        assert b"carol" not in first.data
+
+        c.post(
+            "/config/users",
+            data={
+                "user_count": "2",
+                "username_0": "alice",
+                "display_name_0": "",
+                "exclude_genres_0": "",
+                "max_rating_0": "",
+                "streaming_services_0": "",
+                "username_1": "bob",
+                "display_name_1": "",
+                "exclude_genres_1": "",
+                "max_rating_1": "",
+                "streaming_services_1": "",
+                "new_username": "carol",
+            },
+        )
+
+        second = c.get("/")
+        assert b"carol" in second.data
+
+
 class TestDashboard:
     """Tests for GET /"""
 
@@ -324,6 +382,15 @@ class TestResults:
         c, app, root = client
         resp = c.get("/results/log/..%2Fconfig%2Fconfig.yml")
         assert resp.status_code == 404
+
+    def test_empty_log_shows_reason_instead_of_blank_pane(self, client):
+        """#263: a 0-byte log used to render as a silent blank pane with
+        no indication of why - now shows why."""
+        c, app, root = client
+        open(os.path.join(root, "logs", "empty.log"), "w").close()
+        resp = c.get("/results/log/empty.log")
+        assert resp.status_code == 200
+        assert b"empty" in resp.data.lower()
 
 
 class TestWaitForListening:

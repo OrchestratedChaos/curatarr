@@ -3,5 +3,8 @@
 {% block content %}
 <h1>{{ filename }}</h1>
 <p><a href="{{ url_for('results') }}">&larr; back to results</a></p>
+{% if empty_reason %}
+<p class="banner"><strong>Log is empty:</strong> {{ empty_reason }}</p>
+{% endif %}
 <pre class="log-output">{{ content }}</pre>
 {% endblock %}

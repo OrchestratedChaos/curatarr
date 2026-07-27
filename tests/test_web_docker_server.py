@@ -10,6 +10,7 @@ of web/app.py's own guarantee.
 """
 
 import os
+import signal
 import sys
 from unittest.mock import Mock, patch
 
@@ -23,6 +24,24 @@ import web.docker_server as docker_server
 # _require_auth_token_or_exit to NOT fail closed - see
 # web/security.py's MIN_AUTH_TOKEN_LENGTH.
 _STRONG_TOKEN = "a" * 32
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_signal_handlers():
+    """#263: main() now really does call signal.signal(SIGINT/SIGTERM, ...)
+    with a real handler (previously it registered none at all - that was
+    the bug) - every TestMain test below calls main() with waitress.serve
+    mocked out so it returns immediately, which means this process's own
+    SIGINT/SIGTERM handlers get overwritten as a side effect of just
+    running these tests. Save/restore around every test in this module
+    so that side effect can never leak into a later test or into
+    pytest's own Ctrl-C handling for the rest of the session.
+    """
+    original_sigint = signal.getsignal(signal.SIGINT)
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+    yield
+    signal.signal(signal.SIGINT, original_sigint)
+    signal.signal(signal.SIGTERM, original_sigterm)
 
 
 class TestMain:
@@ -190,3 +209,54 @@ class TestIndependenceFromNativeAppGuardrail:
         source = inspect.getsource(docker_server)
         assert "waitress.serve(" in source
         assert ".run(" not in source
+
+
+class TestShutdownHandling:
+    """#263: docker_server.py's main() caught SIGINT but never SIGTERM
+    (confirmed via /proc/1/status's SigCgt bitmask in a real container),
+    so every `docker stop`/`compose restart`/recreate ate the full stop
+    grace period before being SIGKILLed - and any in-flight recommender
+    run's log lost whatever hadn't been flushed. main() must register
+    the same atexit + SIGINT/SIGTERM -> terminate_running() handling
+    web/app.py's own main() (native mode) has always had.
+    """
+
+    def _run_main_with_mocks(self, monkeypatch):
+        monkeypatch.setenv("CURATARR_AUTH_TOKEN", _STRONG_TOKEN)
+        fake_app = Mock()
+        with (
+            patch.object(docker_server, "create_app", return_value=fake_app),
+            patch.object(docker_server.waitress, "serve"),
+            patch.object(docker_server.atexit, "register") as mock_atexit_register,
+        ):
+            docker_server.main()
+        return fake_app, mock_atexit_register
+
+    def test_registers_atexit_terminate_running(self, monkeypatch):
+        fake_app, mock_atexit_register = self._run_main_with_mocks(monkeypatch)
+        mock_atexit_register.assert_called_once_with(fake_app.job_manager.terminate_running)
+
+    def test_sigterm_handler_terminates_running_job_and_exits(self, monkeypatch):
+        fake_app, _mock_atexit_register = self._run_main_with_mocks(monkeypatch)
+
+        sigterm_handler = signal.getsignal(signal.SIGTERM)
+        assert sigterm_handler is not None
+        assert sigterm_handler not in (signal.SIG_DFL, signal.SIG_IGN)
+
+        with pytest.raises(SystemExit) as exc_info:
+            sigterm_handler(signal.SIGTERM, None)
+
+        fake_app.job_manager.terminate_running.assert_called_once()
+        assert exc_info.value.code == 0
+
+    def test_sigint_handler_also_terminates_running_job(self, monkeypatch):
+        fake_app, _mock_atexit_register = self._run_main_with_mocks(monkeypatch)
+
+        sigint_handler = signal.getsignal(signal.SIGINT)
+        assert sigint_handler is not None
+        assert sigint_handler not in (signal.SIG_DFL, signal.SIG_IGN)
+
+        with pytest.raises(SystemExit):
+            sigint_handler(signal.SIGINT, None)
+
+        fake_app.job_manager.terminate_running.assert_called_once()

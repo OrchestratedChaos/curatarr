@@ -121,6 +121,26 @@ class TeeLogger:
     """
     A simple 'tee' class that writes to both console and a file,
     stripping ANSI color codes for the file and handling Unicode characters.
+
+    #263: the log file is flushed after every write() call. setup_log_file()
+    (utils/cli.py) opens it with Python's default block buffering, and
+    nothing else in the write path flushed per-line - only
+    teardown_log_file()'s explicit close on a clean exit did. A hard kill
+    (SIGKILL, or the SIGTERM-less docker_server.py path this PR also
+    fixes) lost the whole in-process buffer, leaving a 0-byte log file
+    that web/status.py then reports as an unexplained "unknown" status.
+    Confirmed in a real container: python-exit=137, ~60 bytes printed to
+    stdout, 0 bytes on disk.
+
+    Chose per-write flush() over opening the file line-buffered
+    (buffering=1): write volume here is a few hundred to low thousands of
+    status lines over a multi-minute run (not a per-item hot loop - this
+    is CLI progress output, not an access log), and every write() call
+    already does a redact() pass plus an ANSI-stripping regex substitution,
+    both costlier than the flush() syscall this adds. Per-write flush is
+    also a strictly stronger guarantee than line buffering: it can never
+    lose a write regardless of whether that write happened to end in a
+    newline (line buffering only flushes when it sees one).
     """
 
     def __init__(self, logfile):
@@ -145,9 +165,11 @@ class TeeLogger:
             else:
                 sys.__stdout__.write(text)
 
-            # Write to file (strip ANSI codes)
+            # Write to file (strip ANSI codes), then flush immediately
+            # (#263 - see class docstring) so a kill can never zero it.
             stripped = ANSI_PATTERN.sub("", text)
             self.logfile.write(stripped)
+            self.logfile.flush()
         except UnicodeEncodeError:
             # Fallback for problematic characters
             safe_text = text.encode("ascii", "replace").decode("ascii")
@@ -157,6 +179,7 @@ class TeeLogger:
                 sys.__stdout__.write(safe_text)
             stripped = ANSI_PATTERN.sub("", safe_text)
             self.logfile.write(stripped)
+            self.logfile.flush()
 
     def flush(self):
         if hasattr(sys.stdout, "buffer"):

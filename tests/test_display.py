@@ -218,6 +218,38 @@ class TestTeeLogger:
         # Buffer write called twice (initial + fallback)
         assert mock_buffer.write.call_count == 2
 
+    def test_write_flushes_logfile_immediately(self):
+        """#263: every write() flushes the logfile right away, so a hard
+        kill (SIGKILL, or the pre-fix docker_server.py path this same PR
+        also fixes) can't lose buffered output - confirmed in a real
+        container as a 0-byte log file after an interrupted run."""
+        mock_logfile = Mock()
+        tee = TeeLogger(mock_logfile)
+        tee.stdout_buffer = Mock()
+
+        tee.write("some output\n")
+
+        mock_logfile.write.assert_called_once()
+        mock_logfile.flush.assert_called_once()
+
+    def test_write_survives_kill_real_file(self, tmp_path):
+        """Same guarantee as test_write_flushes_logfile_immediately, but
+        against a real file with no Python-level close/flush afterward -
+        proves content is actually on disk, not just sitting in Python's
+        io buffer waiting for a graceful shutdown that a kill would skip."""
+        log_path = tmp_path / "run.log"
+        with open(log_path, "w", encoding="utf-8") as logfile:
+            tee = TeeLogger(logfile)
+            tee.stdout_buffer = Mock()
+            tee.write("line one\n")
+            tee.write("line two\n")
+            # No explicit flush()/close() here - if TeeLogger.write()
+            # didn't flush per-call, this content would still be sitting
+            # in the OS-level file buffer at this point.
+            with open(log_path, "r", encoding="utf-8") as readback:
+                content = readback.read()
+        assert content == "line one\nline two\n"
+
     def test_flush_without_buffer(self):
         """Test flush() when stdout has no buffer."""
         mock_logfile = Mock()

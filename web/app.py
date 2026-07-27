@@ -35,7 +35,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import (
     Flask,
@@ -226,16 +226,90 @@ def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = No
                 response.headers[name] = value
         return response
 
+    # #262: load_config() re-reads and re-parses config.yml (plus up to
+    # 4 module files - tuning/trakt/radarr/sonarr.yml) from disk on
+    # EVERY call, and this closure gets called 1-2x per page render (the
+    # update-banner context processor below plus whichever route handler
+    # is serving the request each call _load_config() independently) -
+    # most of what made a Docker container's logs look like it was
+    # repeatedly restarting (utils/config.py's own log_info calls for
+    # this are now level-controlled, but the disk I/O + YAML parsing
+    # itself was still happening every time regardless). Cached below,
+    # keyed on the mtimes of every file load_config() reads, so a page
+    # view costs at most one disk read - and a config change (through
+    # the web UI's own save routes, or a hand edit to tuning.yml on
+    # disk) invalidates the cache and is picked up on the very next
+    # request, no restart needed. Nanosecond mtimes (not the coarser
+    # whole-second os.path.getmtime) so two saves landing within the
+    # same second still invalidate correctly.
+    _config_cache_lock = threading.Lock()
+    _config_cache: Dict[str, Any] = {"populated": False, "mtimes": None, "config": None}
+    _CONFIG_MODULE_NAMES = ("tuning", "trakt", "radarr", "sonarr")
+
+    def _config_file_mtimes(config_dir: str) -> Tuple[Optional[int], ...]:
+        paths = [os.path.join(config_dir, "config.yml")] + [
+            os.path.join(config_dir, f"{name}.yml") for name in _CONFIG_MODULE_NAMES
+        ]
+        mtimes: List[Optional[int]] = []
+        for path in paths:
+            try:
+                mtimes.append(os.stat(path).st_mtime_ns)
+            except OSError:
+                mtimes.append(None)
+        return tuple(mtimes)
+
     def _load_config():
-        config_path = os.path.join(project_root, "config", "config.yml")
+        config_dir = os.path.join(project_root, "config")
+        config_path = os.path.join(config_dir, "config.yml")
+        mtimes = _config_file_mtimes(config_dir)
+        with _config_cache_lock:
+            if _config_cache["populated"] and _config_cache["mtimes"] == mtimes:
+                return _config_cache["config"]
         try:
-            return load_config(config_path)
+            config = load_config(config_path)
         except Exception:
-            return None
+            config = None
+        with _config_cache_lock:
+            _config_cache["populated"] = True
+            _config_cache["mtimes"] = mtimes
+            _config_cache["config"] = config
+        return config
 
     def _load_users():
         config = _load_config()
         return get_users_from_config(config) if config else []
+
+    # #262: update_available() (itself already interval-gated against
+    # hitting the network more than once every UPDATE_CHECK_INTERVAL_HOURS
+    # - see utils/update_check.py) still re-reads its own small on-disk
+    # cache file on every call, and the context processor below calls it
+    # on every single page render. Cached here too, same spirit as
+    # _load_config above, but deliberately NOT wrapping is_dismissed()
+    # below - a dismiss must take effect on the very next render, and
+    # only update_mode is part of this cache's key (so a config change
+    # invalidates it immediately, same as _load_config), so a short TTL
+    # is enough to dedupe the common case of several renders in a row
+    # with nothing having changed.
+    _update_check_cache_lock = threading.Lock()
+    _update_check_cache: Dict[str, Any] = {"update_mode": None, "computed_at": 0.0, "result": None}
+    _UPDATE_CHECK_CACHE_TTL_SECONDS = 60
+
+    def _cached_update_available(update_mode: str):
+        now = time.time()
+        with _update_check_cache_lock:
+            cached = _update_check_cache
+            if (
+                cached["result"] is not None
+                and cached["update_mode"] == update_mode
+                and now - cached["computed_at"] < _UPDATE_CHECK_CACHE_TTL_SECONDS
+            ):
+                return cached["result"]
+        result = update_available(update_mode=update_mode)
+        with _update_check_cache_lock:
+            _update_check_cache["update_mode"] = update_mode
+            _update_check_cache["computed_at"] = now
+            _update_check_cache["result"] = result
+        return result
 
     @app.context_processor
     def _update_banner_context():
@@ -272,7 +346,7 @@ def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = No
             if not config:
                 return {"update_banner": None}
             update_mode = get_update_mode(config)
-            latest, current, is_newer = update_available(update_mode=update_mode)
+            latest, current, is_newer = _cached_update_available(update_mode)
             if not is_newer:
                 return {"update_banner": None}
             # 7-day dismiss snooze, keyed to the exact version offered -
@@ -404,6 +478,9 @@ def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = No
                 "last_run": {
                     "timestamp": last_run["timestamp"].isoformat(),
                     "status": last_run["status"],
+                    # Only non-None when status is "unknown" (#263) - see
+                    # web/status.py's get_last_run_status docstring.
+                    "reason": last_run.get("reason"),
                 }
                 if last_run
                 else None,
@@ -564,10 +641,10 @@ def create_app(project_root: Optional[str] = None, bind_host: Optional[str] = No
     @app.get("/results/log/<path:filename>")
     def results_log(filename):
         try:
-            tail = read_log_tail(logs_dir, filename)
+            tail, empty_reason = read_log_tail(logs_dir, filename)
         except FileNotFoundError:
             abort(404)
-        return render_template("log_view.html", filename=filename, content=tail)
+        return render_template("log_view.html", filename=filename, content=tail, empty_reason=empty_reason)
 
     return app
 
