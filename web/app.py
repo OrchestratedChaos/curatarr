@@ -387,6 +387,17 @@ def create_app(
         except Exception:
             return {"update_banner": None}
 
+    @app.context_processor
+    def _version_context():
+        """#265: the running version, injected into every rendered
+        template (see base.html's topbar) so it's visible on every page,
+        not just Settings (the issue's original ask) - with "so many
+        versions shipped every day" (the issue's own words), a single
+        page felt like the wrong place to bury it. Same __version__
+        already exposed via /healthz and /status.json - just never
+        rendered anywhere a human looks at it directly before this."""
+        return {"curatarr_version": __version__}
+
     @app.post("/update/dismiss")
     def update_dismiss():
         """Snooze the update banner for this version for 7 days (see

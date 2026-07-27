@@ -124,10 +124,13 @@ from .helpers import (
 
 # Label utilities
 from .labels import (
+    DEFAULT_MOVIE_NAME_TEMPLATE,
+    DEFAULT_TV_NAME_TEMPLATE,
     add_labels_to_items,
     build_label_name,
     categorize_labeled_items,
     remove_labels_from_items,
+    render_collection_name,
 )
 
 # MDBList utilities
@@ -157,6 +160,8 @@ from .plex import (
     extract_genres,
     extract_ids_from_guids,
     extract_rating,
+    fetch_plex_libraries,
+    fetch_plex_users,
     fetch_plex_watch_history_movies,
     fetch_plex_watch_history_shows,
     fetch_show_completion_data,
@@ -508,6 +513,11 @@ __all__ = [
     "update_plex_collection",
     "cleanup_old_collections",
     "cleanup_legacy_unnamed_collection",
+    "render_collection_name",
+    "DEFAULT_MOVIE_NAME_TEMPLATE",
+    "DEFAULT_TV_NAME_TEMPLATE",
+    "fetch_plex_users",
+    "fetch_plex_libraries",
     "get_configured_users",
     "get_current_users",
     "get_excluded_genres_for_user",

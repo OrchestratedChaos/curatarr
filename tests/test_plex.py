@@ -1676,6 +1676,120 @@ class TestGetConfiguredUsers:
         assert len(result["managed_users"]) == 1
 
 
+class TestFetchPlexUsers:
+    """Tests for fetch_plex_users() - #266 (web UI 'Fetch from Plex')."""
+
+    @patch("utils.plex.MyPlexAccount")
+    def test_admin_listed_first(self, mock_account_class):
+        from utils.plex import fetch_plex_users
+
+        mock_account = Mock()
+        mock_account.username = "AdminUser"
+        mock_account.users.return_value = []
+        mock_account_class.return_value = mock_account
+
+        result = fetch_plex_users({"plex": {"token": "test"}})
+
+        assert result == [{"username": "AdminUser", "title": "AdminUser", "is_admin": True}]
+
+    @patch("utils.plex.MyPlexAccount")
+    def test_includes_every_account_user(self, mock_account_class):
+        from utils.plex import fetch_plex_users
+
+        alice = Mock(username="alice", title="Alice")
+        bob = Mock(username="bob", title="Bob")
+
+        mock_account = Mock()
+        mock_account.username = "AdminUser"
+        mock_account.users.return_value = [alice, bob]
+        mock_account_class.return_value = mock_account
+
+        result = fetch_plex_users({"plex": {"token": "test"}})
+
+        assert result == [
+            {"username": "AdminUser", "title": "AdminUser", "is_admin": True},
+            {"username": "alice", "title": "Alice", "is_admin": False},
+            {"username": "bob", "title": "Bob", "is_admin": False},
+        ]
+
+    @patch("utils.plex.MyPlexAccount")
+    def test_blank_username_falls_back_to_title(self, mock_account_class):
+        """A Home user with no linked Plex account/email has a blank
+        plexapi username - fall back to title (what get_configured_users
+        already matches managed_users against)."""
+        from utils.plex import fetch_plex_users
+
+        home_user = Mock(username="", title="Kid")
+
+        mock_account = Mock()
+        mock_account.username = "AdminUser"
+        mock_account.users.return_value = [home_user]
+        mock_account_class.return_value = mock_account
+
+        result = fetch_plex_users({"plex": {"token": "test"}})
+
+        assert result[1] == {"username": "Kid", "title": "Kid", "is_admin": False}
+
+    @patch("utils.plex.MyPlexAccount")
+    def test_propagates_connection_failure(self, mock_account_class):
+        """Fails loud (raises) - the web route (web/config_users.py) is
+        responsible for catching this and showing a friendly message,
+        same convention as init_plex/get_configured_users."""
+        from utils.plex import fetch_plex_users
+
+        mock_account_class.side_effect = plexapi.exceptions.Unauthorized("bad token")
+
+        with pytest.raises(plexapi.exceptions.Unauthorized):
+            fetch_plex_users({"plex": {"token": "bad"}})
+
+
+class TestFetchPlexLibraries:
+    """Tests for fetch_plex_libraries() - #266 (web UI 'Fetch from Plex')."""
+
+    @patch("utils.plex.init_plex")
+    def test_maps_movie_and_show_sections(self, mock_init_plex):
+        from utils.plex import fetch_plex_libraries
+
+        movies_section = Mock(title="Movies", type="movie")
+        shows_section = Mock(title="TV Shows", type="show")
+
+        mock_server = Mock()
+        mock_server.library.sections.return_value = [movies_section, shows_section]
+        mock_init_plex.return_value = mock_server
+
+        result = fetch_plex_libraries({"plex": {"url": "http://x", "token": "y"}})
+
+        assert result == [
+            {"section": "Movies", "media_type": "movie"},
+            {"section": "TV Shows", "media_type": "tv"},
+        ]
+
+    @patch("utils.plex.init_plex")
+    def test_skips_unmanaged_section_types(self, mock_init_plex):
+        """music/photo/etc. sections aren't something curatarr manages -
+        must be silently skipped, not surfaced as some third media_type."""
+        from utils.plex import fetch_plex_libraries
+
+        music_section = Mock(title="Music", type="artist")
+
+        mock_server = Mock()
+        mock_server.library.sections.return_value = [music_section]
+        mock_init_plex.return_value = mock_server
+
+        result = fetch_plex_libraries({"plex": {"url": "http://x", "token": "y"}})
+
+        assert result == []
+
+    @patch("utils.plex.init_plex")
+    def test_propagates_connection_failure(self, mock_init_plex):
+        from utils.plex import fetch_plex_libraries
+
+        mock_init_plex.side_effect = plexapi.exceptions.PlexApiException("connection refused")
+
+        with pytest.raises(plexapi.exceptions.PlexApiException):
+            fetch_plex_libraries({"plex": {"url": "http://x", "token": "y"}})
+
+
 class TestUpdatePlexCollectionAdvanced:
     """Additional tests for update_plex_collection()."""
 

@@ -8,9 +8,69 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
-from .display import GREEN, RESET, log_info
+from .display import GREEN, RESET, log_info, log_warning
 
 logger = logging.getLogger("curatarr")
+
+# #267: default collection-name templates - byte-for-byte what the
+# hardcoded f"{emoji} {display_name} - Recommendation" format produced
+# before this was configurable, so every install that never sets
+# collections.movie_name_template/tv_name_template sees zero change.
+# {user}/{media_type} are the only placeholders render_collection_name
+# below supports - see that function's docstring.
+DEFAULT_MOVIE_NAME_TEMPLATE = "🎬 {user} - Recommendation"
+DEFAULT_TV_NAME_TEMPLATE = "📺 {user} - Recommendation"
+
+_DEFAULT_NAME_TEMPLATES = {
+    "movie": DEFAULT_MOVIE_NAME_TEMPLATE,
+    "tv": DEFAULT_TV_NAME_TEMPLATE,
+}
+
+
+def render_collection_name(template: str, user: str, media_type: str) -> str:
+    """
+    Render a #267 custom collection-name template.
+
+    Args:
+        template: e.g. "Recommended movies - {user}" (config/tuning.yml's
+            collections.movie_name_template/tv_name_template - see
+            config/tuning.example.yml)
+        user: the collection's resolved display name (user_preferences.
+            <user>.display_name if configured, else the username
+            capitalized) - the exact value the pre-#267 hardcoded format
+            already used for this position
+        media_type: "movie" or "tv" - rendered into {media_type} as
+            "Movie"/"TV" (title case, singular) so one template can be
+            shared across both collections.movie_name_template and
+            collections.tv_name_template if desired, even though
+            separate keys for each are the documented/recommended way
+            to do it
+
+    Returns:
+        The rendered name, WITHOUT the multi-library disambiguation
+        suffix (see recommenders/base.py's
+        _library_suffix_for_collection_name) - that's applied
+        unconditionally after this, regardless of any custom template,
+        so a bad/creative template can never break that correctness
+        guarantee (same-media-type libraries would otherwise collide on
+        an identical collection name).
+
+        Falls back to the matching DEFAULT_*_NAME_TEMPLATE constant
+        above on any formatting error (an unknown placeholder like
+        {typo}, or a bad positional {} - str.format raises KeyError/
+        IndexError for those respectively) - a bad template in
+        tuning.yml must never crash a run.
+    """
+    media_type_label = "Movie" if media_type == "movie" else "TV"
+    try:
+        return template.format(user=user, media_type=media_type_label)
+    except (KeyError, IndexError, ValueError) as e:
+        log_warning(
+            f"Invalid collections.{media_type}_name_template {template!r} ({e}) - "
+            f"falling back to the default template this run"
+        )
+        fallback = _DEFAULT_NAME_TEMPLATES.get(media_type, DEFAULT_MOVIE_NAME_TEMPLATE)
+        return fallback.format(user=user, media_type=media_type_label)
 
 
 def build_label_name(

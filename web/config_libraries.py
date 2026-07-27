@@ -47,13 +47,16 @@ called once from web.config_app.register_config_routes().
 """
 
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from flask import redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+from utils.plex import fetch_plex_libraries
+
 from .config_io import commit_modules, existing_library_secret, load_module, merge_secret, module_path, secret_status
 from .config_validate import validate_media_type, validate_required, validate_url
+from .security import redact
 
 MEDIA_TYPE_CHOICES = ("movie", "tv")
 
@@ -92,6 +95,45 @@ def register_libraries_routes(app) -> None:
             ), 400
 
         modules = _apply_libraries(project_root, core, parsed)
+        commit_error = commit_modules(project_root, modules)
+        if commit_error:
+            return render_template(
+                "config_libraries.html",
+                saved=False,
+                errors={"_global": f"Could not save: {commit_error}"},
+                **_libraries_view(load_module(module_path(project_root, "config"))),
+            ), 500
+        return redirect(url_for("config_libraries", saved="1"), code=303)
+
+    @app.post("/config/libraries/fetch-plex")
+    def config_libraries_fetch_plex():
+        """#266: preview step - connect to the already-configured Plex
+        server and list its library sections that aren't configured yet,
+        for the checklist below. Never writes anything - see
+        config_libraries_add_plex for the follow-up that actually saves
+        a selection."""
+        core = load_module(module_path(project_root, "config"))
+        return render_template(
+            "config_libraries.html",
+            saved=False,
+            errors={},
+            plex_fetch=_fetch_plex_libraries_view(core),
+            **_libraries_view(core),
+        )
+
+    @app.post("/config/libraries/add-plex")
+    def config_libraries_add_plex():
+        """#266: add every checked library from the Fetch-from-Plex
+        checklist in one save - each gets no arr/instance routing yet,
+        same as a single manually-added library (editable on a
+        follow-up visit)."""
+        core = load_module(module_path(project_root, "config"))
+        selected = []
+        for raw in request.form.getlist("selected_library"):
+            section, sep, media_type = raw.partition("::")
+            if sep:
+                selected.append({"section": section, "media_type": media_type})
+        modules = _apply_libraries_from_plex(core, selected)
         commit_error = commit_modules(project_root, modules)
         if commit_error:
             return render_template(
@@ -298,6 +340,73 @@ def _parse_libraries_form(form, errors: Dict[str, str]) -> Dict:
         errors["_global"] = "At least one library is required."
 
     return {"libraries": rows, "new_name": "", "new_section": "", "new_media_type": "movie"}
+
+
+def _fetch_plex_libraries_view(core: CommentedMap) -> Dict:
+    """#266: fetch real Plex library sections and filter out ones
+    already configured (matched by Plex section name) - the context
+    config_libraries.html renders as the "Fetch from Plex" checklist.
+    Fails open (never raises) exactly like web/config_test_connection.py's
+    test_plex - a broken/unreachable Plex must never break this screen,
+    just show why the fetch didn't work."""
+    plex_config = core.get("plex") or {}
+    url = plex_config.get("url", "")
+    token = plex_config.get("token", "")
+    if not url or not token:
+        return {
+            "ok": False,
+            "message": "Plex URL/token are not configured yet - set them on the Connections screen first.",
+            "available": [],
+        }
+    try:
+        fetched = fetch_plex_libraries({"plex": {"url": url, "token": token}})
+    except Exception as exc:
+        return {"ok": False, "message": redact(f"Could not fetch libraries from Plex: {exc}"), "available": []}
+
+    existing_sections = {(entry.get("section") or "").strip().lower() for entry in (core.get("libraries") or [])}
+    available = [lib for lib in fetched if lib["section"].strip().lower() not in existing_sections]
+    return {"ok": True, "message": "", "available": available}
+
+
+def _apply_libraries_from_plex(core: CommentedMap, selected: List[Dict[str, str]]) -> Dict[str, CommentedMap]:
+    """#266: append *selected* ({"section", "media_type"} dicts checked
+    on the Fetch-from-Plex checklist) as new library entries, skipping
+    any whose section already matches an existing one - WITHOUT writing
+    to disk (see config_connections._apply_connections' docstring for
+    why). Each new entry gets name=section and no arr/instance routing
+    yet, same as a single manually-added library via
+    _parse_libraries_form's 'new_name' path (editable on a follow-up
+    visit)."""
+    libraries_seq = core.get("libraries")
+    if libraries_seq is None:
+        libraries_seq = CommentedSeq()
+        core["libraries"] = libraries_seq
+
+    existing_sections = {(entry.get("section") or "").strip().lower() for entry in libraries_seq}
+    existing_ids = {entry.get("id") for entry in libraries_seq}
+
+    for lib in selected:
+        section = lib["section"].strip()
+        if not section or section.lower() in existing_sections:
+            continue
+
+        base_id = _derive_library_id(section)
+        library_id = base_id
+        suffix = 2
+        while library_id in existing_ids:
+            library_id = f"{base_id}-{suffix}"
+            suffix += 1
+
+        entry = CommentedMap()
+        entry["id"] = library_id
+        entry["name"] = section
+        entry["section"] = section
+        entry["media_type"] = lib["media_type"]
+        libraries_seq.append(entry)
+        existing_sections.add(section.lower())
+        existing_ids.add(library_id)
+
+    return {"config": core}
 
 
 def _apply_libraries(project_root: str, core: CommentedMap, parsed: Dict) -> Dict[str, CommentedMap]:

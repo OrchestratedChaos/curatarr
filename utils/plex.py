@@ -955,6 +955,71 @@ def get_configured_users(config: dict) -> dict:
     return {"managed_users": managed_users, "plex_users": plex_users, "admin_user": admin_user}
 
 
+def fetch_plex_users(config: Dict) -> List[Dict[str, Any]]:
+    """
+    #266: fetch real Plex account users (server owner + every Home/
+    managed user and shared friend) for the web UI's "Fetch from Plex"
+    convenience on the Users screen (web/config_users.py) - lets an
+    admin pick real usernames instead of typing them by hand and
+    risking a mismatch (curatarr silently not matching a misspelled
+    name is exactly what get_configured_users above already has to
+    guard against for managed_users).
+
+    NOT used by the recommender run path itself, which still resolves
+    users from config (users.list/managed_users) exactly as before -
+    this only helps discover what to put there.
+
+    Returns a list of {"username", "title", "is_admin"} dicts, admin
+    first, then every other Plex account user by title. "username" is
+    what get_configured_users/managed_users matching above actually
+    compares against - falls back to title for a Home user with no
+    linked Plex account/email, where plexapi's own username is blank.
+
+    Raises requests.RequestException/plexapi.exceptions.PlexApiException
+    on any connection/auth failure - callers (the web route) are
+    responsible for catching and turning that into a UI-friendly
+    message, same convention as init_plex/get_configured_users above.
+    """
+    account = MyPlexAccount(token=config["plex"]["token"])
+    admin_username = account.username
+    users = [{"username": admin_username, "title": admin_username, "is_admin": True}]
+    for u in account.users():
+        username = u.username or u.title
+        users.append({"username": username, "title": u.title, "is_admin": False})
+    return users
+
+
+def fetch_plex_libraries(config: Dict) -> List[Dict[str, str]]:
+    """
+    #266: fetch real Plex library sections for the web UI's "Fetch from
+    Plex" convenience on the Libraries screen (web/config_libraries.py) -
+    same rationale as fetch_plex_users above, and likewise never used by
+    the recommender run path itself.
+
+    Returns a list of {"section", "media_type"} dicts - section is the
+    Plex library's own display title (what utils.config.get_libraries's
+    'section:' field and Plex's own library.section() lookup both match
+    against), media_type is curatarr's "movie"/"tv" vocabulary (Plex's
+    own section.type of "movie"/"show" respectively). Library types
+    curatarr doesn't manage (music, photo, etc.) are silently skipped -
+    there's nothing meaningful to configure for them here.
+
+    Raises requests.RequestException/plexapi.exceptions.PlexApiException
+    on any connection failure - same convention as init_plex above.
+    """
+    server = init_plex(config)
+    libraries = []
+    for section in server.library.sections():
+        if section.type == "movie":
+            media_type = "movie"
+        elif section.type == "show":
+            media_type = "tv"
+        else:
+            continue
+        libraries.append({"section": section.title, "media_type": media_type})
+    return libraries
+
+
 def get_current_users(users: dict) -> str:
     """
     Get formatted string of current users being processed.

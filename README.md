@@ -54,7 +54,7 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 - **Recency bias** — Recent watches influence recommendations more
 - **Rewatch detection** — Content you love gets weighted higher
 - **Genre exclusions** — Skip horror for the kids, documentaries for movie night
-- **Auto-updating collections** — `🎬 John - Recommendations` appears in Plex
+- **Auto-updating collections** — `🎬 John - Recommendations` appears in Plex (customizable naming template — `collections.movie_name_template`/`tv_name_template` in tuning.yml)
 
 ### For Acquisition (What to Get)
 - **External watchlists** — Content NOT in your library that users would love
@@ -154,13 +154,16 @@ hand-editing YAML:
   this screen.)
 - **Users** (`/config/users`) - add/remove Plex users and per-user preferences
   (display name, excluded genres, max content rating, streaming services).
+  A "Fetch from Plex" button pulls the real account/Home/friend user list
+  instead of typing names by hand, and can be re-run any time Plex users change.
 - **Settings** (`/config/settings`) - scoring weights, quality filters, recency
   decay, rating multipliers, negative signals, external recommendation limits,
   and the Sonarr/Radarr/Trakt auto-sync safety toggles (surfaced with a warning -
   turning auto-sync on starts writing to your download clients on every run).
 - **Libraries** (`/config/libraries`) - manage multiple Plex libraries, each
   with its own Sonarr/Radarr root folder, quality profile, tags, monitor/search
-  behavior, and optionally its own *arr instance.
+  behavior, and optionally its own *arr instance. Same "Fetch from Plex" button
+  as Users, for library sections.
 
 Secrets (tokens/API keys) are never shown once saved - fields show a
 "configured" / "not set" status, and you only need to enter a new value to

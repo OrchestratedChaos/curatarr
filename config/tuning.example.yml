@@ -67,6 +67,22 @@ collections:
   add_label: true  # Add 'Recommended' label to items
   label_name: Recommended
   append_usernames: true  # Include username in collection name
+
+  # Custom collection-name templates (#267) - optional. Placeholders:
+  #   {user}       - the collection's resolved display name (a user's
+  #                  users.preferences.<user>.display_name if set, else
+  #                  their username capitalized)
+  #   {media_type} - "Movie" or "TV"
+  # Leave unset (or delete these two lines) to keep the default format
+  # shown here - every install that doesn't set these sees no change.
+  # An invalid template (unknown placeholder, bad {}) falls back to the
+  # default and logs a warning rather than breaking a run.
+  # Note: the multi-library disambiguation suffix (e.g. " (Movies 4K)")
+  # is always appended after this template renders, regardless of what
+  # it says - a custom template can't break that guarantee.
+  movie_name_template: "🎬 {user} - Recommendation"
+  tv_name_template: "📺 {user} - Recommendation"
+
   # Per-user label restrictions - each user's library Browse/Search only
   # shows their own recommendation collection, not other users' (Plex
   # label restrictions; Library tab only, does not apply to Home).

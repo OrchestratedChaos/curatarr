@@ -109,4 +109,37 @@
 
   <button type="submit">Save</button>
 </form>
+
+<fieldset class="plex-fetch">
+  <legend>Fetch from Plex</legend>
+  <p class="muted">
+    Pull the current movie/TV library list from Plex instead of typing section names by hand - avoids mismatched
+    names, and can be re-run any time libraries change on the server.
+  </p>
+  <form method="post" action="{{ url_for('config_libraries_fetch_plex') }}">
+    <button type="submit">Fetch from Plex</button>
+  </form>
+
+  {% if plex_fetch %}
+    {% if not plex_fetch.ok %}
+    <p class="banner error">{{ plex_fetch.message }}</p>
+    {% elif not plex_fetch.available %}
+    <p class="muted">Every Plex library is already configured.</p>
+    {% else %}
+    <form method="post" action="{{ url_for('config_libraries_add_plex') }}">
+      <ul class="plex-fetch-list">
+        {% for lib in plex_fetch.available %}
+        <li>
+          <label>
+            <input type="checkbox" name="selected_library" value="{{ lib.section }}::{{ lib.media_type }}" checked>
+            {{ lib.section }} ({{ lib.media_type }})
+          </label>
+        </li>
+        {% endfor %}
+      </ul>
+      <button type="submit">Add selected</button>
+    </form>
+    {% endif %}
+  {% endif %}
+</fieldset>
 {% endblock %}
