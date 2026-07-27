@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.59] - 2026-07-27
+
+### Fixed
+
+- **The clickable Trakt list URL printed after a successful export 404'd for any list name containing " - ".** `recommenders/external_sync.py` derived the slug as `list_name.lower().replace(" ", "-")`, which replaces each space independently - for a list named `Curatarr - Jason - Movies` that produces `curatarr---jason---movies` (three hyphens where the two literal " - " separators sit), while Trakt itself collapses the whole run to a single hyphen and assigns `curatarr-jason-movies` - confirmed against the live API (`GET /users/me/lists` on a real list of that exact name).
+
+  `utils/trakt.py`'s `sync_list()` now returns the list's REAL slug (from the same API response's own `ids.slug`) under a `list_slug` key, and all four places `external_sync.py` prints a Trakt list URL now build it from that returned value instead of re-deriving one. `get_or_create_list()`'s own internal speculative direct-lookup slug (tried before a full search-by-name - Trakt has no "look up by name" endpoint) had the identical bug; it's fixed too via a new shared `derive_trakt_list_slug()` helper, which is explicitly documented as a fallback only, never authoritative - it collapses whitespace/underscore runs and the resulting hyphen runs to a single hyphen and strips leading/trailing hyphens, correctly producing `curatarr-jason-movies` for the reported name, but is not a reimplementation of Trakt's full slugification rules (apostrophes, ampersands, unicode, etc. aren't specially handled).
+
+  Audited every other slug/URL construction site in the codebase (library-id slugs, watchlist HTML filenames, username normalization) - none of them touch Trakt at all, so none were affected.
+
 ## [2.10.58] - 2026-07-27
 
 ### Fixed
