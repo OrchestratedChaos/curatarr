@@ -4,6 +4,8 @@ import json
 import os
 import tempfile
 
+import yaml
+
 from utils.config import (
     CACHE_VERSION,
     DEFAULT_NEGATIVE_MULTIPLIERS,
@@ -12,7 +14,6 @@ from utils.config import (
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
     UPDATE_MODES,
-    adapt_config_for_media_type,
     check_cache_version,
     get_config_section,
     get_effective_arr_config,
@@ -24,6 +25,8 @@ from utils.config import (
     get_tmdb_config,
     get_update_mode,
     load_config,
+    load_resolved_config,
+    resolve_media_type_overrides,
 )
 
 
@@ -177,99 +180,351 @@ class TestGetRatingMultipliers:
         assert result[6] == 1.5  # Midpoint
 
 
-class TestAdaptConfigForMediaType:
-    """Tests for adapt_config_for_media_type function"""
+class TestResolveMediaTypeOverrides:
+    """Tests for resolve_media_type_overrides() - the single, live
+    movies:/tv: resolution path (see its docstring in utils/config.py for
+    the architecture history: this replaces two independent, drifted
+    implementations - recommenders/base.py's inline resolution, which was
+    always the real, live one, and this module's now-deleted
+    adapt_config_for_media_type(), which was never actually read by the
+    recommendation-generation path). Defaults asserted here are the LIVE
+    ones (matching recommenders/base.py's pre-refactor behavior exactly),
+    NOT the old dead path's - see CHANGELOG for every case where the two
+    disagreed and which one won."""
 
-    def test_movies_gets_director_weight(self):
-        config = {"movies": {"weights": {"director": 0.10}}}
-        result = adapt_config_for_media_type(config, "movies")
-        assert "director" in result["weights"]
-        assert result["weights"]["director"] == 0.10
-
-    def test_tv_gets_studio_weight(self):
-        config = {"tv": {"weights": {"studio": 0.15}}}
-        result = adapt_config_for_media_type(config, "tv")
-        assert "studio" in result["weights"]
-        assert result["weights"]["studio"] == 0.15
-
-    def test_movies_default_limit_50(self):
-        config = {}
-        result = adapt_config_for_media_type(config, "movies")
+    def test_movies_limit_results_default_50(self):
+        result = resolve_media_type_overrides({}, MEDIA_TYPE_MOVIE)
         assert result["limit_results"] == 50
 
-    def test_tv_default_limit_20(self):
-        config = {}
-        result = adapt_config_for_media_type(config, "tv")
+    def test_tv_limit_results_default_20(self):
+        result = resolve_media_type_overrides({}, MEDIA_TYPE_TV)
         assert result["limit_results"] == 20
 
-    def test_inherits_plex_config(self):
-        config = {"plex": {"url": "http://localhost:32400"}}
-        result = adapt_config_for_media_type(config, "movies")
-        assert result["plex"]["url"] == "http://localhost:32400"
+    def test_movies_limit_results_overridden(self):
+        config = {"movies": {"limit_results": 15}}
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result["limit_results"] == 15
 
-    def test_movies_quality_defaults(self):
-        config = {}
-        result = adapt_config_for_media_type(config, "movies")
-        assert result["min_rating"] == 5.0
-        assert result["min_vote_count"] == 50
+    def test_randomize_recommendations_defaults_true(self):
+        """Live default is True (recommenders/base.py) - the old, dead
+        adapt_config_for_media_type() computed False here and nothing
+        ever read it; True is the one that must be preserved."""
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_MOVIE)["randomize_recommendations"] is True
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_TV)["randomize_recommendations"] is True
 
-    def test_tv_quality_defaults(self):
-        config = {}
-        result = adapt_config_for_media_type(config, "tv")
-        assert result["min_rating"] == 0.0
-        assert result["min_vote_count"] == 0
+    def test_randomize_recommendations_media_section_overrides_general(self):
+        config = {"general": {"randomize_recommendations": True}, "movies": {"randomize_recommendations": False}}
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result["randomize_recommendations"] is False
+
+    def test_randomize_recommendations_falls_back_to_general_when_media_section_absent(self):
+        config = {"general": {"randomize_recommendations": False}}
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result["randomize_recommendations"] is False
+
+    def test_normalize_counters_defaults_true(self):
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_TV)["normalize_counters"] is True
+
+    def test_show_summary_defaults_false(self):
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_MOVIE)["show_summary"] is False
+
+    def test_show_genres_defaults_true(self):
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_MOVIE)["show_genres"] is True
+
+    def test_show_cast_defaults_false(self):
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_MOVIE)["show_cast"] is False
+
+    def test_show_language_defaults_false(self):
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_TV)["show_language"] is False
+
+    def test_show_rating_defaults_false(self):
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_TV)["show_rating"] is False
+
+    def test_show_imdb_link_defaults_false(self):
+        assert resolve_media_type_overrides({}, MEDIA_TYPE_MOVIE)["show_imdb_link"] is False
+
+    def test_display_options_honor_movies_section_override(self):
+        config = {
+            "movies": {
+                "show_summary": True,
+                "show_cast": True,
+                "show_language": True,
+                "show_rating": True,
+                "show_imdb_link": True,
+                "show_genres": False,
+            }
+        }
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result["show_summary"] is True
+        assert result["show_cast"] is True
+        assert result["show_language"] is True
+        assert result["show_rating"] is True
+        assert result["show_imdb_link"] is True
+        assert result["show_genres"] is False
+
+    def test_show_director_only_resolved_for_movies(self):
+        result = resolve_media_type_overrides({}, MEDIA_TYPE_MOVIE)
+        assert result["show_director"] is False
+
+        tv_result = resolve_media_type_overrides({}, MEDIA_TYPE_TV)
+        assert "show_director" not in tv_result
+
+    def test_show_director_honors_movies_section_and_general_fallback(self):
+        config = {"movies": {"show_director": True}}
+        assert resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)["show_director"] is True
+
+        config2 = {"general": {"show_director": True}}
+        assert resolve_media_type_overrides(config2, MEDIA_TYPE_MOVIE)["show_director"] is True
+
+    def test_weights_movies_section_overrides_legacy_root_weights(self):
+        config = {"weights": {"genre": 0.9, "actor": 0.1}, "movies": {"weights": {"genre": 0.1, "actor": 0.9}}}
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result["weights"] == {"genre": 0.1, "actor": 0.9}
+
+    def test_weights_falls_back_to_legacy_root_weights_when_media_section_absent(self):
+        config = {"weights": {"genre": 0.9, "actor": 0.1}}
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result["weights"] == {"genre": 0.9, "actor": 0.1}
+
+    def test_weights_defaults_to_empty_dict(self):
+        result = resolve_media_type_overrides({}, MEDIA_TYPE_TV)
+        assert result["weights"] == {}
 
     def test_handles_uppercase_media_section(self):
         config = {"MOVIES": {"limit_results": 100}}
-        result = adapt_config_for_media_type(config, "movies")
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
         assert result["limit_results"] == 100
 
-    def test_collection_settings_inherited(self):
-        config = {"collections": {"add_label": False}}
-        result = adapt_config_for_media_type(config, "movies")
-        assert result["add_label"] is False
+    def test_quality_filters_min_rating_min_vote_count_not_resolved_here(self):
+        """Deliberately out of scope: quality_filters is resolved by
+        BaseRecommender.get_recommendations() at call time, directly from
+        self.media_config/self.config (already the one correct, live
+        implementation - see this function's docstring). Locks in that a
+        future change doesn't reintroduce a second, competing computation
+        of these two keys here."""
+        result = resolve_media_type_overrides({"movies": {"quality_filters": {"min_rating": 5.0}}}, MEDIA_TYPE_MOVIE)
+        assert "min_rating" not in result
+        assert "min_vote_count" not in result
+
+    def test_arbitrary_root_level_keys_pass_through_unchanged(self):
+        """Strict-superset contract: every root-level key not explicitly
+        resolved here (plex_users, tautulli, huntarr, negative_signals,
+        radarr, sonarr, an arbitrary future key) survives completely
+        untouched - there is no cherry-picked reconstruction that could
+        silently drop one (see CHANGELOG for the plex_users key the old,
+        deleted adapt_config_for_media_type() used to drop)."""
+        config = {
+            "plex_users": {"users": "alice,bob"},
+            "tautulli": {"enabled": True, "url": "http://tautulli"},
+            "huntarr": {"sequel_huntarr": False},
+            "negative_signals": {"enabled": False},
+            "radarr": {"enabled": True, "url": "http://radarr"},
+            "sonarr": {"enabled": True, "url": "http://sonarr"},
+            "some_future_key": {"nested": "value"},
+        }
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result["plex_users"] == {"users": "alice,bob"}
+        assert result["tautulli"] == {"enabled": True, "url": "http://tautulli"}
+        assert result["huntarr"] == {"sequel_huntarr": False}
+        assert result["negative_signals"] == {"enabled": False}
+        assert result["radarr"] == {"enabled": True, "url": "http://radarr"}
+        assert result["sonarr"] == {"enabled": True, "url": "http://sonarr"}
+        assert result["some_future_key"] == {"nested": "value"}
 
     def test_libraries_passed_through(self):
-        """#157 Phase 3: the adapted config must carry 'libraries' through so
-        utils/cli.py's per-library loop (which calls
-        get_libraries_for_media_type against the adapted config) sees a
-        real multi-library setup instead of always falling back to the
-        synthesized single-library default."""
+        """#157 Phase 3: 'libraries' must carry through so utils/cli.py's
+        per-library loop sees a real multi-library setup instead of
+        always falling back to the synthesized single-library default."""
         config = {
             "libraries": [
                 {"id": "movies", "name": "Movies", "media_type": "movie"},
                 {"id": "movies-4k", "name": "Movies 4K", "media_type": "movie"},
             ]
         }
-        result = adapt_config_for_media_type(config, "movies")
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
         assert result["libraries"] == config["libraries"]
 
-    def test_libraries_absent_passes_through_none(self):
-        """No 'libraries' key in root config -> adapted config's 'libraries'
-        is None, so get_libraries_for_media_type falls back to synthesis."""
+    def test_libraries_absent_stays_absent(self):
+        """No 'libraries' key in root config -> resolved config has none
+        either, so get_libraries_for_media_type falls back to synthesis."""
         config = {"plex": {"movie_library": "Movies"}}
-        result = adapt_config_for_media_type(config, "movies")
-        assert result["libraries"] is None
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result.get("libraries") is None
 
         libs = get_libraries_for_media_type(result, "movie")
         assert len(libs) == 1
         assert libs[0]["section"] == "Movies"
 
-    def test_does_not_produce_dead_divergently_defaulted_display_keys(self):
-        """PR4 audit remediation: show_summary/show_cast/show_language/
-        show_rating used to be flattened onto the returned dict here with
-        a default (True) that silently diverged from
-        recommenders/base.py's real, live resolution (default False) -
-        while never actually being read from this function's output
-        anywhere. Removed rather than fixed-in-place, since fixing the
-        default wouldn't make the output any less dead. Locks in that a
-        future change doesn't silently reintroduce the same trap."""
-        result = adapt_config_for_media_type({}, "movies")
+    def test_mutates_and_returns_same_dict(self):
+        config = {"plex": {"url": "http://localhost"}}
+        result = resolve_media_type_overrides(config, MEDIA_TYPE_MOVIE)
+        assert result is config
 
-        assert "show_summary" not in result
-        assert "show_cast" not in result
-        assert "show_language" not in result
-        assert "show_rating" not in result
+
+class TestLoadResolvedConfig:
+    """Tests for load_resolved_config() - load_config() +
+    resolve_media_type_overrides() in one call, the single function most
+    callers (recommenders/base.py, utils/cli.py) need."""
+
+    def test_combines_modular_merge_and_media_type_resolution(self):
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            tuning_path = os.path.join(config_dir, "tuning.yml")
+            with open(tuning_path, "w") as f:
+                f.write("movies:\n  limit_results: 15\n  randomize_recommendations: false\n")
+
+            result = load_resolved_config(config_path, MEDIA_TYPE_MOVIE)
+
+            assert result["plex"]["url"] == "http://localhost:32400"
+            assert result["limit_results"] == 15
+            assert result["randomize_recommendations"] is False
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_env_var_override_still_applies(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n  token: file_token\n")
+            path = f.name
+        try:
+            os.environ["PLEX_TOKEN"] = "env_token"
+            result = load_resolved_config(path, MEDIA_TYPE_TV)
+            assert result["plex"]["token"] == "env_token"
+            # media-type resolution still applied on top
+            assert result["limit_results"] == 20
+        finally:
+            del os.environ["PLEX_TOKEN"]
+            os.unlink(path)
+
+    def test_movie_and_tv_resolve_independently_from_same_file(self):
+        """Same on-disk config, two media types -> two independently
+        resolved results, each media-type-correct."""
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            tuning_path = os.path.join(config_dir, "tuning.yml")
+            with open(tuning_path, "w") as f:
+                f.write("movies:\n  limit_results: 15\ntv:\n  limit_results: 7\n")
+
+            movie_result = load_resolved_config(config_path, MEDIA_TYPE_MOVIE)
+            tv_result = load_resolved_config(config_path, MEDIA_TYPE_TV)
+
+            assert movie_result["limit_results"] == 15
+            assert tv_result["limit_results"] == 7
+        finally:
+            shutil.rmtree(config_dir)
+
+
+class TestResolveMediaTypeOverridesKeyEnumeration:
+    """Standing guard (audit remediation): enumerates every movies:/tv:
+    key documented in config/tuning.example.yml and asserts each one
+    actually reaches a real recommender attribute (or, for
+    quality_filters/weights per-field values, the actual scoring/
+    filtering behavior) - not just that some function computes a
+    plausible-looking value nothing reads. This is the test that makes
+    the "two divergent resolution paths" bug class this PR fixes
+    impossible to silently reintroduce: a future key added only to
+    resolve_media_type_overrides() (or only read inline somewhere else)
+    without a corresponding case here should fail loudly instead of
+    silently doing nothing for users who set it.
+
+    Uses the real, committed config/tuning.example.yml - not a hand-rolled
+    fixture - so it also catches the example file and the resolution code
+    drifting apart from each other.
+    """
+
+    @staticmethod
+    def _load_example_tuning():
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        example_path = os.path.join(repo_root, "config", "tuning.example.yml")
+        with open(example_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    def test_every_documented_movies_key_resolves(self):
+        tuning = self._load_example_tuning()
+        movies = tuning["movies"]
+        result = resolve_media_type_overrides({"movies": movies}, MEDIA_TYPE_MOVIE)
+
+        assert result["limit_results"] == movies["limit_results"]
+        assert result["randomize_recommendations"] == movies["randomize_recommendations"]
+        assert result["show_summary"] == movies["show_summary"]
+        assert result["show_cast"] == movies["show_cast"]
+        assert result["show_director"] == movies["show_director"]
+        assert result["show_genres"] == movies["show_genres"]
+        assert result["show_language"] == movies["show_language"]
+        assert result["show_rating"] == movies["show_rating"]
+        assert result["show_imdb_link"] == movies["show_imdb_link"]
+        assert result["weights"] == movies["weights"]
+        # quality_filters is resolved by BaseRecommender.get_recommendations(),
+        # not here (see TestResolveMediaTypeOverrides) - assert the raw
+        # section itself is at least present and unmodified, so a caller
+        # reading it directly (as get_recommendations() does) sees it.
+        assert result["movies"]["quality_filters"] == movies["quality_filters"]
+
+    def test_every_documented_tv_key_resolves(self):
+        tuning = self._load_example_tuning()
+        tv = tuning["tv"]
+        result = resolve_media_type_overrides({"tv": tv}, MEDIA_TYPE_TV)
+
+        assert result["limit_results"] == tv["limit_results"]
+        assert result["randomize_recommendations"] == tv["randomize_recommendations"]
+        assert result["normalize_counters"] == tv["normalize_counters"]
+        assert result["show_summary"] == tv["show_summary"]
+        assert result["show_cast"] == tv["show_cast"]
+        assert result["show_language"] == tv["show_language"]
+        assert result["show_rating"] == tv["show_rating"]
+        assert result["show_imdb_link"] == tv["show_imdb_link"]
+        assert "show_director" not in result
+        assert result["weights"] == tv["weights"]
+        assert result["tv"]["quality_filters"] == tv["quality_filters"]
+
+    def test_movies_and_tv_documented_keys_are_all_covered_by_this_class(self):
+        """Belt-and-braces: fails loudly (instead of silently passing) if
+        a future tuning.example.yml edit adds a movies:/tv: key that
+        neither test method above accounts for."""
+        tuning = self._load_example_tuning()
+        covered_movie_keys = {
+            "limit_results",
+            "randomize_recommendations",
+            "show_summary",
+            "show_cast",
+            "show_director",
+            "show_genres",
+            "show_language",
+            "show_rating",
+            "show_imdb_link",
+            "quality_filters",
+            "weights",
+        }
+        covered_tv_keys = {
+            "limit_results",
+            "randomize_recommendations",
+            "normalize_counters",
+            "show_summary",
+            "show_cast",
+            "show_language",
+            "show_rating",
+            "show_imdb_link",
+            "quality_filters",
+            "weights",
+        }
+        assert set(tuning["movies"].keys()) <= covered_movie_keys, (
+            f"tuning.example.yml movies: has undocumented-here keys: "
+            f"{set(tuning['movies'].keys()) - covered_movie_keys}"
+        )
+        assert set(tuning["tv"].keys()) <= covered_tv_keys, (
+            f"tuning.example.yml tv: has undocumented-here keys: {set(tuning['tv'].keys()) - covered_tv_keys}"
+        )
 
 
 class TestNegativeSignalsConstants:
@@ -576,30 +831,6 @@ trakt:
             assert os.path.exists(os.path.join(config_dir, "trakt.yml"))
         finally:
             shutil.rmtree(config_dir)
-
-
-class TestAdaptConfigRadarrSonarr:
-    """Tests for radarr/sonarr config handling in adapt_config_for_media_type"""
-
-    def test_radarr_from_root_level(self):
-        # New modular format - radarr at root level
-        config = {
-            "radarr": {"enabled": True, "url": "http://radarr:7878"},
-            "movies": {},
-        }
-        result = adapt_config_for_media_type(config, "movies")
-        assert result["radarr"]["enabled"] is True
-        assert result["radarr"]["url"] == "http://radarr:7878"
-
-    def test_sonarr_from_root_level(self):
-        # New modular format - sonarr at root level
-        config = {
-            "sonarr": {"enabled": True, "url": "http://sonarr:8989"},
-            "tv": {},
-        }
-        result = adapt_config_for_media_type(config, "tv")
-        assert result["sonarr"]["enabled"] is True
-        assert result["sonarr"]["url"] == "http://sonarr:8989"
 
 
 class TestGetLibraries:

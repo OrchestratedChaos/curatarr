@@ -399,11 +399,10 @@ class TestRunRecommenderMain:
         mock_root.return_value = "/fake/root"
         mock_open.side_effect = FileNotFoundError("No config")
 
-        mock_adapt = Mock()
         mock_process = Mock()
 
         with pytest.raises(SystemExit) as exc_info:
-            run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+            run_recommender_main("Movie", "Test", mock_process)
 
         assert exc_info.value.code == 1
 
@@ -424,12 +423,11 @@ class TestRunRecommenderMain:
         mock_yaml.return_value = {"plex": {"token": "abc"}}  # No users
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(return_value={"plex": {"token": "abc"}, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
 
         with pytest.raises(SystemExit) as exc_info:
-            run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+            run_recommender_main("Movie", "Test", mock_process)
 
         assert exc_info.value.code == 1
 
@@ -450,12 +448,11 @@ class TestRunRecommenderMain:
         mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "alice, bob"}}
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(return_value={"plex": {"token": "abc"}, "users": {"list": "alice, bob"}, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u  # Return unchanged
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         assert mock_process.call_count == 2
 
@@ -476,14 +473,11 @@ class TestRunRecommenderMain:
         mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "alice, bob, charlie"}}
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(
-            return_value={"plex": {"token": "abc"}, "users": {"list": "alice, bob, charlie"}, "general": {}}
-        )
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         assert mock_process.call_count == 1
 
@@ -504,13 +498,12 @@ class TestRunRecommenderMain:
         mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "alice"}}
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(return_value={"plex": {"token": "abc"}, "users": {"list": "alice"}, "general": {}})
         mock_process = Mock()
         mock_logger = Mock()
         mock_setup_log.return_value = mock_logger
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         mock_setup_log.assert_called_once()
         call_kwargs = mock_setup_log.call_args
@@ -538,12 +531,11 @@ class TestRunRecommenderMain:
         ]
         mock_migrate.return_value = {"oldname": "newname"}
 
-        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         mock_migrate.assert_called_once()
         # Config was re-read after migration, so the adapted config (and
@@ -569,12 +561,11 @@ class TestRunRecommenderMain:
         mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "alice"}}
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         assert mock_yaml.call_count == 1
 
@@ -602,18 +593,11 @@ class TestRunRecommenderMainLibraryMatrixLoop:
         mock_yaml.return_value = {"plex": {"token": "abc", "movie_library": "Movies"}, "users": {"list": "alice, bob"}}
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(
-            return_value={
-                "plex": {"token": "abc", "movie_library": "Movies"},
-                "users": {"list": "alice, bob"},
-                "general": {},
-            }
-        )
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process, media_type_key="movie")
+        run_recommender_main("Movie", "Test", mock_process, media_type_key="movie")
 
         assert mock_process.call_count == 2
         for call in mock_process.call_args_list:
@@ -649,12 +633,11 @@ class TestRunRecommenderMainLibraryMatrixLoop:
         mock_yaml.return_value = root_cfg
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process, media_type_key="movie")
+        run_recommender_main("Movie", "Test", mock_process, media_type_key="movie")
 
         assert mock_process.call_count == 4
         seen = set()
@@ -695,12 +678,11 @@ class TestRunRecommenderMainLibraryMatrixLoop:
         mock_yaml.return_value = root_cfg
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("TV Show", "Test", mock_adapt, mock_process, media_type_key="tv")
+        run_recommender_main("TV Show", "Test", mock_process, media_type_key="tv")
 
         assert mock_process.call_count == 2
         lib_ids = {call[0][4]["id"] for call in mock_process.call_args_list}
@@ -731,12 +713,11 @@ class TestRunRecommenderMainLibraryMatrixLoop:
         mock_yaml.return_value = root_cfg
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process, media_type_key="movie")
+        run_recommender_main("Movie", "Test", mock_process, media_type_key="movie")
 
         assert mock_process.call_count == 1
         assert mock_process.call_args[0][4]["id"] == "movies-4k"
@@ -759,13 +740,12 @@ class TestRunRecommenderMainLibraryMatrixLoop:
         mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "alice"}}
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(side_effect=lambda cfg: {**cfg, "general": {}})
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
         with pytest.raises(SystemExit) as exc_info:
-            run_recommender_main("Movie", "Test", mock_adapt, mock_process, media_type_key="movie")
+            run_recommender_main("Movie", "Test", mock_process, media_type_key="movie")
 
         assert exc_info.value.code == 1
         mock_process.assert_not_called()
@@ -927,12 +907,11 @@ class TestRunRecommenderMainCachePruneScope:
         mock_yaml.return_value = config
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(return_value=config)
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         assert alice_cache.exists()
 
@@ -977,12 +956,11 @@ class TestRunRecommenderMainCachePruneScope:
         mock_yaml.return_value = config
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(return_value=config)
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         assert alice_cache.exists()
         assert not removed_cache.exists()
@@ -1031,11 +1009,10 @@ class TestRunRecommenderMainCachePruneScope:
         mock_yaml.return_value = config
         mock_migrate.return_value = {}
 
-        mock_adapt = Mock(return_value=config)
         mock_process = Mock()
         mock_setup_log.return_value = Mock()
         mock_resolve.side_effect = lambda u, t: "realadmin" if u.lower() == "admin" else u
 
-        run_recommender_main("Movie", "Test", mock_adapt, mock_process)
+        run_recommender_main("Movie", "Test", mock_process)
 
         assert real_admin_cache.exists()

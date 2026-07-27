@@ -11,7 +11,7 @@ from typing import Dict, List
 import yaml
 
 # Project version - single source of truth
-__version__ = "2.10.38"
+__version__ = "2.10.39"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 4  # v4: Added production_company_ids for TV franchise bonus
@@ -465,90 +465,109 @@ def get_negative_multiplier(rating: int, config: dict = None) -> float:
     return DEFAULT_NEGATIVE_MULTIPLIERS.get(rating, -0.3)
 
 
-def adapt_config_for_media_type(root_config: Dict, media_type: str = "movies") -> Dict:
+def resolve_media_type_overrides(config: Dict, media_type: str) -> Dict:
     """
-    Adapt root configuration for a specific media type (movies or TV).
+    Overlay resolved `movies:`/`tv:` (config/tuning.yml) per-media-type
+    overrides onto an already-loaded root config (see load_config()).
 
-    Creates a unified config dict by merging media-specific settings
-    with global settings, handling key variations for backwards compatibility.
+    This is THE single resolution path for these keys - it replaces two
+    formerly-independent implementations that had quietly drifted apart
+    (see CHANGELOG 2.10.23/2.10.37/2.10.39 and this module's git history):
+    `recommenders/base.py`'s own inline `self.media_config` resolution
+    (LIVE - this is what every install's actual recommendations used),
+    and this module's now-deleted `adapt_config_for_media_type()` (DEAD -
+    computed a plausible-looking, differently-defaulted result that
+    nothing in the recommendation-generation path ever read). Consolidated
+    here so a future new `movies:`/`tv:` key only needs wiring up once,
+    with a standing test (see tests/test_config.py's
+    TestResolveMediaTypeOverridesKeyEnumeration) asserting every key
+    documented in config/tuning.example.yml actually resolves.
+
+    Mutates and returns `config` in place (matching load_config()'s own
+    `_load_module_configs()` merge convention) with these additional/
+    overwritten top-level keys: `limit_results`, `randomize_recommendations`,
+    `normalize_counters`, `show_summary`, `show_genres`, `show_cast`,
+    `show_language`, `show_rating`, `show_imdb_link`, `weights`, and
+    (movies only) `show_director`.
+
+    Every other root-level section (`plex`, `tmdb`, `users`, `plex_users`,
+    `collections`, `recency_decay`, `rating_multipliers`, `general`,
+    `cache_dir`, `libraries`, `negative_signals`, `radarr`, `sonarr`,
+    `quality_filters`, and anything else) passes through completely
+    untouched, because `config` itself (not a cherry-picked
+    reconstruction of it) is what gets returned - there is no way for
+    this function to silently drop a root-level key the way the old
+    `adapt_config_for_media_type()` dropped `plex_users` (see CHANGELOG).
+
+    Deliberately NOT resolved here (left exactly where they already
+    correctly, non-divergently live):
+      - `quality_filters` (`min_rating`/`min_vote_count`): still resolved
+        by `BaseRecommender.get_recommendations()` at call time, straight
+        from `self.media_config`/`self.config` - that was always the one
+        correct, live implementation (the old dead path's 5.0/50 movies
+        default never matched it - see CHANGELOG for which one won).
+      - Per-field weight *defaults* (`director` vs `studio`, and their
+        values): still resolved by `PlexMovieRecommender`/
+        `PlexTVRecommender._load_weights()` - already the single,
+        non-divergent source once the dead path is gone. Only the
+        `movies:`/`tv:` -> legacy-root-level `weights:` fallback *chain*
+        is centralized here (that part WAS duplicated, and divergently -
+        the old dead path never checked the legacy root-level tier).
 
     Args:
-        root_config: Root configuration dictionary from config.yml
-        media_type: 'movies' or 'tv'
+        config: Root config dict, as returned by load_config()
+        media_type: MEDIA_TYPE_MOVIE ('movie') or MEDIA_TYPE_TV ('tv')
 
     Returns:
-        Unified config dict with all needed settings for the media type
+        The same `config` dict, with the keys above added/overwritten
     """
-    # Get media-specific section
-    media_section = media_type.lower()
-    media_config = root_config.get(media_section, root_config.get(media_section.upper(), {}))
+    general_config = config.get("general", {}) or {}
+    media_section = MEDIA_KEY_MOVIES if media_type == MEDIA_TYPE_MOVIE else "tv"
+    media_config = config.get(media_section, config.get(media_section.upper(), {})) or {}
 
-    # Build unified config
-    config = {
-        "plex": root_config.get("plex", {}),
-        "tmdb": root_config.get("tmdb", root_config.get("TMDB", {})),
-        "users": root_config.get("users", {}),
-        "collections": root_config.get("collections", {}),
-        "recency_decay": root_config.get("recency_decay", {}),
-        "rating_multipliers": root_config.get("rating_multipliers", {}),
-        "general": root_config.get("general", {}),
-        "cache_dir": root_config.get("cache_dir", "cache"),
-        # #157 Phase 3: pass through the raw multi-library config so
-        # get_libraries()/get_libraries_for_media_type() (called against this
-        # adapted config from utils/cli.py's per-library recommendation loop)
-        # see the real 'libraries' block instead of always falling back to
-        # the synthesized single-library default.
-        "libraries": root_config.get("libraries"),
-    }
+    config["limit_results"] = media_config.get("limit_results", DEFAULT_LIMIT_RESULTS[media_type])
+    config["randomize_recommendations"] = media_config.get(
+        "randomize_recommendations", general_config.get("randomize_recommendations", True)
+    )
+    config["normalize_counters"] = media_config.get(
+        "normalize_counters", general_config.get("normalize_counters", True)
+    )
+    config["show_summary"] = media_config.get("show_summary", general_config.get("show_summary", False))
+    config["show_genres"] = media_config.get("show_genres", general_config.get("show_genres", True))
+    config["show_cast"] = media_config.get("show_cast", general_config.get("show_cast", False))
+    config["show_language"] = media_config.get("show_language", general_config.get("show_language", False))
+    config["show_rating"] = media_config.get("show_rating", general_config.get("show_rating", False))
+    config["show_imdb_link"] = media_config.get("show_imdb_link", general_config.get("show_imdb_link", False))
 
-    # Add media-specific settings
-    config["limit_results"] = media_config.get("limit_results", 50 if media_type == "movies" else 20)
-    config["randomize_recommendations"] = media_config.get("randomize_recommendations", False)
-    config["normalize_counters"] = media_config.get("normalize_counters", True)
-    # NOTE: show_summary/show_cast/show_language/show_rating deliberately
-    # NOT flattened here (removed 2026-07, audit remediation PR4) -
-    # recommenders/base.py resolves these itself directly from
-    # self.media_config (see its __init__), with a DIFFERENT default
-    # (False) than this function used to produce (True) for all four.
-    # This function's output for these specific keys was never read
-    # anywhere outside its own tests (see CHANGELOG) - do not re-add a
-    # flattened copy here; it would only reintroduce the same dead,
-    # misleadingly-defaulted trap for a future maintainer.
-    config["show_imdb_link"] = media_config.get("show_imdb_link", False)
+    if media_type == MEDIA_TYPE_MOVIE:
+        # movies-only: recommenders/movie.py's self.show_director (TV has
+        # no director-equivalent display option).
+        config["show_director"] = media_config.get("show_director", general_config.get("show_director", False))
 
-    # Quality filters
-    quality = media_config.get("quality_filters", {})
-    config["min_rating"] = quality.get("min_rating", 5.0 if media_type == "movies" else 0.0)
-    config["min_vote_count"] = quality.get("min_vote_count", 50 if media_type == "movies" else 0)
-
-    # Weights - handle both old and new key names
-    weights = media_config.get("weights", {})
-    config["weights"] = {
-        "genre": weights.get("genre", weights.get("genre_weight", 0.25)),
-        "actor": weights.get("actor", weights.get("actor_weight", 0.20)),
-        "keyword": weights.get("keyword", weights.get("keyword_weight", 0.50)),
-        "language": weights.get("language", weights.get("language_weight", 0.0)),
-    }
-
-    # Media-specific weights
-    if media_type == "movies":
-        config["weights"]["director"] = weights.get("director", weights.get("director_weight", 0.05))
-    else:
-        config["weights"]["studio"] = weights.get("studio", weights.get("studio_weight", 0.10))
-
-    # Radarr/Sonarr integration - check root level first (new modular format),
-    # then fall back to nested under movies/tv (legacy format)
-    arr_key = "radarr" if media_type == "movies" else "sonarr"
-    config[arr_key] = root_config.get(arr_key, media_config.get(arr_key, {}))
-
-    # Collection settings
-    collections = root_config.get("collections", {})
-    config["add_label"] = collections.get("add_label", True)
-
-    # Negative signals configuration
-    config["negative_signals"] = get_negative_signals_config(root_config)
+    # Weights - only the movies:/tv: -> legacy-root-level `weights:`
+    # fallback CHAIN is resolved here (see docstring above for why the
+    # per-field defaults deliberately stay in _load_weights()).
+    config["weights"] = media_config.get("weights", config.get("weights", {})) or {}
 
     return config
+
+
+def load_resolved_config(config_path: str, media_type: str) -> Dict:
+    """
+    The one function a caller needs for a fully media-type-resolved
+    config: load_config() (modular merge + auto-migration + env-var
+    overrides) followed by resolve_media_type_overrides() (movies:/tv:
+    per-media-type overrides) - see that function's docstring for exactly
+    which keys this adds/overwrites and why the rest is untouched.
+
+    Args:
+        config_path: Path to config.yml file
+        media_type: MEDIA_TYPE_MOVIE ('movie') or MEDIA_TYPE_TV ('tv')
+
+    Returns:
+        Parsed, merged, and media-type-resolved config dictionary
+    """
+    return resolve_media_type_overrides(load_config(config_path), media_type)
 
 
 # =============================================================================

@@ -11,7 +11,6 @@ import pytest
 from recommenders.movie import (
     MovieCache,
     PlexMovieRecommender,
-    adapt_root_config_to_legacy,
     format_movie_output,
     main,
     process_recommendations,
@@ -521,27 +520,6 @@ class TestFormatMovieOutput:
 
         assert "imdb.com" in result
         assert "tt1234567" in result
-
-
-class TestAdaptRootConfigToLegacy:
-    """Tests for adapt_root_config_to_legacy function."""
-
-    def test_adapt_preserves_plex_key(self):
-        """Test that config with 'plex' key preserves it."""
-        config = {"plex": {"url": "http://localhost", "token": "abc"}}
-
-        result = adapt_root_config_to_legacy(config)
-
-        assert "plex" in result
-        assert result["plex"]["url"] == "http://localhost"
-
-    def test_adapt_returns_dict(self):
-        """Test that function returns a dict."""
-        config = {"plex": {"url": "http://localhost"}}
-
-        result = adapt_root_config_to_legacy(config)
-
-        assert isinstance(result, dict)
 
 
 class TestProcessRecommendationsLibraryParam:
