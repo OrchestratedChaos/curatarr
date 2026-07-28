@@ -35,6 +35,8 @@ full rationale):
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
+from plexapi.exceptions import NotFound
+
 from utils.config import CACHE_VERSION
 
 # ---------------------------------------------------------------------------
@@ -302,6 +304,42 @@ MOVIE_ROMANCE_IDS = {"119", "120"}
 
 
 # ---------------------------------------------------------------------------
+# Per-user library state (#273) - viewCount/userRating are PER-ACCOUNT Plex
+# state: the admin's own token can only ever see the admin's own values for
+# these two attributes on a library item, never another user's (see
+# recommenders/base.py's _get_all_library_items_for_user and this repo's
+# CHANGELOG for the verified real-library finding this fixture reproduces).
+# alice and bob below get DELIBERATELY DIFFERENT, nonzero values on movies
+# they've each actually watched (see MOVIE_WATCHED_BY above) - a builder
+# that reads this state through the wrong (shared admin-token) connection
+# can never tell them apart (build_fake_plex_server() below always reports
+# 0/None for every item, admin included); one that switches to each user's
+# OWN connection first (build_fake_plex_server_for_user() below) can.
+# ---------------------------------------------------------------------------
+MOVIE_PER_USER_LIBRARY_STATE: Dict[str, Dict[int, Dict]] = {
+    "alice": {
+        101: {"view_count": 3, "user_rating": 9.0},  # loved it, rewatched
+        102: {"view_count": 1, "user_rating": 2.0},  # hated it - negative signal once sourced correctly
+        # Remaining alice-watched movies (see MOVIE_WATCHED_BY) get a plain
+        # baseline view_count=1/no rating - just enough for
+        # FakeSection.search(unwatched=False) (the managed-users path) to
+        # correctly report them as watched, without the 101/102 overrides'
+        # differentiated signal.
+        103: {"view_count": 1, "user_rating": None},
+        104: {"view_count": 1, "user_rating": None},
+        105: {"view_count": 1, "user_rating": None},
+        106: {"view_count": 1, "user_rating": None},
+    },
+    "bob": {
+        107: {"view_count": 2, "user_rating": 8.0},
+        108: {"view_count": 1, "user_rating": None},
+        109: {"view_count": 1, "user_rating": None},
+        110: {"view_count": 1, "user_rating": None},
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # TV catalog
 # ---------------------------------------------------------------------------
 def _s(rating_key, title, year, genres, studio, cast, keywords) -> Dict:
@@ -421,6 +459,20 @@ SHOW_WATCHED_BY = {
 
 SHOW_HORROR_IDS = {"208", "209", "210"}
 
+SHOW_PER_USER_LIBRARY_STATE: Dict[str, Dict[int, Dict]] = {
+    "alice": {
+        201: {"view_count": 2, "user_rating": 10.0},
+        202: {"view_count": 1, "user_rating": 1.0},  # hated it
+        203: {"view_count": 1, "user_rating": None},
+        204: {"view_count": 1, "user_rating": None},
+    },
+    "bob": {
+        205: {"view_count": 3, "user_rating": 7.0},
+        206: {"view_count": 1, "user_rating": None},
+        207: {"view_count": 1, "user_rating": None},
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Pre-seeded media caches - see module docstring for why this replaces the
@@ -455,26 +507,49 @@ class FakeGuid:
 
 
 class FakeMediaItem:
-    """Minimal duck-typed stand-in for a plexapi Movie/Show object.
+    """Duck-typed stand-in for a plexapi Movie/Show object.
 
-    Only carries the attributes the real (unmocked) code paths this test
-    exercises actually touch: BaseCache.update_cache()'s item-identity
-    bookkeeping (ratingKey only, since the cache is pre-seeded and
-    up-to-date - see module docstring), _get_library_movies_set()/
-    _get_library_shows_set()/_get_library_imdb_ids() (ratingKey/title/year/
-    guids), and the optional viewCount/userRating watched-item bookkeeping
-    in recommenders/movie.py's/tv.py's own watched-data builders. Deliberately
-    has no .genres/.directors/.roles/.media - those only matter to
-    BaseCache._process_item(), which never runs here (see module docstring).
+    Originally minimal (ratingKey/title/year/guids/viewCount only - see
+    git history), extended for #273's profile-builder harness
+    (tests/harness.py's run_profile_builders()) to also carry a settable
+    userRating (not just a hardcoded None) plus the handful of extra
+    attributes recommenders/external.py's build_user_profile() reads
+    directly off a library item (isWatched, genres/directors/roles as
+    empty-by-default lists, lastViewedAt, audienceRating) - that
+    function is the one #273 builder that reads a RICHER item shape
+    than the other three, since it (still) does its own from-scratch
+    Plex scan rather than going through the pre-seeded movie/show cache
+    the other three consume via self._get_media_cache().
+    BaseCache._process_item() itself still never runs here (the cache
+    stays pre-seeded/up-to-date - see module docstring), so
+    genres/directors/roles default to empty rather than modeling this
+    fixture's real catalog data.
     """
 
-    def __init__(self, rating_key: str, title: str, year: Optional[int], view_count: int = 0):
+    def __init__(
+        self,
+        rating_key: str,
+        title: str,
+        year: Optional[int],
+        view_count: int = 0,
+        user_rating: Optional[float] = None,
+    ):
         self.ratingKey = int(rating_key)
         self.title = title
         self.year = year
-        self.guids = [FakeGuid(f"imdb://tt{rating_key}")]
+        self.guids = [FakeGuid(f"imdb://tt{rating_key}"), FakeGuid(f"tmdb://{rating_key}")]
         self.viewCount = view_count
-        self.userRating = None
+        self.userRating = user_rating
+        # Real plexapi computes isWatched from viewCount>0 server-side;
+        # mirrored here (rather than hardcoded True/False) so a fixture
+        # item with a nonzero view_count (per-user overrides below) is
+        # correctly "watched" for build_user_profile()'s own isWatched gate.
+        self.isWatched = view_count > 0
+        self.lastViewedAt = None
+        self.audienceRating = None
+        self.genres: list = []
+        self.directors: list = []
+        self.roles: list = []
 
     def reload(self):
         """No-op - real code only calls this on items about to be
@@ -491,6 +566,15 @@ class FakeSection:
         return list(self._items)
 
     def search(self, **kwargs):
+        # #273: recommenders/base.py's _get_managed_users_watched_data()
+        # calls section.search(unwatched=False) to fetch a (switchUser-
+        # scoped) user's own watched items - a real, legitimate caller,
+        # not the label/collection-writing stage the AssertionError below
+        # guards against. Narrow, exact-kwarg-shape check so any OTHER
+        # (unexpected) search() call still raises as before.
+        if set(kwargs.keys()) == {"unwatched"}:
+            want_unwatched = kwargs["unwatched"]
+            return [item for item in self._items if (item.viewCount > 0) != want_unwatched]
         raise AssertionError(
             "FakeSection.search() was called - the label/collection-writing stage "
             "must stay mocked in this test (patch PlexMovieRecommender/"
@@ -509,11 +593,34 @@ class FakeLibrary:
 class FakePlexServer:
     def __init__(self, sections: Dict[str, FakeSection]):
         self.library = FakeLibrary(sections)
+        # #273: machineIdentifier is what real plexapi's switchUser()
+        # passes to MyPlexUser.get_token() - not used by this fake's own
+        # switchUser() below (which skips the token/HTTP hop entirely and
+        # returns a per-user server directly), but set for parity with
+        # the real attribute in case future code reads it directly.
+        self.machineIdentifier = "fake-machine-id"
+        # None = this server represents the shared admin-token view
+        # (build_fake_plex_server()); set to a username by
+        # build_fake_plex_server_for_user() / switchUser() below.
+        self.current_user: Optional[str] = None
 
     def fetchItem(self, rating_key):
         raise AssertionError(
             "FakePlexServer.fetchItem() was called - the label/collection-writing stage must stay mocked in this test."
         )
+
+    def switchUser(self, user):
+        """Duck-typed stand-in for plexapi.server.PlexServer.switchUser()
+        (#273): real plexapi resolves `user.get_token(machineIdentifier)`
+        then reconnects with that token; this fake skips the token/HTTP
+        round trip and returns a fully independent per-user server
+        directly (see build_fake_plex_server_for_user) - same end result
+        (a PlexServer scoped to that user's own account state), narrower
+        fake. Keyed off the user's own `.title` (mirrors
+        FakeMyPlexAccount.user()'s title-keyed lookup below).
+        """
+        username = getattr(user, "title", str(user))
+        return build_fake_plex_server_for_user(username)
 
 
 def build_fake_plex_server() -> FakePlexServer:
@@ -526,6 +633,46 @@ def build_fake_plex_server() -> FakePlexServer:
     return FakePlexServer(sections)
 
 
+def build_fake_plex_server_for_user(username: str) -> FakePlexServer:
+    """A second, independent FakePlexServer scoped to `username`'s own
+    Plex account (#273) - what FakePlexServer.switchUser() above returns,
+    modeling what a builder correctly using that user's own connection
+    (instead of the shared admin-token build_fake_plex_server() above)
+    would see: MOVIE_PER_USER_LIBRARY_STATE/SHOW_PER_USER_LIBRARY_STATE's
+    view_count/user_rating overrides instead of the admin-view defaults
+    (0/None) every item gets otherwise.
+    """
+    movie_overrides = MOVIE_PER_USER_LIBRARY_STATE.get(username, {})
+    show_overrides = SHOW_PER_USER_LIBRARY_STATE.get(username, {})
+    movies = [
+        FakeMediaItem(
+            m["rating_key"],
+            m["title"],
+            m["year"],
+            view_count=movie_overrides.get(int(m["rating_key"]), {}).get("view_count", 0),
+            user_rating=movie_overrides.get(int(m["rating_key"]), {}).get("user_rating"),
+        )
+        for m in MOVIE_CATALOG
+    ]
+    shows = [
+        FakeMediaItem(
+            s["rating_key"],
+            s["title"],
+            s["year"],
+            view_count=show_overrides.get(int(s["rating_key"]), {}).get("view_count", 0),
+            user_rating=show_overrides.get(int(s["rating_key"]), {}).get("user_rating"),
+        )
+        for s in SHOW_CATALOG
+    ]
+    sections = {
+        "Movies": FakeSection("1", movies),
+        "TV Shows": FakeSection("2", shows),
+    }
+    server = FakePlexServer(sections)
+    server.current_user = username
+    return server
+
+
 class FakeUser:
     def __init__(self, title: str, user_id: int):
         self.title = title
@@ -536,7 +683,10 @@ class FakeMyPlexAccount:
     """Stand-in for plexapi.myplex.MyPlexAccount - only the surface
     utils/plex.py's get_configured_users()/_resolve_myplex_account_ids()/
     fetch_plex_watch_history_movies() actually call (.username, .id,
-    .users())."""
+    .users()), plus .user() (#273: recommenders/base.py's
+    _get_managed_users_watched_data() and the new
+    _get_all_library_items_for_user() both call account.user(username)
+    to resolve a MyPlexUser before switchUser())."""
 
     def __init__(self, token: Optional[str] = None):
         self.token = token
@@ -545,6 +695,17 @@ class FakeMyPlexAccount:
 
     def users(self):
         return [FakeUser(name, int(account_id)) for name, account_id in ACCOUNT_IDS.items()]
+
+    def user(self, username: str) -> FakeUser:
+        """Mirrors plexapi.myplex.MyPlexAccount.user()'s title-keyed
+        lookup (case-insensitive) and its NotFound-on-miss contract, so
+        callers' existing `except plexapi.exceptions.PlexApiException`
+        handling is exercised for real on a miss, not just the happy
+        path."""
+        for name, account_id in ACCOUNT_IDS.items():
+            if name.lower() == str(username).lower():
+                return FakeUser(name, int(account_id))
+        raise NotFound(f"Unable to find user {username}")
 
 
 # ---------------------------------------------------------------------------
