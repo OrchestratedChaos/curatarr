@@ -886,9 +886,7 @@ class BaseRecommender(ABC):
         # collection already sitting in Plex for this user (see
         # _remove_collection_for_no_history) - never on the default path,
         # and never for a user who has ANY watch history at all.
-        recommend_for_no_history = self.media_config.get(
-            "recommend_for_no_history", RECOMMEND_FOR_NO_HISTORY_DEFAULT
-        )
+        recommend_for_no_history = self.media_config.get("recommend_for_no_history", RECOMMEND_FOR_NO_HISTORY_DEFAULT)
         watched_count = len(self.watched_ids)
         if watched_count == 0 and not recommend_for_no_history:
             who = self.single_user or "the configured user(s)"

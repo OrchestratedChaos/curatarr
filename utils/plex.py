@@ -689,9 +689,7 @@ def _find_stale_owned_collections(all_collections: List[Any], collection_name: s
     ]
 
 
-def remove_owned_collection(
-    section: Any, private_label: str, username: str, reason: str, logger: Any = None
-) -> bool:
+def remove_owned_collection(section: Any, private_label: str, username: str, reason: str, logger: Any = None) -> bool:
     """Remove a user's own curatarr-created collection (#291
     recommend_for_no_history: false path) - fires ONLY when a user has
     zero watch history AND that config is explicitly disabled, never on
