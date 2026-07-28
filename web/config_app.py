@@ -12,6 +12,9 @@ run time:
                        recency_decay, rating_multipliers, negative_signals,
                        external_recommendations
     sonarr.yml / radarr.yml / trakt.yml - one file per integration
+    mdblist.yml / simkl.yml - loaded and merged by _load_module_configs
+                       same as the above, but not yet exposed on a
+                       Settings/Connections screen here
 
 Package layout (audit remediation batch F/I, PR1(a) - this module used
 to hold all four screens' view/parse/apply CRUD logic directly; it's now
@@ -33,13 +36,6 @@ This module is purely additive: register_config_routes() is called once
 from web.app.create_app() and only adds new routes. It never touches
 the dashboard/run/results routes or the recommenders themselves.
 
-mdblist.yml/simkl.yml are deliberately NOT exposed here - see the "mdblist
-/simkl gap" note in the PR description. utils.config._load_module_configs
-never loads those two files into the merged config, so an mdblist.yml or
-simkl.yml a user hand-writes today is silently ignored at run time. Fixing
-that loader gap is a behavior change for anyone who already has one of
-those files sitting in config/ (it would suddenly start exporting), so
-it's left as a follow-up rather than bundled into this UI-only PR.
 """
 
 from .config_connections import register_connections_routes

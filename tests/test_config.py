@@ -1032,6 +1032,50 @@ class TestModularConfigLoading:
         finally:
             shutil.rmtree(config_dir)
 
+    def test_loads_mdblist_yml_when_present(self):
+        """Regression: _load_module_configs previously looped over only
+        ["trakt", "radarr", "sonarr"], so mdblist.yml shipped an example
+        but was never actually read at run time - a user who copied
+        config/mdblist.example.yml, filled in a real api_key, and set
+        enabled: true would silently stay disabled."""
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            mdblist_path = os.path.join(config_dir, "mdblist.yml")
+            with open(mdblist_path, "w") as f:
+                f.write("enabled: true\napi_key: mdblist-key1\n")
+
+            result = load_config(config_path)
+            assert result["mdblist"]["enabled"] is True
+            assert result["mdblist"]["api_key"] == "mdblist-key1"
+        finally:
+            shutil.rmtree(config_dir)
+
+    def test_loads_simkl_yml_when_present(self):
+        """Same regression as mdblist.yml above, for simkl.yml."""
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            simkl_path = os.path.join(config_dir, "simkl.yml")
+            with open(simkl_path, "w") as f:
+                f.write("enabled: true\nclient_id: real-simkl-client-id\n")
+
+            result = load_config(config_path)
+            assert result["simkl"]["enabled"] is True
+            assert result["simkl"]["client_id"] == "real-simkl-client-id"
+        finally:
+            shutil.rmtree(config_dir)
+
     def test_works_without_module_files(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
             f.write("plex:\n  url: http://localhost:32400\n")
@@ -1221,6 +1265,110 @@ class TestModularConfigLoading:
             assert result["trakt"]["enabled"] is True
             # Pre-existing client_id, not mentioned by trakt.yml, survives.
             assert result["trakt"]["client_id"] == "legacy_id"
+        finally:
+            import shutil
+
+            shutil.rmtree(config_dir)
+
+    def test_mdblist_module_deep_merges_into_existing_same_named_section(self):
+        """Same deep-merge guarantee as the trakt/radarr/sonarr test
+        above, for mdblist.yml - added alongside trakt/radarr/sonarr in
+        the loader loop, so it must behave identically."""
+        from utils.config import _load_module_configs
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            mdblist_path = os.path.join(config_dir, "mdblist.yml")
+            with open(mdblist_path, "w") as f:
+                f.write("enabled: true\n")
+
+            config = {
+                "plex": {"url": "http://localhost:32400"},
+                "mdblist": {"enabled": False, "list_prefix": "Curatarr"},
+            }
+            result = _load_module_configs(config, config_dir)
+
+            # mdblist.yml's explicit override wins.
+            assert result["mdblist"]["enabled"] is True
+            # Pre-existing list_prefix, not mentioned by mdblist.yml, survives.
+            assert result["mdblist"]["list_prefix"] == "Curatarr"
+        finally:
+            import shutil
+
+            shutil.rmtree(config_dir)
+
+    def test_simkl_module_deep_merges_into_existing_same_named_section(self):
+        """Same deep-merge guarantee as the trakt/radarr/sonarr test
+        above, for simkl.yml - added alongside trakt/radarr/sonarr in
+        the loader loop, so it must behave identically."""
+        from utils.config import _load_module_configs
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            simkl_path = os.path.join(config_dir, "simkl.yml")
+            with open(simkl_path, "w") as f:
+                f.write("enabled: true\n")
+
+            config = {
+                "plex": {"url": "http://localhost:32400"},
+                "simkl": {"enabled": False, "client_id": "legacy_id"},
+            }
+            result = _load_module_configs(config, config_dir)
+
+            # simkl.yml's explicit override wins.
+            assert result["simkl"]["enabled"] is True
+            # Pre-existing client_id, not mentioned by simkl.yml, survives.
+            assert result["simkl"]["client_id"] == "legacy_id"
+        finally:
+            import shutil
+
+            shutil.rmtree(config_dir)
+
+    def test_env_var_overrides_mdblist_api_key_when_mdblist_yml_also_present(self, monkeypatch):
+        """Closes the gap CHANGELOG 2.10.74 noted: MDBLIST_API_KEY
+        previously only took effect for an install embedding an
+        `mdblist:` section directly in config.yml, because
+        _load_module_configs never loaded mdblist.yml at all. Now that
+        it does, the env var must still win over whatever mdblist.yml
+        itself says (env always wins, #289)."""
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            mdblist_path = os.path.join(config_dir, "mdblist.yml")
+            with open(mdblist_path, "w") as f:
+                f.write("enabled: true\napi_key: file-key\n")
+
+            monkeypatch.setenv("MDBLIST_API_KEY", "env-key")
+            result = load_config(config_path)
+            assert result["mdblist"]["api_key"] == "env-key"
+            # File-only key (enabled) is untouched by the env override.
+            assert result["mdblist"]["enabled"] is True
+        finally:
+            import shutil
+
+            shutil.rmtree(config_dir)
+
+    def test_env_var_overrides_simkl_client_id_when_simkl_yml_also_present(self, monkeypatch):
+        """Same gap-closing guarantee as the MDBList test above, for
+        SIMKL_CLIENT_ID/simkl.yml."""
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w") as f:
+                f.write("plex:\n  url: http://localhost:32400\n")
+
+            simkl_path = os.path.join(config_dir, "simkl.yml")
+            with open(simkl_path, "w") as f:
+                f.write("enabled: true\nclient_id: file-client-id\n")
+
+            monkeypatch.setenv("SIMKL_CLIENT_ID", "env-client-id")
+            result = load_config(config_path)
+            assert result["simkl"]["client_id"] == "env-client-id"
+            # File-only key (enabled) is untouched by the env override.
+            assert result["simkl"]["enabled"] is True
         finally:
             import shutil
 
