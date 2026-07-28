@@ -167,13 +167,27 @@ class TestProfileBuilderHarnessCatchesTheFourBugs:
             "may have regressed."
         )
 
-    def test_bug3_external_build_user_profile_ignores_username(self):
-        """Bug #3: build_user_profile()'s username parameter has zero
-        effect on its output - alice's and bob's calls (against the
-        exact same shared admin-token `plex` connection every builder
-        here receives) produce byte-identical results."""
+    def test_bug3_external_build_user_profile_now_respects_username(self):
+        """Bug #3 - FIXED (#273 PR3): build_user_profile() (which had
+        zero username effect - it always scanned whatever `plex`
+        connection the caller already had) has been DELETED entirely
+        and replaced by _build_profile_via_recommender(), which
+        constructs a real, username-scoped PlexMovieRecommender/
+        PlexTVRecommender directly - the same "shared path" the other
+        three builders already use. alice's and bob's calls now
+        produce genuinely different profiles, matching their own
+        distinct fixture watch histories (see MOVIE_WATCHED_BY in
+        tests/e2e_plex_fixture.py) - the opposite of the pinned bug
+        this test used to assert."""
         live = run_profile_builders()
-        assert live["external_build_user_profile_movie_alice"] == live["external_build_user_profile_movie_bob"]
+        alice = live["external_profile_via_recommender_movie_alice"]
+        bob = live["external_profile_via_recommender_movie_bob"]
+        assert alice != bob, (
+            "alice's and bob's _build_profile_via_recommender() profiles are identical again - "
+            "the #273 PR3 username fix may have regressed."
+        )
+        assert alice["tmdb_ids"] == ["101", "102", "103", "104", "105", "106"]
+        assert bob["tmdb_ids"] == ["107", "108", "109", "110"]
 
     def test_external_load_cache_adapter_renames_tmdb_keywords_to_keywords(self):
         """recommenders/external.py's load_user_profile_from_cache() is
