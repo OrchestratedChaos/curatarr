@@ -466,11 +466,13 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         assert result["show_rating"] == movies["show_rating"]
         assert result["show_imdb_link"] == movies["show_imdb_link"]
         assert result["weights"] == movies["weights"]
-        # quality_filters is resolved by BaseRecommender.get_recommendations(),
-        # not here (see TestResolveMediaTypeOverrides) - assert the raw
-        # section itself is at least present and unmodified, so a caller
-        # reading it directly (as get_recommendations() does) sees it.
+        # quality_filters/recommend_for_no_history are both resolved by
+        # BaseRecommender.get_recommendations(), not here (see
+        # TestResolveMediaTypeOverrides) - assert the raw section itself
+        # is at least present and unmodified, so a caller reading it
+        # directly (as get_recommendations() does) sees it.
         assert result["movies"]["quality_filters"] == movies["quality_filters"]
+        assert result["movies"]["recommend_for_no_history"] == movies["recommend_for_no_history"]
 
     def test_every_documented_tv_key_resolves(self):
         tuning = self._load_example_tuning()
@@ -488,6 +490,7 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         assert "show_director" not in result
         assert result["weights"] == tv["weights"]
         assert result["tv"]["quality_filters"] == tv["quality_filters"]
+        assert result["tv"]["recommend_for_no_history"] == tv["recommend_for_no_history"]
 
     def test_movies_and_tv_documented_keys_are_all_covered_by_this_class(self):
         """Belt-and-braces: fails loudly (instead of silently passing) if
@@ -505,6 +508,7 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
             "show_rating",
             "show_imdb_link",
             "quality_filters",
+            "recommend_for_no_history",
             "weights",
         }
         covered_tv_keys = {
@@ -517,6 +521,7 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
             "show_rating",
             "show_imdb_link",
             "quality_filters",
+            "recommend_for_no_history",
             "weights",
         }
         assert set(tuning["movies"].keys()) <= covered_movie_keys, (
@@ -649,6 +654,19 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
         this class exists to catch."""
         tuning = self._load_example_tuning()
         assert tuning["profile_accuracy"]["enabled"] is False
+
+    def test_recommend_for_no_history_defaults_match(self):
+        """#291: BaseRecommender.get_recommendations() reads
+        movies.recommend_for_no_history/tv.recommend_for_no_history with
+        this exact fallback default when the key is absent - a
+        documented example value silently drifting from the real code
+        default is exactly the #261-class bug this guardrail class
+        exists to catch."""
+        from recommenders.base import RECOMMEND_FOR_NO_HISTORY_DEFAULT
+
+        tuning = self._load_example_tuning()
+        assert tuning["movies"]["recommend_for_no_history"] == RECOMMEND_FOR_NO_HISTORY_DEFAULT
+        assert tuning["tv"]["recommend_for_no_history"] == RECOMMEND_FOR_NO_HISTORY_DEFAULT
 
     def test_top_level_sections_are_all_covered_by_this_class(self):
         """Belt-and-braces, mirroring

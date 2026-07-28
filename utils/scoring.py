@@ -1061,7 +1061,25 @@ def select_tiered_recommendations(
         extra = safe_pool[safe_count : safe_count + remaining]
         selected.extend(extra)
 
-    # Sort final selection by score for consistent output
-    selected.sort(key=lambda x: x.get("similarity_score", x.get("score", 0)), reverse=True)
+    # Sort final selection by score for consistent output - same
+    # (score, rating, vote_count) tiebreaker as
+    # BaseRecommender.get_recommendations()'s own scored_items.sort()
+    # (#291): scored_items is already tiebroken this way by the time it
+    # reaches this function (see that sort's own comment), but this
+    # final re-sort is itself the last word on display order (the
+    # safe/diverse/wildcard tiers above are assembled by slicing plus
+    # rng.sample(), which does not preserve input order for the
+    # diverse/wildcard picks) - without the same tiebreaker here, an
+    # all-(or partially-)tied-score set (the cold-start case) would
+    # collapse back to whatever incidental order the tier
+    # slicing/sampling above left them in, rather than best-rated-first.
+    selected.sort(
+        key=lambda x: (
+            x.get("similarity_score", x.get("score", 0)),
+            x.get("rating") or 0.0,
+            x.get("vote_count") or 0,
+        ),
+        reverse=True,
+    )
 
     return selected[:limit]

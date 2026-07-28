@@ -689,6 +689,97 @@ def _find_stale_owned_collections(all_collections: List[Any], collection_name: s
     ]
 
 
+def remove_owned_collection(section: Any, private_label: str, username: str, reason: str, logger: Any = None) -> bool:
+    """Remove a user's own curatarr-created collection (#291
+    recommend_for_no_history: false path) - fires ONLY when a user has
+    zero watch history AND that config is explicitly disabled, never on
+    the default (create) path. See BaseRecommender._remove_collection_
+    for_no_history, the only caller.
+
+    Ownership is confirmed ONLY via the PrivateCollection_<user> label
+    already on the collection - the exact same marker
+    _find_stale_owned_collections/update_plex_collection's own
+    rename-on-template-change path trusts (#274) - never inferred from
+    title, emoji, or name pattern. A false positive here would delete a
+    real, hand-curated collection instead of one curatarr created, so
+    every branch below either removes a single unambiguously-owned
+    collection or leaves everything alone and logs why.
+
+    That label is applied by manage_plex_labels()/update_plex_collection
+    unconditionally whenever collections.add_label is enabled,
+    independent of whether collections.private_collections is itself
+    enabled (private_collections only gates the cross-user Plex
+    exclude-filter push in utils.plex_policy.apply_user_label_
+    restrictions - see update_plex_collection's own docstring) - so this
+    removal path can confirm ownership the same way regardless of that
+    setting.
+
+    Args:
+        section: PlexAPI library section (movies or shows)
+        private_label: This user's PrivateCollection_<user> label
+        username: Real username, for the log message only
+        reason: Human-readable reason this run wants the collection gone
+            (e.g. "no watch history and movies.recommend_for_no_history
+            is disabled"), for the log message only
+        logger: Optional logger instance (falls back to print, matching
+            every other function in this module)
+
+    Returns:
+        True if a collection was found and removed, False otherwise -
+        nothing found, ownership ambiguous, or the delete call itself
+        failed are all logged, never silent.
+    """
+    try:
+        all_collections = list(section.collections())
+    except plexapi.exceptions.PlexApiException as e:
+        msg = f"Could not list Plex collections to check for one to remove for {username}: {e}"
+        if logger:
+            logger.warning(msg)
+        else:
+            print(f"WARNING: {msg}")
+        return False
+
+    owned = [c for c in all_collections if private_label in [label.tag for label in c.labels]]
+
+    if not owned:
+        # Nothing carries this user's label - either they never had a
+        # collection, or add_label/private-label application was off
+        # when it was created. Nothing safe to remove either way.
+        return False
+
+    if len(owned) > 1:
+        titles = [c.title for c in owned]
+        msg = (
+            f"{username} has no watch history ({reason}), but {len(owned)} collections carry "
+            f"label {private_label!r} ({titles}) - ownership is ambiguous, leaving all of them "
+            "alone rather than guessing which one to remove"
+        )
+        if logger:
+            logger.warning(msg)
+        else:
+            print(f"WARNING: {msg}")
+        return False
+
+    collection = owned[0]
+    title = collection.title
+    try:
+        collection.delete()
+    except plexapi.exceptions.PlexApiException as e:
+        msg = f"Could not remove collection {title!r} for {username} ({reason}): {e}"
+        if logger:
+            logger.warning(msg)
+        else:
+            print(f"WARNING: {msg}")
+        return False
+
+    msg = f"Removed collection {title!r} for {username}: {reason} (ownership confirmed via label {private_label!r})"
+    if logger:
+        logger.warning(msg)
+    else:
+        print(f"WARNING: {msg}")
+    return True
+
+
 def update_plex_collection(
     section: Any,
     collection_name: str,

@@ -2076,6 +2076,151 @@ class TestUpdatePlexCollectionRenameOnTemplateChange:
         bob_stale.editTitle.assert_not_called()
 
 
+class TestRemoveOwnedCollection:
+    """Tests for utils.plex.remove_owned_collection (#291
+    recommend_for_no_history: false path) - the removal path's actual
+    find/confirm/remove logic. Ownership is confirmed ONLY via the
+    PrivateCollection_<user> label already on the collection (the same
+    marker TestUpdatePlexCollectionRenameOnTemplateChange's
+    rename-on-template-change coverage above trusts, #274) - never
+    inferred from title, emoji, or name pattern."""
+
+    @staticmethod
+    def _make_collection(title, labels=()):
+        collection = Mock()
+        collection.title = title
+        collection.labels = [Mock(tag=t) for t in labels]
+        return collection
+
+    def test_removes_collection_confirmed_by_label(self):
+        from utils.plex import remove_owned_collection
+
+        owned = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [owned]
+
+        result = remove_owned_collection(mock_section, "PrivateCollection_alice", "alice", "no watch history")
+
+        assert result is True
+        owned.delete.assert_called_once()
+
+    def test_does_not_remove_when_label_absent(self):
+        """A collection (even one with a matching title) that doesn't
+        carry the PrivateCollection_<user> label is never removed -
+        ownership must be positively confirmed, never guessed."""
+        from utils.plex import remove_owned_collection
+
+        unrelated = self._make_collection("🎬 Alice - Recommendation")  # no labels at all
+        mock_section = Mock()
+        mock_section.collections.return_value = [unrelated]
+
+        result = remove_owned_collection(mock_section, "PrivateCollection_alice", "alice", "no watch history")
+
+        assert result is False
+        unrelated.delete.assert_not_called()
+
+    def test_does_not_remove_when_ambiguous(self):
+        """More than one collection carries this same private_label -
+        never guess which one to delete; leave all alone and log why."""
+        from utils.plex import remove_owned_collection
+
+        dup_1 = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        dup_2 = self._make_collection("Old duplicate - Alice", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [dup_1, dup_2]
+        mock_logger = Mock()
+
+        result = remove_owned_collection(
+            mock_section, "PrivateCollection_alice", "alice", "no watch history", logger=mock_logger
+        )
+
+        assert result is False
+        dup_1.delete.assert_not_called()
+        dup_2.delete.assert_not_called()
+        mock_logger.warning.assert_called_once()
+        assert "ambiguous" in mock_logger.warning.call_args[0][0]
+
+    def test_never_touches_another_users_collection(self):
+        """Two users' collections coexist in the same library, each with
+        their own private_label - removing alice's must never touch
+        bob's."""
+        from utils.plex import remove_owned_collection
+
+        alice_owned = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        bob_owned = self._make_collection("🎬 Bob - Recommendation", labels=["PrivateCollection_bob"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [alice_owned, bob_owned]
+
+        remove_owned_collection(mock_section, "PrivateCollection_alice", "alice", "no watch history")
+
+        alice_owned.delete.assert_called_once()
+        bob_owned.delete.assert_not_called()
+
+    def test_logs_removal_with_user_collection_and_reason(self):
+        """Every removal is logged at a visible level - never silent,
+        even when configured."""
+        from utils.plex import remove_owned_collection
+
+        owned = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [owned]
+        mock_logger = Mock()
+
+        remove_owned_collection(
+            mock_section,
+            "PrivateCollection_alice",
+            "alice",
+            "no watch history and recommend_for_no_history is disabled",
+            logger=mock_logger,
+        )
+
+        mock_logger.warning.assert_called_once()
+        message = mock_logger.warning.call_args[0][0]
+        assert "alice" in message
+        assert "🎬 Alice - Recommendation" in message
+        assert "no watch history" in message
+
+    def test_no_matching_collection_is_a_silent_no_op(self):
+        from utils.plex import remove_owned_collection
+
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+
+        result = remove_owned_collection(mock_section, "PrivateCollection_alice", "alice", "no watch history")
+
+        assert result is False
+
+    def test_delete_failure_logs_and_returns_false(self):
+        from utils.plex import remove_owned_collection
+
+        owned = self._make_collection("🎬 Alice - Recommendation", labels=["PrivateCollection_alice"])
+        owned.delete.side_effect = plexapi.exceptions.PlexApiException("locked")
+        mock_section = Mock()
+        mock_section.collections.return_value = [owned]
+        mock_logger = Mock()
+
+        result = remove_owned_collection(
+            mock_section, "PrivateCollection_alice", "alice", "no watch history", logger=mock_logger
+        )
+
+        assert result is False
+        mock_logger.warning.assert_called_once()
+
+    def test_list_collections_failure_logs_and_returns_false(self):
+        from utils.plex import remove_owned_collection
+
+        mock_section = Mock()
+        mock_section.collections.side_effect = plexapi.exceptions.PlexApiException("boom")
+        mock_logger = Mock()
+
+        result = remove_owned_collection(
+            mock_section, "PrivateCollection_alice", "alice", "no watch history", logger=mock_logger
+        )
+
+        assert result is False
+        mock_logger.warning.assert_called_once()
+
+
 class TestCleanupOldCollectionsAdvanced:
     """Additional tests for cleanup_old_collections()."""
 

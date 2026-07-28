@@ -51,6 +51,7 @@ from .config import (
     RATING_TIER_3_STAR,
     RATING_TIER_4_STAR,
     RATING_TIER_5_STAR,
+    RECOMMEND_FOR_NO_HISTORY_DEFAULT,
     SONARR_REQUEST_TIMEOUT,
     TIER_DIVERSE_PERCENT,
     TIER_SAFE_PERCENT,
@@ -187,6 +188,7 @@ from .plex import (
     get_watched_show_count,
     identify_dropped_shows,
     init_plex,
+    remove_owned_collection,
     update_plex_collection,
 )
 
@@ -409,6 +411,7 @@ __all__ = [
     "TMDB_TV_MOVIE_GENRE_ID",
     "DEFAULT_NEGATIVE_MULTIPLIERS",
     "DEFAULT_NEGATIVE_THRESHOLD",
+    "RECOMMEND_FOR_NO_HISTORY_DEFAULT",
     "COLLECTION_BONUS_BASE",
     "COLLECTION_BONUS_CAP",
     "COLLECTION_BONUS_LOG_FACTOR",
@@ -543,6 +546,7 @@ __all__ = [
     "fetch_plex_watch_history_shows",
     "fetch_watch_history_with_tmdb",
     "update_plex_collection",
+    "remove_owned_collection",
     "cleanup_old_collections",
     "cleanup_legacy_unnamed_collection",
     "render_collection_name",

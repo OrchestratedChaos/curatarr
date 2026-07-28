@@ -13,7 +13,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.71"
+__version__ = "2.10.72"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
@@ -98,6 +98,33 @@ DEFAULT_NEGATIVE_MULTIPLIERS = {
 
 # Default threshold for negative signals (Plex 0-10 scale)
 DEFAULT_NEGATIVE_THRESHOLD = 3  # Ratings 0-3 become negative signals
+
+# #291: whether a user with zero watch history still gets a
+# Recommended collection built for them. Default True (create - see
+# RECOMMEND_FOR_NO_HISTORY_DEFAULT below): a brand-new/zero-history user
+# gets exactly the same collection they always have, because cold-start
+# is a solved problem in recommenders - the standard answer is falling
+# back to popular/well-rated unwatched items (see the sort-tiebreaker
+# fix alongside this flag), not producing nothing. A user who opens
+# Plex and sees no collection at all concludes the app is broken.
+#
+# Set to False (movies.recommend_for_no_history/tv.recommend_for_no_history
+# in tuning.yml) to opt OUT of that and skip zero-history users instead -
+# BaseRecommender.get_recommendations() then also removes any collection
+# already sitting in Plex for that user (see
+# BaseRecommender._remove_collection_for_no_history), so a user who
+# later goes quiet again doesn't keep a stale collection around. That
+# removal only ever targets a collection provably owned by this user via
+# its PrivateCollection_<user> label (utils.plex.remove_owned_collection)
+# - never inferred from title/emoji/name pattern - and only ever fires
+# on this explicit opt-out, never on the default path.
+#
+# Documented in config/tuning.example.yml's
+# movies.recommend_for_no_history/tv.recommend_for_no_history -
+# tests/test_config.py's guardrail class enforces the two stay identical
+# (#261 precedent: a documented example silently drifting from the real
+# code default).
+RECOMMEND_FOR_NO_HISTORY_DEFAULT = True
 
 # Rating tier thresholds (Plex uses 0-10 scale, Plex UI shows 0-5 stars)
 RATING_TIER_5_STAR = 9.0  # 5 stars: ratings 9-10

@@ -26,6 +26,22 @@ movies:
     min_rating: 5.0  # TMDB rating minimum (0-10)
     min_vote_count: 15  # Minimum votes for reliability
 
+  # Whether a user with ZERO watch history still gets a Recommended
+  # collection built for them (#291). Default true: they get exactly
+  # the same collection they always have, falling back to well-rated/
+  # popular unwatched movies - cold start is a solved problem, and the
+  # standard answer is a sensible fallback, not producing nothing (a
+  # user who opens Plex and sees no collection concludes the app is
+  # broken).
+  #
+  # Set to false to opt OUT of that instead: a zero-history user gets
+  # no collection, and any collection curatarr already created for them
+  # is actively REMOVED (only ever a collection curatarr can positively
+  # confirm it created, via its own PrivateCollection_<user> label -
+  # never guessed from title/name - and only for a user with zero
+  # watch history; a user with ANY history is never touched).
+  recommend_for_no_history: true
+
   # Scoring weights - must sum to 1.0
   weights:
     genre: 0.25
@@ -52,6 +68,12 @@ tv:
   quality_filters:
     min_rating: 0.0
     min_vote_count: 0
+
+  # Whether a user with ZERO watch history still gets a Recommended
+  # collection built for them - see movies.recommend_for_no_history
+  # above for the full rationale (including the removal behavior when
+  # set to false).
+  recommend_for_no_history: true
 
   # Scoring weights - must sum to 1.0
   weights:
