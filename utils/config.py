@@ -13,7 +13,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.74"
+__version__ = "2.10.75"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
@@ -265,7 +265,8 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
     """
     Load and merge modular config files into the main config.
 
-    Loads tuning.yml, trakt.yml, radarr.yml, sonarr.yml if they exist.
+    Loads tuning.yml, trakt.yml, radarr.yml, sonarr.yml, mdblist.yml,
+    simkl.yml if they exist.
 
     Precedence: for any top-level key a module file defines, that module
     file wins. Dict-valued keys are deep-merged (see `_deep_merge_dicts`),
@@ -275,6 +276,8 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
     specifies are overridden. Non-dict values (including lists) are
     replaced outright, never merged.
     """
+    loaded_modules = []
+
     # Tuning modules merge their sections into root
     tuning_path = os.path.join(config_dir, "tuning.yml")
     if os.path.exists(tuning_path):
@@ -284,13 +287,17 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
                 if tuning:
                     config = _deep_merge_dicts(config, tuning)
                     log_info("Loaded tuning.yml")
+                    loaded_modules.append("tuning.yml")
         except Exception as e:
             log_warning(f"Could not load tuning.yml: {e}")
 
     # Feature modules go under their key, but still deep-merge in case
     # config.yml already carries a same-named section (e.g. pre-migration
     # leftovers) - same precedence rule as above applies within that key.
-    for module in ["trakt", "radarr", "sonarr"]:
+    # mdblist/simkl added here alongside trakt/radarr/sonarr (previously
+    # missing, which meant a user's mdblist.yml/simkl.yml was silently
+    # never read at all).
+    for module in ["trakt", "radarr", "sonarr", "mdblist", "simkl"]:
         module_path = os.path.join(config_dir, f"{module}.yml")
         if os.path.exists(module_path):
             try:
@@ -303,8 +310,18 @@ def _load_module_configs(config: dict, config_dir: str) -> dict:
                         else:
                             config[module] = module_config
                         log_info(f"Loaded {module}.yml")
+                        loaded_modules.append(f"{module}.yml")
             except Exception as e:
                 log_warning(f"Could not load {module}.yml: {e}")
+
+    # Make it visible at load time which optional module files were
+    # actually found and merged, rather than only ever seeing per-file
+    # lines scroll by (or, for a file that doesn't exist, no signal at
+    # all) - one summary line an operator can grep for.
+    if loaded_modules:
+        log_info(f"Module configs merged: {', '.join(loaded_modules)}")
+    else:
+        log_info("No optional module config files found (config.yml only)")
 
     return config
 
@@ -382,6 +399,8 @@ def load_config(config_path: str) -> dict:
     - trakt.yml: Trakt integration settings
     - radarr.yml: Radarr integration settings
     - sonarr.yml: Sonarr integration settings
+    - mdblist.yml: MDBList integration settings
+    - simkl.yml: Simkl integration settings
 
     Environment variables take precedence over all config values - see
     ENV_VAR_OVERRIDES above for the full, current list (this is a

@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.75] - 2026-07-27
+
+### Fixed
+
+- **`mdblist.yml`/`simkl.yml` were shipped as example configs but never actually loaded - a real config bug, same class as #261.** `utils/config.py::_load_module_configs()` looped over exactly `["trakt", "radarr", "sonarr"]`, so a user who copied `config/mdblist.example.yml`/`config/simkl.example.yml`, filled in a real API key/client ID, and set `enabled: true` was silently ignored - `recommenders/external_sync.py`'s `export_to_mdblist()`/`export_to_simkl()` always saw `config.get("mdblist", {})`/`config.get("simkl", {})` come back empty, then logged "check config/mdblist.yml"/"check config/simkl.yml" - telling the user to check the exact file they'd just filled in.
+
+  Fixed by adding `mdblist`/`simkl` to the same module-file loop `trakt`/`radarr`/`sonarr` already go through, with the identical deep-merge precedence (a module file's keys win; sibling keys it doesn't mention survive). Both shipped examples default `enabled: false`, so this is a behavior change only for an install that already has one of these files with `enabled: true` sitting in `config/` - for whom the change is "the integration I explicitly configured starts working," not a surprise. Verified no such file exists on this install before merging.
+
+  Also closes a documented half of #289: `MDBLIST_API_KEY`/`SIMKL_CLIENT_ID`/`SIMKL_ACCESS_TOKEN` previously only took effect for an install that embedded an `mdblist:`/`simkl:` section directly in `config.yml` itself (env-var override application was already unconditional, but had nothing to override on top of when the module file was never read). Now verified to win over a value the module file itself sets, same as every other integration.
+
+  `_load_module_configs()` now also logs one summary line at load time ("Module configs merged: ..." or "No optional module config files found") so which module files were actually found and merged is visible, not just inferred from individual per-file lines.
+
+  Removed `web/config_app.py`'s docstring note describing this as a deliberate, deferred gap, since it no longer exists. Left `mdblist`/`simkl` unexposed on a Settings/Connections screen for now (UI work, out of scope for this config-loading fix) - both are still config-file-only, same as before.
+
+  New coverage in `tests/test_config.py::TestModularConfigLoading`: both files load and merge; both deep-merge into a pre-existing same-named section instead of replacing it outright; the three env-var overrides apply and win even when the corresponding module file also sets that key.
+
 ## [2.10.74] - 2026-07-27
 
 ### Added
