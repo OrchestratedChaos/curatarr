@@ -13,7 +13,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.71"
+__version__ = "2.10.72"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
@@ -98,6 +98,24 @@ DEFAULT_NEGATIVE_MULTIPLIERS = {
 
 # Default threshold for negative signals (Plex 0-10 scale)
 DEFAULT_NEGATIVE_THRESHOLD = 3  # Ratings 0-3 become negative signals
+
+# #291: minimum number of watched movies/shows a user needs before
+# BaseRecommender.get_recommendations() will build/update a Recommended
+# collection for them at all - below this, a "profile" is really just
+# "recommend more like this one thing", not a genuine preference signal,
+# and produces a collection that looks arbitrary rather than
+# personalized. 0 (no watch history at all) is the unambiguous floor;
+# picked 2 (not 1) as the actual default because a single watched item
+# still has this same "recommend more of exactly that" problem - lean
+# conservative here: skipping a user who might otherwise have gotten a
+# poor collection is fully recoverable (they just get one once they've
+# watched enough), while the reverse (a confusing collection built from
+# near-zero signal) is something the user has to notice and clean up
+# in Plex themselves. Documented in config/tuning.example.yml's
+# movies.min_watch_history/tv.min_watch_history - tests/test_config.py's
+# guardrail class enforces the two stay identical (#261 precedent: a
+# documented example silently drifting from the real code default).
+MIN_WATCH_HISTORY_DEFAULT = 2
 
 # Rating tier thresholds (Plex uses 0-10 scale, Plex UI shows 0-5 stars)
 RATING_TIER_5_STAR = 9.0  # 5 stars: ratings 9-10

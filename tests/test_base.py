@@ -11,7 +11,7 @@ import plexapi.exceptions
 import requests
 
 import recommenders.base as base_module
-from recommenders.base import BaseCache, BaseRecommender
+from recommenders.base import MIN_WATCH_HISTORY_DEFAULT, BaseCache, BaseRecommender
 from utils.helpers import get_project_root
 
 
@@ -724,7 +724,7 @@ class TestBaseRecommenderMediaSectionConfig:
         media_cache.cache = {"movies": items}
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        recommender.watched_ids = set()
+        recommender.watched_ids = {90001, 90002, 90003}  # #291: above MIN_WATCH_HISTORY_DEFAULT
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
         recommender.user_preferences = {}
@@ -2859,7 +2859,11 @@ class TestGetRecommendationsBranches:
         media_cache.cache = {"movies": items}
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        recommender.watched_ids = set()
+        # #291: safely above MIN_WATCH_HISTORY_DEFAULT - these tests are
+        # about quality filters/caching/tiered selection/debug logging,
+        # not the min-watch-history gate (see TestMinWatchHistoryGate for
+        # that), so this fixture must never itself get gated out.
+        recommender.watched_ids = {90001, 90002, 90003}
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
         recommender.user_preferences = {}
@@ -2906,7 +2910,7 @@ class TestGetRecommendationsBranches:
         }
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        recommender.watched_ids = set()
+        recommender.watched_ids = {90001, 90002, 90003}  # #291: above MIN_WATCH_HISTORY_DEFAULT
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
         recommender.user_preferences = {}
@@ -2944,7 +2948,7 @@ class TestGetRecommendationsBranches:
         media_cache.cache = {"shows": {"1": {"title": "No TMDB Match", "genres": []}}}
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        recommender.watched_ids = set()
+        recommender.watched_ids = {90001, 90002, 90003}  # #291: above MIN_WATCH_HISTORY_DEFAULT
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
         recommender.user_preferences = {}
@@ -3043,6 +3047,92 @@ class TestGetRecommendationsBranches:
 
         titles = [i["title"] for i in result["plex_recommendations"]]
         assert titles == ["Fine"]
+
+
+class TestMinWatchHistoryGate:
+    """#291: a user with too little watch history to build a
+    meaningful profile from gets no collection at all, rather than one
+    built from noise - see BaseRecommender.get_recommendations()'s own
+    comment for the full rationale, including why this is skip-only,
+    never a delete of an existing collection (movie.py's
+    process_recommendations() never calls manage_plex_labels() at all
+    when plex_recommendations is empty - see
+    tests/test_movie.py::TestProcessRecommendationsMovie::
+    test_no_recommendations_warns_and_skips_labels for that existing
+    coverage - and tv.py's manage_plex_labels([]) returns before
+    touching Plex either way)."""
+
+    def _recommender_with_watched_ids(self, watched_ids, min_watch_history=None):
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {"movies": {"1": {"title": "Candidate", "rating": 8.0, "vote_count": 500, "genres": []}}}
+        media_cache._save_cache = Mock()
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender.watched_ids = set(watched_ids)
+        recommender.profile_hash = "hash1"
+        recommender.exclude_genres = []
+        recommender.user_preferences = {}
+        recommender.randomize_recommendations = False
+        if min_watch_history is not None:
+            recommender.media_config = {"min_watch_history": min_watch_history}
+        return recommender
+
+    @patch("recommenders.base.log_warning")
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_zero_watch_history_skips_and_logs_clearly(self, mock_excl, mock_warn):
+        recommender = self._recommender_with_watched_ids(set())
+        recommender.single_user = "alice"
+
+        result = recommender.get_recommendations()
+
+        assert result == {"plex_recommendations": []}
+        mock_warn.assert_called_once()
+        message = mock_warn.call_args[0][0]
+        assert "alice" in message
+        assert "0 watched" in message
+        assert str(MIN_WATCH_HISTORY_DEFAULT) in message
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_above_threshold_user_is_unaffected(self, mock_excl):
+        # Watched IDs deliberately distinct from the candidate item's own
+        # id ("1" in media_cache.cache above) - these represent OTHER,
+        # already-watched movies, not the one unwatched candidate this
+        # test expects back.
+        recommender = self._recommender_with_watched_ids({101, 102, 103})
+        recommender.single_user = "alice"
+
+        result = recommender.get_recommendations()
+
+        assert len(result["plex_recommendations"]) == 1
+        assert result["plex_recommendations"][0]["title"] == "Candidate"
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_exactly_at_threshold_is_not_gated(self, mock_excl):
+        """The threshold is an inclusive floor - having watched exactly
+        min_watch_history items is enough, not one short of it."""
+        recommender = self._recommender_with_watched_ids({101, 102}, min_watch_history=2)
+
+        result = recommender.get_recommendations()
+
+        assert len(result["plex_recommendations"]) == 1
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_one_below_threshold_is_gated(self, mock_excl):
+        recommender = self._recommender_with_watched_ids({101}, min_watch_history=2)
+
+        result = recommender.get_recommendations()
+
+        assert result == {"plex_recommendations": []}
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_threshold_configurable_via_media_config(self, mock_excl):
+        """A configured movies.min_watch_history/tv.min_watch_history
+        overrides the code default."""
+        recommender = self._recommender_with_watched_ids({101, 102, 103, 104}, min_watch_history=5)
+
+        result = recommender.get_recommendations()
+
+        assert result == {"plex_recommendations": []}
 
 
 class TestLoadWatchedCache:

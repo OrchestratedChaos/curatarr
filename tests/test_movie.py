@@ -986,6 +986,7 @@ class TestPlexMovieRecommenderExcludedGenres:
 
         recommender = PlexMovieRecommender("/path/to/config.yml")
         recommender.watched_movie_ids = set()
+        recommender.watched_ids = {101, 102}  # #291: above MIN_WATCH_HISTORY_DEFAULT
         recommender.cached_watched_count = 0
         recommender.watched_data = {
             "genres": Counter(),

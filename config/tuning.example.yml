@@ -26,6 +26,15 @@ movies:
     min_rating: 5.0  # TMDB rating minimum (0-10)
     min_vote_count: 15  # Minimum votes for reliability
 
+  # Minimum watched movies before a user gets a Recommended collection
+  # at all (#291). Below this, there's too little watch history to
+  # build a genuine preference signal from - a "profile" built from a
+  # single film is really just "recommend more like that one movie",
+  # not a personalized recommendation, so no collection is created
+  # (an EXISTING collection from a prior run is left untouched either
+  # way, never deleted).
+  min_watch_history: 2
+
   # Scoring weights - must sum to 1.0
   weights:
     genre: 0.25
@@ -52,6 +61,10 @@ tv:
   quality_filters:
     min_rating: 0.0
     min_vote_count: 0
+
+  # Minimum watched shows before a user gets a Recommended collection
+  # at all - see movies.min_watch_history above for the full rationale.
+  min_watch_history: 2
 
   # Scoring weights - must sum to 1.0
   weights:

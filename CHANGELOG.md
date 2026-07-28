@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.72] - 2026-07-27
+
+### Added
+
+- **A user with no (or too little) watch history no longer gets a Recommended collection built from noise (#291).** `BaseRecommender.get_recommendations()` (shared by `movie.py` and `tv.py`, and by every watched-data builder underneath it - #273's per-user builders, base.py's managed-users path) now checks the user's actual watched-item count before doing any scoring at all. Below the configured minimum, the run logs a clear line naming the user, the actual count, and the configured threshold, and returns no recommendations - exactly the same "nothing to recommend" path an empty-candidate-pool run already takes, so an EXISTING collection from a prior run is left completely untouched (`movie.py` never calls `manage_plex_labels()` at all in that case; `tv.py`'s own `manage_plex_labels([])` returns before touching Plex either way) - never a delete.
+
+  New `movies.min_watch_history` / `tv.min_watch_history` (`config/tuning.example.yml`), default **2** (`MIN_WATCH_HISTORY_DEFAULT`, `utils/config.py`). Zero watched items is the unambiguous case; a single watched item still has the same "recommend more of exactly that one thing" problem a true zero does - a profile built from one data point isn't a genuine preference signal, just a fluke. Leaned conservative in choosing the default (2, not 1 or 0): skipping a user who might otherwise have gotten a borderline collection is fully recoverable (they get one once they've watched enough), while a confusing collection built from near-zero signal is something the user has to notice and manually clean up in Plex.
+
+  **Verified in a real container**: triggered a real `movie` run for a user with a genuinely empty (0-item) Plex library through the actual production pipeline - the log showed `Skipping movies recommendations for fake_admin: only 0 watched movies (below the configured minimum of 2 - see movies.min_watch_history in tuning.yml). Any existing collection is left as-is.`, and no collection/label write of any kind was attempted. New unit coverage in `tests/test_base.py::TestMinWatchHistoryGate`: zero-history and one-below-threshold users are gated with a clear log line naming the user/count/threshold; a user at or above the threshold (including exactly at it - the threshold is an inclusive floor) is unaffected; the threshold is configurable per media type via `media_config`. `config/tuning.example.yml`'s documented default is cross-checked against `MIN_WATCH_HISTORY_DEFAULT` by `tests/test_config.py`'s existing guardrail class (the same #261-class mismatch this class exists to catch).
+
 ## [2.10.71] - 2026-07-27
 
 ### Fixed

@@ -30,6 +30,7 @@ from utils import (
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_TV_NAME_TEMPLATE,
     GREEN,
+    MIN_WATCH_HISTORY_DEFAULT,
     RATING_MULTIPLIER_2_STAR,
     RATING_MULTIPLIER_3_STAR,
     RATING_MULTIPLIER_4_STAR,
@@ -858,6 +859,35 @@ class BaseRecommender(ABC):
         if self.cached_watched_count > 0 and not self.watched_ids:
             self.watched_data_counters = self._get_watched_data()
             self._save_watched_cache()
+
+        # #291: a user with too little watch history to build a
+        # meaningful profile from gets no collection at all, rather
+        # than one built from noise - self.watched_ids is populated by
+        # whichever watched-data builder actually ran for this user
+        # (movie.py's/tv.py's own per-user builder, or base.py's
+        # managed-users path - see #273), so this check sits above all
+        # of them and applies regardless of which one populated it.
+        # Returning {"plex_recommendations": []} here reaches the exact
+        # same "nothing to recommend" path movie.py/tv.py already
+        # handle for a user with zero matching candidates: movie.py
+        # never calls manage_plex_labels() at all in that case, and
+        # tv.py's own manage_plex_labels([]) returns immediately before
+        # touching Plex (see that method's own early-return on an empty
+        # list) - either way, an existing collection from a PRIOR run
+        # (before this user's watch history dropped, or before this
+        # config was set) is left completely untouched, never deleted.
+        min_watch_history = self.media_config.get("min_watch_history", MIN_WATCH_HISTORY_DEFAULT)
+        watched_count = len(self.watched_ids)
+        if watched_count < min_watch_history:
+            who = self.single_user or "the configured user(s)"
+            media_section = "movies" if self.media_type == "movie" else "tv"
+            log_warning(
+                f"Skipping {self.media_key} recommendations for {who}: only {watched_count} watched "
+                f"{self.media_key} (below the configured minimum of {min_watch_history} - "
+                f"see {media_section}.min_watch_history in tuning.yml). Any existing collection is "
+                "left as-is."
+            )
+            return {"plex_recommendations": []}
 
         # Get all items from cache
         media_cache = self._get_media_cache()
