@@ -71,7 +71,14 @@ from .config_app import register_config_routes
 from .job_runner import DONE_SENTINEL, JobAlreadyRunningError, JobError, JobManager
 from .scheduler_runner import SchedulerThread
 from .security import redact, register_origin_host_guard, register_token_auth
-from .status import find_user_watchlist, get_last_run_status, list_log_files, read_log_tail
+from .status import (
+    LOG_VIEW_MAX_BYTES,
+    find_user_watchlist,
+    get_last_run_status,
+    list_log_files,
+    read_log_full,
+    read_log_tail,
+)
 from .update_apply import (
     UpdateAlreadyInProgressError,
     UpdateManager,
@@ -612,6 +619,19 @@ def create_app(
                 if last_run
                 else None,
                 "trakt_export": trakt_export,
+                # #292: the last (or in-progress) web-UI-triggered job's
+                # own per-stage breakdown (see web/job_runner.py's
+                # Job.stage_results/external_produced_output, #282/#288) -
+                # None whenever nothing has been triggered from the web
+                # UI at all yet in this process's lifetime. This is a
+                # DIFFERENT signal than last_run above (which is
+                # per-user, spans movie.py AND tv.py, and survives a
+                # server restart via logs/run_status_*.json) - this one
+                # is specifically "what did the most recent Run-page
+                # click do", including which of movie/tv/external ran,
+                # was skipped, or failed, which last_run's single
+                # success/failed/unknown can't express on its own.
+                "last_job": app.job_manager.status(),
             }
         )
 
@@ -835,11 +855,30 @@ def create_app(
 
     @app.get("/results/log/<path:filename>")
     def results_log(filename):
+        # #283: default view is still the last-500-lines tail (cheap,
+        # fine for the common case of "what just happened") - `?view=full`
+        # opts into read_log_full() instead, the only way to reach the
+        # true START of a long run's output (cleanup_old_logs() retains
+        # up to ~20MB per log, so the tail alone can genuinely never
+        # reach it).
+        full = request.args.get("view") == "full"
         try:
-            tail, empty_reason = read_log_tail(logs_dir, filename)
+            if full:
+                content, empty_reason, truncated = read_log_full(logs_dir, filename)
+            else:
+                content, empty_reason = read_log_tail(logs_dir, filename)
+                truncated = False
         except FileNotFoundError:
             abort(404)
-        return render_template("log_view.html", filename=filename, content=tail, empty_reason=empty_reason)
+        return render_template(
+            "log_view.html",
+            filename=filename,
+            content=content,
+            empty_reason=empty_reason,
+            full=full,
+            truncated=truncated,
+            max_bytes=LOG_VIEW_MAX_BYTES,
+        )
 
     return app
 

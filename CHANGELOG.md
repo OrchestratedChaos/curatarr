@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.70] - 2026-07-27
+
+### Fixed
+
+- **Web UI status badge reported "success" on a real failure (#292), and the log viewer couldn't reach the start of a long log (#283) - same `TAIL_BYTES` truncation behind both.** `web/status.py`'s `get_last_run_status()` used to infer success/failure entirely by grepping the last 200KB of whichever log file `latest_user_log()` picked for three fixed English substrings ("traceback (most recent call last)", "fatal error", "an error occurred"). Two confirmed, real failure modes: (1) a failure logged any other way (e.g. `recommenders/external_sync.py`'s `log_error(f"Failed to export {user} to Trakt: {e}")`, no traceback dump) reads as success - the exact shape that let a Trakt auth failure report success for six months before `utils/integration_status.py` (v2.10.54) covered that one specific case; (2) `movie.py`/`tv.py` both write to the identical `recommendations_<user>_<timestamp>.log` naming, so the newest-by-mtime pick can show one engine's outcome while masking a different, older failure from the other.
+
+  **Stopped inferring status from English prose.** New `utils/run_status.py` (same explicit, structured, atomic-write shape as `utils/integration_status.py`): `recommenders/movie.py`'s and `tv.py`'s `process_recommendations()` and `recommenders/external.py`'s per-user loops now record their own real observed outcome - did processing for this user raise at all - immediately after each (engine, user) pair finishes, independent of whether `movie.py`'s own fatal-keyword check additionally decides to `sys.exit()` over it. `get_last_run_status()` now reads this back directly per user, comparing each engine's own recorded timestamp (never file mtime) to resolve which is newest - fixing failure mode 2 as a side effect. Falls back to the legacy log-tail heuristic only when neither engine has ever recorded a status for a user yet (an install predating this fix, or a run from before it shipped) - every already-written log on every existing install has no recorded status to prefer, so the fallback is permanent, not a migration step.
+
+  `/status.json` now also includes `last_job`: the most recent (or in-progress) web-UI-triggered job's full per-stage breakdown (`stage_results`/`external_produced_output` - #282/#288, v2.10.64) - a "succeeded" job-level exit code and a "failed" per-user `last_run` are now both visible together instead of only one or the other.
+
+  **Log viewer (#283):** new `read_log_full()` (up to `LOG_VIEW_MAX_BYTES` = 50MB, a memory-safety backstop well above `cleanup_old_logs()`'s ~20MB retention target) alongside the existing `read_log_tail()` (still the default, last 500 lines). `/results/log/<file>?view=full` and a "Show full log" / "Show last 500 lines" toggle link on the log-view page.
+
+  **Verified in a real container**: triggered a real `external` run whose per-user processing raised inside the actual subprocess pipeline - `/run/status`/`last_job` correctly showed the job itself `succeeded` (exit 0, matching the exact "silently reports success" shape this issue described), while `/status.json`'s `last_run` and the dashboard correctly showed that user as `failed`, with the real exception message surfaced as the badge's tooltip - the accurate signal the job-level exit code alone can't express. Confirmed the log-view toggle serves the full file vs. the last-500-line tail correctly for a real generated log.
+
+  New regression coverage in `tests/test_web_status.py` (explicit signal overrides conflicting log content in both directions; cross-engine timestamp comparison resolves which of movie/tv is newest; fallback to the legacy heuristic when no explicit signal exists; `read_log_full()`'s truncation/redaction/traversal-safety behavior) and `tests/test_movie.py`/`test_tv.py`/`test_external.py` (record_run_status called with the right engine/user/outcome).
+
 ## [2.10.69] - 2026-07-27
 
 ### Fixed

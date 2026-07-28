@@ -1726,3 +1726,50 @@ class TestProcessRecommendationsTV:
         process_recommendations({"general": {}}, "/path/to/config.yml", 0)
 
         mock_teardown.assert_called_once()
+
+
+class TestProcessRecommendationsRecordsRunStatus:
+    """#292: process_recommendations() records its own real observed
+    outcome via utils.run_status.record_run_status() - see
+    recommenders/movie.py's matching hook and web/status.py's
+    get_last_run_status() docstring for the full rationale."""
+
+    @patch("recommenders.tv.record_run_status")
+    @patch("recommenders.tv.PlexTVRecommender")
+    @patch("recommenders.tv.teardown_log_file")
+    @patch("recommenders.tv.setup_log_file")
+    def test_success_records_true(self, mock_setup, mock_teardown, mock_recommender_cls, mock_record):
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {"plex_recommendations": []}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
+
+        args, _kwargs = mock_record.call_args
+        assert args[1:] == ("tv", "alice", True, "")
+
+    @patch("recommenders.tv.record_run_status")
+    @patch("recommenders.tv.PlexTVRecommender")
+    @patch("recommenders.tv.teardown_log_file")
+    @patch("recommenders.tv.setup_log_file")
+    def test_error_records_false_with_detail(self, mock_setup, mock_teardown, mock_recommender_cls, mock_record):
+        mock_recommender_cls.side_effect = RuntimeError("boom")
+
+        process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
+
+        args, _kwargs = mock_record.call_args
+        assert args[1:4] == ("tv", "alice", False)
+        assert "boom" in args[4]
+
+    @patch("recommenders.tv.record_run_status")
+    @patch("recommenders.tv.PlexTVRecommender")
+    @patch("recommenders.tv.teardown_log_file")
+    @patch("recommenders.tv.setup_log_file")
+    def test_no_single_user_never_records(self, mock_setup, mock_teardown, mock_recommender_cls, mock_record):
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {"plex_recommendations": []}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({"general": {}}, "/path/to/config.yml", 0)
+
+        mock_record.assert_not_called()

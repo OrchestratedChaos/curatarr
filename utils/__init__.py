@@ -208,6 +208,14 @@ from .radarr import (
     create_radarr_client_from,
 )
 
+# Explicit, structured per-(engine, user) recommender run status (#292 -
+# see module docstring for why this replaces log-tail marker matching)
+from .run_status import (
+    get_latest_run_status_for_user,
+    get_run_status,
+    record_run_status,
+)
+
 # Scheduler utilities (#264)
 from .scheduler import (
     WEEKDAY_NAMES,
@@ -513,6 +521,10 @@ __all__ = [
     # Integration-health signal
     "record_integration_status",
     "get_integration_status",
+    # Per-(engine, user) recommender run status
+    "record_run_status",
+    "get_run_status",
+    "get_latest_run_status_for_user",
     # CLI
     "get_users_from_config",
     "resolve_admin_username",

@@ -2943,6 +2943,130 @@ class TestMainLibraryResolution:
         assert mock_sonarr.call_args[0][1] is mock_radarr.call_args[0][1]
         assert mock_sonarr.call_args[0][1] == mock_trakt.call_args[0][1]
 
+
+class TestMainImplRecordsRunStatus:
+    """#292: the per-user loop (non-fan-out path) records its own real
+    observed outcome via utils.run_status.record_run_status() -
+    independent of the job-level exit code, which stays 0 either way
+    (this loop's own except block never re-raises) - see
+    recommenders/movie.py's matching hook and web/status.py's
+    get_last_run_status() docstring for the full rationale, and this
+    module's own real-container precedent (recommenders/external_sync.py's
+    Trakt-export log_error calls, which the legacy log-tail heuristic
+    never caught for six months)."""
+
+    @patch("recommenders.external.record_run_status")
+    @patch("recommenders.external.export_to_simkl")
+    @patch("recommenders.external.export_to_mdblist")
+    @patch("recommenders.external.export_to_radarr")
+    @patch("recommenders.external.export_to_sonarr")
+    @patch("recommenders.external.export_to_trakt")
+    @patch("recommenders.external.generate_combined_html")
+    @patch("recommenders.external.find_horizon_movies")
+    @patch("recommenders.external.find_missing_sequels")
+    @patch("recommenders.external.process_user")
+    @patch("recommenders.external.PlexServer")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.load_config")
+    @patch("recommenders.external.get_project_root")
+    @patch("sys.argv", ["external.py"])
+    def test_success_records_true_per_user(
+        self,
+        mock_root,
+        mock_load_config,
+        mock_get_tmdb,
+        mock_plex_server,
+        mock_process_user,
+        mock_sequels,
+        mock_horizon,
+        mock_html,
+        mock_trakt,
+        mock_sonarr,
+        mock_radarr,
+        mock_mdblist,
+        mock_simkl,
+        mock_record,
+    ):
+        mock_root.return_value = "/fake/root"
+        mock_load_config.return_value = {
+            "plex": {"url": "http://x", "token": "y", "movie_library": "Movies", "tv_library": "TV Shows"},
+            "users": {"list": "alice"},
+            "huntarr": {"sequel_huntarr": False, "horizon_huntarr": False},
+        }
+        mock_get_tmdb.return_value = {"api_key": "key", "use_keywords": True}
+        mock_plex_server.return_value = Mock()
+        mock_process_user.return_value = {
+            "username": "alice",
+            "display_name": "alice",
+            "movies_categorized": {"user_services": {}, "other_services": {}, "acquire": []},
+            "shows_categorized": {"user_services": {}, "other_services": {}, "acquire": []},
+            "movie_profile": {},
+            "show_profile": {},
+            "user_services": [],
+            "library_id": None,
+        }
+        mock_html.return_value = None
+
+        from recommenders.external import main
+
+        main()
+
+        mock_record.assert_called_once_with(os.path.join("/fake/root", "logs"), "external", "alice", True)
+
+    @patch("recommenders.external.record_run_status")
+    @patch("recommenders.external.export_to_simkl")
+    @patch("recommenders.external.export_to_mdblist")
+    @patch("recommenders.external.export_to_radarr")
+    @patch("recommenders.external.export_to_sonarr")
+    @patch("recommenders.external.export_to_trakt")
+    @patch("recommenders.external.generate_combined_html")
+    @patch("recommenders.external.find_horizon_movies")
+    @patch("recommenders.external.find_missing_sequels")
+    @patch("recommenders.external.process_user")
+    @patch("recommenders.external.PlexServer")
+    @patch("recommenders.external.get_tmdb_config")
+    @patch("recommenders.external.load_config")
+    @patch("recommenders.external.get_project_root")
+    @patch("sys.argv", ["external.py"])
+    def test_error_records_false_with_detail_per_user(
+        self,
+        mock_root,
+        mock_load_config,
+        mock_get_tmdb,
+        mock_plex_server,
+        mock_process_user,
+        mock_sequels,
+        mock_horizon,
+        mock_html,
+        mock_trakt,
+        mock_sonarr,
+        mock_radarr,
+        mock_mdblist,
+        mock_simkl,
+        mock_record,
+    ):
+        """The concrete #292 precedent shape: a caught per-user exception
+        logged without a traceback dump - the explicit signal is the only
+        thing that catches this, not the legacy log-tail marker check."""
+        mock_root.return_value = "/fake/root"
+        mock_load_config.return_value = {
+            "plex": {"url": "http://x", "token": "y", "movie_library": "Movies", "tv_library": "TV Shows"},
+            "users": {"list": "alice"},
+            "huntarr": {"sequel_huntarr": False, "horizon_huntarr": False},
+        }
+        mock_get_tmdb.return_value = {"api_key": "key", "use_keywords": True}
+        mock_plex_server.return_value = Mock()
+        mock_process_user.side_effect = Exception("Cannot get lists: not authenticated")
+        mock_html.return_value = None
+
+        from recommenders.external import main
+
+        main()
+
+        mock_record.assert_called_once_with(
+            os.path.join("/fake/root", "logs"), "external", "alice", False, "Cannot get lists: not authenticated"
+        )
+
     @patch("recommenders.external.export_to_simkl")
     @patch("recommenders.external.export_to_mdblist")
     @patch("recommenders.external.export_to_radarr")

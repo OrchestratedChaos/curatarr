@@ -43,6 +43,7 @@ from utils import (
     log_warning,
     merge_show_watched_data,
     process_counters_from_cache,
+    record_run_status,
     run_recommender_main,
     setup_log_file,
     show_progress,
@@ -641,6 +642,12 @@ def process_recommendations(
     log_dir = os.path.join(get_project_root(), "logs")
     setup_log_file(log_dir, log_retention_days, single_user, "recommendations")
 
+    # #292: explicit, structured outcome for THIS user's TV run - see
+    # utils/run_status.py's own docstring and recommenders/movie.py's
+    # matching hook for the full rationale.
+    run_success = True
+    run_detail = ""
+
     try:
         # Create recommender with single user context
         recommender = PlexTVRecommender(
@@ -673,8 +680,12 @@ def process_recommendations(
     except Exception as e:
         print(f"\n{RED}An error occurred: {e}{RESET}")
         print(traceback.format_exc())
+        run_success = False
+        run_detail = str(e)
 
     finally:
+        if single_user:
+            record_run_status(log_dir, "tv", single_user, run_success, run_detail)
         teardown_log_file(original_stdout, log_retention_days)
 
 
