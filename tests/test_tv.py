@@ -1234,12 +1234,23 @@ class TestExtractGenresFromShow:
 class TestProcessRecommendationsLibraryParam:
     """Tests for process_recommendations library forwarding (#157 Phase 3)."""
 
+    @patch("recommenders.tv.record_run_status")
     @patch("recommenders.tv.PlexTVRecommender")
     @patch("recommenders.tv.teardown_log_file")
     @patch("recommenders.tv.setup_log_file")
-    def test_forwards_library_to_recommender(self, mock_setup_log, mock_teardown, mock_recommender_cls):
+    def test_forwards_library_to_recommender(
+        self, mock_setup_log, mock_teardown, mock_recommender_cls, mock_record_status
+    ):
         """process_recommendations passes library through to
-        PlexTVRecommender's constructor unchanged."""
+        PlexTVRecommender's constructor unchanged.
+
+        record_run_status is mocked here for the same reason
+        setup_log_file/teardown_log_file already are - this test only
+        cares about library forwarding, and conftest.py's
+        _isolated_recommender_cache_dir already isolates
+        recommenders.tv.get_project_root (log_dir) from the real repo as
+        a suite-wide safety net; this adds an explicit, test-local
+        guarantee independent of that fixture."""
         mock_instance = Mock()
         mock_instance.get_recommendations.return_value = {"plex_recommendations": []}
         mock_instance.config = {"general": {}}
@@ -1252,10 +1263,13 @@ class TestProcessRecommendationsLibraryParam:
             "/path/to/config.yml", "alice", library=library, library_items_cache=None
         )
 
+    @patch("recommenders.tv.record_run_status")
     @patch("recommenders.tv.PlexTVRecommender")
     @patch("recommenders.tv.teardown_log_file")
     @patch("recommenders.tv.setup_log_file")
-    def test_defaults_library_to_none(self, mock_setup_log, mock_teardown, mock_recommender_cls):
+    def test_defaults_library_to_none(
+        self, mock_setup_log, mock_teardown, mock_recommender_cls, mock_record_status
+    ):
         """process_recommendations defaults library=None (legacy callers)."""
         mock_instance = Mock()
         mock_instance.get_recommendations.return_value = {"plex_recommendations": []}

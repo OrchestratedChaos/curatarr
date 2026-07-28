@@ -11,8 +11,28 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _is_loopback_address(address) -> bool:
-    """True if a socket.connect() address targets only this machine.
+# Plex Media Server's well-known default port. plex.direct hostnames -
+# the ones Plex itself issues for every real server, e.g. this project's
+# own config/config.yml has "https://127-0-0-1.<hash>.plex.direct:32400"
+# - are standard, expected Plex behavior (not exotic), and they resolve
+# straight to a loopback IP (the dash-encoded address in the hostname
+# itself). By the time a real HTTP client (requests/urllib3/plexapi)
+# calls socket.connect(), that hostname has already been resolved via
+# getaddrinfo() to a plain IP, so a plex.direct name that resolves to
+# 127.0.0.1 arrives here indistinguishable from this suite's own local
+# test-server binds - a loopback-only check alone would silently ALLOW a
+# test with a real config accidentally connecting to a real, live PMS
+# instance running on this same machine, defeating the whole point of
+# this guard. Blocking this port specifically (regardless of how the
+# host got resolved) is what actually closes that gap: nothing in this
+# suite's own legitimate loopback socket use (test_web_routes.py's
+# TestWaitForListening/TestBindRetry, which always bind to an
+# OS-assigned ephemeral port via ("127.0.0.1", 0)) ever targets it.
+_PLEX_DEFAULT_PORT = 32400
+
+
+def _is_allowed_test_socket_address(address) -> bool:
+    """True if a socket.connect() address is safe to allow during a test run.
 
     address is whatever was passed to socket.socket.connect() - for
     AF_INET it's (host, port), for AF_INET6 it's (host, port, flowinfo,
@@ -21,6 +41,9 @@ def _is_loopback_address(address) -> bool:
     reaches .connect(), the host is normally already a resolved IP
     (requests/urllib3 resolve via getaddrinfo first), but 'localhost' is
     allowed too for anything that connects before resolving.
+
+    Loopback alone is NOT sufficient - see _PLEX_DEFAULT_PORT above for
+    why a loopback address on Plex's default port is also blocked.
     """
     if not isinstance(address, tuple) or not address:
         return True
@@ -28,7 +51,13 @@ def _is_loopback_address(address) -> bool:
     if isinstance(host, bytes):
         host = host.decode("ascii", "ignore")
     host = str(host)
-    return host in ("127.0.0.1", "::1", "localhost") or host.startswith("127.")
+    is_loopback_host = host in ("127.0.0.1", "::1", "localhost") or host.startswith("127.")
+    if not is_loopback_host:
+        return False
+    port = address[1] if len(address) > 1 else None
+    if port == _PLEX_DEFAULT_PORT:
+        return False
+    return True
 
 
 @pytest.fixture(autouse=True)
@@ -52,24 +81,30 @@ def _block_non_loopback_sockets(monkeypatch):
     therefore urllib3/requests - eventually goes through) to allow
     127.0.0.1/::1/localhost (loopback - e.g. tests/test_web_routes.py's
     TestWaitForListening/TestBindRetry classes, which bind a real local
-    server socket and poll it) and raise immediately, with the offending
-    host in the message, for anything else. A loud, instant,
-    self-diagnosing failure instead of a silent leak or a multi-minute
-    hang - any test that legitimately needs to reach a real non-loopback
-    host must mock the call instead (mirroring the rest of this suite's
-    existing convention of mocking requests.get/MyPlexAccount/etc. rather
-    than hitting the network for real).
+    server socket and poll it) EXCEPT on Plex's own default port (see
+    _PLEX_DEFAULT_PORT/_is_allowed_test_socket_address above - a
+    loopback-only check would have been a false guarantee: plex.direct
+    hostnames are standard Plex behavior that resolve straight to
+    loopback, so a test running against a real config would sail
+    straight through a check that only looked at the host), and raise
+    immediately, with the offending address in the message, for
+    anything else. A loud, instant, self-diagnosing failure instead of a
+    silent leak or a multi-minute hang - any test that legitimately
+    needs to reach a real non-loopback host (or the real Plex port) must
+    mock the call instead (mirroring the rest of this suite's existing
+    convention of mocking requests.get/MyPlexAccount/etc. rather than
+    hitting the network for real).
     """
     real_connect = _socket_module.socket.connect
 
     def _guarded_connect(self, address, *args, **kwargs):
-        if not _is_loopback_address(address):
+        if not _is_allowed_test_socket_address(address):
             raise AssertionError(
                 f"Blocked outbound network connect attempt to {address!r} during "
                 "test run - tests must mock all real network calls (Plex, TMDB, "
                 "GitHub, etc.) rather than reach the network. If this is a "
                 "legitimate local-server test, it must connect to "
-                "127.0.0.1/::1/localhost only."
+                "127.0.0.1/::1/localhost on a non-Plex port only."
             )
         return real_connect(self, address, *args, **kwargs)
 
@@ -205,6 +240,26 @@ def _isolated_recommender_cache_dir(tmp_path_factory, monkeypatch):
     tests/test_base.py already mocks this itself in every test that
     needs to (its own @patch layers on top of this, same convention as
     every other fixture here).
+
+    ALSO patches recommenders.movie.get_project_root and
+    recommenders.tv.get_project_root - a second, separate name binding
+    from recommenders.base.get_project_root above (movie.py/tv.py each
+    hold their own `from utils import get_project_root`), used by
+    process_recommendations()'s own log_dir = os.path.join(
+    get_project_root(), "logs") (feeding both setup_log_file()/
+    teardown_log_file() and record_run_status()). Left unpatched, any
+    test that calls process_recommendations() without ALSO separately
+    mocking those two - or the setup_log_file/teardown_log_file/
+    record_run_status calls it makes - resolves log_dir to the REAL
+    repo's logs/ directory and writes a real run_status_movie_<user>.json
+    / run_status_tv_<user>.json into it. Confirmed: tests/test_movie.py's
+    and tests/test_tv.py's TestProcessRecommendationsLibraryParam classes
+    did exactly this (mocked setup_log_file/teardown_log_file/the
+    recommender class, but not record_run_status) before this fixture
+    covered these two modules - the same class of leak
+    _isolated_metrics_dir/_isolated_update_dismissal_dir/
+    _no_real_update_check_network above each exist to close for their
+    own module.
     """
     fallback_root = str(tmp_path_factory.mktemp("recommender_cache"))
 
@@ -217,6 +272,8 @@ def _isolated_recommender_cache_dir(tmp_path_factory, monkeypatch):
 
     monkeypatch.setattr("recommenders.base.get_project_root", _fake_get_project_root)
     monkeypatch.setattr("recommenders.external.get_project_root", _fake_get_project_root)
+    monkeypatch.setattr("recommenders.movie.get_project_root", _fake_get_project_root)
+    monkeypatch.setattr("recommenders.tv.get_project_root", _fake_get_project_root)
     monkeypatch.setattr("recommenders.base.migrate_legacy_cache_dir", lambda legacy_dir, new_dir: None)
 
 
@@ -311,3 +368,75 @@ def curatarr_web_root(tmp_path):
     (root / "run.sh").write_text(_FAKE_RUN_SH, encoding="utf-8")
     (root / "run.ps1").write_text(_FAKE_RUN_PS1, encoding="utf-8")
     return str(root)
+
+
+def _snapshot_dir_mtimes(directory: str) -> dict:
+    """path -> mtime for every file under *directory* (empty dict if it
+    doesn't exist). Helper for _fail_if_real_logs_or_cache_written below."""
+    if not os.path.isdir(directory):
+        return {}
+    snapshot = {}
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                snapshot[path] = os.path.getmtime(path)
+            except OSError:
+                # Deleted between os.walk() yielding it and getmtime() -
+                # nothing to snapshot, and not a leak this guard cares about.
+                continue
+    return snapshot
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fail_if_real_logs_or_cache_written():
+    """Hard gate: this project has a repeat history of test-isolation
+    leaks writing real files into the checked-out repo's own logs/ and
+    cache/ directories (see _isolated_recommender_cache_dir's docstring
+    above for the fullest account, and utils/metrics.py's/utils/
+    update_dismissal.py's own equivalents) - every prior instance was
+    only ever noticed by someone spotting an unexpected file in `git
+    status`/`ls -la` afterward, not by the suite itself. This snapshots
+    the real repo's logs/ and cache/ directories (by path -> mtime) once
+    at session start and once at session end; if anything was created,
+    deleted, or modified in either, the session fails loudly naming
+    every changed path, rather than staying green while quietly
+    corrupting the owner's real generated data.
+
+    Deliberately session-scoped (one check for the whole run, not
+    per-test) - walking both directories after each of ~2900 tests would
+    be wasteful, and the fixtures this guards against are themselves
+    autouse-for-the-whole-suite, so there's no per-test granularity to
+    preserve here anyway.
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    logs_dir = os.path.join(repo_root, "logs")
+    cache_dir = os.path.join(repo_root, "cache")
+
+    before_logs = _snapshot_dir_mtimes(logs_dir)
+    before_cache = _snapshot_dir_mtimes(cache_dir)
+
+    yield
+
+    after_logs = _snapshot_dir_mtimes(logs_dir)
+    after_cache = _snapshot_dir_mtimes(cache_dir)
+
+    changed = []
+    for label, before, after in (("logs", before_logs, after_logs), ("cache", before_cache, after_cache)):
+        for path in sorted(set(after) - set(before)):
+            changed.append(f"created ({label}): {path}")
+        for path in sorted(set(before) - set(after)):
+            changed.append(f"deleted ({label}): {path}")
+        for path in sorted(set(after) & set(before)):
+            if after[path] != before[path]:
+                changed.append(f"modified ({label}): {path}")
+
+    if changed:
+        raise AssertionError(
+            "Test suite wrote to the real repo's logs/ and/or cache/ directory "
+            "- every test must isolate these via tmp_path/tmp_path_factory (see "
+            "_isolated_recommender_cache_dir, _isolated_metrics_dir, and "
+            "_isolated_update_dismissal_dir above) rather than letting a "
+            "module's real get_project_root() resolve during a test run. "
+            "Changed paths:\n  " + "\n  ".join(changed)
+        )

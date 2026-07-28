@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.80] - 2026-07-28
+
+### Fixed
+
+- **Two test-isolation gaps in `tests/conftest.py`'s suite-wide safety nets, found while investigating how test-fixture usernames (`alice`/`bob`) leaked into a real Plex library.**
+
+  **Real repo `logs/` writes during a normal pytest run.** `_isolated_recommender_cache_dir` patched `recommenders.base.get_project_root` and `recommenders.external.get_project_root` but not `recommenders.movie.get_project_root`/`recommenders.tv.get_project_root` - a separate name binding each of those two modules holds from their own `from utils import get_project_root`, used by `process_recommendations()`'s `log_dir = os.path.join(get_project_root(), "logs")` (feeding `setup_log_file()`/`teardown_log_file()`/`record_run_status()`). `tests/test_movie.py`'s and `tests/test_tv.py`'s `TestProcessRecommendationsLibraryParam` classes mocked `setup_log_file`/`teardown_log_file`/the recommender class but not `record_run_status`, so a plain test run wrote real `logs/run_status_movie_alice.json` / `run_status_tv_alice.json` into the owner's own repo - confirmed reproduced and cleaned up. Fixed by extending `_isolated_recommender_cache_dir` to also patch `recommenders.movie`/`recommenders.tv`'s `get_project_root`, and by additionally patching `record_run_status` directly in both test classes (same belt-and-suspenders convention already used for `setup_log_file`/`teardown_log_file` there).
+
+  Added a new session-scoped, autouse `_fail_if_real_logs_or_cache_written` guard: snapshots the real repo's `logs/` and `cache/` directories (path -> mtime) once at session start and once at session end, and fails the whole run with every changed path named if either directory was touched - this class of leak was previously only ever noticed by someone spotting an unexpected file in `git status`/`ls -la` afterward. Verified it actually fires (a throwaway test that wrote directly into the real `logs/` dir was correctly caught and failed the session, confirmed before removing that throwaway test).
+
+  **The socket guard's own loopback allowance was a false guarantee.** `_block_non_loopback_sockets` (added to stop tests from making real outbound network calls) allowed any `127.0.0.1`/`::1`/`localhost` connection through unconditionally. Plex's own `plex.direct` hostnames - standard, expected Plex behavior, not exotic - resolve straight to a loopback IP (confirmed directly against this project's own `config/config.yml`, which has a real `https://127-0-0-1.<hash>.plex.direct:32400` URL); by the time a real HTTP client's `socket.connect()` fires, that hostname is already resolved to plain `127.0.0.1`, indistinguishable from this suite's own local test-server binds. A test that ended up using a real config would sail straight through the loopback check and connect to a real, live Plex Media Server running on the same machine - no current test does this, but the guard's docstring claimed a guarantee it didn't actually provide.
+
+  Fixed by additionally blocking loopback connections to Plex's well-known default port (32400) specifically, regardless of host - nothing in this suite's legitimate loopback socket use (`test_web_routes.py`'s `TestWaitForListening`/`TestBindRetry`, which always bind an OS-assigned ephemeral port) ever targets that port. Chose this over blocking by original hostname (not reliably visible at the `.connect()` layer at all - `requests`/`urllib3`/`socket.create_connection()` all resolve via `getaddrinfo()` before `.connect()` ever fires) or requiring an explicit per-test opt-in marker (a much bigger, more invasive change to every existing legitimate local-bind test for a gap with no currently-affected test).
+
+  New coverage in `tests/test_conftest_guards.py`: `test_blocks_genuine_external_host` (unchanged original behavior), `test_allows_loopback_on_an_ordinary_port` (the legitimate local-test-server case still works), and `test_blocks_loopback_resolving_plex_direct_style_address` (proves the guard now blocks the exact plex.direct-resolves-to-loopback case this closes).
+
 ## [2.10.79] - 2026-07-28
 
 ### Fixed
