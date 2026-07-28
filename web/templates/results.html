@@ -13,6 +13,23 @@
   </li>
   {% endfor %}
 </ul>
+{% elif job and job.stage_results and job.stage_results.get('external') == 'skipped' %}
+<p class="banner error">
+  No watchlists: external watchlist generation was skipped because an earlier stage
+  ({{ 'movie recommendations' if job.stage_results.get('movie') != '0' else 'TV recommendations' }}) failed.
+  See <a href="{{ url_for('results_log', filename=job.log_file) }}">the run log</a> for details.
+</p>
+{% elif job and job.stage_results and job.stage_results.get('external') not in (None, '0') %}
+<p class="banner error">
+  No watchlists: external watchlist generation failed (exit code {{ job.stage_results.get('external') }}).
+  See <a href="{{ url_for('results_log', filename=job.log_file) }}">the run log</a> for details.
+</p>
+{% elif job and job.get('external_produced_output') is sameas false %}
+<p class="banner error">
+  No watchlists: the last run completed but did not write any watchlist file - check
+  <a href="{{ url_for('results_log', filename=job.log_file) }}">the run log</a> for a per-user error,
+  or confirm <code>external_recommendations.enabled</code> in tuning.yml.
+</p>
 {% else %}
 <p>No watchlists generated yet - run recommendations first.</p>
 {% endif %}

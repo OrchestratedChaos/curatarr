@@ -37,6 +37,35 @@
   No run yet.
   {% endif %}
 </p>
+{% if job and job.stage_results %}
+{# #282/#288: a "full" run's per-stage breakdown - previously the only
+   signal was one overall state, so a movie failure that correctly (and
+   silently) skipped tv/external looked identical to them being dropped
+   for no reason. See web/job_runner.py's STAGE_MARKER_PREFIX. #}
+<ul id="stage-results" class="stage-results">
+  {% for stage in ['movie', 'tv', 'external'] %}
+  {% set result = job.stage_results.get(stage) %}
+  {% if result is not none %}
+  <li>
+    {{ stage }}:
+    {% if result == 'skipped' %}
+    <span class="muted">skipped (an earlier stage failed)</span>
+    {% elif result == '0' %}
+    <span class="ok">succeeded</span>
+    {% else %}
+    <span class="error">failed (exit code {{ result }})</span>
+    {% endif %}
+  </li>
+  {% endif %}
+  {% endfor %}
+</ul>
+{% if job.external_produced_output is sameas false %}
+<p class="banner error">
+  External watchlist generation reported success but wrote no file - see the log below for a
+  per-user error, or confirm <code>external_recommendations.enabled</code> in tuning.yml.
+</p>
+{% endif %}
+{% endif %}
 <pre id="output" class="log-output"></pre>
 
 <script>
