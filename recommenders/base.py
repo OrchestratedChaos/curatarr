@@ -1620,10 +1620,11 @@ class BaseRecommender(ABC):
         every builder read this state through one shared admin snapshot.
 
         Only used behind the profile_accuracy.enabled config flag (see
-        movie.py's/tv.py's watched-data builders) - the legacy path keeps
-        reading _get_all_library_items()'s shared admin snapshot
-        unchanged, so this method has zero effect on any install that
-        hasn't opted in.
+        movie.py's/tv.py's watched-data builders) - default ON since
+        v2.10.82; the legacy path (_get_all_library_items()'s shared
+        admin snapshot) is still available by explicitly setting
+        profile_accuracy.enabled: false, so this method has zero effect
+        on any install that has opted back out.
 
         Cached in the same shared _library_items_cache dict as
         _get_all_library_items(), under a per-user key so it's never

@@ -297,10 +297,11 @@ class PlexMovieRecommender(BaseRecommender):
             # across 6 real accounts, zero with the attribute present - so
             # this branch is dead in practice and user_ratings stays empty
             # via this path alone. Left exactly as-is (not removed) so
-            # profile_accuracy.enabled: false (the default) stays
+            # profile_accuracy.enabled: false (the opt-out) stays
             # byte-for-byte identical to pre-#273 behavior; see the
             # profile_accuracy.enabled branch below for the actual
-            # (library-sourced, per-user) fix.
+            # (library-sourced, per-user) fix, which is ON by default
+            # since v2.10.82.
             if hasattr(item, "userRating") and item.userRating:
                 user_rating = float(item.userRating)
                 if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
@@ -311,27 +312,29 @@ class PlexMovieRecommender(BaseRecommender):
         # all, and (per the verified finding above) never reliably
         # provides userRating either.
         #
-        # profile_accuracy.enabled (config flag, default OFF - see
-        # config/tuning.example.yml): fetches EACH user's own Plex-token
-        # library snapshot (_get_all_library_items_for_user, #273)
-        # instead of the one shared admin-token snapshot every builder
-        # used before - viewCount/userRating are per-account Plex state,
-        # so the admin's token can only ever see the admin's OWN values
-        # for them, never another configured user's (verified against a
-        # real library - see CHANGELOG). Also reads userRating straight
-        # off the library item, mirroring what recommenders/tv.py's own
-        # builder already does correctly (tv.py was never affected by
-        # the dead-history-userRating issue above). Per-user max-merge
-        # (view_count and rating both) mirrors this same function's own
-        # existing history-derived user_ratings merge convention just
-        # above, for when users_to_match has more than one entry.
+        # profile_accuracy.enabled (config flag, default ON since
+        # v2.10.82 - see config/tuning.example.yml): fetches EACH user's
+        # own Plex-token library snapshot (_get_all_library_items_for_user,
+        # #273) instead of the one shared admin-token snapshot every
+        # builder used before - viewCount/userRating are per-account Plex
+        # state, so the admin's token can only ever see the admin's OWN
+        # values for them, never another configured user's (verified
+        # against a real library - see CHANGELOG). Also reads userRating
+        # straight off the library item, mirroring what
+        # recommenders/tv.py's own builder already does correctly (tv.py
+        # was never affected by the dead-history-userRating issue above).
+        # Per-user max-merge (view_count and rating both) mirrors this
+        # same function's own existing history-derived user_ratings merge
+        # convention just above, for when users_to_match has more than
+        # one entry.
         #
-        # Disabled (default): unchanged legacy behavior - the shared
-        # admin-token snapshot's view counts only, no library-sourced
-        # ratings at all (the history-sourced attempt above already
-        # covers - and, per the verified finding, never actually
-        # populates - user_ratings for the default path).
-        if self.config.get("profile_accuracy", {}).get("enabled", False):
+        # Disabled (enabled: false - opt-out for anyone who wants the
+        # pre-v2.10.82 output unchanged for a release): legacy behavior -
+        # the shared admin-token snapshot's view counts only, no
+        # library-sourced ratings at all (the history-sourced attempt
+        # above already covers - and, per the verified finding, never
+        # actually populates - user_ratings for the disabled path).
+        if self.config.get("profile_accuracy", {}).get("enabled", True):
             for username in users_to_match:
                 try:
                     for movie in self._get_all_library_items_for_user(username):

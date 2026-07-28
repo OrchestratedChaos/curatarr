@@ -372,21 +372,23 @@ class PlexTVRecommender(BaseRecommender):
                 if show_id not in user_ratings or user_rating > user_ratings[show_id]:
                     user_ratings[show_id] = user_rating
 
-        # profile_accuracy.enabled (config flag, default OFF - see
-        # config/tuning.example.yml, #273): fetches EACH user's own
-        # Plex-token library snapshot (_get_all_library_items_for_user)
-        # instead of the one shared admin-token snapshot every builder
-        # used before - viewCount/userRating are per-account Plex state,
-        # so the admin's token can only ever see the admin's OWN values
-        # for them, never another configured user's (verified against a
+        # profile_accuracy.enabled (config flag, default ON since
+        # v2.10.82 - see config/tuning.example.yml, #273): fetches EACH
+        # user's own Plex-token library snapshot
+        # (_get_all_library_items_for_user) instead of the one shared
+        # admin-token snapshot every builder used before -
+        # viewCount/userRating are per-account Plex state, so the
+        # admin's token can only ever see the admin's OWN values for
+        # them, never another configured user's (verified against a
         # real library - see CHANGELOG). Per-user max-merge (rewatch
         # count and rating both) for when more than one user is
-        # configured. Disabled (default): unchanged legacy behavior -
-        # one shared admin-token snapshot for every user, reused from
-        # this run instead of a fresh section.all() (#233 audit
-        # remediation batch D / PR1(a)).
+        # configured. Disabled (enabled: false - opt-out for anyone who
+        # wants the pre-v2.10.82 output unchanged for a release): legacy
+        # behavior - one shared admin-token snapshot for every user,
+        # reused from this run instead of a fresh section.all() (#233
+        # audit remediation batch D / PR1(a)).
         try:
-            if self.config.get("profile_accuracy", {}).get("enabled", False):
+            if self.config.get("profile_accuracy", {}).get("enabled", True):
                 users_to_match = [self.single_user] if self.single_user else self.users["plex_users"]
                 for username in users_to_match:
                     for show in self._get_all_library_items_for_user(username):

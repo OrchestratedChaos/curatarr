@@ -1331,14 +1331,19 @@ class TestGetPlexWatchedDataMovie:
 
 
 class TestGetPlexWatchedDataMovieAccurateMode:
-    """Tests for the profile_accuracy.enabled=True path (#273) in
+    """Tests for the profile_accuracy.enabled path (#273) in
     PlexMovieRecommender._get_plex_watched_data - per-user library-
     sourced ratings/view counts instead of the legacy shared admin-token
     snapshot's view counts and Plex-history-sourced (verified: never
-    actually populated in practice) ratings. Default (flag absent/False)
-    behavior is covered by TestGetPlexWatchedDataMovie above and must
-    stay byte-identical - see this class's own
-    test_default_never_calls_per_user_fetch.
+    actually populated in practice) ratings.
+
+    Default flipped False -> True in v2.10.82 (a defect fix, not a
+    preference - see CHANGELOG): a config that has never touched this
+    key now gets accurate mode, proven by this class's own
+    test_absent_config_key_defaults_to_accurate_mode. The explicit
+    opt-out (enabled: false) that keeps the pre-v2.10.82 legacy
+    behavior byte-identical (covered by TestGetPlexWatchedDataMovie
+    above) is proven by test_explicit_disabled_never_calls_per_user_fetch.
     """
 
     @patch("os.path.exists", return_value=False)
@@ -1439,7 +1444,7 @@ class TestGetPlexWatchedDataMovieAccurateMode:
     @patch("recommenders.movie.fetch_plex_watch_history_movies")
     @patch("recommenders.movie.get_plex_account_ids")
     @patch("recommenders.movie.get_watched_movie_count", return_value=1)
-    def test_default_never_calls_per_user_fetch(
+    def test_absent_config_key_defaults_to_accurate_mode(
         self,
         mock_count,
         mock_account_ids,
@@ -1450,15 +1455,56 @@ class TestGetPlexWatchedDataMovieAccurateMode:
         mock_per_user_items,
         mock_exists,
     ):
-        """profile_accuracy absent from config entirely (real-world
-        default for every existing install) - _get_all_library_items_for_user
-        must never even be called, proving zero behavior change."""
+        """profile_accuracy genuinely absent from config (an install
+        that has never touched this setting) now defaults to accurate
+        mode (v2.10.82) - _get_all_library_items_for_user IS called,
+        proving the flipped default actually takes effect for a real
+        config that never sets the key at all."""
+        mock_account_ids.return_value = ["acct1"]
+        history_item = Mock(ratingKey=42, viewedAt=None, userRating=None)
+        mock_history.return_value = ([history_item], {})
+        mock_per_user_items.return_value = []
+
+        config = copy.deepcopy(MOVIE_TEST_CONFIG)
+        assert "profile_accuracy" not in config
+        _make_movie_recommender(
+            config=config,
+            users={"plex_users": ["alice"], "managed_users": [], "admin_user": "admin"},
+            movie_cache_data={"42": {"title": "Movie", "genres": ["action"], "tmdb_id": 999}},
+        )
+
+        mock_per_user_items.assert_called_once_with("alice")
+
+    @patch("os.path.exists", return_value=False)
+    @patch("recommenders.base.BaseRecommender._get_all_library_items_for_user")
+    @patch("recommenders.movie.process_counters_from_cache")
+    @patch("recommenders.movie.calculate_rewatch_multiplier", return_value=1.0)
+    @patch("recommenders.movie.calculate_recency_multiplier", return_value=1.0)
+    @patch("recommenders.movie.fetch_plex_watch_history_movies")
+    @patch("recommenders.movie.get_plex_account_ids")
+    @patch("recommenders.movie.get_watched_movie_count", return_value=1)
+    def test_explicit_disabled_never_calls_per_user_fetch(
+        self,
+        mock_count,
+        mock_account_ids,
+        mock_history,
+        mock_recency,
+        mock_rewatch,
+        mock_process_counters,
+        mock_per_user_items,
+        mock_exists,
+    ):
+        """profile_accuracy explicitly set to enabled: false (the
+        opt-out for anyone who wants the pre-v2.10.82 output unchanged
+        for a release) - _get_all_library_items_for_user must never
+        even be called, proving the legacy path stays byte-identical
+        for anyone who opts back out."""
         mock_account_ids.return_value = ["acct1"]
         history_item = Mock(ratingKey=42, viewedAt=None, userRating=None)
         mock_history.return_value = ([history_item], {})
 
         config = copy.deepcopy(MOVIE_TEST_CONFIG)
-        assert "profile_accuracy" not in config
+        config["profile_accuracy"] = {"enabled": False}
         _make_movie_recommender(
             config=config,
             users={"plex_users": ["alice"], "managed_users": [], "admin_user": "admin"},

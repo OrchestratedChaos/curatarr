@@ -192,25 +192,30 @@ negative_signals:
 # =============================================================================
 # PROFILE ACCURACY (#273)
 # =============================================================================
-# Advanced - off by default. When enabled, movie/tv preference profiles
-# are built from MORE ACCURATE Plex data than the legacy default:
+# On by default since v2.10.82 - this is a defect fix, not a preference.
+# When enabled, movie/tv preference profiles are built from MORE
+# ACCURATE Plex data than the legacy (enabled: false) behavior:
 #   - Movie ratings are read from the Plex LIBRARY item (matches how TV
 #     profiles already work) instead of Plex's watch-history API, which
-#     never actually carries a user's star rating - so today, a movie
-#     you've disliked NEVER produces a negative signal.
+#     never actually carries a user's star rating - so with this off, a
+#     movie you've disliked NEVER produces a negative signal.
 #   - Each configured user's own view count/rating is fetched through
 #     THEIR OWN Plex account (switchUser) instead of always reading the
-#     shared admin account's view - today, every user's rewatch/rating
-#     weighting is silently computed from the ADMIN's own Plex state,
-#     not their own.
-# Off by default because enabling this changes existing users' actual
+#     shared admin account's view - with this off, every user's
+#     rewatch/rating weighting is silently computed from the ADMIN's own
+#     Plex state, not their own.
+# Enabling/upgrading into this default changes existing users' actual
 # recommendations (previously-invisible dislikes can now suppress
-# similar content) and forces a one-time full profile rescore on the
-# next run after you enable it (the profile hash changes) - a
-# deliberate one-time cost, not a bug. See CHANGELOG for the full
-# rationale and the real-library findings that motivated this.
+# similar content, and non-admin users stop getting the admin's own
+# profile) and forces a one-time full profile rescore on the next run
+# after the flag flips (the profile hash changes) - a deliberate
+# one-time cost, not a bug. Set enabled: false to keep the old
+# (admin-contaminated) output unchanged for a release. See CHANGELOG
+# for the full rationale and the real-library findings that motivated
+# this, including measured top-10 recommendation overlap between old and
+# new output.
 profile_accuracy:
-  enabled: false
+  enabled: true
 
 # =============================================================================
 # USER PREFERENCES
