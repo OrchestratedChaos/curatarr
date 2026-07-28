@@ -25,7 +25,7 @@ import urllib3
 from plexapi.myplex import MyPlexAccount
 
 from .config import PLEX_LONG_REQUEST_TIMEOUT, PLEX_REQUEST_TIMEOUT
-from .display import GREEN, RED, RESET, YELLOW, log_error, log_warning
+from .display import GREEN, RESET, YELLOW, log_error, log_warning
 from .helpers import normalize_title, read_response_capped
 from .labels import remove_labels_from_items
 from .metrics import record_api_call
@@ -363,7 +363,21 @@ def fetch_plex_watch_history_movies(
                     print(f" {YELLOW}SKIP (account not found in managed users){RESET}")
 
             except (requests.RequestException, ET.ParseError) as e:
-                print(f" {RED}ERROR: {e}{RESET}")
+                # Routed through the level-gated logging module (#306) -
+                # this is the one choke point that was still a bare
+                # print(), so logging.verbosity's off/quiet/verbose
+                # setting didn't govern it like every other integration
+                # (Plex connection init, TMDB, Trakt, Simkl, the shared
+                # Sonarr/Radarr/Tautulli/MDBList client, and this same
+                # module's fetch_plex_watch_history_shows/
+                # fetch_show_completion_data siblings just below, which
+                # already did this correctly). A failure to fetch one
+                # user's watch history is exactly the kind of thing an
+                # operator must see - the same class of silent failure
+                # that hid a real six-month Trakt outage - so this stays
+                # visible at the default 'quiet' level (log_error maps
+                # to logging.ERROR, at or above every non-off tier).
+                log_error(f"Error fetching watch history for account {account_id}: {e}")
 
         return all_history_items, watched_movie_dates
 
