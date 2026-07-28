@@ -137,14 +137,33 @@ class TestDashboard:
         resp = c.get("/")
         assert b"success" in resp.data
 
-    def test_links_to_per_user_watchlist_when_generated(self, client):
+    def test_dashboard_link_ignores_stray_per_user_watchlist_file(self, client):
+        """find_user_watchlist()'s per-user "<slug>_watchlist.html"
+        preference was removed - recommenders/external_render.py has
+        never written that file in this repo's tracked history, only
+        stragglers predating it ever existed on disk (since deleted).
+        A stray file matching that naming must not be linked to, even
+        when it's the only file present.
+        """
         c, app, root = client
         ext_dir = os.path.join(root, "recommendations", "external")
         with open(os.path.join(ext_dir, "alice_a_watchlist.html"), "w") as f:
             f.write("<html>alice list</html>")
         resp = c.get("/")
         assert resp.status_code == 200
-        assert b"alice_a_watchlist.html" in resp.data
+        assert b"alice_a_watchlist.html" not in resp.data
+
+    def test_dashboard_links_to_combined_watchlist_regardless_of_stray_per_user_file(self, client):
+        c, app, root = client
+        ext_dir = os.path.join(root, "recommendations", "external")
+        with open(os.path.join(ext_dir, "alice_a_watchlist.html"), "w") as f:
+            f.write("<html>alice list</html>")
+        with open(os.path.join(ext_dir, "watchlist.html"), "w") as f:
+            f.write("<html>combined</html>")
+        resp = c.get("/")
+        assert resp.status_code == 200
+        assert b"watchlist.html" in resp.data
+        assert b"alice_a_watchlist.html" not in resp.data
 
     def test_dashboard_watchlist_link_absent_when_nothing_generated(self, client):
         c, app, root = client
