@@ -1,7 +1,22 @@
 """Settings / Tuning screen: scoring weights, quality filters, recency
 decay, rating multipliers, negative signals, external-recommendations
-tuning, general/logging options, and the sync-safety fields also
-editable (with less context) on the Connections screen.
+tuning, and general/logging options.
+
+#290: the sync-safety fields (Sonarr/Radarr/Trakt auto_sync/user_mode/
+plex_users) used to ALSO be a fully editable, separately-submitted copy
+on this screen, right alongside the Connections screen's own editable
+copy of the exact same fields. Since both screens' POST handlers wrote
+those fields unconditionally from whatever THEIR OWN form last showed,
+saving either page silently reverted any change made on the other -
+both still said "Saved." either way, with no warning and no log line.
+Given these fields gate real writes to a user's Sonarr/Radarr/Trakt
+instances (see the in-page warning banner), silent loss here is worse
+than a cosmetic UI bug, so this screen no longer submits them at all -
+Connections (web/config_connections.py) is the sole writer; this
+screen only ever displays their current on-disk value read-only, with
+a link there to actually change them. This structurally cannot clobber
+Connections' own save, since this screen's <form> has no input named
+sonarr_auto_sync/etc for a submission to even carry.
 
 Split out of web/config_app.py (audit remediation batch F/I, PR1(a)) -
 see that module's docstring for the overall package layout this is one
@@ -18,13 +33,11 @@ from utils.config import UPDATE_MODES, get_update_mode
 from utils.scheduler import WEEKDAY_NAMES, describe_next_run, parse_schedule_config
 
 from .config_io import (
-    USER_MODE_CHOICES,
     commit_modules,
     ensure_section,
     format_csv_list,
     load_module,
     module_path,
-    parse_csv_list,
 )
 from .config_validate import validate_choice, validate_float, validate_int, validate_weights_sum
 
@@ -83,7 +96,7 @@ def register_settings_routes(app) -> None:
                 **_settings_view(tuning, core, sonarr, radarr, trakt, overrides=parsed),
             ), 400
 
-        modules = _apply_settings(project_root, tuning, core, sonarr, radarr, trakt, parsed)
+        modules = _apply_settings(project_root, tuning, core, parsed)
         commit_error = commit_modules(project_root, modules)
         if commit_error:
             reloaded = _load_all()
@@ -107,9 +120,36 @@ def _settings_view(
 ) -> Dict:
     """Build the template context for config_settings.html: the on-disk
     values across all five module files (or, after a failed submission,
-    *overrides* verbatim - already in this same shape)."""
+    *overrides* for everything this screen actually submits).
+
+    sync_safety (#290, read-only on this screen - see this module's own
+    docstring) is always read fresh from sonarr/radarr/trakt here,
+    regardless of *overrides*: it is never part of a Settings
+    submission, so there is nothing for a validation-error redisplay to
+    override it WITH - showing the current real value is the only
+    option, same as it would be for any other read-only field.
+    """
+    trakt_export = trakt.get("export") or {}
+    sync_safety = {
+        "sonarr": {
+            "auto_sync": bool(sonarr.get("auto_sync", False)),
+            "user_mode": sonarr.get("user_mode", "mapping"),
+            "plex_users": format_csv_list(sonarr.get("plex_users")),
+        },
+        "radarr": {
+            "auto_sync": bool(radarr.get("auto_sync", False)),
+            "user_mode": radarr.get("user_mode", "mapping"),
+            "plex_users": format_csv_list(radarr.get("plex_users")),
+        },
+        "trakt": {
+            "auto_sync": bool(trakt_export.get("auto_sync", False)),
+            "user_mode": trakt_export.get("user_mode", "mapping"),
+            "plex_users": format_csv_list(trakt_export.get("plex_users")),
+        },
+    }
+
     if overrides is not None:
-        return overrides
+        return {**overrides, "sync_safety": sync_safety}
 
     movies = tuning.get("movies") or {}
     tv = tuning.get("tv") or {}
@@ -126,7 +166,6 @@ def _settings_view(
     general = core.get("general") or {}
     logging_cfg = core.get("logging") or {}
     schedule_cfg = core.get("schedule") or {}
-    trakt_export = trakt.get("export") or {}
 
     return {
         "movies": {
@@ -204,25 +243,8 @@ def _settings_view(
             "weekdays": [str(d).strip().lower() for d in (schedule_cfg.get("weekdays") or [])],
         },
         "weekday_choices": WEEKDAY_NAMES,
-        "sync_safety": {
-            "sonarr": {
-                "auto_sync": bool(sonarr.get("auto_sync", False)),
-                "user_mode": sonarr.get("user_mode", "mapping"),
-                "plex_users": format_csv_list(sonarr.get("plex_users")),
-            },
-            "radarr": {
-                "auto_sync": bool(radarr.get("auto_sync", False)),
-                "user_mode": radarr.get("user_mode", "mapping"),
-                "plex_users": format_csv_list(radarr.get("plex_users")),
-            },
-            "trakt": {
-                "auto_sync": bool(trakt_export.get("auto_sync", False)),
-                "user_mode": trakt_export.get("user_mode", "mapping"),
-                "plex_users": format_csv_list(trakt_export.get("plex_users")),
-            },
-        },
+        "sync_safety": sync_safety,
         "log_level_choices": LOG_LEVEL_CHOICES,
-        "user_mode_choices": USER_MODE_CHOICES,
         "update_mode_choices": UPDATE_MODES,
     }
 
@@ -345,16 +367,12 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
     except ValueError as e:
         errors["schedule_time"] = str(e)
 
-    sync_safety = {}
-    for svc in ("sonarr", "radarr", "trakt"):
-        user_mode = form.get(f"{svc}_user_mode", "mapping")
-        validate_choice(user_mode, f"{svc}_user_mode", errors, USER_MODE_CHOICES)
-        sync_safety[svc] = {
-            "auto_sync": flag(f"{svc}_auto_sync"),
-            "user_mode": user_mode,
-            "plex_users": format_csv_list(parse_csv_list(form.get(f"{svc}_plex_users", ""))),
-        }
-
+    # #290: sync_safety (Sonarr/Radarr/Trakt auto_sync/user_mode/
+    # plex_users) is deliberately NOT parsed here - this screen's own
+    # <form> has no input for those fields anymore (Connections is the
+    # sole writer - see this module's own docstring). _settings_view()
+    # always re-reads their current on-disk value fresh regardless of
+    # *overrides* for exactly this reason.
     return {
         "movies": movies,
         "tv": tv,
@@ -366,9 +384,7 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
         "logging": {"level": logging_level},
         "schedule": schedule,
         "weekday_choices": WEEKDAY_NAMES,
-        "sync_safety": sync_safety,
         "log_level_choices": LOG_LEVEL_CHOICES,
-        "user_mode_choices": USER_MODE_CHOICES,
         "update_mode_choices": UPDATE_MODES,
     }
 
@@ -377,14 +393,17 @@ def _apply_settings(
     project_root: str,
     tuning: CommentedMap,
     core: CommentedMap,
-    sonarr: CommentedMap,
-    radarr: CommentedMap,
-    trakt: CommentedMap,
     parsed: Dict,
 ) -> Dict[str, CommentedMap]:
     """Mutate the in-memory CommentedMaps for this screen and return them
     keyed by module name, WITHOUT writing to disk - see
-    config_connections._apply_connections' docstring for why."""
+    config_connections._apply_connections' docstring for why.
+
+    #290: no longer takes sonarr/radarr/trakt - this screen never
+    writes to those files anymore (sync_safety is read-only here now -
+    see this module's own docstring), so there's nothing in them for
+    this function to mutate or for its caller to commit.
+    """
     movies_section = ensure_section(tuning, "movies")
     movies_section["limit_results"] = parsed["movies"]["limit_results"]
     ensure_section(movies_section, "weights").update(parsed["movies"]["weights"])
@@ -442,18 +461,4 @@ def _apply_settings(
         # purely a tidier on-disk file, not a behavior difference.
         schedule_section.pop("weekdays", None)
 
-    sonarr["auto_sync"] = parsed["sync_safety"]["sonarr"]["auto_sync"]
-    sonarr["user_mode"] = parsed["sync_safety"]["sonarr"]["user_mode"]
-    sonarr["plex_users"] = parse_csv_list(parsed["sync_safety"]["sonarr"]["plex_users"])
-
-    radarr["auto_sync"] = parsed["sync_safety"]["radarr"]["auto_sync"]
-    radarr["user_mode"] = parsed["sync_safety"]["radarr"]["user_mode"]
-    radarr["plex_users"] = parse_csv_list(parsed["sync_safety"]["radarr"]["plex_users"])
-
-    trakt_export = trakt.get("export") or CommentedMap()
-    trakt_export["auto_sync"] = parsed["sync_safety"]["trakt"]["auto_sync"]
-    trakt_export["user_mode"] = parsed["sync_safety"]["trakt"]["user_mode"]
-    trakt_export["plex_users"] = parse_csv_list(parsed["sync_safety"]["trakt"]["plex_users"])
-    trakt["export"] = trakt_export
-
-    return {"tuning": tuning, "config": core, "sonarr": sonarr, "radarr": radarr, "trakt": trakt}
+    return {"tuning": tuning, "config": core}

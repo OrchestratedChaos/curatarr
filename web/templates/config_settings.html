@@ -16,31 +16,21 @@
   <fieldset>
     <legend>Export safety - Sonarr / Radarr / Trakt</legend>
     <p class="banner warn">
-      Turning <strong>Auto-sync</strong> ON here means curatarr starts writing to your
-      download clients (adding movies/shows to Sonarr/Radarr, or syncing lists to Trakt) on
-      every run, with no confirmation prompt. <strong>User mode</strong> and
-      <strong>Plex users</strong> control whose recommendations get synced - double-check
-      both before enabling auto-sync for anyone but yourself.
+      These fields control whether curatarr starts writing to your download clients (adding
+      movies/shows to Sonarr/Radarr, or syncing lists to Trakt) on every run, with no
+      confirmation prompt - <a href="{{ url_for('config_connections') }}">edit them on the
+      Connections screen</a>, right alongside each service's own connection details. Shown
+      here read-only so Settings can never silently revert a change made there (#290).
     </p>
 
     {% for svc in ['sonarr', 'radarr', 'trakt'] %}
     <div class="sync-safety-row">
       <h3>{{ svc|capitalize }}</h3>
-      <label>
-        <input type="checkbox" name="{{ svc }}_auto_sync" {% if sync_safety[svc].auto_sync %}checked{% endif %}>
-        Auto-sync every run
-      </label>
-      <label>User mode
-        <select name="{{ svc }}_user_mode">
-          {% for choice in user_mode_choices %}
-          <option value="{{ choice }}" {% if sync_safety[svc].user_mode == choice %}selected{% endif %}>{{ choice }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      {{ field_error(errors, svc ~ '_user_mode') }}
-      <label>Plex users to sync (comma-separated, used when user mode is "mapping")
-        <input type="text" name="{{ svc }}_plex_users" value="{{ sync_safety[svc].plex_users }}">
-      </label>
+      <p>
+        Auto-sync every run: <strong>{{ 'on' if sync_safety[svc].auto_sync else 'off' }}</strong>
+        &middot; User mode: <strong>{{ sync_safety[svc].user_mode }}</strong>
+        &middot; Plex users to sync: <strong>{{ sync_safety[svc].plex_users or '(none)' }}</strong>
+      </p>
     </div>
     {% endfor %}
   </fieldset>
