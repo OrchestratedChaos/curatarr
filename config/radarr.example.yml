@@ -9,7 +9,7 @@
 
 enabled: false
 url: http://localhost:7878
-api_key: YOUR_RADARR_API_KEY
+api_key: YOUR_RADARR_API_KEY  # Or set RADARR_API_KEY in the environment (takes precedence, #289)
 
 # --- SYNC BEHAVIOR ---
 # auto_sync: Run automatically when external recs finish

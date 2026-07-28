@@ -238,6 +238,30 @@ def secret_status(value: Optional[str]) -> str:
     return "configured" if (value or "").strip() else "not set"
 
 
+def secret_status_with_env(section: str, key: str, disk_value: Optional[str]) -> str:
+    """secret_status(), but environment-variable-aware (#289): if an
+    operator has set this field's env var override (see
+    utils.config.ENV_VAR_OVERRIDES - the same list load_config() itself
+    uses, so this can never silently drift out of sync with what's
+    actually active at runtime), that value wins for status purposes
+    too, exactly like it wins for the real value at run time. Without
+    this, an install configured entirely via the environment (Docker
+    secrets, an orchestrator's own secrets management - never written
+    to config.yml/sonarr.yml/etc at all) would show a misleading "not
+    set" here despite working correctly.
+
+    Args:
+        section: Config section (e.g. "plex", "trakt")
+        key: Config key within that section (e.g. "token", "client_secret")
+        disk_value: The value as saved on disk (or merged with a
+            just-submitted form value) - used only when no env override
+            is set.
+    """
+    from utils.config import get_env_override
+
+    return secret_status(get_env_override(section, key) or disk_value)
+
+
 def parse_csv_list(value: Optional[str]) -> list:
     """'a, b, c' -> ['a', 'b', 'c'], dropping blanks. Used for the small
     comma-separated list fields (plex_users, exclude_genres, etc.)."""

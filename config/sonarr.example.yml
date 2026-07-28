@@ -12,7 +12,7 @@ enabled: false
 
 # Sonarr connection
 url: http://localhost:8989
-api_key: YOUR_SONARR_API_KEY
+api_key: YOUR_SONARR_API_KEY  # Or set SONARR_API_KEY in the environment (takes precedence, #289)
 
 # Sync behavior
 auto_sync: false  # Auto-add on each run (or use external recs manually)

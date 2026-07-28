@@ -5,6 +5,7 @@
 enabled: false
 
 # MDBList API key (get from https://mdblist.com/preferences/)
+# Or set MDBLIST_API_KEY in the environment (takes precedence, #289)
 api_key: YOUR_MDBLIST_API_KEY
 
 # Sync behavior

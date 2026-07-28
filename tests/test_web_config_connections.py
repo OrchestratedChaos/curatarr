@@ -65,6 +65,53 @@ class TestGet:
         assert b"configured" in resp.data
 
 
+class TestEnvVarSecretStatus:
+    """#289: an integration configured ONLY via its environment-variable
+    override (nothing at all on disk) must show "configured", not a
+    misleading "not set" - see web/config_io.py's secret_status_with_env.
+    """
+
+    def test_sonarr_api_key_from_env_shows_configured(self, client, monkeypatch):
+        c, app, root = client
+        # No sonarr.yml at all in this fixture root - api_key is
+        # unconfigured on disk, so without the env-var fix this would
+        # show "not set" even though SONARR_API_KEY makes it fully
+        # functional at runtime.
+        monkeypatch.setenv("SONARR_API_KEY", "env-sonarr-key")
+
+        from web.config_connections import _connections_view, _load_connections
+
+        data = _load_connections(root)
+        view = _connections_view(data)
+
+        assert view["sonarr"]["api_key_status"] == "configured"
+        # Never the raw value itself, even in this internal view dict.
+        resp = c.get("/config/connections")
+        assert b"env-sonarr-key" not in resp.data
+
+    def test_trakt_access_token_from_env_shows_configured(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.setenv("TRAKT_ACCESS_TOKEN", "env-trakt-token")
+
+        from web.config_connections import _connections_view, _load_connections
+
+        data = _load_connections(root)
+        view = _connections_view(data)
+
+        assert view["trakt"]["access_token_status"] == "configured"
+
+    def test_no_env_var_set_falls_back_to_disk_not_set(self, client, monkeypatch):
+        c, app, root = client
+        monkeypatch.delenv("SONARR_API_KEY", raising=False)
+
+        from web.config_connections import _connections_view, _load_connections
+
+        data = _load_connections(root)
+        view = _connections_view(data)
+
+        assert view["sonarr"]["api_key_status"] == "not set"
+
+
 class TestTraktReauthHint:
     """The Trakt re-auth instructions shown below the fields must match
     how a user can actually reach this screen in the first place - a

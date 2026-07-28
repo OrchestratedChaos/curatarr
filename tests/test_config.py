@@ -11,6 +11,7 @@ from utils.config import (
     DEFAULT_NEGATIVE_MULTIPLIERS,
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_RATING_MULTIPLIERS,
+    ENV_VAR_OVERRIDES,
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
     UPDATE_MODES,
@@ -18,6 +19,7 @@ from utils.config import (
     check_cache_version,
     get_config_section,
     get_effective_arr_config,
+    get_env_override,
     get_libraries,
     get_libraries_for_media_type,
     get_negative_multiplier,
@@ -841,6 +843,110 @@ class TestLoadConfig:
             assert result["plex"]["token"] == "file_token"
         finally:
             os.unlink(path)
+
+    def test_every_registered_env_var_override_actually_applies(self):
+        """#289: table-driven over ENV_VAR_OVERRIDES itself (rather than
+        one hardcoded test per integration) so a future addition to that
+        list is automatically covered here too, and any variable that's
+        merely declared but not actually wired through load_config()
+        would fail loudly instead of silently doing nothing."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n")
+            path = f.name
+        try:
+            for env_var, section, key in ENV_VAR_OVERRIDES:
+                os.environ[env_var] = f"env-value-for-{env_var}"
+                try:
+                    result = load_config(path)
+                    assert result[section][key] == f"env-value-for-{env_var}", (
+                        f"{env_var} did not override {section}.{key}"
+                    )
+                finally:
+                    del os.environ[env_var]
+        finally:
+            os.unlink(path)
+
+    def test_sonarr_radarr_trakt_simkl_mdblist_tautulli_env_vars_create_section_if_missing(self):
+        """#289: same create-the-section-if-absent behavior the existing
+        TMDB_API_KEY coverage above already established, extended to
+        every newly-added integration - an operator using ONLY
+        environment variables (no sonarr.yml/radarr.yml/trakt.yml/etc at
+        all) must still end up with a working config."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n")
+            path = f.name
+        env_vars = {
+            "SONARR_API_KEY": ("sonarr", "api_key"),
+            "RADARR_API_KEY": ("radarr", "api_key"),
+            "TRAKT_CLIENT_SECRET": ("trakt", "client_secret"),
+            "TRAKT_ACCESS_TOKEN": ("trakt", "access_token"),
+            "TRAKT_REFRESH_TOKEN": ("trakt", "refresh_token"),
+            "SIMKL_CLIENT_ID": ("simkl", "client_id"),
+            "SIMKL_ACCESS_TOKEN": ("simkl", "access_token"),
+            "MDBLIST_API_KEY": ("mdblist", "api_key"),
+            "TAUTULLI_API_KEY": ("tautulli", "api_key"),
+        }
+        try:
+            for env_var in env_vars:
+                os.environ[env_var] = "env-secret"
+            result = load_config(path)
+            for _env_var, (section, key) in env_vars.items():
+                assert result[section][key] == "env-secret"
+        finally:
+            for env_var in env_vars:
+                if env_var in os.environ:
+                    del os.environ[env_var]
+            os.unlink(path)
+
+    def test_env_var_never_logged(self, caplog):
+        """#289: load_config() must log WHICH env var was used, never the
+        secret VALUE itself."""
+        import logging
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write("plex:\n  url: http://localhost:32400\n")
+            path = f.name
+        try:
+            os.environ["TRAKT_CLIENT_SECRET"] = "placeholder-secret-value-should-not-appear"
+            with caplog.at_level(logging.INFO, logger="curatarr"):
+                load_config(path)
+            assert "placeholder-secret-value-should-not-appear" not in caplog.text
+            assert "TRAKT_CLIENT_SECRET" in caplog.text
+        finally:
+            del os.environ["TRAKT_CLIENT_SECRET"]
+            os.unlink(path)
+
+
+class TestGetEnvOverride:
+    """Tests for utils.config.get_env_override - the single lookup web/
+    config_io.py's secret_status_with_env uses to ask "is this
+    (section, key) actively overridden by the environment" without
+    duplicating ENV_VAR_OVERRIDES."""
+
+    def test_returns_none_when_env_var_not_set(self, monkeypatch):
+        monkeypatch.delenv("PLEX_TOKEN", raising=False)
+        assert get_env_override("plex", "token") is None
+
+    def test_returns_value_when_env_var_set(self, monkeypatch):
+        monkeypatch.setenv("PLEX_TOKEN", "env-value")
+        assert get_env_override("plex", "token") == "env-value"
+
+    def test_returns_none_for_unregistered_section_key_pair(self, monkeypatch):
+        """A (section, key) with no entry in ENV_VAR_OVERRIDES at all
+        (e.g. a field that has never had an env var override, like
+        radarr.root_folder) always returns None, never a false positive
+        from some unrelated env var."""
+        assert get_env_override("radarr", "root_folder") is None
+
+    def test_empty_string_env_var_treated_as_unset(self, monkeypatch):
+        monkeypatch.setenv("PLEX_TOKEN", "")
+        assert get_env_override("plex", "token") is None
+
+    def test_covers_every_documented_integration(self):
+        """Belt-and-braces: fails loudly if a future ENV_VAR_OVERRIDES
+        edit forgets one of the sections #289 was actually about."""
+        sections = {section for _env_var, section, _key in ENV_VAR_OVERRIDES}
+        assert sections == {"plex", "tmdb", "tautulli", "sonarr", "radarr", "trakt", "simkl", "mdblist"}
 
 
 class TestModularConfigLoading:

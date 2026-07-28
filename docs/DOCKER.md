@@ -8,6 +8,7 @@ image that runs both the web UI and the recommender, from
 - [Quick start (docker run)](#quick-start-docker-run)
 - [Authentication](#authentication)
 - [Config and cache volumes](#config-and-cache-volumes)
+- [Secrets via environment variables](#secrets-via-environment-variables)
 - [Accessing from another machine](#accessing-from-another-machine)
 - [Scheduling recommendation runs](#scheduling-recommendation-runs)
 - [Updating](#updating)
@@ -139,6 +140,63 @@ container: the web UI's Connections screen creates it for you on first
 save. `docker run curatarr recommend ...` (see
 [Scheduling](#scheduling-recommendation-runs)) does need it to exist
 first, though, since there's no browser involved for that one.
+
+## Secrets via environment variables
+
+Every secret Curatarr stores (Plex token, TMDB API key, Tautulli/
+Sonarr/Radarr API keys, Trakt client secret and tokens, Simkl client
+ID and access token, MDBList API key) can be set as an environment
+variable instead of
+being written to `config.yml`/`sonarr.yml`/`radarr.yml`/`trakt.yml`/
+`simkl.yml`/`mdblist.yml` on disk - useful with Docker secrets, a
+`docker-compose.yml` `env_file:`, or an orchestrator's own secrets
+management (Kubernetes Secrets, etc).
+
+This is a convenience for operators who'd rather inject secrets this
+way than write them to a mounted config file - it is **not** a
+secrets-manager replacement. Curatarr doesn't encrypt anything at
+rest either way; an environment variable just avoids that particular
+value ever touching the config volume at all.
+
+An environment variable always takes precedence over whatever's saved
+in the corresponding config file - the file keeps working unchanged
+for anyone who doesn't use this, and the web UI's Connections screen
+correctly shows a field as "configured" when it's only ever set this
+way (never the value itself, only ever a masked status).
+
+```yaml
+# docker-compose.yml
+services:
+  curatarr:
+    environment:
+      - PLEX_TOKEN=${PLEX_TOKEN}
+      - TMDB_API_KEY=${TMDB_API_KEY}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - TRAKT_CLIENT_SECRET=${TRAKT_CLIENT_SECRET}
+    env_file:
+      - .env   # keep the real values out of docker-compose.yml/version control
+```
+
+| Variable | Overrides |
+|----------|-----------|
+| `PLEX_URL` | `plex.url` |
+| `PLEX_TOKEN` | `plex.token` |
+| `TMDB_API_KEY` | `tmdb.api_key` |
+| `TAUTULLI_API_KEY` | `tautulli.api_key` |
+| `SONARR_API_KEY` | `sonarr.api_key` |
+| `RADARR_API_KEY` | `radarr.api_key` |
+| `TRAKT_CLIENT_SECRET` | `trakt.client_secret` |
+| `TRAKT_ACCESS_TOKEN` | `trakt.access_token` |
+| `TRAKT_REFRESH_TOKEN` | `trakt.refresh_token` |
+| `SIMKL_CLIENT_ID` | `simkl.client_id` |
+| `SIMKL_ACCESS_TOKEN` | `simkl.access_token` |
+| `MDBLIST_API_KEY` | `mdblist.api_key` |
+
+Non-secret settings (URLs, `enabled`/`auto_sync` flags, `user_mode`,
+library paths, etc) have no environment-variable override and are
+still only configurable through the config files/web UI - this list
+is deliberately secrets-only.
 
 ## Accessing from another machine
 

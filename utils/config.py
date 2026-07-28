@@ -13,7 +13,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.72"
+__version__ = "2.10.73"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
@@ -330,6 +330,49 @@ def _auto_migrate_if_needed(config: dict, config_path: str) -> dict:
     return config
 
 
+# #289: single source of truth for every secret's environment-variable
+# override - (ENV_VAR, config-section, config-key). load_config() applies
+# these (env always wins over whatever's on disk); get_env_override()
+# below lets a caller (web/config_io.py's secret-status display, so the
+# web UI shows "configured" - not a stale "not set" - for a value that's
+# only ever set via the environment) ask the identical question without
+# duplicating (and risking drifting from - #261's whole class of bug)
+# this list. This is a convenience for operators using Docker
+# secrets/an orchestrator's own secrets management, not a replacement
+# for one - see config/tuning.example.yml and docs/DOCKER.md for the
+# full list with setup instructions.
+ENV_VAR_OVERRIDES = [
+    ("PLEX_URL", "plex", "url"),
+    ("PLEX_TOKEN", "plex", "token"),
+    ("TMDB_API_KEY", "tmdb", "api_key"),
+    ("TAUTULLI_API_KEY", "tautulli", "api_key"),
+    ("SONARR_API_KEY", "sonarr", "api_key"),
+    ("RADARR_API_KEY", "radarr", "api_key"),
+    ("TRAKT_CLIENT_SECRET", "trakt", "client_secret"),
+    ("TRAKT_ACCESS_TOKEN", "trakt", "access_token"),
+    ("TRAKT_REFRESH_TOKEN", "trakt", "refresh_token"),
+    ("SIMKL_CLIENT_ID", "simkl", "client_id"),
+    ("SIMKL_ACCESS_TOKEN", "simkl", "access_token"),
+    ("MDBLIST_API_KEY", "mdblist", "api_key"),
+]
+
+
+def get_env_override(section: str, key: str) -> Optional[str]:
+    """The environment-variable value that would override config[section]
+    [key] at load_config() time, or None if either no such override is
+    registered in ENV_VAR_OVERRIDES or the env var isn't actually set.
+
+    Exists so a caller other than load_config() itself (currently: web/
+    config_io.py's secret-status display) can ask "is this value coming
+    from the environment" without hand-rolling a second lookup that
+    could silently drift out of sync with the real override list.
+    """
+    for env_var, env_section, env_key in ENV_VAR_OVERRIDES:
+        if env_section == section and env_key == key:
+            return os.environ.get(env_var) or None
+    return None
+
+
 def load_config(config_path: str) -> dict:
     """
     Load YAML configuration with modular config file support.
@@ -340,10 +383,10 @@ def load_config(config_path: str) -> dict:
     - radarr.yml: Radarr integration settings
     - sonarr.yml: Sonarr integration settings
 
-    Environment variables take precedence over all config values:
-        PLEX_URL      -> plex.url
-        PLEX_TOKEN    -> plex.token
-        TMDB_API_KEY  -> tmdb.api_key
+    Environment variables take precedence over all config values - see
+    ENV_VAR_OVERRIDES above for the full, current list (this is a
+    convenience for operators using Docker secrets/an orchestrator, not
+    a secrets-manager replacement - see docs/DOCKER.md).
 
     Args:
         config_path: Path to config.yml file
@@ -380,14 +423,9 @@ def load_config(config_path: str) -> dict:
         # Load and merge modular config files
         config = _load_module_configs(config, config_dir)
 
-        # Override with environment variables (security best practice)
-        env_overrides = [
-            ("PLEX_URL", "plex", "url"),
-            ("PLEX_TOKEN", "plex", "token"),
-            ("TMDB_API_KEY", "tmdb", "api_key"),
-        ]
-
-        for env_var, section, key in env_overrides:
+        # Override with environment variables (security best practice) -
+        # never log the value itself, only which env var was used.
+        for env_var, section, key in ENV_VAR_OVERRIDES:
             value = os.environ.get(env_var)
             if value:
                 if section not in config:
