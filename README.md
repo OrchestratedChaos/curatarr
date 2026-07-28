@@ -296,15 +296,24 @@ users:
 
 ### Environment Variables
 
-For Docker or CI environments, you can use environment variables instead of storing tokens in config.yml:
+For Docker or CI environments, you can use environment variables instead of storing secrets in config.yml/sonarr.yml/radarr.yml/trakt.yml/simkl.yml/mdblist.yml. This is a convenience for operators using Docker secrets or an orchestrator's own secrets management - not a replacement for one; Curatarr itself still doesn't encrypt anything at rest.
 
 | Variable | Overrides |
 |----------|-----------|
 | `PLEX_URL` | `plex.url` |
 | `PLEX_TOKEN` | `plex.token` |
 | `TMDB_API_KEY` | `tmdb.api_key` |
+| `TAUTULLI_API_KEY` | `tautulli.api_key` |
+| `SONARR_API_KEY` | `sonarr.api_key` |
+| `RADARR_API_KEY` | `radarr.api_key` |
+| `TRAKT_CLIENT_SECRET` | `trakt.client_secret` |
+| `TRAKT_ACCESS_TOKEN` | `trakt.access_token` |
+| `TRAKT_REFRESH_TOKEN` | `trakt.refresh_token` |
+| `SIMKL_CLIENT_ID` | `simkl.client_id` |
+| `SIMKL_ACCESS_TOKEN` | `simkl.access_token` |
+| `MDBLIST_API_KEY` | `mdblist.api_key` |
 
-Environment variables take precedence over config file values.
+Environment variables take precedence over config file values, and the web UI's Connections screen correctly shows a field as "configured" when it's set only via the environment (never the value itself - only ever a masked status).
 
 ### Per-User Preferences
 ```yaml

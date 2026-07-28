@@ -19,6 +19,7 @@ from web.config_io import (
     parse_csv_list,
     save_module,
     secret_status,
+    secret_status_with_env,
     validate_merge,
 )
 
@@ -162,6 +163,26 @@ class TestSecretHelpers:
         assert secret_status("") == "not set"
         assert secret_status(None) == "not set"
         assert secret_status("   ") == "not set"
+
+    def test_secret_status_with_env_falls_back_to_disk_when_unset(self, monkeypatch):
+        monkeypatch.delenv("PLEX_TOKEN", raising=False)
+        assert secret_status_with_env("plex", "token", "a-real-token") == "configured"
+        assert secret_status_with_env("plex", "token", "") == "not set"
+
+    def test_secret_status_with_env_reports_configured_when_only_env_is_set(self, monkeypatch):
+        """#289: an install configured entirely via the environment (no
+        disk value at all) must not show a misleading "not set" - the
+        env var is what's actually active at runtime."""
+        monkeypatch.setenv("PLEX_TOKEN", "env-token")
+        assert secret_status_with_env("plex", "token", "") == "configured"
+        assert secret_status_with_env("plex", "token", None) == "configured"
+
+    def test_secret_status_with_env_ignores_unregistered_section_key(self, monkeypatch):
+        """A (section, key) pair with no registered env var override
+        (e.g. a per-library instance api_key) always falls back to the
+        disk value, never mistaking an unrelated env var for it."""
+        assert secret_status_with_env("radarr", "root_folder", "") == "not set"
+        assert secret_status_with_env("radarr", "root_folder", "/movies") == "configured"
 
 
 class TestCsvHelpers:

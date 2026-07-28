@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.73] - 2026-07-27
+
+### Added
+
+- **Every integration's secrets can now be set via environment variable, the same convenience `PLEX_URL`/`PLEX_TOKEN`/`TMDB_API_KEY` already offered (#289).** New: `TAUTULLI_API_KEY`, `SONARR_API_KEY`, `RADARR_API_KEY`, `TRAKT_CLIENT_SECRET`, `TRAKT_ACCESS_TOKEN`, `TRAKT_REFRESH_TOKEN`, `SIMKL_CLIENT_ID`, `SIMKL_ACCESS_TOKEN`, `MDBLIST_API_KEY` - an environment variable always takes precedence over whatever's saved on disk, and config files keep working completely unchanged for anyone who doesn't use this. This is a convenience for operators using Docker secrets or an orchestrator's own secrets management (mounting a value as a file and exporting it, a Kubernetes Secret, etc) - it is **not** a secrets-manager replacement, and Curatarr still doesn't encrypt anything at rest either way.
+
+  `utils.config.ENV_VAR_OVERRIDES` is now the single, shared list every override reads from (`load_config()` to apply them, and the web UI to check them) rather than two independently-hand-written lists that could silently drift apart. That mattered here: the Connections screen's "configured"/"not set" status was computed purely from what's on disk, with no awareness of the environment at all - so an install already using `PLEX_TOKEN`/`TMDB_API_KEY` this way would have shown a misleading "not set" for a field that's actually fully working. Fixed for every secret this PR covers via new `web.config_io.secret_status_with_env`.
+
+  New unit coverage: `tests/test_config.py::TestLoadConfig` (table-driven over every entry in `ENV_VAR_OVERRIDES`, so a future addition is automatically exercised; confirms the env var is logged by name but the value never appears in the log) and `TestGetEnvOverride`; `tests/test_web_config_io.py::TestSecretHelpers` and `tests/test_web_config_connections.py::TestEnvVarSecretStatus` (env-only configuration shows "configured", never the raw value, in both the internal view dict and the rendered page). Documented in every relevant `config/*.example.yml`, `README.md`, and a new `docs/DOCKER.md` section with a `docker-compose.yml` example.
+
+  `mdblist.yml`/`simkl.yml` have a separate, pre-existing, already-documented gap (`web/config_app.py`'s own docstring): `utils.config._load_module_configs()` doesn't merge those two files into the running config at all yet (only `trakt.yml`/`radarr.yml`/`sonarr.yml` are), so `MDBLIST_API_KEY`/`SIMKL_CLIENT_ID`/`SIMKL_ACCESS_TOKEN` only take effect today for an install that embeds an `mdblist:`/`simkl:` section directly in `config.yml` itself. Registering the override doesn't make that pre-existing gap any worse, and closes it automatically whenever that loader gap is fixed - left as-is here rather than bundled into a PR about environment variables, not module loading.
+
 ## [2.10.72] - 2026-07-27
 
 ### Added

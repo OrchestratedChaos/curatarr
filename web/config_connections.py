@@ -33,7 +33,7 @@ from .config_io import (
     merge_secret,
     module_path,
     parse_csv_list,
-    secret_status,
+    secret_status_with_env,
 )
 from .config_test_connection import TESTERS
 from .config_validate import validate_choice, validate_required, validate_url
@@ -195,35 +195,43 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
     return {
         "plex": {
             "url": pick("plex", "url", plex.get("url", "")),
-            "token_status": secret_status(
+            "token_status": secret_status_with_env(
+                "plex",
+                "token",
                 merge_secret(plex.get("token"), o.get("plex", {}).get("token_submitted", ""))
                 if "plex" in o
-                else plex.get("token")
+                else plex.get("token"),
             ),
         },
         "tmdb": {
-            "api_key_status": secret_status(
+            "api_key_status": secret_status_with_env(
+                "tmdb",
+                "api_key",
                 merge_secret(tmdb.get("api_key"), o.get("tmdb", {}).get("api_key_submitted", ""))
                 if "tmdb" in o
-                else tmdb.get("api_key")
+                else tmdb.get("api_key"),
             ),
         },
         "tautulli": {
             "enabled": pick("tautulli", "enabled", bool(tautulli.get("enabled", False))),
             "url": pick("tautulli", "url", tautulli.get("url", "")),
-            "api_key_status": secret_status(
+            "api_key_status": secret_status_with_env(
+                "tautulli",
+                "api_key",
                 merge_secret(tautulli.get("api_key"), o.get("tautulli", {}).get("api_key_submitted", ""))
                 if "tautulli" in o
-                else tautulli.get("api_key")
+                else tautulli.get("api_key"),
             ),
         },
         "sonarr": {
             "enabled": pick("sonarr", "enabled", bool(sonarr.get("enabled", False))),
             "url": pick("sonarr", "url", sonarr.get("url", "")),
-            "api_key_status": secret_status(
+            "api_key_status": secret_status_with_env(
+                "sonarr",
+                "api_key",
                 merge_secret(sonarr.get("api_key"), o.get("sonarr", {}).get("api_key_submitted", ""))
                 if "sonarr" in o
-                else sonarr.get("api_key")
+                else sonarr.get("api_key"),
             ),
             "auto_sync": pick("sonarr", "auto_sync", bool(sonarr.get("auto_sync", False))),
             "user_mode": pick("sonarr", "user_mode", sonarr.get("user_mode", "mapping")),
@@ -232,10 +240,12 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
         "radarr": {
             "enabled": pick("radarr", "enabled", bool(radarr.get("enabled", False))),
             "url": pick("radarr", "url", radarr.get("url", "")),
-            "api_key_status": secret_status(
+            "api_key_status": secret_status_with_env(
+                "radarr",
+                "api_key",
                 merge_secret(radarr.get("api_key"), o.get("radarr", {}).get("api_key_submitted", ""))
                 if "radarr" in o
-                else radarr.get("api_key")
+                else radarr.get("api_key"),
             ),
             "auto_sync": pick("radarr", "auto_sync", bool(radarr.get("auto_sync", False))),
             "user_mode": pick("radarr", "user_mode", radarr.get("user_mode", "mapping")),
@@ -244,12 +254,14 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
         "trakt": {
             "enabled": pick("trakt", "enabled", bool(trakt.get("enabled", False))),
             "client_id": pick("trakt", "client_id", trakt.get("client_id", "")),
-            "client_secret_status": secret_status(
+            "client_secret_status": secret_status_with_env(
+                "trakt",
+                "client_secret",
                 merge_secret(trakt.get("client_secret"), o.get("trakt", {}).get("client_secret_submitted", ""))
                 if "trakt" in o
-                else trakt.get("client_secret")
+                else trakt.get("client_secret"),
             ),
-            "access_token_status": secret_status(trakt.get("access_token")),
+            "access_token_status": secret_status_with_env("trakt", "access_token", trakt.get("access_token")),
             "auto_sync": pick("trakt", "auto_sync", bool(trakt_export.get("auto_sync", False))),
             "user_mode": pick("trakt", "user_mode", trakt_export.get("user_mode", "mapping")),
             "plex_users": pick("trakt", "plex_users", format_csv_list(trakt_export.get("plex_users"))),

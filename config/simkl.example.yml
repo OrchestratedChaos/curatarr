@@ -6,9 +6,11 @@ enabled: false
 
 # Simkl API credentials
 # Get your client ID at: https://simkl.com/settings/developer/
+# Or set SIMKL_CLIENT_ID in the environment (takes precedence, #289)
 client_id: YOUR_SIMKL_CLIENT_ID
 
 # Access token (filled automatically by setup wizard after PIN auth)
+# Or set SIMKL_ACCESS_TOKEN in the environment (takes precedence, #289)
 access_token: null
 
 # Import settings - enhance profiles with Simkl watch history

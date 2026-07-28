@@ -5,7 +5,7 @@ enabled: true
 
 # API credentials - get from https://trakt.tv/oauth/applications
 client_id: YOUR_CLIENT_ID
-client_secret: YOUR_CLIENT_SECRET
+client_secret: YOUR_CLIENT_SECRET  # Or set TRAKT_CLIENT_SECRET in the environment (takes precedence, #289)
 
 # OAuth tokens - set automatically after authentication, and kept up
 # to date automatically as they're refreshed (access tokens currently
@@ -16,8 +16,8 @@ client_secret: YOUR_CLIENT_SECRET
 # Run (from the project root, with your virtual environment active if
 # you're using one): python3 -m utils.trakt_auth [--reauth]
 # Docker: docker exec -it curatarr python3 -m utils.trakt_auth [--reauth]
-access_token: null
-refresh_token: null
+access_token: null   # Or set TRAKT_ACCESS_TOKEN in the environment (takes precedence, #289)
+refresh_token: null  # Or set TRAKT_REFRESH_TOKEN in the environment (takes precedence, #289)
 # token_created_at / token_expires_in: also set automatically (used to
 # refresh proactively, before expiry, rather than only reactively on a
 # failed request) - never set these by hand.
