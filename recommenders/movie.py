@@ -37,6 +37,7 @@ from utils import (
     get_project_root,
     get_watched_movie_count,
     log_error,
+    log_info,
     log_warning,
     merge_movie_history,
     process_counters_from_cache,
@@ -623,6 +624,11 @@ def process_recommendations(
     run_success = True
     run_detail = ""
 
+    # #284: quiet-tier lifecycle visibility - see utils.display.
+    # LOG_VERBOSITY_LEVELS's own docstring for why this is at INFO
+    # (visible at the quiet default) rather than DEBUG.
+    log_info(f"Starting movie recommendations for {single_user or 'configured users'}")
+
     try:
         # Create recommender with single user context
         recommender = PlexMovieRecommender(
@@ -659,7 +665,13 @@ def process_recommendations(
 
         recommender._save_cache()
 
+        log_info(
+            f"Movie recommendations complete for {single_user or 'configured users'}: "
+            f"{len(plex_recs)} recommendation(s)"
+        )
+
     except Exception as e:
+        log_error(f"Movie recommendations failed for {single_user or 'configured users'}: {e}")
         print(f"\n{RED}An error occurred: {e}{RESET}")
         print(traceback.format_exc())
         run_success = False

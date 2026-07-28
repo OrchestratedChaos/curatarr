@@ -23,6 +23,7 @@ from .display import (
     YELLOW,
     TeeLogger,
     log_error,
+    log_info,
     log_warning,
     setup_logging,
 )
@@ -342,6 +343,13 @@ def run_recommender_main(
         logger = setup_logging(debug=args.debug, config=root_config)
         logger.debug("Debug logging enabled")
 
+        # #284: quiet-tier lifecycle visibility (see utils.display.
+        # LOG_VERBOSITY_LEVELS) - covers the whole run (every configured
+        # library x user), complementing process_func's own per-user
+        # start/complete/failure lines (recommenders/movie.py's and
+        # tv.py's process_recommendations()).
+        log_info(f"Starting {media_type_key} recommender run (v{__version__})")
+
         general = root_config.get("general", {})
         log_retention_days = general.get("log_retention_days", 7)
 
@@ -444,9 +452,11 @@ def run_recommender_main(
             prune_orphaned_cache_files(cache_dir, resolved_usernames, dry_run=cache_prune_config.get("dry_run", True))
 
         outcome = "success"
+        log_info(f"{media_type_key} recommender run complete: {len(resolved_usernames)} user(s) processed")
     except SystemExit:
         raise
-    except Exception:
+    except Exception as e:
+        log_error(f"Unhandled error in {media_type_key} recommender run: {e}")
         record_unhandled_error(component=media_type_key)
         raise
     finally:

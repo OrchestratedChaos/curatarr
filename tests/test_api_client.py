@@ -115,3 +115,97 @@ class TestResponseSizeCap:
         with patch("utils.api_client.requests.request", return_value=resp):
             result = client._make_request_to_url("GET", "http://radarr.local/api")
         assert result == {"ok": True}
+
+
+class TestExternalApiFailureLogging:
+    """#284: a bad/expired API key, or a connection/timeout failure,
+    must be visible (logged, not just raised and possibly swallowed by
+    a caller) - this is the one shared choke point every Radarr/Sonarr/
+    Tautulli/MDBList request goes through (Trakt/Simkl have their own
+    equivalent coverage in tests/test_trakt.py / tests/test_simkl.py)."""
+
+    def test_401_logs_authentication_failure(self, client, caplog):
+        import logging
+
+        resp = _make_response(401, "http://radarr.local/api")
+        with (
+            patch("utils.api_client.requests.request", return_value=resp),
+            caplog.at_level(logging.ERROR, logger="curatarr"),
+        ):
+            with pytest.raises(_FakeAPIError):
+                client._make_request_to_url("GET", "http://radarr.local/api")
+
+        assert "FakeAPI" in caplog.text
+        assert "authentication failed" in caplog.text.lower()
+
+    def test_401_log_line_never_contains_the_api_key(self, client, caplog):
+        import logging
+
+        resp = _make_response(401, "http://radarr.local/api")
+        with (
+            patch("utils.api_client.requests.request", return_value=resp),
+            caplog.at_level(logging.ERROR, logger="curatarr"),
+        ):
+            with pytest.raises(_FakeAPIError):
+                client._make_request_to_url("GET", "http://radarr.local/api")
+
+        assert "super-secret-key" not in caplog.text
+
+    def test_5xx_logs_the_api_error(self, client, caplog):
+        import logging
+
+        resp = _make_response(500, "http://radarr.local/api")
+        resp.text = "Internal Server Error"
+        with (
+            patch("utils.api_client.requests.request", return_value=resp),
+            caplog.at_level(logging.ERROR, logger="curatarr"),
+        ):
+            with pytest.raises(_FakeAPIError):
+                client._make_request_to_url("GET", "http://radarr.local/api")
+
+        assert "500" in caplog.text
+
+    def test_connection_error_is_logged(self, client, caplog):
+        import logging
+
+        import requests
+
+        with (
+            patch("utils.api_client.requests.request", side_effect=requests.exceptions.ConnectionError("refused")),
+            caplog.at_level(logging.ERROR, logger="curatarr"),
+        ):
+            with pytest.raises(_FakeAPIError):
+                client._make_request_to_url("GET", "http://radarr.local/api")
+
+        assert "FakeAPI" in caplog.text
+        assert "could not connect" in caplog.text.lower()
+
+    def test_timeout_is_logged(self, client, caplog):
+        import logging
+
+        import requests
+
+        with (
+            patch("utils.api_client.requests.request", side_effect=requests.exceptions.Timeout("timed out")),
+            caplog.at_level(logging.ERROR, logger="curatarr"),
+        ):
+            with pytest.raises(_FakeAPIError):
+                client._make_request_to_url("GET", "http://radarr.local/api")
+
+        assert "FakeAPI" in caplog.text
+        assert "timed out" in caplog.text.lower() or "timeout" in caplog.text.lower()
+
+    def test_404_is_not_logged_as_an_error(self, client, caplog):
+        """A 404 is a normal, expected \"not found\" outcome for these
+        clients (see _handle_response) - not a failure worth surfacing."""
+        import logging
+
+        resp = _make_response(404, "http://radarr.local/api")
+        with (
+            patch("utils.api_client.requests.request", return_value=resp),
+            caplog.at_level(logging.ERROR, logger="curatarr"),
+        ):
+            result = client._make_request_to_url("GET", "http://radarr.local/api")
+
+        assert result is None
+        assert caplog.text == ""

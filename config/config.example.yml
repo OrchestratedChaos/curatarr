@@ -111,7 +111,29 @@ huntarr:
 
 # Optional: Logging level and format
 logging:
-  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  # off / quiet / verbose (#284) - default: quiet. Maps onto standard
+  # Python logging levels internally (off -> ERROR, quiet -> INFO,
+  # verbose -> DEBUG) rather than inventing a parallel severity system:
+  #   quiet   (default) - recommender run start/completion/failure per
+  #           engine and user with final counts; scheduled-run
+  #           confirmations; unhandled errors; and any external API
+  #           (Plex/TMDB/Tautulli/Sonarr/Radarr/Trakt/Simkl/MDBList)
+  #           failure - a bad token, expired auth, or rate limit is
+  #           surfaced immediately here rather than as an unexplained
+  #           no recommendations.
+  #   verbose - all of the above, plus per-item filtering decisions,
+  #           discovery iterations, and cache hits.
+  #   off     - near-silence; errors only.
+  # Also overridable via the CURATARR_LOG_LEVEL environment variable
+  # (takes precedence over this - useful for a one-off troubleshooting
+  # run without editing config.yml).
+  verbosity: quiet
+  # Advanced/legacy: an explicit level here (DEBUG, INFO, WARNING, or
+  # ERROR) takes precedence over verbosity above - only set this if you
+  # specifically need WARNING (the one standard level with no
+  # verbosity-tier equivalent) or already rely on this exact key. Leave
+  # unset (the default) to use verbosity instead.
+  # level: INFO
   # format: text (default) - colored, human-readable console output.
   # format: json - structured JSON-lines (one JSON object per log line:
   #   timestamp, level, logger, message, plus any extra fields a call

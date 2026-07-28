@@ -10,8 +10,11 @@ from unittest.mock import Mock, patch
 
 from utils.display import (
     ANSI_PATTERN,
+    CURATARR_LOG_LEVEL_ENV_VAR,
     CYAN,
     GREEN,
+    LOG_VERBOSITY_DEFAULT,
+    LOG_VERBOSITY_LEVELS,
     RED,
     RESET,
     YELLOW,
@@ -26,6 +29,7 @@ from utils.display import (
     print_status,
     print_user_footer,
     print_user_header,
+    resolve_log_level,
     setup_logging,
     show_progress,
     user_select_recommendations,
@@ -307,6 +311,142 @@ class TestSetupLogging:
         logger = setup_logging()
 
         assert logger.name == "curatarr"
+
+
+class TestResolveLogLevel:
+    """Tests for resolve_log_level() - the #284 off/quiet/verbose
+    resolution setup_logging() delegates to. See its own docstring for
+    the full precedence order this class exercises."""
+
+    def test_debug_flag_wins_over_everything(self, monkeypatch):
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "off")
+        config = {"logging": {"level": "ERROR", "verbosity": "off"}}
+
+        level, warning = resolve_log_level(debug=True, config=config)
+
+        assert level == logging.DEBUG
+        assert warning is None
+
+    def test_no_config_no_env_defaults_to_quiet_info(self, monkeypatch):
+        monkeypatch.delenv(CURATARR_LOG_LEVEL_ENV_VAR, raising=False)
+
+        level, warning = resolve_log_level(debug=False, config=None)
+
+        assert level == LOG_VERBOSITY_LEVELS[LOG_VERBOSITY_DEFAULT] == logging.INFO
+        assert warning is None
+
+    def test_explicit_logging_level_wins_over_env_and_verbosity(self, monkeypatch):
+        """The pre-existing raw logging.level key is untouched by #284 -
+        it still wins outright, including over WARNING (the one
+        standard level with no verbosity-tier equivalent)."""
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "verbose")
+        config = {"logging": {"level": "WARNING", "verbosity": "off"}}
+
+        level, warning = resolve_log_level(debug=False, config=config)
+
+        assert level == logging.WARNING
+        assert warning is None
+
+    def test_env_var_wins_over_config_verbosity(self, monkeypatch):
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "verbose")
+        config = {"logging": {"verbosity": "off"}}
+
+        level, warning = resolve_log_level(debug=False, config=config)
+
+        assert level == logging.DEBUG
+        assert warning is None
+
+    def test_env_var_accepts_all_three_friendly_tiers(self, monkeypatch):
+        for name, expected in LOG_VERBOSITY_LEVELS.items():
+            monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, name)
+            level, warning = resolve_log_level(debug=False, config=None)
+            assert level == expected
+            assert warning is None
+
+    def test_env_var_is_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "VERBOSE")
+
+        level, warning = resolve_log_level(debug=False, config=None)
+
+        assert level == logging.DEBUG
+        assert warning is None
+
+    def test_env_var_also_accepts_standard_level_names(self, monkeypatch):
+        """Not just the three friendly tiers - a raw level name works
+        too, matching \"map onto standard levels\" rather than rejecting
+        anything that isn't one of the three."""
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "WARNING")
+
+        level, warning = resolve_log_level(debug=False, config=None)
+
+        assert level == logging.WARNING
+        assert warning is None
+
+    def test_config_verbosity_used_when_no_env_var(self, monkeypatch):
+        monkeypatch.delenv(CURATARR_LOG_LEVEL_ENV_VAR, raising=False)
+        config = {"logging": {"verbosity": "off"}}
+
+        level, warning = resolve_log_level(debug=False, config=config)
+
+        assert level == logging.ERROR
+        assert warning is None
+
+    def test_unrecognized_env_var_falls_back_to_default_with_warning(self, monkeypatch):
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "not-a-real-level")
+
+        level, warning = resolve_log_level(debug=False, config=None)
+
+        assert level == logging.INFO
+        assert warning is not None
+        assert "not-a-real-level" in warning
+
+    def test_unrecognized_config_verbosity_falls_back_to_default_with_warning(self, monkeypatch):
+        monkeypatch.delenv(CURATARR_LOG_LEVEL_ENV_VAR, raising=False)
+        config = {"logging": {"verbosity": "extremely-chatty"}}
+
+        level, warning = resolve_log_level(debug=False, config=config)
+
+        assert level == logging.INFO
+        assert warning is not None
+
+
+class TestSetupLoggingVerbosity:
+    """setup_logging() itself, for the #284 verbosity path specifically
+    (TestSetupLogging above already covers the pre-existing
+    logging.level path end to end)."""
+
+    def test_quiet_is_the_default(self, monkeypatch):
+        monkeypatch.delenv(CURATARR_LOG_LEVEL_ENV_VAR, raising=False)
+
+        logger = setup_logging(debug=False, config=None)
+
+        assert logger.level == logging.INFO
+
+    def test_config_verbosity_off_maps_to_error(self, monkeypatch):
+        monkeypatch.delenv(CURATARR_LOG_LEVEL_ENV_VAR, raising=False)
+
+        logger = setup_logging(debug=False, config={"logging": {"verbosity": "off"}})
+
+        assert logger.level == logging.ERROR
+
+    def test_env_var_verbose_maps_to_debug(self, monkeypatch):
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "verbose")
+
+        logger = setup_logging(debug=False, config=None)
+
+        assert logger.level == logging.DEBUG
+
+    def test_invalid_verbosity_logs_a_warning_not_silently(self, monkeypatch, capsys):
+        """setup_logging() replaces the root logger's handlers as part
+        of its own setup (see its own body) - which is also why this
+        can't use caplog here (caplog's handler would be one of the
+        ones just replaced). Its own freshly-attached StreamHandler
+        writes to stderr, so that's what this asserts against instead."""
+        monkeypatch.setenv(CURATARR_LOG_LEVEL_ENV_VAR, "not-a-real-level")
+
+        setup_logging(debug=False, config=None)
+
+        assert "not-a-real-level" in capsys.readouterr().err
 
 
 class TestJsonFormatter:

@@ -33,6 +33,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -61,6 +62,7 @@ from utils import (
     get_users_from_config,
     is_dismissed,
     load_config,
+    log_error,
     record_dismissal,
     record_unhandled_error,
     render_prometheus_text,
@@ -674,6 +676,14 @@ def create_app(
         if isinstance(exc, HTTPException):
             return exc
         record_unhandled_error(component="web")
+        # #284: structured line (component, route, stack trace -
+        # asctime/timestamp comes from the log formatter itself) so an
+        # error visible in curatarr_unhandled_errors_total can actually
+        # be traced back to a cause in the logs, not just counted.
+        log_error(
+            f"Unhandled error in web request: component=web route={request.path} "
+            f"method={request.method}: {exc}\n{traceback.format_exc()}"
+        )
         raise exc
 
     @app.get("/")

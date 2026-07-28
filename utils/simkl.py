@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 
 from .api_client import BaseAPIClient
+from .display import log_error
 from .metrics import record_api_call
 
 logger = logging.getLogger("curatarr")
@@ -154,6 +155,11 @@ class SimklClient(BaseAPIClient):
 
             # Handle auth errors
             if response.status_code == 401:
+                # #284: logged HERE (the one choke point every Simkl
+                # request goes through) - a bad/expired token must be
+                # visible rather than surfacing only as a silently
+                # empty import/export.
+                log_error("Simkl: authentication failed (invalid or expired token)")
                 raise SimklAuthError("Invalid or expired Simkl token")
 
             # Handle not found
@@ -163,6 +169,7 @@ class SimklClient(BaseAPIClient):
 
             # Handle other errors
             if response.status_code >= 400:
+                log_error(f"Simkl API error {response.status_code}: {response.text}")
                 raise SimklAPIError(f"Simkl API error {response.status_code}: {response.text}")
 
             # Return JSON or None for no-content responses
@@ -173,10 +180,13 @@ class SimklClient(BaseAPIClient):
             return response.json()
 
         except requests.exceptions.Timeout as e:
+            log_error(f"Simkl: request timed out after {SIMKL_REQUEST_TIMEOUT}s")
             raise SimklAPIError(f"Request timeout after {SIMKL_REQUEST_TIMEOUT}s") from e
         except requests.exceptions.ConnectionError as e:
+            log_error(f"Simkl: could not connect - {e}")
             raise SimklAPIError("Could not connect to Simkl API") from e
         except requests.exceptions.RequestException as e:
+            log_error(f"Simkl: request failed - {e}")
             raise SimklAPIError(f"Simkl request failed: {e}") from e
         finally:
             record_api_call("simkl", outcome, time.time() - request_start)

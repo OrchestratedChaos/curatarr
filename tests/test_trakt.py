@@ -226,6 +226,62 @@ class TestTraktClientMakeRequest:
             with pytest.raises(TraktAuthError):
                 client._make_request("GET", "/test")
 
+    @patch("utils.trakt.requests.request")
+    def test_api_error_is_logged_at_the_choke_point(self, mock_request, caplog):
+        """#284: a Trakt API failure must be logged HERE, at the one
+        shared choke point every Trakt request goes through - never
+        relying on some caller further up to notice/log a caught
+        TraktAPIError (the exact gap that let a real Trakt outage stay
+        invisible for six months)."""
+        import logging
+
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.text = "Server Error"
+        mock_request.return_value = mock_response
+
+        client = TraktClient("id", "secret", access_token="token")
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"), pytest.raises(TraktAPIError):
+            client._make_request("GET", "/test")
+
+        assert "Trakt" in caplog.text
+        assert "500" in caplog.text
+
+    @patch("utils.trakt.requests.request")
+    def test_token_refresh_failure_is_logged(self, mock_request, caplog):
+        """#284: a bad/expired Trakt token, unrecoverable via refresh,
+        must be visible - not just an exception a caller might swallow."""
+        import logging
+
+        unauthorized = Mock()
+        unauthorized.status_code = 401
+        unauthorized.text = "Unauthorized"
+        mock_request.return_value = unauthorized
+
+        client = TraktClient("id", "secret", access_token="token", refresh_token="refresh")
+
+        with (
+            patch.object(client, "_refresh_access_token", return_value=False),
+            caplog.at_level(logging.ERROR, logger="curatarr"),
+            pytest.raises(TraktAuthError),
+        ):
+            client._make_request("GET", "/test")
+
+        assert "authentication failed" in caplog.text.lower()
+
+    @patch("utils.trakt.requests.request")
+    def test_connection_failure_is_logged(self, mock_request, caplog):
+        import logging
+
+        mock_request.side_effect = requests.exceptions.ConnectionError("refused")
+        client = TraktClient("id", "secret", access_token="token")
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"), pytest.raises(TraktAPIError):
+            client._make_request("GET", "/test")
+
+        assert "Trakt" in caplog.text
+
 
 class TestTraktClientDeviceAuth:
     """Tests for device authentication flow."""

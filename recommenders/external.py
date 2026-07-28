@@ -81,6 +81,7 @@ from utils import (
     load_config,
     load_json_cache,
     log_error,
+    log_info,
     log_warning,
     normalize_genre,
     normalize_user_profile,
@@ -2278,7 +2279,8 @@ def main():
         outcome = "success"
     except SystemExit:
         raise
-    except Exception:
+    except Exception as e:
+        log_error(f"Unhandled error in external recommender run: {e}")
         record_unhandled_error(component="external")
         raise
     finally:
@@ -2331,6 +2333,12 @@ def _main_impl():
     # under its own huntarr.* keys, already independently gated above).
     external_recommendations_enabled = config.get("external_recommendations", {}).get("enabled", True)
     run_recommendations = not args.huntarr_only and external_recommendations_enabled
+
+    # #284: quiet-tier lifecycle visibility (see utils.display.
+    # LOG_VERBOSITY_LEVELS) - the per-user try/except blocks below
+    # already log_error() each failure (see #292's record_run_status
+    # calls alongside them); this is the run-level start/complete pair.
+    log_info("Starting external recommendations run" + (" (Huntarr only)" if args.huntarr_only else ""))
 
     if args.huntarr_only:
         print(f"\n{GREEN}=== Huntarr: Collection Movie Finder ==={RESET}")
@@ -2546,6 +2554,8 @@ def _main_impl():
         export_to_radarr(config, arr_export_data, tmdb_api_key)
         export_to_mdblist(config, all_users_data, tmdb_api_key)
         export_to_simkl(config, all_users_data, tmdb_api_key)
+
+    log_info(f"External recommendations run complete: {total_users} user(s) processed")
 
 
 if __name__ == "__main__":

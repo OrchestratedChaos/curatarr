@@ -40,6 +40,7 @@ from utils import (
     get_watched_show_count,
     identify_dropped_shows,
     log_error,
+    log_info,
     log_warning,
     merge_show_watched_data,
     process_counters_from_cache,
@@ -648,6 +649,11 @@ def process_recommendations(
     run_success = True
     run_detail = ""
 
+    # #284: quiet-tier lifecycle visibility - see utils.display.
+    # LOG_VERBOSITY_LEVELS's own docstring for why this is at INFO
+    # (visible at the quiet default) rather than DEBUG.
+    log_info(f"Starting tv recommendations for {single_user or 'configured users'}")
+
     try:
         # Create recommender with single user context
         recommender = PlexTVRecommender(
@@ -677,7 +683,12 @@ def process_recommendations(
         # Always manage labels (to remove old ones even if no new recommendations)
         recommender.manage_plex_labels(plex_recs)
 
+        log_info(
+            f"TV recommendations complete for {single_user or 'configured users'}: {len(plex_recs)} recommendation(s)"
+        )
+
     except Exception as e:
+        log_error(f"TV recommendations failed for {single_user or 'configured users'}: {e}")
         print(f"\n{RED}An error occurred: {e}{RESET}")
         print(traceback.format_exc())
         run_success = False

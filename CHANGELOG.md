@@ -2,6 +2,25 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.74] - 2026-07-27
+
+### Added
+
+- **A log verbosity setting - off/quiet/verbose - replacing the reporter's original twelve-category proposal with the high-value slice of it (#284).** Most of that original list (per-request web access logging, a config-change audit trail, per-call latency logging for every external call) would have recreated the `docker logs` firehose v2.10.50 already fixed, so it's deliberately out of scope here. What ships instead:
+
+  New `logging.verbosity` (`config/config.example.yml`, default **quiet**, `LOG_VERBOSITY_DEFAULT`/`LOG_VERBOSITY_LEVELS` in `utils/display.py`), overridable via the `CURATARR_LOG_LEVEL` environment variable (env always wins - Docker operators expect this, matching Sonarr/Radarr/Plex's own convention). Both accept either a friendly tier (`off`/`quiet`/`verbose`) or a standard Python level name, mapped internally onto real logging levels rather than inventing a parallel severity system: `off` -> ERROR (near-silence, errors only), `quiet` -> INFO (the same level this app already defaulted to - `quiet` is a rename, not a behavior change, for anyone who touches nothing), `verbose` -> DEBUG (surfaces the existing `logger.debug()` call sites throughout the codebase - per-item filtering decisions, discovery iterations, cache hits). The pre-existing raw `logging.level` key (DEBUG/INFO/WARNING/ERROR, already shipped and exposed in the web UI's Settings screen) is untouched and still takes precedence if explicitly set - this is additive, never a replacement, so nothing anyone already relies on changes.
+
+  At the quiet default, four things are now genuinely visible that weren't before:
+  1. **External API failures, surfaced immediately** - the single most valuable item, and the exact gap that let a real Trakt outage stay invisible for six months: a bad/expired token, or a connection/timeout failure, is now logged at the one shared choke point every request to Plex (`init_plex`), TMDB (`fetch_tmdb_with_retry` - deduplicated to once per process so a per-item lookup called hundreds of times per run can't turn this into its own firehose), Tautulli/Sonarr/Radarr/MDBList (`BaseAPIClient._handle_response`/`_make_request_to_url` - one fix, four integrations), Trakt, and Simkl goes through - never silently swallowed by whichever caller happens to catch the resulting exception.
+  2. **Recommender run lifecycle** - start/completion/failure, per engine (movie/tv/external) and per user, with final counts (`recommenders/movie.py`, `recommenders/tv.py`, `recommenders/external.py`, `utils/cli.py`'s shared `run_recommender_main`).
+  3. **Scheduler confirmations** - already shipped (the in-app scheduler already logged a clear "started scheduled 'full' run" line, or why it was skipped/failed) - verified, not re-implemented.
+  4. **Unhandled errors** - `web/app.py`'s generic exception handler now logs a structured line (component, route, method, stack trace - timestamp comes from the log formatter itself) alongside the `curatarr_unhandled_errors_total` metric it already recorded, so an error visible in that metric can actually be traced back to a cause instead of just counted. `utils/cli.py`'s equivalent CLI-side top-level handler gets the same treatment.
+
+  Never logs a secret's value anywhere in any of this - every new line either carries no secret-shaped content at all, or goes through the existing `log_error`/`log_warning` redaction path (`utils/redact.py`) the same as every other log line in this codebase. No bare `print()` was reintroduced; every new line goes through the logging module so `off`/`quiet`/`verbose` actually controls it.
+
+  New unit coverage: `tests/test_display.py::TestResolveLogLevel`/`TestSetupLoggingVerbosity` (full precedence order, case-insensitivity, unrecognized-value fallback-with-warning); `tests/test_config.py::TestConfigExampleLoggingDefaultsMatch` (the documented default matches the code default - same #261-class guardrail as this project's other config defaults); `tests/test_api_client.py::TestExternalApiFailureLogging`, `tests/test_trakt.py`, `tests/test_simkl.py`, `tests/test_tmdb.py::TestFetchTmdbWithRetry` (401/error/timeout/connection-failure logging, secret-never-logged, the TMDB once-per-process dedup); `tests/test_web_metrics.py::TestUnhandledErrorMetric` (structured line present, redacted).
+
+
 ## [2.10.73] - 2026-07-27
 
 ### Added
