@@ -13,7 +13,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.75"
+__version__ = "2.10.76"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
