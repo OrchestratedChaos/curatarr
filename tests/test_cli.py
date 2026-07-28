@@ -481,6 +481,164 @@ class TestRunRecommenderMain:
 
         assert mock_process.call_count == 1
 
+    @patch("utils.cli.log_error")
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_single_user_mode_rejects_unconfigured_username(
+        self,
+        mock_parse_args,
+        mock_root,
+        mock_open,
+        mock_yaml,
+        mock_setup_log,
+        mock_resolve,
+        mock_print,
+        mock_migrate,
+        mock_error,
+    ):
+        """A username not in the configured user list must be rejected
+        before it can reach collection/label creation on live Plex - see
+        utils/cli.py's own comment on this check for the incident this
+        covers (`python3 recommenders/movie.py alice` for a nonexistent
+        user creating real collections/labels)."""
+        mock_parse_args.return_value = Mock(username="alice", debug=False, library_id=None)
+        mock_root.return_value = "/fake/root"
+        mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "bob, charlie"}}
+        mock_migrate.return_value = {}
+
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_recommender_main("Movie", "Test", mock_process)
+
+        assert exc_info.value.code == 1
+        mock_process.assert_not_called()
+        error_message = mock_error.call_args[0][0]
+        assert "alice" in error_message
+        assert "bob" in error_message
+        assert "charlie" in error_message
+
+    @patch("utils.cli.log_error")
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_single_user_mode_accepts_configured_username_case_insensitively(
+        self,
+        mock_parse_args,
+        mock_root,
+        mock_open,
+        mock_yaml,
+        mock_setup_log,
+        mock_resolve,
+        mock_print,
+        mock_migrate,
+        mock_error,
+    ):
+        """A configured username still works unchanged, including when
+        the casing typed on the command line doesn't match config.yml's
+        casing exactly."""
+        mock_parse_args.return_value = Mock(username="BOB", debug=False, library_id=None)
+        mock_root.return_value = "/fake/root"
+        mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "bob, charlie"}}
+        mock_migrate.return_value = {}
+
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main("Movie", "Test", mock_process)
+
+        assert mock_process.call_count == 1
+        mock_error.assert_not_called()
+
+    @patch("utils.cli.log_error")
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_single_user_mode_accepts_admin_keyword_even_if_unconfigured(
+        self,
+        mock_parse_args,
+        mock_root,
+        mock_open,
+        mock_yaml,
+        mock_setup_log,
+        mock_resolve,
+        mock_print,
+        mock_migrate,
+        mock_error,
+    ):
+        """'Admin'/'Administrator' are always accepted regardless of the
+        configured user list - resolve_admin_username() resolves either
+        to the real Plex account username downstream."""
+        mock_parse_args.return_value = Mock(username="Admin", debug=False, library_id=None)
+        mock_root.return_value = "/fake/root"
+        mock_yaml.return_value = {"plex": {"token": "abc"}, "users": {"list": "bob, charlie"}}
+        mock_migrate.return_value = {}
+
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main("Movie", "Test", mock_process)
+
+        assert mock_process.call_count == 1
+        mock_error.assert_not_called()
+
+    @patch("utils.cli.log_error")
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_single_user_mode_unconfigured_username_creates_nothing(
+        self,
+        mock_parse_args,
+        mock_root,
+        mock_open,
+        mock_yaml,
+        mock_setup_log,
+        mock_resolve,
+        mock_print,
+        mock_migrate,
+        mock_error,
+    ):
+        """No users configured at all (not even the requested one) still
+        rejects a --username value cleanly instead of falling through to
+        a single-element all_users list built straight from the raw arg."""
+        mock_parse_args.return_value = Mock(username="alice", debug=False, library_id=None)
+        mock_root.return_value = "/fake/root"
+        mock_yaml.return_value = {"plex": {"token": "abc"}}  # No users configured at all
+        mock_migrate.return_value = {}
+
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_recommender_main("Movie", "Test", mock_process)
+
+        assert exc_info.value.code == 1
+        mock_process.assert_not_called()
+
     @patch("utils.cli.migrate_renamed_plex_users")
     @patch("utils.cli.print_runtime")
     @patch("utils.cli.resolve_admin_username")

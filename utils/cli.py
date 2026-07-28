@@ -358,14 +358,38 @@ def run_recommender_main(
         # for why this (not run.sh/run.ps1) is what binary users see.
         print_update_notice(get_update_mode(root_config))
 
-        # Handle single user mode
-        single_user = args.username
-        if single_user:
-            log_warning(f"Single user mode: {single_user}")
-
         # Get users to process
         all_users = get_users_from_config(root_config)
+
+        # Handle single user mode. Validated against the configured user
+        # list (case-insensitively) before it can reach anything that
+        # touches live Plex - a real incident: `python3 recommenders/
+        # movie.py alice` for a username that was never configured
+        # anywhere still created a real "Alice - Recommendation"
+        # collection, applied Recommended_alice labels to real library
+        # items, and wrote per-user cache/log files, all for a user that
+        # does not exist. "Admin"/"Administrator" are always accepted
+        # here (unchanged) since resolve_admin_username() below resolves
+        # either to the real Plex account username regardless of what's
+        # in the configured user list.
+        #
+        # Hard failure, no override flag: a deliberate escape hatch here
+        # is exactly what the next throwaway/manual-test invocation would
+        # reach for, reproducing the same live-Plex-mutation-for-a-typo'd
+        # username this exists to prevent. Genuinely testing against a
+        # new user is one config.yml edit away.
+        single_user = args.username
         if single_user:
+            valid_usernames = {u.lower() for u in all_users} | {"admin", "administrator"}
+            if single_user.lower() not in valid_usernames:
+                configured_list = ", ".join(all_users) if all_users else "(none configured)"
+                log_error(
+                    f"Unknown user '{single_user}' - not in the configured user list. "
+                    f"Configured users: {configured_list}. Add this user to config.yml "
+                    "(users.list / plex_users.users / plex.managed_users) before running against it."
+                )
+                sys.exit(1)
+            log_warning(f"Single user mode: {single_user}")
             all_users = [single_user]
 
         if not all_users:

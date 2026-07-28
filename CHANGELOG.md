@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.79] - 2026-07-28
+
+### Fixed
+
+- **The optional positional `username` CLI argument (e.g. `python3 recommenders/movie.py alice`) accepted any string with zero validation and could mint real collections/labels on live Plex for a user that was never configured.** `utils/cli.py`'s `run_recommender_main()` took `args.username` straight from argparse and used it verbatim as the sole entry in `all_users` - nothing checked it against the configured user list (or a real Plex account) before it reached `recommenders/base.py`'s collection (`Recommended_<user>`) and label (`PrivateCollection_<user>`) creation. Reproduced: `python3 recommenders/movie.py alice` for a username absent from every configured location (`users.list`/`plex_users.users`/`plex.managed_users`) created a real "Alice - Recommendation" collection, applied `Recommended_alice` labels to real library items, and wrote per-user cache/log files - for a user that doesn't exist.
+
+  `run_recommender_main()` now validates that positional argument (case-insensitively) against the actually-configured user list before it can reach any of that, and exits with a clear error naming the valid usernames if it isn't one of them. `Admin`/`Administrator` remain always accepted regardless of the configured list, unchanged - `resolve_admin_username()` already resolves either to the real Plex account username downstream, independent of what's in config.
+
+  Deliberately a hard failure with no override flag. A `--force`-style escape hatch would be exactly what the next throwaway/manual-test invocation reaches for, reproducing this same live-Plex-mutation-for-a-typo'd-username bug; testing against a genuinely new user is one `config.yml` edit away.
+
+  New coverage in `tests/test_cli.py::TestRunRecommenderMain`: `test_single_user_mode_rejects_unconfigured_username` (exits 1, creates nothing, error names the configured users), `test_single_user_mode_unconfigured_username_creates_nothing` (same, with zero users configured at all), `test_single_user_mode_accepts_configured_username_case_insensitively`, and `test_single_user_mode_accepts_admin_keyword_even_if_unconfigured`.
+
 ## [2.10.78] - 2026-07-28
 
 ### Fixed
