@@ -894,7 +894,7 @@ Inspired by [netplexflix's](https://github.com/netplexflix) Movie/TV Recommendat
 
 Curatarr is free and will stay free - no premium tier, no paywalled
 features, ever. If you'd like to support development, you can do so via
-[Ko-fi](https://ko-fi.com/OrchestratedChaos). It's entirely optional and
+[Ko-fi](https://ko-fi.com/orchestratedchaos). It's entirely optional and
 buys nothing - no priority support, no feature influence, no say over the
 roadmap. Just a way to say thanks if you feel like it.
 
