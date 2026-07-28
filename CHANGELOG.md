@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.69] - 2026-07-27
+
+### Fixed
+
+- **Settings and Connections silently clobbered each other's Sonarr/Radarr/Trakt sync-safety fields (#290).** `/config/settings` and `/config/connections` both rendered live editable inputs for the same fields (`sonarr_auto_sync`/`user_mode`/`plex_users` and the radarr/trakt equivalents) and both wrote all of them unconditionally on save, from whatever THEIR OWN form last showed - saving either page silently reverted any change made on the other, with both still showing "Saved." either way, no warning, no log line. Since these fields gate real writes to a user's Sonarr/Radarr/Trakt instances, this was treated as higher severity than a cosmetic UI bug.
+
+  Made Connections the sole writer (it already had "more context" - each field sits directly below that service's own URL/API key, matching the module's own pre-existing docstring) and Settings display-only: `web/config_settings.py`'s `_apply_settings()` no longer touches `sonarr.yml`/`radarr.yml`/`trakt.yml` at all (dropped those three params/writes entirely, and dropped them from the modules it commits), and `web/templates/config_settings.html`'s Export Safety fieldset now shows the current on-disk value as plain text with a link to Connections, instead of `<input>`/`<select>` elements - this is the approach that cannot silently lose a setting: Settings' own `<form>` structurally has no field named e.g. `sonarr_auto_sync` for a submission to ever carry, rather than relying on save-time scoping logic to get this right every time.
+
+  **Verified in a real container**: saved distinct sync-safety values via Connections over real HTTP (`sonarr.auto_sync: true`, `user_mode: combined`), then saved Settings' own unrelated fields - `sonarr.yml` was byte-identical afterward, and the Settings page correctly showed the Connections-saved values read-only. New regression coverage in `tests/test_web_config_settings.py::TestSaveNeverTouchesSyncSafety`: a Settings save leaves `sonarr.yml`/`radarr.yml`/`trakt.yml`'s mtimes unchanged; the full clobber scenario (save Connections, then Settings, assert Connections' values survive); and the Settings screen never renders an input/select named for any of these fields.
+
 ## [2.10.68] - 2026-07-27
 
 ### Fixed

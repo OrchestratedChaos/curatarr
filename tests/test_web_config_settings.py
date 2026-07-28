@@ -1,7 +1,15 @@
 """Tests for the /config/settings screen: tuning.yml weights (with
 sum-to-1.0 validation), quality filters, recency decay, rating
-multipliers, negative signals, external recommendations, general/
-logging, and the sonarr/radarr/trakt export-safety toggles."""
+multipliers, negative signals, external recommendations, and general/
+logging.
+
+#290: the sonarr/radarr/trakt export-safety fields (auto_sync/
+user_mode/plex_users) used to ALSO be editable and saved from here,
+duplicating the Connections screen's own editable copy of the exact
+same fields - saving either page silently reverted whatever the other
+had last saved, with no warning. This screen now only ever displays
+those fields read-only (Connections is the sole writer) - see
+TestSaveNeverTouchesSyncSafety below for the regression coverage."""
 
 import os
 import sys
@@ -80,12 +88,6 @@ VALID_FORM = {
     "ext_language": "",
     "general_log_retention_days": "7",
     "logging_level": "INFO",
-    "sonarr_user_mode": "mapping",
-    "sonarr_plex_users": "alice",
-    "radarr_user_mode": "mapping",
-    "radarr_plex_users": "alice",
-    "trakt_user_mode": "mapping",
-    "trakt_plex_users": "alice",
 }
 
 
@@ -203,17 +205,6 @@ class TestSave:
         assert get_update_mode(core) == "off"
         assert core["general"]["auto_update"] is True
 
-    def test_saves_sync_safety_toggles_to_module_files(self, client):
-        c, app, root = client
-        form = dict(VALID_FORM)
-        form["sonarr_auto_sync"] = "on"
-        c.post("/config/settings", data=form)
-
-        sonarr = _read_yaml(root, "sonarr")
-        assert sonarr["auto_sync"] is True
-        assert sonarr["user_mode"] == "mapping"
-        assert sonarr["plex_users"] == ["alice"]
-
     def test_round_trip_preserves_untouched_keys(self, client):
         c, app, root = client
         tuning_path = module_path(root, "tuning")
@@ -226,6 +217,90 @@ class TestSave:
         content = open(tuning_path, encoding="utf-8").read()
         assert "# Curatarr Tuning Configuration" in content
         assert "label_name: Recommended" in content
+
+
+class TestSaveNeverTouchesSyncSafety:
+    """#290: Settings must never write sonarr/radarr/trakt.yml's
+    auto_sync/user_mode/plex_users - Connections (web/config_connections.py)
+    is the sole writer. Before this fix, saving either page silently
+    reverted whatever the other had last saved, with no warning - both
+    still said "Saved." either way."""
+
+    # Minimal valid Connections form - the fields under test
+    # (sonarr_user_mode/plex_users) plus whatever else that screen's
+    # own validation requires to accept the submission at all.
+    CONNECTIONS_FORM = {
+        "plex_url": "http://localhost:32400",
+        "plex_token": "",
+        "tmdb_api_key": "",
+        "tautulli_url": "",
+        "tautulli_api_key": "",
+        "sonarr_url": "http://localhost:8989",
+        "sonarr_api_key": "sonarr-key-123",
+        "sonarr_auto_sync": "on",
+        "sonarr_user_mode": "combined",
+        "sonarr_plex_users": "",
+        "radarr_url": "http://localhost:7878",
+        "radarr_api_key": "radarr-key-123",
+        "radarr_user_mode": "mapping",
+        "radarr_plex_users": "bob",
+        "trakt_client_id": "client-id-123",
+        "trakt_client_secret": "client-secret-123",
+        "trakt_user_mode": "mapping",
+        "trakt_plex_users": "alice",
+    }
+
+    def test_settings_save_does_not_write_sonarr_radarr_trakt_files(self, client):
+        c, app, root = client
+        sonarr_path = module_path(root, "sonarr")
+        radarr_path = module_path(root, "radarr")
+        trakt_path = module_path(root, "trakt")
+        before = tuple(
+            os.path.getmtime(p) if os.path.isfile(p) else None for p in (sonarr_path, radarr_path, trakt_path)
+        )
+
+        c.post("/config/settings", data=VALID_FORM)
+
+        after = tuple(
+            os.path.getmtime(p) if os.path.isfile(p) else None for p in (sonarr_path, radarr_path, trakt_path)
+        )
+        assert before == after
+
+    def test_settings_save_does_not_revert_a_connections_save(self, client):
+        """The actual #290 clobber scenario end to end: save distinct
+        sync-safety values via Connections, then save Settings (its own
+        unrelated fields) - the Connections values must survive
+        untouched."""
+        c, app, root = client
+        c.post("/config/connections", data=self.CONNECTIONS_FORM)
+
+        sonarr = _read_yaml(root, "sonarr")
+        assert sonarr["auto_sync"] is True
+        assert sonarr["user_mode"] == "combined"
+
+        c.post("/config/settings", data=VALID_FORM)
+
+        sonarr_after = _read_yaml(root, "sonarr")
+        radarr_after = _read_yaml(root, "radarr")
+        assert sonarr_after["auto_sync"] is True
+        assert sonarr_after["user_mode"] == "combined"
+        assert radarr_after["user_mode"] == "mapping"
+        assert radarr_after["plex_users"] == ["bob"]
+
+    def test_settings_screen_renders_sync_safety_read_only(self, client):
+        """No <input>/<select> named {svc}_auto_sync/user_mode/
+        plex_users on this screen at all - the only way a save here can
+        structurally never carry a value for them (see this module's
+        own docstring)."""
+        c, app, root = client
+        c.post("/config/connections", data=self.CONNECTIONS_FORM)
+        resp = c.get("/config/settings")
+        text = resp.data.decode()
+        for svc in ("sonarr", "radarr", "trakt"):
+            for field in ("auto_sync", "user_mode", "plex_users"):
+                assert f'name="{svc}_{field}"' not in text
+        # Still shows the current (Connections-owned) value read-only.
+        assert "combined" in text  # sonarr_user_mode from CONNECTIONS_FORM above
 
 
 class TestValidation:
