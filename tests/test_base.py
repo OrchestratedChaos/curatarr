@@ -2119,6 +2119,91 @@ class TestGetManagedUsersWatchedData:
         recommender.plex.switchUser.assert_not_called()
 
 
+class TestGetAllLibraryItemsForUser:
+    """Tests for BaseRecommender._get_all_library_items_for_user (#273) -
+    the per-user-token library snapshot fetch used behind the
+    profile_accuracy.enabled config flag (see recommenders/movie.py's/
+    tv.py's watched-data builders) instead of _get_all_library_items()'s
+    shared admin-token snapshot."""
+
+    def test_admin_user_delegates_to_shared_admin_snapshot(self):
+        recommender = _make_recommender(users={"plex_users": [], "managed_users": [], "admin_user": "admin"})
+        recommender.plex = Mock()
+        admin_items = [Mock(ratingKey="1")]
+        recommender.plex.library.section.return_value.all.return_value = admin_items
+
+        result = recommender._get_all_library_items_for_user("admin")
+
+        assert result == admin_items
+        # Same admin-token connection reused, not switched.
+        recommender.plex.switchUser.assert_not_called()
+
+    def test_admin_user_case_insensitive(self):
+        recommender = _make_recommender(users={"plex_users": [], "managed_users": [], "admin_user": "Admin"})
+        recommender.plex = Mock()
+        admin_items = [Mock(ratingKey="1")]
+        recommender.plex.library.section.return_value.all.return_value = admin_items
+
+        result = recommender._get_all_library_items_for_user("admin")
+
+        assert result == admin_items
+        recommender.plex.switchUser.assert_not_called()
+
+    @patch("recommenders.base.MyPlexAccount")
+    def test_non_admin_user_switches_user_and_caches(self, mock_account_cls):
+        recommender = _make_recommender(users={"plex_users": ["bob"], "managed_users": [], "admin_user": "admin"})
+        recommender.plex = Mock()
+        switched_plex = Mock()
+        recommender.plex.switchUser.return_value = switched_plex
+        bob_items = [Mock(ratingKey="2")]
+        switched_plex.library.section.return_value.all.return_value = bob_items
+
+        first = recommender._get_all_library_items_for_user("bob")
+        second = recommender._get_all_library_items_for_user("bob")
+
+        assert first == bob_items
+        assert second == bob_items
+        # Cached after the first fetch - switchUser only called once.
+        recommender.plex.switchUser.assert_called_once()
+
+    @patch("recommenders.base.MyPlexAccount")
+    def test_different_users_get_independent_snapshots(self, mock_account_cls):
+        recommender = _make_recommender(
+            users={"plex_users": ["alice", "bob"], "managed_users": [], "admin_user": "admin"}
+        )
+        recommender.plex = Mock()
+        alice_plex, bob_plex = Mock(), Mock()
+        alice_items = [Mock(ratingKey="10", viewCount=3)]
+        bob_items = [Mock(ratingKey="10", viewCount=1)]
+        alice_plex.library.section.return_value.all.return_value = alice_items
+        bob_plex.library.section.return_value.all.return_value = bob_items
+        # account.user(...) returns a fresh Mock per call regardless of the
+        # username passed in, so key switchUser()'s return value off call
+        # order instead (alice is always fetched first below).
+        recommender.plex.switchUser.side_effect = [alice_plex, bob_plex]
+
+        alice_result = recommender._get_all_library_items_for_user("alice")
+        bob_result = recommender._get_all_library_items_for_user("bob")
+
+        assert alice_result == alice_items
+        assert bob_result == bob_items
+        assert recommender.plex.switchUser.call_count == 2
+
+    @patch("recommenders.base.log_warning")
+    @patch("recommenders.base.MyPlexAccount")
+    def test_switch_user_failure_falls_back_to_admin_snapshot(self, mock_account_cls, mock_log_warning):
+        recommender = _make_recommender(users={"plex_users": ["bob"], "managed_users": [], "admin_user": "admin"})
+        recommender.plex = Mock()
+        recommender.plex.switchUser.side_effect = plexapi.exceptions.PlexApiException("fail")
+        admin_items = [Mock(ratingKey="1")]
+        recommender.plex.library.section.return_value.all.return_value = admin_items
+
+        result = recommender._get_all_library_items_for_user("bob")
+
+        assert result == admin_items
+        mock_log_warning.assert_called()
+
+
 class TestFindPlexItemsForRecs:
     """Tests for BaseRecommender._find_plex_items_for_recs."""
 

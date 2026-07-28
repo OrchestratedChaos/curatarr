@@ -168,6 +168,29 @@ negative_signals:
     penalty_multiplier: -0.4
 
 # =============================================================================
+# PROFILE ACCURACY (#273)
+# =============================================================================
+# Advanced - off by default. When enabled, movie/tv preference profiles
+# are built from MORE ACCURATE Plex data than the legacy default:
+#   - Movie ratings are read from the Plex LIBRARY item (matches how TV
+#     profiles already work) instead of Plex's watch-history API, which
+#     never actually carries a user's star rating - so today, a movie
+#     you've disliked NEVER produces a negative signal.
+#   - Each configured user's own view count/rating is fetched through
+#     THEIR OWN Plex account (switchUser) instead of always reading the
+#     shared admin account's view - today, every user's rewatch/rating
+#     weighting is silently computed from the ADMIN's own Plex state,
+#     not their own.
+# Off by default because enabling this changes existing users' actual
+# recommendations (previously-invisible dislikes can now suppress
+# similar content) and forces a one-time full profile rescore on the
+# next run after you enable it (the profile hash changes) - a
+# deliberate one-time cost, not a bug. See CHANGELOG for the full
+# rationale and the real-library findings that motivated this.
+profile_accuracy:
+  enabled: false
+
+# =============================================================================
 # USER PREFERENCES
 # =============================================================================
 # Per-user settings (display_name, exclude_genres, max_rating)

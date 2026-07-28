@@ -250,7 +250,7 @@ class PlexMovieRecommender(BaseRecommender):
         watched_ids: Set[int] = set()
         watched_movie_dates: Dict[int, Any] = {}  # Store watch timestamps for recency decay
         user_ratings: Dict[int, float] = {}  # Store user ratings for each movie
-        watched_movie_views = {}  # Store view counts for rewatch weighting
+        watched_movie_views: Dict[int, int] = {}  # Store view counts for rewatch weighting
         not_found_count = 0
 
         # Get account IDs for users to process
@@ -289,22 +289,73 @@ class PlexMovieRecommender(BaseRecommender):
                 if movie_id not in watched_movie_dates or viewed_at > int(watched_movie_dates.get(movie_id, 0)):
                     watched_movie_dates[movie_id] = str(viewed_at)
 
-            # Get user rating if available
+            # Get user rating if available. NOTE (#273): Plex's history API
+            # (/status/sessions/history/all) never actually carries
+            # userRating - verified against 2,475 real history entries
+            # across 6 real accounts, zero with the attribute present - so
+            # this branch is dead in practice and user_ratings stays empty
+            # via this path alone. Left exactly as-is (not removed) so
+            # profile_accuracy.enabled: false (the default) stays
+            # byte-for-byte identical to pre-#273 behavior; see the
+            # profile_accuracy.enabled branch below for the actual
+            # (library-sourced, per-user) fix.
             if hasattr(item, "userRating") and item.userRating:
                 user_rating = float(item.userRating)
                 if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
                     user_ratings[movie_id] = user_rating
 
-        # Get view counts from library (history API doesn't provide this).
-        # Reuses this run's shared library snapshot instead of a fresh
-        # section.all() (#233 audit remediation batch D / PR1(a)).
-        try:
-            for movie in self._get_all_library_items():
-                movie_id = int(movie.ratingKey)
-                if movie_id in watched_ids and hasattr(movie, "viewCount") and movie.viewCount:
-                    watched_movie_views[movie_id] = int(movie.viewCount)
-        except Exception as e:
-            logger.debug(f"Error getting view counts for rewatch weighting: {e}")
+        # Get view counts, and (accurate mode only) ratings, from the
+        # library - the history API above doesn't provide view counts at
+        # all, and (per the verified finding above) never reliably
+        # provides userRating either.
+        #
+        # profile_accuracy.enabled (config flag, default OFF - see
+        # config/tuning.example.yml): fetches EACH user's own Plex-token
+        # library snapshot (_get_all_library_items_for_user, #273)
+        # instead of the one shared admin-token snapshot every builder
+        # used before - viewCount/userRating are per-account Plex state,
+        # so the admin's token can only ever see the admin's OWN values
+        # for them, never another configured user's (verified against a
+        # real library - see CHANGELOG). Also reads userRating straight
+        # off the library item, mirroring what recommenders/tv.py's own
+        # builder already does correctly (tv.py was never affected by
+        # the dead-history-userRating issue above). Per-user max-merge
+        # (view_count and rating both) mirrors this same function's own
+        # existing history-derived user_ratings merge convention just
+        # above, for when users_to_match has more than one entry.
+        #
+        # Disabled (default): unchanged legacy behavior - the shared
+        # admin-token snapshot's view counts only, no library-sourced
+        # ratings at all (the history-sourced attempt above already
+        # covers - and, per the verified finding, never actually
+        # populates - user_ratings for the default path).
+        if self.config.get("profile_accuracy", {}).get("enabled", False):
+            for username in users_to_match:
+                try:
+                    for movie in self._get_all_library_items_for_user(username):
+                        movie_id = int(movie.ratingKey)
+                        if movie_id not in watched_ids:
+                            continue
+                        if getattr(movie, "viewCount", None):
+                            watched_movie_views[movie_id] = max(
+                                watched_movie_views.get(movie_id, 0), int(movie.viewCount)
+                            )
+                        if getattr(movie, "userRating", None):
+                            user_rating = float(movie.userRating)
+                            if movie_id not in user_ratings or user_rating > user_ratings[movie_id]:
+                                user_ratings[movie_id] = user_rating
+                except Exception as e:
+                    logger.debug(f"Error getting {username}'s own view counts/ratings: {e}")
+        else:
+            # Reuses this run's shared library snapshot instead of a fresh
+            # section.all() (#233 audit remediation batch D / PR1(a)).
+            try:
+                for movie in self._get_all_library_items():
+                    movie_id = int(movie.ratingKey)
+                    if movie_id in watched_ids and hasattr(movie, "viewCount") and movie.viewCount:
+                        watched_movie_views[movie_id] = int(movie.viewCount)
+            except Exception as e:
+                logger.debug(f"Error getting view counts for rewatch weighting: {e}")
 
         print(f"Found {len(watched_ids)} unique watched movies from history API")
 

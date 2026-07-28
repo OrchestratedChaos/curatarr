@@ -61,6 +61,14 @@ CORE_SECTIONS = [
     "platform",
     "libraries",
     "schedule",
+    # #273: profile_accuracy is a root config.yml flag (like schedule/
+    # users/general above), not a tuning.yml section (TUNING_SECTIONS
+    # below) - added here for the exact same reason "schedule" was
+    # (#264 regression, see TestCoreSectionsIncludesSchedule below):
+    # without this, build_core_config() silently drops it the moment a
+    # single-library (plex.movie_library/tv_library, no explicit
+    # 'libraries:' list) install runs its first migration.
+    "profile_accuracy",
 ]
 
 # Feature modules (each gets its own file)

@@ -130,6 +130,50 @@ class TestCoreSectionsIncludesSchedule:
         assert migrated.get("schedule") == {"enabled": True, "time": "03:00"}
 
 
+class TestCoreSectionsIncludesProfileAccuracy:
+    """#273 regression (same shape as #264's TestCoreSectionsIncludesSchedule
+    above): build_core_config() only ever copies sections listed in
+    CORE_SECTIONS into the migrated config.yml - anything else is
+    silently dropped. Verified directly (see this PR's own real-library
+    verification run): a scratch config missing an explicit 'libraries:'
+    list (single-library plex.movie_library/tv_library format - most
+    fresh installs) triggered auto-migration on the very first
+    recommender construction, and profile_accuracy vanished from the
+    migrated config.yml because it wasn't in this list - silently
+    reverting the flag to its off-by-default fallback with no error or
+    warning, even though the user had explicitly enabled it."""
+
+    def test_profile_accuracy_in_core_sections(self):
+        assert "profile_accuracy" in CORE_SECTIONS
+
+    def test_profile_accuracy_section_survives_a_real_migration(self, tmp_path):
+        config_path = tmp_path / "config.yml"
+        config_path.write_text(
+            "plex:\n"
+            "  url: http://localhost:32400\n"
+            "  token: faketoken\n"
+            "  movie_library: Movies\n"
+            "  tv_library: TV Shows\n"
+            "users:\n"
+            "  list: alice\n"
+            "profile_accuracy:\n"
+            "  enabled: true\n",
+            encoding="utf-8",
+        )
+
+        from utils.migrate_config import migrate_config
+
+        result = migrate_config(str(config_path))
+        assert result["migrated"] is True
+
+        import yaml
+
+        with open(config_path, encoding="utf-8") as f:
+            migrated = yaml.safe_load(f)
+
+        assert migrated.get("profile_accuracy") == {"enabled": True}
+
+
 class TestMigrateToLibraries:
     """Tests for migrate_to_libraries (#157 Phase 1)"""
 

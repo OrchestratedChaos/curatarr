@@ -1378,6 +1378,136 @@ class TestGetPlexWatchedShowsData:
         mock_merge.assert_called_once()
 
 
+class TestGetPlexWatchedShowsDataAccurateMode:
+    """Tests for the profile_accuracy.enabled=True path (#273) in
+    PlexTVRecommender._get_plex_watched_shows_data - per-user
+    library-sourced rewatch counts/ratings instead of the legacy shared
+    admin-token snapshot every builder used before. Default
+    (flag absent/False) behavior is covered by
+    TestGetPlexWatchedShowsData above and must stay byte-identical - see
+    this class's own test_default_never_calls_per_user_fetch.
+    """
+
+    @patch("os.path.exists", return_value=False)
+    @patch("recommenders.base.BaseRecommender._get_all_library_items_for_user")
+    @patch("recommenders.tv.process_counters_from_cache")
+    @patch("recommenders.tv.calculate_recency_multiplier", return_value=1.0)
+    @patch("recommenders.tv.fetch_plex_watch_history_shows")
+    @patch("recommenders.tv.get_plex_account_ids")
+    @patch("recommenders.tv.get_watched_show_count", return_value=1)
+    def test_accurate_mode_sources_rating_from_per_user_library_item(
+        self,
+        mock_count,
+        mock_account_ids,
+        mock_history,
+        mock_recency,
+        mock_process_counters,
+        mock_per_user_items,
+        mock_exists,
+    ):
+        mock_account_ids.return_value = ["acct1"]
+        mock_history.return_value = ({99}, {99: 1700000000})
+        # This user's OWN library item carries a real (low) rating.
+        library_item = Mock(ratingKey=99, viewCount=1, userRating=1.0)
+        mock_per_user_items.return_value = [library_item]
+
+        config = copy.deepcopy(TV_TEST_CONFIG)
+        config["profile_accuracy"] = {"enabled": True}
+        config["negative_signals"] = {"dropped_shows": {"enabled": False}}
+        _make_tv_recommender(
+            config=config,
+            users={"plex_users": ["alice"], "managed_users": [], "admin_user": "admin"},
+            show_cache_data={"99": {"title": "Hated Show", "genres": ["horror"], "tmdb_id": 888}},
+        )
+
+        mock_per_user_items.assert_called_once_with("alice")
+        mock_process_counters.assert_called_once()
+        _, kwargs = mock_process_counters.call_args
+        # The per-user library rating (1.0, a real dislike) reached the
+        # scoring layer as a NEGATIVE weight.
+        assert kwargs["weight"] < 0
+
+    @patch("os.path.exists", return_value=False)
+    @patch("recommenders.base.BaseRecommender._get_all_library_items_for_user")
+    @patch("recommenders.tv.process_counters_from_cache")
+    @patch("recommenders.tv.calculate_recency_multiplier", return_value=1.0)
+    @patch("recommenders.tv.fetch_plex_watch_history_shows")
+    @patch("recommenders.tv.get_plex_account_ids")
+    @patch("recommenders.tv.get_watched_show_count", return_value=1)
+    def test_accurate_mode_merges_across_multiple_users_by_taking_max(
+        self,
+        mock_count,
+        mock_account_ids,
+        mock_history,
+        mock_recency,
+        mock_process_counters,
+        mock_per_user_items,
+        mock_exists,
+    ):
+        from utils.scoring import calculate_rewatch_multiplier as real_rewatch_multiplier
+
+        mock_account_ids.return_value = ["acct1", "acct2"]
+        mock_history.return_value = ({99}, {99: 1700000000})
+        alice_item = Mock(ratingKey=99, viewCount=1, userRating=4.0)
+        bob_item = Mock(ratingKey=99, viewCount=5, userRating=9.0)
+        # users_to_match iterates plex_users in configured order
+        # (["alice", "bob"] below) - alice's own snapshot fetched first.
+        mock_per_user_items.side_effect = [[alice_item], [bob_item]]
+
+        config = copy.deepcopy(TV_TEST_CONFIG)
+        config["profile_accuracy"] = {"enabled": True}
+        config["negative_signals"] = {"dropped_shows": {"enabled": False}}
+        recommender = _make_tv_recommender(
+            config=config,
+            users={"plex_users": ["alice", "bob"], "managed_users": [], "admin_user": "admin"},
+            show_cache_data={"99": {"title": "Show", "genres": ["drama"], "tmdb_id": 888}},
+        )
+
+        assert mock_per_user_items.call_count == 2
+        _, kwargs = mock_process_counters.call_args
+        # Higher of the two ratings (9.0, bob's) and higher of the two
+        # rewatch counts (view_count=5, bob's, no completion data so
+        # watched_eps defaults to 1) both win.
+        expected_weight = recommender._calculate_rating_multiplier(9.0) * real_rewatch_multiplier(5)
+        assert kwargs["weight"] == pytest.approx(expected_weight)
+
+    @patch("os.path.exists", return_value=False)
+    @patch("recommenders.base.BaseRecommender._get_all_library_items_for_user")
+    @patch("recommenders.tv.process_counters_from_cache")
+    @patch("recommenders.tv.calculate_rewatch_multiplier", return_value=1.0)
+    @patch("recommenders.tv.calculate_recency_multiplier", return_value=1.0)
+    @patch("recommenders.tv.fetch_plex_watch_history_shows")
+    @patch("recommenders.tv.get_plex_account_ids")
+    @patch("recommenders.tv.get_watched_show_count", return_value=1)
+    def test_default_never_calls_per_user_fetch(
+        self,
+        mock_count,
+        mock_account_ids,
+        mock_history,
+        mock_recency,
+        mock_rewatch,
+        mock_process_counters,
+        mock_per_user_items,
+        mock_exists,
+    ):
+        """profile_accuracy absent from config entirely (real-world
+        default for every existing install) - _get_all_library_items_for_user
+        must never even be called, proving zero behavior change."""
+        mock_account_ids.return_value = ["acct1"]
+        mock_history.return_value = ({99}, {99: 1700000000})
+
+        config = copy.deepcopy(TV_TEST_CONFIG)
+        config["negative_signals"] = {"dropped_shows": {"enabled": False}}
+        assert "profile_accuracy" not in config
+        _make_tv_recommender(
+            config=config,
+            users={"plex_users": ["alice"], "managed_users": [], "admin_user": "admin"},
+            show_cache_data={"99": {"title": "Show", "genres": ["drama"], "tmdb_id": 888}},
+        )
+
+        mock_per_user_items.assert_not_called()
+
+
 class TestGetShowDetails:
     """Tests for PlexTVRecommender.get_show_details."""
 
