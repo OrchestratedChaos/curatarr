@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.77] - 2026-07-27
+
+### Fixed
+
+- **A Plex watch-history fetch failure was the one integration NOT governed by the `logging.verbosity` (off/quiet/verbose) setting #306 added.** `utils/plex.py`'s `fetch_plex_watch_history_movies()` per-account except clause was a bare `print(f" {RED}ERROR: {e}{RESET}")` - no `log_error()` call at all, unlike every other choke point #306 already routed through the level-gated logging module (Plex connection init, TMDB, Trakt, Simkl, the shared Sonarr/Radarr/Tautulli/MDBList client), and unlike this exact module's own sibling functions - `fetch_plex_watch_history_shows()` and `fetch_show_completion_data()` - which already called `log_error()`/`log_warning()` correctly for the identical class of failure.
+
+  Fixed by replacing that `print()` with `log_error(f"Error fetching watch history for account {account_id}: {e}")`, naming the failing account (the sibling functions' messages don't - this one now does, for easier triage across multiple users). Stays visible at the default `quiet` level (and even at `off`, which maps to ERROR-only, not full silence) - a failure to fetch a user's watch history is exactly the kind of thing an operator must see, and it's the class of silent failure that hid a real six-month Trakt outage. No bare `print()` reintroduced.
+
+  New regression coverage in `tests/test_plex.py::TestFetchPlexWatchHistoryMovies::test_per_account_fetch_error_routed_through_log_error_not_bare_print` - asserts `log_error` is called with the failing account ID, and that one account's failure doesn't abort the fetch for the rest.
+
 ## [2.10.76] - 2026-07-27
 
 ### Added

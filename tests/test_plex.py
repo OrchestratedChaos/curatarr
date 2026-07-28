@@ -1427,6 +1427,44 @@ class TestFetchPlexWatchHistoryMovies:
         # Should return empty since no matching accounts
         assert history == []
 
+    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex.requests.get")
+    @patch("utils.plex.log_error")
+    def test_per_account_fetch_error_routed_through_log_error_not_bare_print(
+        self, mock_log, mock_get, mock_account_class
+    ):
+        """Regression: the per-account fetch's except clause used to be
+        a bare print() with no log_error call at all - the one choke
+        point in this module NOT routed through the level-gated logging
+        module #306 added (every sibling function -
+        fetch_plex_watch_history_shows, fetch_show_completion_data -
+        already called log_error/log_warning here). A per-account
+        failure must be logged (so logging.verbosity actually governs
+        it, and it's visible in a real log file, not just a
+        console-only print), and must not raise - one account's
+        failure should not abort every other account's fetch."""
+        from utils.plex import fetch_plex_watch_history_movies
+
+        mock_user = Mock()
+        mock_user.id = 123
+        mock_account = Mock()
+        mock_account.users.return_value = [mock_user]
+        mock_account_class.return_value = mock_account
+
+        mock_get.side_effect = requests.exceptions.ConnectionError("Connection refused")
+
+        mock_section = Mock()
+        mock_section.key = 1
+
+        config = {"plex": {"url": "http://localhost", "token": "test"}}
+        history, dates = fetch_plex_watch_history_movies(config, ["123"], mock_section)
+
+        assert history == []
+        assert dates == {}
+        mock_log.assert_called_once()
+        logged_message = mock_log.call_args[0][0]
+        assert "123" in logged_message
+
 
 class TestFetchWatchHistoryWithTmdb:
     """Tests for fetch_watch_history_with_tmdb() function."""
