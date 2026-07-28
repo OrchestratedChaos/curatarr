@@ -2,7 +2,7 @@
 
 All notable changes to Curatarr will be documented in this file.
 
-## [2.10.67] - 2026-07-27
+## [2.10.68] - 2026-07-27
 
 ### Fixed
 
@@ -13,6 +13,21 @@ All notable changes to Curatarr will be documented in this file.
   This does NOT touch the storage-layer convention at all - `create_empty_counters()`, `process_counters_from_cache()`, and every real `watched_cache_plex_<user>.json`/`tv_watched_cache_plex_<user>.json` on disk still use `"tmdb_keywords"` exactly as before; only the scoring-layer boundary's now-provably-unreachable tolerance for that same name was removed.
 
   **Verified against the real, live Plex library** (read-only: no Plex writes, no Trakt calls): re-scored all 161 real unwatched-movie candidates for a real user against their real, freshly-built watched profile using the current (post-PR4) code - 50 candidates still received a non-zero keyword-score contribution (confirming `"keywords"`, the one surviving key, still matches real TMDB keyword data correctly end to end), and two consecutive scoring passes produced byte-identical results (determinism unaffected). Zero behavioral delta was predicted for this PR (a pure dead-code removal, unlike PR1/PR2/PR3's genuine behavior changes) and none was observed.
+
+## [2.10.67] - 2026-07-27
+
+### Fixed
+
+- **Web UI freeze under load - P0 (#287).** Reporter's own diagnosis (a late SSE subscriber to an already-finished job never receiving `done` and parking forever) turned out to be already-correct, existing behavior - verified directly in a real container: connecting to `/run/stream` after a job has already finished replays its backlog and closes within milliseconds, exactly as `Job.subscribe()`'s pre-existing `if self.returncode is not None: queue DONE_SENTINEL immediately` branch is supposed to. The freeze itself was real and reproduced independently: waitress dispatches a streaming (SSE) WSGI response to ONE task thread for the connection's ENTIRE lifetime (confirmed against `waitress/task.py`'s own source - it synchronously iterates the response generator on that one thread), and `THREADS = 8` (`web/docker_server.py`) is explicitly sized "for one open SSE live-log stream" per its own comment. Confirmed in a real container: opening as few as 8 concurrent, perfectly legitimate (not stuck, not misbehaving) `/run/stream` connections during one still-running job completely exhausted the pool - a subsequent `/run/status` request (a trivial JSON read) then hung indefinitely until a stream closed, exactly matching the reporter's `docker stats`/`/proc/1/task` findings and "significantly worse when the script is running."
+
+  Three changes, all in `web/app.py`/`web/job_runner.py`/`static/app.js`:
+  1. `run.html`/`app.js` now only open an `EventSource` when a job is genuinely `running` (`window.CURATARR_JOB_RUNNING`, replacing the old `window.CURATARR_HAS_JOB`, which was true for any job record at all, including one that finished hours ago) - unnecessary given point 1 above already worked, but still pointless connection churn worth not doing.
+  2. New `Job.try_subscribe(max_subscribers)` (the same lock-protected path `subscribe()` itself now calls through to with no cap) lets `/run/stream` cap concurrent viewers of the SAME running job at `MAX_STREAM_SUBSCRIBERS_PER_JOB = 4` - only one job ever runs at a time, so every viewer beyond that is a fully redundant stream of identical output, each pinning one more of only 8 threads. A viewer over the cap gets a new `busy` SSE event instead of a connection that would just make the exhaustion worse; `app.js` falls back to polling `/run/status` for that tab instead.
+  3. `run_stream()`'s `generate()` now bounds any single connection to `MAX_STREAM_SECONDS = 120.0` regardless of how long the job itself takes, closing (not erroring) once reached - `EventSource`'s own default auto-reconnect behavior (never overridden by an `onerror` handler that calls `.close()` - deliberately removed) picks the stream back up a few seconds later, replaying the backlog exactly like any other new subscriber.
+
+  Deliberately did not blindly raise `THREADS` - a bigger pool only raises how many concurrent viewers it takes to reproduce the same freeze, it doesn't remove the underlying one-thread-per-open-stream design; capping concurrent viewers per job (point 2) and bounding how long any one of them can hold a thread (point 3) address the capacity problem directly instead.
+
+  **Verified in a real container**: reproduced the freeze pre-fix (8 concurrent live streams during one running job → a fresh `/run/status` request hung indefinitely, recovered only once enough streams were closed); post-fix, opening 10 concurrent streams during one running job yields exactly 4 real streams and 6 immediate `busy` events, and `/run/status` stays responsive (~5ms) throughout. New regression coverage in `tests/test_web_job_runner.py` (`Job.try_subscribe()` cap enforcement, and that a finished job's `subscribe()` is never capped) and `tests/test_web_routes.py` (`/run/stream` emits `busy` once over the cap and never registers the rejected connection as a subscriber; a connection is proactively closed - without a `done` event - once `MAX_STREAM_SECONDS` elapses, and the job itself is unaffected).
 
 ## [2.10.66] - 2026-07-27
 

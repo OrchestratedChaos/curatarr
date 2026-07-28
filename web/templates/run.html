@@ -69,7 +69,13 @@
 <pre id="output" class="log-output"></pre>
 
 <script>
-  window.CURATARR_HAS_JOB = {{ 'true' if job else 'false' }};
+  // #287: a job RECORD existing (even one that finished hours ago) is
+  // not the same thing as a job actually running - app.js used to open
+  // an EventSource for either, which the fix in web/app.py's
+  // run_stream() no longer even needs as a safety net, but there's
+  // still no reason to open a connection at all for a job that isn't
+  // running.
+  window.CURATARR_JOB_RUNNING = {{ 'true' if job and job.state == 'running' else 'false' }};
 </script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}
