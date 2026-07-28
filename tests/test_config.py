@@ -639,6 +639,17 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
         assert negative["dropped_shows"]["max_completion_percent"] == 25
         assert negative["dropped_shows"]["penalty_multiplier"] == -0.4
 
+    def test_profile_accuracy_defaults_match(self):
+        """#273: recommenders/movie.py's _get_plex_watched_data() and
+        recommenders/tv.py's _get_plex_watched_shows_data() both read
+        this with this exact fallback default (False) - see also
+        tests/test_config.py's own note in this class's docstring about
+        why this guardrail exists: a documented example value drifting
+        from the real code default (#261) is exactly the class of bug
+        this class exists to catch."""
+        tuning = self._load_example_tuning()
+        assert tuning["profile_accuracy"]["enabled"] is False
+
     def test_top_level_sections_are_all_covered_by_this_class(self):
         """Belt-and-braces, mirroring
         TestResolveMediaTypeOverridesKeyEnumeration's own version of this:
@@ -654,6 +665,7 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
             "recency_decay",
             "rating_multipliers",
             "negative_signals",
+            "profile_accuracy",
             "users",
         }
         assert set(tuning.keys()) <= covered_sections, (

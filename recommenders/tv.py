@@ -317,28 +317,52 @@ class PlexTVRecommender(BaseRecommender):
         # Build rewatch data and user ratings for shows
         # Each show gets base weight of 1.0 regardless of episode count
         # Only apply rewatch bonus if user actually rewatched episodes
-        show_rewatch_counts = {}
-        user_ratings = {}  # Store user ratings for each show
-        # Reuses this run's shared library snapshot instead of a fresh
-        # section.all() (#233 audit remediation batch D / PR1(a)).
-        try:
-            for show in self._get_all_library_items():
-                show_id = int(show.ratingKey)
-                if show_id in watched_ids:
-                    # Get rewatch count
-                    if hasattr(show, "viewCount") and show.viewCount:
-                        view_count = int(show.viewCount)
-                        # Get watched episode count from completion data
-                        watched_eps = 1
-                        if show_id in show_completion_data:
-                            watched_eps = max(1, show_completion_data[show_id].get("watched_episodes", 1))
-                        # Calculate actual show rewatches (viewCount / watched_episodes)
-                        # If > 1, user rewatched some episodes
-                        show_rewatch_counts[show_id] = max(1, view_count // watched_eps)
+        show_rewatch_counts: Dict[int, int] = {}
+        user_ratings: Dict[int, float] = {}  # Store user ratings for each show
 
-                    # Get user rating if available
-                    if hasattr(show, "userRating") and show.userRating:
-                        user_ratings[show_id] = float(show.userRating)
+        def _record_show_rewatch_and_rating(show) -> None:
+            show_id = int(show.ratingKey)
+            if show_id not in watched_ids:
+                return
+            if hasattr(show, "viewCount") and show.viewCount:
+                view_count = int(show.viewCount)
+                # Get watched episode count from completion data
+                watched_eps = 1
+                if show_id in show_completion_data:
+                    watched_eps = max(1, show_completion_data[show_id].get("watched_episodes", 1))
+                # Calculate actual show rewatches (viewCount / watched_episodes)
+                # If > 1, user rewatched some episodes
+                rewatches = max(1, view_count // watched_eps)
+                show_rewatch_counts[show_id] = max(show_rewatch_counts.get(show_id, 1), rewatches)
+
+            # Get user rating if available
+            if hasattr(show, "userRating") and show.userRating:
+                user_rating = float(show.userRating)
+                if show_id not in user_ratings or user_rating > user_ratings[show_id]:
+                    user_ratings[show_id] = user_rating
+
+        # profile_accuracy.enabled (config flag, default OFF - see
+        # config/tuning.example.yml, #273): fetches EACH user's own
+        # Plex-token library snapshot (_get_all_library_items_for_user)
+        # instead of the one shared admin-token snapshot every builder
+        # used before - viewCount/userRating are per-account Plex state,
+        # so the admin's token can only ever see the admin's OWN values
+        # for them, never another configured user's (verified against a
+        # real library - see CHANGELOG). Per-user max-merge (rewatch
+        # count and rating both) for when more than one user is
+        # configured. Disabled (default): unchanged legacy behavior -
+        # one shared admin-token snapshot for every user, reused from
+        # this run instead of a fresh section.all() (#233 audit
+        # remediation batch D / PR1(a)).
+        try:
+            if self.config.get("profile_accuracy", {}).get("enabled", False):
+                users_to_match = [self.single_user] if self.single_user else self.users["plex_users"]
+                for username in users_to_match:
+                    for show in self._get_all_library_items_for_user(username):
+                        _record_show_rewatch_and_rating(show)
+            else:
+                for show in self._get_all_library_items():
+                    _record_show_rewatch_and_rating(show)
         except Exception as e:
             logger.debug(f"Error getting rewatch counts/ratings for shows: {e}")
 

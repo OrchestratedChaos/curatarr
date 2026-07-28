@@ -1428,6 +1428,57 @@ class BaseRecommender(ABC):
             self._library_items_cache[self.library_title] = section.all()
         return self._library_items_cache[self.library_title]
 
+    def _get_all_library_items_for_user(self, username: str) -> List:
+        """Fetch `username`'s OWN library item snapshot from Plex (#273) -
+        unlike _get_all_library_items() above (one snapshot fetched
+        through the shared ADMIN token), this switches to `username`'s
+        own Plex account first, so viewCount/userRating on each returned
+        item reflect THAT user's own account state. Both are per-account
+        Plex state the admin's token can never see for another user -
+        verified against a real library: every real watched_cache_plex_
+        <user>.json on disk had zero negative rating signals despite the
+        library containing plenty of low-rated watched movies, because
+        every builder read this state through one shared admin snapshot.
+
+        Only used behind the profile_accuracy.enabled config flag (see
+        movie.py's/tv.py's watched-data builders) - the legacy path keeps
+        reading _get_all_library_items()'s shared admin snapshot
+        unchanged, so this method has zero effect on any install that
+        hasn't opted in.
+
+        Cached in the same shared _library_items_cache dict as
+        _get_all_library_items(), under a per-user key so it's never
+        confused with the plain admin-snapshot entry (or another user's),
+        and is still reused (not re-fetched) if called more than once for
+        the same user within one run.
+
+        Falls back to _get_all_library_items() (the admin snapshot) if
+        `username` IS the admin account (switchUser is a no-op for the
+        account that's already connected) or if switching to their
+        account fails for any reason (matches
+        utils.plex.get_user_specific_connection's own fallback shape) -
+        never raises up to the caller.
+        """
+        admin_user = self.users["admin_user"]
+        if username.lower() == admin_user.lower():
+            return self._get_all_library_items()
+
+        cache_key = f"{self.library_title}::user::{username}"
+        if cache_key in self._library_items_cache:
+            return self._library_items_cache[cache_key]
+
+        try:
+            account = MyPlexAccount(token=self.config["plex"]["token"])
+            user = account.user(username)
+            user_plex = self.plex.switchUser(user)
+            items = user_plex.library.section(self.library_title).all()
+        except (plexapi.exceptions.PlexApiException, KeyError, AttributeError) as e:
+            log_warning(f"Could not fetch {username}'s own library snapshot, falling back to shared admin view: {e}")
+            return self._get_all_library_items()
+
+        self._library_items_cache[cache_key] = items
+        return items
+
     def _get_library_imdb_ids(self) -> Set[str]:
         """Get set of all IMDb IDs in the library."""
         return get_library_imdb_ids_from_items(self._get_all_library_items())
