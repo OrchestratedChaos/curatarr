@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.78] - 2026-07-28
+
+### Fixed
+
+- **Nightly TV runs logged "Warning: Weights sum to 1.05, expected 1.0" every run whenever tv:/weights: in config/tuning.yml provided the 4 documented keys (genre/studio/actor/keyword, already summing to 1.0 on their own per config/tuning.example.yml) without an explicit language key.** recommenders/tv.py's PlexTVRecommender._load_weights() defaulted an omitted language weight to 0.05 unconditionally, silently reintroducing a 5th scoring dimension the config never asked for on top of an already-complete 4-key block - both the spurious warning and a real, uninvited language-matching contribution to every score.
+
+  PlexMovieRecommender._load_weights() already got this right for movies (language defaults to 0.0 there, always) - TV was the sole outlier. Fixed by making the language default conditional on whether the caller supplied any explicit weights at all: a genuinely empty/absent tv:/weights: block (no config/tuning.yml, or tv: with no weights: sub-key) still gets curatarr's own baked-in default profile unchanged, which deliberately blends in a small 0.05 language weight as part of a 5-value set already designed to sum to 1.0 - but once any explicit weights are supplied, an omitted language key now defaults to 0, matching the movie engine's behavior. Every other key (genre/studio/actor/keyword) keeps its existing per-field default regardless, unchanged - those four are the documented core set config/tuning.example.yml expects users to tune as a unit; language is the one dimension deliberately left out of that documented block.
+
+  Audited every other optional weight key in both engines for the same gap: none exists. genre/actor/director-or-studio/keyword are always part of the documented example weights: block for both movies: and tv: (the one set config/tuning.example.yml shows as "must sum to 1.0"); language is the only key either engine treats as an implicit bonus dimension excluded from that documented block, and it's now consistently zero-defaulted (movies always; TV whenever any explicit weights are given) in both.
+
+  New coverage in `tests/test_tv.py::TestPlexTVRecommenderWeights`: `test_fully_default_weights_with_no_config_still_sum_to_one` (regression guard - a zero-config TV install must keep summing to 1.0 exactly as before), `test_omitted_language_in_explicit_config_defaults_to_zero` (reproduces the real 1.05 case and asserts it now sums to 1.0 with no warning), and `test_explicit_language_weight_in_partial_config_still_honored` (an explicitly-set language weight is never overridden).
+
 ## [2.10.77] - 2026-07-27
 
 ### Fixed

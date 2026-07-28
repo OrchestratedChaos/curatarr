@@ -116,12 +116,41 @@ class PlexTVRecommender(BaseRecommender):
 
     def _load_weights(self, weights_config: Dict) -> Dict:
         """Load TV-specific scoring weights from config."""
+        # language is deliberately not part of tv:/weights: in
+        # config/tuning.example.yml - it is an opt-in bonus dimension,
+        # not one of the 4 keys (genre/studio/actor/keyword) the docs
+        # and web-UI validator require to sum to 1.0 on their own, and
+        # that example 4-key block already sums to 1.0 without it.
+        #
+        # A genuinely empty/absent weights_config (no config/tuning.yml
+        # at all, or tv: present with no weights: sub-key) gets
+        # curatarr's own baked-in default PROFILE below, which
+        # deliberately blends in a small language weight (0.05) as a
+        # real 5th dimension - that whole 5-value set is designed
+        # together and already sums to 1.0.
+        #
+        # But once a user supplies ANY explicit tv:/weights: override -
+        # even a complete-looking 4-key block that simply omits
+        # language, as the documented example itself does - an omitted
+        # language key must default to 0, not to that 0.05 constant:
+        # silently reintroducing a 5th scoring dimension on top of
+        # weights the user chose is what made an already-1.0 4-key
+        # block sum to 1.05 (the recurring nightly warning) while also
+        # applying language matching at a weight nobody asked for.
+        # Every other key here keeps defaulting per-field regardless -
+        # genre/studio/actor/keyword are the documented core set users
+        # are expected to tune as a unit, unlike language.
+        #
+        # Mirrors PlexMovieRecommender._load_weights(), whose own
+        # baked-in default profile never included language at all
+        # (already 0.0 unconditionally - no such split needed there).
+        language_default = 0.0 if weights_config else 0.05
         return {
             "genre": weights_config.get("genre", weights_config.get("genre_weight", 0.20)),
             "actor": weights_config.get("actor", weights_config.get("actor_weight", 0.15)),
             "studio": weights_config.get("studio", weights_config.get("studio_weight", 0.15)),
             "keyword": weights_config.get("keyword", weights_config.get("keyword_weight", 0.45)),
-            "language": weights_config.get("language", weights_config.get("language_weight", 0.05)),
+            "language": weights_config.get("language", weights_config.get("language_weight", language_default)),
         }
 
     def __init__(
