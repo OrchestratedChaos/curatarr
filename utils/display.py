@@ -5,10 +5,11 @@ Handles colored output, progress indicators, and formatting.
 
 import json
 import logging
+import os
 import re
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from .redact import redact
 
@@ -189,30 +190,115 @@ class TeeLogger:
         self.logfile.flush()
 
 
+# #284: friendly, three-tier alternative to the pre-existing raw
+# logging.level (DEBUG/INFO/WARNING/ERROR) config key - maps onto those
+# exact same standard Python logging levels rather than inventing a
+# parallel severity system. Additive, never a replacement: logging.level
+# (if explicitly set) still wins outright over this - see
+# resolve_log_level's own docstring for the full precedence order - so
+# anyone already relying on its exact four values (including WARNING,
+# which has no verbosity-tier equivalent) is completely unaffected.
+#
+# quiet is the default and is deliberately the SAME logging.INFO this
+# function already fell back to before #284 existed - the intent is a
+# clean, quiet default (like a normal hosted web app), not a firehose,
+# while still making anything an operator must act on (a recommender
+# run failing, a scheduled run not actually starting, a bad token/
+# expired auth/rate limit on an external API call) impossible to miss.
+# verbose additionally surfaces the existing logger.debug() call sites
+# throughout the codebase (per-item filtering decisions, discovery
+# iterations, cache hits, etc). off is near-silence: errors only.
+LOG_VERBOSITY_DEFAULT = "quiet"
+LOG_VERBOSITY_LEVELS = {
+    "off": logging.ERROR,
+    "quiet": logging.INFO,
+    "verbose": logging.DEBUG,
+}
+
+# Overrides logging.verbosity in config.yml - env always wins over the
+# config file, the same convention #289's secret overrides use, and how
+# Sonarr/Radarr/Plex expose their own equivalent settings.
+CURATARR_LOG_LEVEL_ENV_VAR = "CURATARR_LOG_LEVEL"
+
+
+def resolve_log_level(debug: bool = False, config: Optional[dict] = None) -> Tuple[int, Optional[str]]:
+    """Resolve the effective Python logging level for setup_logging().
+
+    Precedence (highest first):
+      1. debug=True (the CLI --debug flag) - always DEBUG.
+      2. logging.level in config, if set - the pre-existing raw
+         DEBUG/INFO/WARNING/ERROR override (unchanged: #284 is additive,
+         never takes this away from anyone already using it).
+      3. CURATARR_LOG_LEVEL environment variable, if set - accepts
+         either a friendly tier (off/quiet/verbose) or a standard level
+         name (debug/info/warning/error), case-insensitive.
+      4. logging.verbosity in config, if set - same accepted values as
+         the environment variable above.
+      5. LOG_VERBOSITY_DEFAULT ("quiet" -> INFO) - identical to the
+         level this function returned before #284 existed whenever
+         nothing else was configured, so an install that never touches
+         any of this sees zero behavior change.
+
+    Returns:
+        (level, warning) - warning is None unless an explicitly-set
+        value (the env var or logging.verbosity) wasn't recognized, in
+        which case level falls back to the default and warning is a
+        human-readable message the caller should log once a handler
+        exists (this function has no logging side effects of its own,
+        since it runs before setup_logging() has configured one).
+    """
+    if debug:
+        return logging.DEBUG, None
+
+    logging_cfg = (config or {}).get("logging", {}) or {}
+
+    if logging_cfg.get("level"):
+        level_str = str(logging_cfg["level"]).upper()
+        return getattr(logging, level_str, logging.INFO), None
+
+    raw = os.environ.get(CURATARR_LOG_LEVEL_ENV_VAR) or logging_cfg.get("verbosity") or LOG_VERBOSITY_DEFAULT
+    key = str(raw).strip().lower()
+
+    if key in LOG_VERBOSITY_LEVELS:
+        return LOG_VERBOSITY_LEVELS[key], None
+
+    # Also accept the four standard level names directly (not just the
+    # three friendly tiers) - "map the friendly names onto standard
+    # Python logging levels" cuts both ways: this never rejects a value
+    # that's already a real level name.
+    raw_level = getattr(logging, key.upper(), None)
+    if isinstance(raw_level, int):
+        return raw_level, None
+
+    default_level = LOG_VERBOSITY_LEVELS[LOG_VERBOSITY_DEFAULT]
+    return default_level, (
+        f"Unrecognized log level {raw!r} (expected one of {', '.join(LOG_VERBOSITY_LEVELS)}, "
+        f"or a standard Python logging level name) - falling back to the default ({LOG_VERBOSITY_DEFAULT!r})"
+    )
+
+
 def setup_logging(debug: bool = False, config: Optional[dict] = None) -> logging.Logger:
     """
     Configure logging for recommendation scripts.
 
     Args:
-        debug: If True, set level to DEBUG. Otherwise use config or default to INFO.
-        config: Optional config dict that may contain logging.level setting
-            and an optional logging.format setting ('text', the default,
-            human-readable/colored - or 'json', structured JSON-lines via
-            JsonFormatter above - see that class's docstring). Unset/any
-            other value falls back to 'text', so existing configs (which
-            predate logging.format entirely) are completely unaffected.
+        debug: If True, set level to DEBUG. Otherwise resolved via
+            resolve_log_level() above (config's logging.level/
+            logging.verbosity, the CURATARR_LOG_LEVEL environment
+            variable, or the quiet/INFO default - see that function's
+            own docstring for the full precedence order).
+        config: Optional config dict that may contain logging.level/
+            logging.verbosity settings and an optional logging.format
+            setting ('text', the default, human-readable/colored - or
+            'json', structured JSON-lines via JsonFormatter above - see
+            that class's docstring). Unset/any other value falls back
+            to 'text', so existing configs (which predate
+            logging.format entirely) are completely unaffected.
 
     Returns:
         Configured logger instance.
     """
-    # Determine log level
-    if debug:
-        level = logging.DEBUG
-    elif config and config.get("logging", {}).get("level"):
-        level_str = config["logging"]["level"].upper()
-        level = getattr(logging, level_str, logging.INFO)
-    else:
-        level = logging.INFO
+    level, level_warning = resolve_log_level(debug, config)
 
     log_format = str((config or {}).get("logging", {}).get("format", "text")).lower()
 
@@ -241,6 +327,9 @@ def setup_logging(debug: bool = False, config: Optional[dict] = None) -> logging
 
     logger = logging.getLogger("curatarr")
     logger.setLevel(level)
+
+    if level_warning:
+        logger.warning(level_warning)
 
     return logger
 

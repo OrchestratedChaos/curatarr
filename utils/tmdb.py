@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 import requests
 
 from .config import TMDB_REQUEST_TIMEOUT
+from .display import log_error
 from .metrics import record_api_call
 
 # Module-level logger
@@ -98,7 +99,19 @@ def fetch_tmdb_with_retry(url: str, params: Dict, max_retries: int = 3, timeout:
     return result
 
 
+_tmdb_auth_failure_logged = False
+
+
+def _reset_tmdb_auth_failure_logged_for_tests() -> None:
+    """Test-only reset for _tmdb_auth_failure_logged (see its own
+    comment below) - real callers never need this; a fresh process
+    naturally starts with it False."""
+    global _tmdb_auth_failure_logged
+    _tmdb_auth_failure_logged = False
+
+
 def _fetch_tmdb_with_retry_impl(url: str, params: Dict, max_retries: int = 3, timeout: int = 15) -> Optional[Dict]:
+    global _tmdb_auth_failure_logged
     for attempt in range(max_retries):
         try:
             resp = requests.get(url, params=params, timeout=timeout, allow_redirects=False)
@@ -111,6 +124,23 @@ def _fetch_tmdb_with_retry_impl(url: str, params: Dict, max_retries: int = 3, ti
 
             if resp.status_code == 200:
                 return resp.json()
+
+            if resp.status_code in (401, 403):
+                # #284: a bad/expired TMDB API key must be visible
+                # rather than degrading every TMDB-dependent lookup
+                # (called once per candidate item - up to hundreds of
+                # times per run) into a silent None with nothing above
+                # DEBUG. Logged once per process (not once per call) to
+                # avoid turning this into exactly the firehose the
+                # quiet default is meant to avoid - the underlying
+                # problem doesn't change call to call.
+                if not _tmdb_auth_failure_logged:
+                    log_error(
+                        f"TMDB: authentication failed (HTTP {resp.status_code}) - check tmdb.api_key in "
+                        "config/config.yml (further TMDB auth failures this run are suppressed after this one)"
+                    )
+                    _tmdb_auth_failure_logged = True
+                return None
 
             logging.debug(f"TMDB request failed with status {resp.status_code}")
             return None

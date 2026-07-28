@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from utils.tmdb import (
     LANGUAGE_CODES,
     fetch_tmdb_with_retry,
@@ -106,6 +108,18 @@ class TestGetTmdbKeywords:
 class TestFetchTmdbWithRetry:
     """Tests for fetch_tmdb_with_retry function"""
 
+    @pytest.fixture(autouse=True)
+    def _reset_auth_failure_logged(self):
+        """_tmdb_auth_failure_logged (#284's once-per-process dedup for
+        the 401/403 log line below) is module-level state - reset it
+        before every test in this class so one test logging it doesn't
+        silently suppress the next test's own assertion."""
+        from utils.tmdb import _reset_tmdb_auth_failure_logged_for_tests
+
+        _reset_tmdb_auth_failure_logged_for_tests()
+        yield
+        _reset_tmdb_auth_failure_logged_for_tests()
+
     @patch("utils.tmdb.requests.get")
     def test_successful_request(self, mock_get):
         mock_response = Mock()
@@ -172,6 +186,74 @@ class TestFetchTmdbWithRetry:
 
         assert result is None
         assert mock_get.call_count == 3
+
+    @patch("utils.tmdb.requests.get")
+    def test_401_logs_authentication_failure(self, mock_get, caplog):
+        """#284: a bad/expired TMDB API key must be visible rather than
+        degrading every TMDB-dependent lookup into a silent None with
+        nothing above DEBUG."""
+        import logging
+
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_get.return_value = mock_response
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"):
+            result = fetch_tmdb_with_retry("http://test.api", {"api_key": "key"})
+
+        assert result is None
+        assert "TMDB" in caplog.text
+        assert "authentication failed" in caplog.text.lower()
+
+    @patch("utils.tmdb.requests.get")
+    def test_403_logs_authentication_failure(self, mock_get, caplog):
+        import logging
+
+        mock_response = Mock()
+        mock_response.status_code = 403
+        mock_get.return_value = mock_response
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"):
+            fetch_tmdb_with_retry("http://test.api", {"api_key": "key"})
+
+        assert "authentication failed" in caplog.text.lower()
+
+    @patch("utils.tmdb.requests.get")
+    def test_repeated_401s_are_logged_only_once_per_process(self, mock_get, caplog):
+        """Avoids turning a per-item lookup (called up to hundreds of
+        times per run) into exactly the log firehose the quiet default
+        is meant to avoid - the underlying problem doesn't change call
+        to call."""
+        import logging
+
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_get.return_value = mock_response
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"):
+            fetch_tmdb_with_retry("http://test.api", {"api_key": "key"})
+            fetch_tmdb_with_retry("http://test.api", {"api_key": "key"})
+            fetch_tmdb_with_retry("http://test.api", {"api_key": "key"})
+
+        assert caplog.text.count("authentication failed") == 1
+
+    @patch("utils.tmdb.requests.get")
+    def test_other_status_codes_stay_at_debug_not_error(self, mock_get, caplog):
+        """A non-auth, non-2xx/429 status (e.g. a transient 500) is
+        unchanged by #284 - still DEBUG-tier (verbose only), not
+        promoted to an ERROR-level line for every one of hundreds of
+        per-item lookups."""
+        import logging
+
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_get.return_value = mock_response
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"):
+            result = fetch_tmdb_with_retry("http://test.api", {"api_key": "key"})
+
+        assert result is None
+        assert caplog.text == ""
 
     @patch("utils.tmdb.requests.get")
     def test_returns_none_on_generic_exception(self, mock_get):

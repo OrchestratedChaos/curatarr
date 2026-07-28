@@ -693,6 +693,47 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
         )
 
 
+class TestConfigExampleLoggingDefaultsMatch:
+    """#284: config/config.example.yml's documented logging.verbosity
+    default must match utils.display.LOG_VERBOSITY_DEFAULT exactly - the
+    same #261-class guardrail TestTuningExampleTopLevelSectionsMatch
+    CodeDefaults enforces for tuning.example.yml, applied here to
+    config.example.yml's logging: section instead (a different file,
+    outside what that class parses)."""
+
+    @staticmethod
+    def _load_example_config():
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        example_path = os.path.join(repo_root, "config", "config.example.yml")
+        with open(example_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    def test_logging_verbosity_default_matches_code(self):
+        from utils.display import LOG_VERBOSITY_DEFAULT
+
+        config = self._load_example_config()
+        assert config["logging"]["verbosity"] == LOG_VERBOSITY_DEFAULT
+
+    def test_logging_verbosity_default_is_itself_a_valid_tier(self):
+        """Belt-and-braces: LOG_VERBOSITY_DEFAULT must be one of the
+        keys LOG_VERBOSITY_LEVELS actually maps - catches a typo'd
+        default that would otherwise silently fall through
+        resolve_log_level's own "unrecognized value" fallback path."""
+        from utils.display import LOG_VERBOSITY_DEFAULT, LOG_VERBOSITY_LEVELS
+
+        assert LOG_VERBOSITY_DEFAULT in LOG_VERBOSITY_LEVELS
+
+    def test_shipped_example_leaves_legacy_level_key_commented_out(self):
+        """The pre-existing raw logging.level key takes precedence over
+        logging.verbosity whenever it's set (see resolve_log_level) - so
+        for a FRESH install to actually run on the new verbosity default
+        rather than silently ignoring it, the shipped example must leave
+        level: commented out (documentation only), not set it
+        unconditionally the way it did before #284."""
+        config = self._load_example_config()
+        assert "level" not in config["logging"]
+
+
 class TestNegativeSignalsConstants:
     """Tests for negative signals constants"""
 

@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 
+from .display import log_error
 from .helpers import read_response_capped
 from .metrics import record_api_call
 
@@ -178,11 +179,20 @@ class BaseAPIClient:
                 f"to a different host. See logs for the redirect target."
             )
         if response.status_code == 401:
+            # #284: logged HERE (the one shared choke point every
+            # Radarr/Sonarr/Tautulli/MDBList request goes through),
+            # rather than relying on every individual caller to log a
+            # caught exception - a bad/expired API key must be visible
+            # rather than surfacing only as an unexplained "no
+            # recommendations"/failed sync, no matter how many layers
+            # up silently catch the exception this still raises.
+            log_error(f"{self.api_name}: authentication failed (invalid or expired API key)")
             raise self.exception_class("Invalid API key")
         elif response.status_code == 404:
             return None
         elif response.status_code >= 400:
             error_msg = self._parse_error_response(response)
+            log_error(f"{self.api_name} API error {response.status_code}: {error_msg}")
             raise self.exception_class(f"API error {response.status_code}: {error_msg}")
 
         if response.status_code == 204:
@@ -319,10 +329,13 @@ class BaseAPIClient:
             return result
 
         except requests.exceptions.Timeout as e:
+            log_error(f"{self.api_name}: request timed out after {self.request_timeout}s")
             raise self.exception_class(f"Request timeout after {self.request_timeout}s") from e
         except requests.exceptions.ConnectionError as e:
+            log_error(f"{self.api_name}: could not connect - {e}")
             raise self.exception_class(f"Could not connect to {self.api_name}") from e
         except requests.exceptions.RequestException as e:
+            log_error(f"{self.api_name}: request failed - {e}")
             raise self.exception_class(f"Request failed: {e}") from e
         finally:
             record_api_call(self.api_name.lower(), outcome, time.time() - request_start)

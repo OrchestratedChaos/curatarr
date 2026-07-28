@@ -267,10 +267,22 @@ class TraktClient(BaseAPIClient):
                     # retried call below is a separate request attempt
                     # and records its own outcome independently.
                     return self._make_request(method, endpoint, data, authenticated, retry_auth=False)
+                # #284: logged HERE (the one choke point every Trakt
+                # request goes through) rather than relying on every
+                # individual caller to notice/log a caught
+                # TraktAuthError/TraktAPIError - this is exactly the
+                # "a bad token/expired auth shows up only as an
+                # unexplained failure" gap: a six-month Trakt outage
+                # previously stayed invisible because nothing here ever
+                # logged anything at all.
+                log_error(
+                    "Trakt: authentication failed - token refresh unsuccessful (re-run utils.trakt_auth --reauth)"
+                )
                 raise TraktAuthError("Failed to refresh Trakt token")
 
             # Handle other errors
             if response.status_code >= 400:
+                log_error(f"Trakt API error {response.status_code}: {response.text}")
                 raise TraktAPIError(f"Trakt API error {response.status_code}: {response.text}")
 
             # Return JSON or None for no-content responses
@@ -280,6 +292,7 @@ class TraktClient(BaseAPIClient):
             return response.json()
 
         except requests.RequestException as e:
+            log_error(f"Trakt: request failed - {e}")
             raise TraktAPIError(f"Trakt request failed: {e}") from e
         finally:
             record_api_call("trakt", outcome, time.time() - request_start)

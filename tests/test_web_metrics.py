@@ -282,3 +282,42 @@ class TestUnhandledErrorMetric:
 
         text = c.get("/metrics").get_data(as_text=True)
         assert 'curatarr_unhandled_errors_total{component="web"} 1.0' in text
+
+    def test_genuine_unhandled_exception_logs_structured_line(self, client, caplog):
+        """#284: an unhandled exception must also produce a structured
+        log line (component, route, stack trace - timestamp comes from
+        the formatter) so an error visible in the metric above can
+        actually be traced back to a cause, not just counted."""
+        import logging
+
+        c, app, root = client
+
+        @app.get("/__boom_logged")
+        def _boom_logged():
+            raise RuntimeError("simulated unhandled error for log assertion")
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"), pytest.raises(RuntimeError):
+            c.get("/__boom_logged")
+
+        assert "component=web" in caplog.text
+        assert "/__boom_logged" in caplog.text
+        assert "simulated unhandled error for log assertion" in caplog.text
+        # Stack trace present, not just the exception's own message.
+        assert "Traceback (most recent call last)" in caplog.text
+
+    def test_unhandled_exception_log_line_redacts_secret_shaped_text(self, client, caplog):
+        """Never log a secret's value - even one that arrives via an
+        exception's own message text (see utils/redact.py, which
+        log_error() already runs every message through)."""
+        import logging
+
+        c, app, root = client
+
+        @app.get("/__boom_secret")
+        def _boom_secret():
+            raise RuntimeError("api_key=abcdef1234567890")
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"), pytest.raises(RuntimeError):
+            c.get("/__boom_secret")
+
+        assert "abcdef1234567890" not in caplog.text

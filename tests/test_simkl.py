@@ -188,6 +188,54 @@ class TestSimklClientMakeRequest:
             client._make_request("GET", "/users/settings")
 
     @patch("utils.simkl.requests.request")
+    def test_401_is_logged(self, mock_request, caplog):
+        """#284: a bad/expired Simkl token must be visible - logged HERE,
+        at the one shared choke point every Simkl request goes through."""
+        import logging
+
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_request.return_value = mock_response
+
+        client = SimklClient("id", access_token="bad_token")
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"), pytest.raises(SimklAuthError):
+            client._make_request("GET", "/users/settings")
+
+        assert "Simkl" in caplog.text
+        assert "authentication failed" in caplog.text.lower()
+
+    @patch("utils.simkl.requests.request")
+    def test_error_response_is_logged(self, mock_request, caplog):
+        import logging
+
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.text = "Bad request"
+        mock_request.return_value = mock_response
+
+        client = SimklClient("id")
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"), pytest.raises(SimklAPIError):
+            client._make_request("POST", "/sync/history")
+
+        assert "Simkl" in caplog.text
+        assert "400" in caplog.text
+
+    @patch("utils.simkl.requests.request")
+    def test_connection_error_is_logged(self, mock_request, caplog):
+        import logging
+
+        mock_request.side_effect = requests.exceptions.ConnectionError()
+
+        client = SimklClient("id")
+
+        with caplog.at_level(logging.ERROR, logger="curatarr"), pytest.raises(SimklAPIError):
+            client._make_request("GET", "/users/settings")
+
+        assert "Simkl" in caplog.text
+
+    @patch("utils.simkl.requests.request")
     def test_rate_limit_retries(self, mock_request):
         """Test 429 rate limit triggers retry."""
         rate_limit_response = Mock()
