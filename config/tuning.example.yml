@@ -26,14 +26,21 @@ movies:
     min_rating: 5.0  # TMDB rating minimum (0-10)
     min_vote_count: 15  # Minimum votes for reliability
 
-  # Minimum watched movies before a user gets a Recommended collection
-  # at all (#291). Below this, there's too little watch history to
-  # build a genuine preference signal from - a "profile" built from a
-  # single film is really just "recommend more like that one movie",
-  # not a personalized recommendation, so no collection is created
-  # (an EXISTING collection from a prior run is left untouched either
-  # way, never deleted).
-  min_watch_history: 2
+  # Whether a user with ZERO watch history still gets a Recommended
+  # collection built for them (#291). Default true: they get exactly
+  # the same collection they always have, falling back to well-rated/
+  # popular unwatched movies - cold start is a solved problem, and the
+  # standard answer is a sensible fallback, not producing nothing (a
+  # user who opens Plex and sees no collection concludes the app is
+  # broken).
+  #
+  # Set to false to opt OUT of that instead: a zero-history user gets
+  # no collection, and any collection curatarr already created for them
+  # is actively REMOVED (only ever a collection curatarr can positively
+  # confirm it created, via its own PrivateCollection_<user> label -
+  # never guessed from title/name - and only for a user with zero
+  # watch history; a user with ANY history is never touched).
+  recommend_for_no_history: true
 
   # Scoring weights - must sum to 1.0
   weights:
@@ -62,9 +69,11 @@ tv:
     min_rating: 0.0
     min_vote_count: 0
 
-  # Minimum watched shows before a user gets a Recommended collection
-  # at all - see movies.min_watch_history above for the full rationale.
-  min_watch_history: 2
+  # Whether a user with ZERO watch history still gets a Recommended
+  # collection built for them - see movies.recommend_for_no_history
+  # above for the full rationale (including the removal behavior when
+  # set to false).
+  recommend_for_no_history: true
 
   # Scoring weights - must sum to 1.0
   weights:

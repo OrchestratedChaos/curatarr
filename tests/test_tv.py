@@ -1086,7 +1086,7 @@ class TestPlexTVRecommenderExcludedGenres:
         mock_cache.return_value = mock_cache_inst
 
         recommender = PlexTVRecommender("/path/to/config.yml")
-        recommender.watched_ids = {101, 102}  # #291: above MIN_WATCH_HISTORY_DEFAULT
+        recommender.watched_ids = {101, 102}  # #291: non-empty, so the zero-watch-history gate never fires
         recommender.cached_watched_count = 0
         recommender.watched_data = {
             "genres": Counter(),

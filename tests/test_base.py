@@ -11,7 +11,7 @@ import plexapi.exceptions
 import requests
 
 import recommenders.base as base_module
-from recommenders.base import MIN_WATCH_HISTORY_DEFAULT, BaseCache, BaseRecommender
+from recommenders.base import RECOMMEND_FOR_NO_HISTORY_DEFAULT, BaseCache, BaseRecommender
 from utils.helpers import get_project_root
 
 
@@ -724,7 +724,7 @@ class TestBaseRecommenderMediaSectionConfig:
         media_cache.cache = {"movies": items}
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        recommender.watched_ids = {90001, 90002, 90003}  # #291: above MIN_WATCH_HISTORY_DEFAULT
+        recommender.watched_ids = {90001, 90002, 90003}  # #291: non-empty, so the zero-watch-history gate never fires
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
         recommender.user_preferences = {}
@@ -2410,6 +2410,52 @@ class TestUpdateLabelsByRank:
         mock_add.assert_not_called()
         assert result == [item]
 
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_tied_scores_broken_by_rating_then_vote_count(self, mock_remove, mock_add):
+        """#291: all_candidates values are (plex_item, score) tuples -
+        plex_item itself carries no TMDB rating/vote_count, so ties must
+        be broken by looking those fields up from the media cache by
+        item_id (same cache/key shape _build_scored_candidates already
+        reads), not by falling through to arbitrary dict/insertion
+        order."""
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {
+            "movies": {
+                "1": {"rating": 5.0, "vote_count": 100},
+                "2": {"rating": 9.0, "vote_count": 5000},
+                "3": {"rating": 9.0, "vote_count": 100},
+            }
+        }
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        item_low = Mock(ratingKey=1)
+        item_best = Mock(ratingKey=2)
+        item_mid = Mock(ratingKey=3)
+        candidates = {1: (item_low, 0.5), 2: (item_best, 0.5), 3: (item_mid, 0.5)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=3)
+
+        assert [int(i.ratingKey) for i in result] == [2, 3, 1]
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_missing_cache_entry_treated_as_zero_rating_and_votes(self, mock_remove, mock_add):
+        """An item labeled in Plex but absent from the media cache (same
+        edge case _build_scored_candidates itself defensively handles)
+        must not raise - it just sorts as if rating/vote_count were 0."""
+        recommender = _make_recommender()
+        media_cache = Mock()
+        media_cache.cache = {"movies": {"2": {"rating": 9.0, "vote_count": 5000}}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        item_missing = Mock(ratingKey=1)
+        item_best = Mock(ratingKey=2)
+        candidates = {1: (item_missing, 0.5), 2: (item_best, 0.5)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=2)
+
+        assert [int(i.ratingKey) for i in result] == [2, 1]
+
 
 class TestSyncPlexCollectionEmpty:
     """Tests for BaseRecommender._sync_plex_collection with no items."""
@@ -2493,6 +2539,26 @@ class TestManagePlexLabelsFullFlow:
 
         args = recommender._find_plex_items_for_recs.call_args[0]
         assert args[1] == []
+
+    def test_private_label_applied_even_with_private_collections_disabled(self):
+        """#291 removal-path prerequisite: the PrivateCollection_<user>
+        label used to CONFIRM ownership for removal is applied by
+        _sync_plex_collection unconditionally, before the
+        collections.private_collections check below it is ever reached -
+        that setting only gates the cross-user Plex exclude-filter
+        (apply_user_label_restrictions), never whether the label itself
+        gets set on the collection. So a collection's ownership stays
+        identifiable via that label even in a private_collections: false
+        install - utils.plex.remove_owned_collection (the #291 removal
+        path) can rely on it regardless of this setting."""
+        recommender = self._base_recommender()  # fixture already sets private_collections: False
+        assert recommender.config["collections"]["private_collections"] is False
+
+        recommender.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        args = recommender._sync_plex_collection.call_args[0]
+        # (section, label_name, final_items, username, private_label)
+        assert args[4] == "PrivateCollection_alice"
 
     @patch("recommenders.base.apply_user_label_restrictions")
     def test_private_collections_applies_restrictions(self, mock_apply):
@@ -2859,10 +2925,10 @@ class TestGetRecommendationsBranches:
         media_cache.cache = {"movies": items}
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        # #291: safely above MIN_WATCH_HISTORY_DEFAULT - these tests are
-        # about quality filters/caching/tiered selection/debug logging,
-        # not the min-watch-history gate (see TestMinWatchHistoryGate for
-        # that), so this fixture must never itself get gated out.
+        # #291: non-empty, so these tests (about quality filters/
+        # caching/tiered selection/debug logging) never trip the
+        # zero-watch-history gate (see TestRecommendForNoHistoryGate for
+        # that).
         recommender.watched_ids = {90001, 90002, 90003}
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
@@ -2910,7 +2976,7 @@ class TestGetRecommendationsBranches:
         }
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        recommender.watched_ids = {90001, 90002, 90003}  # #291: above MIN_WATCH_HISTORY_DEFAULT
+        recommender.watched_ids = {90001, 90002, 90003}  # #291: non-empty, so the zero-watch-history gate never fires
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
         recommender.user_preferences = {}
@@ -2948,7 +3014,7 @@ class TestGetRecommendationsBranches:
         media_cache.cache = {"shows": {"1": {"title": "No TMDB Match", "genres": []}}}
         media_cache._save_cache = Mock()
         recommender._get_media_cache = Mock(return_value=media_cache)
-        recommender.watched_ids = {90001, 90002, 90003}  # #291: above MIN_WATCH_HISTORY_DEFAULT
+        recommender.watched_ids = {90001, 90002, 90003}  # #291: non-empty, so the zero-watch-history gate never fires
         recommender.profile_hash = "hash1"
         recommender.exclude_genres = []
         recommender.user_preferences = {}
@@ -2989,6 +3055,35 @@ class TestGetRecommendationsBranches:
         result = recommender.get_recommendations()
 
         assert result["plex_recommendations"] == []
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_tied_scores_ordered_best_rated_first(self, mock_excl):
+        """#291: when every candidate scores identically (verified
+        against a real 289-movie cache: every calculate_similarity_score
+        component returns 0.0 against an empty/cold-start profile), the
+        primary sort must break the tie by (rating, vote_count) rather
+        than falling through to media-cache insertion order (which is
+        alphabetical by title) - a cold-start collection should surface
+        well-regarded, well-known unwatched titles, the standard
+        cold-start fallback, not an arbitrary alphabetical slice."""
+        items = {
+            "1": {"title": "Alphabetically First But Mediocre", "rating": 5.0, "vote_count": 100, "genres": []},
+            "2": {"title": "Best Rated", "rating": 9.0, "vote_count": 5000, "genres": []},
+            "3": {"title": "Same Rating More Votes", "rating": 7.0, "vote_count": 9000, "genres": []},
+            "4": {"title": "Same Rating Fewer Votes", "rating": 7.0, "vote_count": 100, "genres": []},
+        }
+        recommender, media_cache = self._recommender_with_cache(items)
+        recommender._calculate_similarity_from_cache = Mock(return_value=(0.0, {}))
+
+        result = recommender.get_recommendations()
+
+        titles = [i["title"] for i in result["plex_recommendations"]]
+        assert titles == [
+            "Best Rated",
+            "Same Rating More Votes",
+            "Same Rating Fewer Votes",
+            "Alphabetically First But Mediocre",
+        ]
 
     @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
     def test_no_unwatched_items_returns_empty(self, mock_excl):
@@ -3049,20 +3144,22 @@ class TestGetRecommendationsBranches:
         assert titles == ["Fine"]
 
 
-class TestMinWatchHistoryGate:
-    """#291: a user with too little watch history to build a
-    meaningful profile from gets no collection at all, rather than one
-    built from noise - see BaseRecommender.get_recommendations()'s own
-    comment for the full rationale, including why this is skip-only,
-    never a delete of an existing collection (movie.py's
-    process_recommendations() never calls manage_plex_labels() at all
-    when plex_recommendations is empty - see
-    tests/test_movie.py::TestProcessRecommendationsMovie::
-    test_no_recommendations_warns_and_skips_labels for that existing
-    coverage - and tv.py's manage_plex_labels([]) returns before
-    touching Plex either way)."""
+class TestRecommendForNoHistoryGate:
+    """#291: a user with ZERO watch history gets no collection at all
+    when movies.recommend_for_no_history/tv.recommend_for_no_history is
+    explicitly set to False. Default True means a zero-history user
+    gets EXACTLY today's behavior - no change for anyone who doesn't
+    touch the setting (see RECOMMEND_FOR_NO_HISTORY_DEFAULT's own
+    comment in utils/config.py for the cold-start rationale). Only on
+    the explicit opt-out does get_recommendations() also remove any
+    collection curatarr already created for that user - see
+    TestRemoveCollectionForNoHistory and
+    tests/test_plex.py::TestRemoveOwnedCollection for the
+    ownership-safety rules that removal path enforces (never inferred
+    from title/emoji/name pattern, only the PrivateCollection_<user>
+    label)."""
 
-    def _recommender_with_watched_ids(self, watched_ids, min_watch_history=None):
+    def _recommender_with_watched_ids(self, watched_ids, recommend_for_no_history=None):
         recommender = _make_recommender()
         media_cache = Mock()
         media_cache.cache = {"movies": {"1": {"title": "Candidate", "rating": 8.0, "vote_count": 500, "genres": []}}}
@@ -3073,66 +3170,126 @@ class TestMinWatchHistoryGate:
         recommender.exclude_genres = []
         recommender.user_preferences = {}
         recommender.randomize_recommendations = False
-        if min_watch_history is not None:
-            recommender.media_config = {"min_watch_history": min_watch_history}
+        if recommend_for_no_history is not None:
+            recommender.media_config = {"recommend_for_no_history": recommend_for_no_history}
         return recommender
 
     @patch("recommenders.base.log_warning")
     @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
-    def test_zero_watch_history_skips_and_logs_clearly(self, mock_excl, mock_warn):
+    def test_default_on_creates_recommendations_for_zero_history(self, mock_excl, mock_warn):
+        """No behavior change for anyone who doesn't touch the setting -
+        a zero-history user still gets a collection, exactly as today."""
         recommender = self._recommender_with_watched_ids(set())
-        recommender.single_user = "alice"
-
-        result = recommender.get_recommendations()
-
-        assert result == {"plex_recommendations": []}
-        mock_warn.assert_called_once()
-        message = mock_warn.call_args[0][0]
-        assert "alice" in message
-        assert "0 watched" in message
-        assert str(MIN_WATCH_HISTORY_DEFAULT) in message
-
-    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
-    def test_above_threshold_user_is_unaffected(self, mock_excl):
-        # Watched IDs deliberately distinct from the candidate item's own
-        # id ("1" in media_cache.cache above) - these represent OTHER,
-        # already-watched movies, not the one unwatched candidate this
-        # test expects back.
-        recommender = self._recommender_with_watched_ids({101, 102, 103})
         recommender.single_user = "alice"
 
         result = recommender.get_recommendations()
 
         assert len(result["plex_recommendations"]) == 1
         assert result["plex_recommendations"][0]["title"] == "Candidate"
+        mock_warn.assert_not_called()
 
     @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
-    def test_exactly_at_threshold_is_not_gated(self, mock_excl):
-        """The threshold is an inclusive floor - having watched exactly
-        min_watch_history items is enough, not one short of it."""
-        recommender = self._recommender_with_watched_ids({101, 102}, min_watch_history=2)
+    def test_default_on_is_the_documented_code_default(self, mock_excl):
+        """Same as above but relying on RECOMMEND_FOR_NO_HISTORY_DEFAULT
+        rather than an explicit config value, so a future default flip
+        would fail this test loudly."""
+        assert RECOMMEND_FOR_NO_HISTORY_DEFAULT is True
+        recommender = self._recommender_with_watched_ids(set())
+        recommender.single_user = "alice"
 
         result = recommender.get_recommendations()
 
         assert len(result["plex_recommendations"]) == 1
 
+    @patch("recommenders.base.log_warning")
     @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
-    def test_one_below_threshold_is_gated(self, mock_excl):
-        recommender = self._recommender_with_watched_ids({101}, min_watch_history=2)
+    def test_explicit_off_skips_zero_history_user_and_logs_clearly(self, mock_excl, mock_warn):
+        recommender = self._recommender_with_watched_ids(set(), recommend_for_no_history=False)
+        recommender.single_user = "alice"
+        recommender._remove_collection_for_no_history = Mock()
 
         result = recommender.get_recommendations()
 
         assert result == {"plex_recommendations": []}
+        message = mock_warn.call_args[0][0]
+        assert "alice" in message
+        assert "no watch history" in message
+        assert "recommend_for_no_history" in message
 
     @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
-    def test_threshold_configurable_via_media_config(self, mock_excl):
-        """A configured movies.min_watch_history/tv.min_watch_history
-        overrides the code default."""
-        recommender = self._recommender_with_watched_ids({101, 102, 103, 104}, min_watch_history=5)
+    def test_explicit_off_triggers_removal_for_the_right_user(self, mock_excl):
+        recommender = self._recommender_with_watched_ids(set(), recommend_for_no_history=False)
+        recommender.single_user = "alice"
+        recommender._remove_collection_for_no_history = Mock()
+
+        recommender.get_recommendations()
+
+        recommender._remove_collection_for_no_history.assert_called_once_with("alice")
+
+    @patch("recommenders.base.get_excluded_genres_for_user", return_value=[])
+    def test_off_does_not_affect_or_remove_for_a_user_with_history(self, mock_excl):
+        """Even a single watched item counts as history - only a
+        genuine zero is gated/removed."""
+        recommender = self._recommender_with_watched_ids({101}, recommend_for_no_history=False)
+        recommender.single_user = "alice"
+        recommender._remove_collection_for_no_history = Mock()
 
         result = recommender.get_recommendations()
 
-        assert result == {"plex_recommendations": []}
+        assert len(result["plex_recommendations"]) == 1
+        recommender._remove_collection_for_no_history.assert_not_called()
+
+
+class TestRemoveCollectionForNoHistory:
+    """Tests for BaseRecommender._remove_collection_for_no_history - the
+    #291 recommend_for_no_history: false removal path. The actual
+    find/confirm/remove logic lives in utils.plex.remove_owned_collection
+    (see tests/test_plex.py::TestRemoveOwnedCollection for that); these
+    tests only cover this method's own wiring (label computed correctly,
+    add_label gate, defensive section-access handling)."""
+
+    @patch("recommenders.base.remove_owned_collection")
+    def test_delegates_with_this_users_computed_private_label(self, mock_remove):
+        recommender = _make_recommender()
+        recommender.single_user = "alice"
+        section = Mock()
+        recommender.plex.library.section.return_value = section
+
+        recommender._remove_collection_for_no_history("alice")
+
+        mock_remove.assert_called_once()
+        args, _kwargs = mock_remove.call_args
+        assert args[0] is section
+        assert args[1] == "PrivateCollection_alice"
+        assert args[2] == "alice"
+        assert "no watch history" in args[3]
+
+    @patch("recommenders.base.remove_owned_collection")
+    def test_add_label_disabled_never_touches_plex(self, mock_remove):
+        """If curatarr never applies PrivateCollection_* labels in this
+        config, ownership can never be confirmed - skip entirely rather
+        than guess (mirrors utils.plex.update_plex_collection's own
+        label_name/private_label on/off gate)."""
+        recommender = _make_recommender()
+        recommender.config["collections"] = {"add_label": False}
+        recommender.single_user = "alice"
+
+        recommender._remove_collection_for_no_history("alice")
+
+        mock_remove.assert_not_called()
+        recommender.plex.library.section.assert_not_called()
+
+    @patch("recommenders.base.log_warning")
+    @patch("recommenders.base.remove_owned_collection")
+    def test_section_access_failure_logs_and_does_not_raise(self, mock_remove, mock_warn):
+        recommender = _make_recommender()
+        recommender.single_user = "alice"
+        recommender.plex.library.section.side_effect = plexapi.exceptions.PlexApiException("boom")
+
+        recommender._remove_collection_for_no_history("alice")
+
+        mock_remove.assert_not_called()
+        mock_warn.assert_called_once()
 
 
 class TestLoadWatchedCache:

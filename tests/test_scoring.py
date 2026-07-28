@@ -736,6 +736,48 @@ class TestSelectTieredRecommendations:
 
         assert [r["title"] for r in result_a] == [r["title"] for r in result_b]
 
+    def test_all_tied_scores_order_by_rating_then_vote_count(self):
+        """#291: with every candidate scoring identically (the observed
+        cold-start case - every calculate_similarity_score component
+        returns 0.0 against an empty profile), the final sort must break
+        the tie by (rating, vote_count) rather than collapsing to
+        whatever incidental order the tier slicing/sampling left them
+        in - the standard cold-start fallback is best-rated-unwatched,
+        not an arbitrary order. Uses a seeded rng and asserts on the
+        general (score, rating, vote_count)-descending property of
+        whatever tier-sampling selects, rather than a specific
+        membership/order, since which items land in the diverse/wildcard
+        tiers is itself randomized (see TestSeededRngIsDeterministic
+        above) - that randomness is pre-existing, unrelated behavior
+        this test isn't about."""
+        import random as random_module
+
+        items = [
+            {"similarity_score": 0.0, "title": f"Item{i}", "rating": float(i % 10), "vote_count": (i * 37) % 500}
+            for i in range(50)
+        ]
+
+        result = select_tiered_recommendations(items, 20, rng=random_module.Random(42))
+
+        keys = [(r["similarity_score"], r["rating"], r["vote_count"]) for r in result]
+        assert keys == sorted(keys, reverse=True)
+        # Sanity check this isn't vacuously true because every key is equal
+        assert len(set(keys)) > 1
+
+    def test_missing_rating_and_vote_count_treated_as_zero(self):
+        """Items without rating/vote_count fields at all (None-safe
+        fallback) must not raise and must sort behind any rated item on
+        an otherwise-tied score."""
+        items = [
+            {"similarity_score": 0.0, "title": "NoMetadata"},
+            {"similarity_score": 0.0, "title": "Rated", "rating": 8.0, "vote_count": 200},
+        ]
+
+        result = select_tiered_recommendations(items, 2, safe_percent=1.0, diverse_percent=0.0, wildcard_percent=0.0)
+
+        titles = [r["title"] for r in result]
+        assert titles == ["Rated", "NoMetadata"]
+
 
 class TestPopularityDampening:
     """Tests for popularity dampening in calculate_similarity_score."""

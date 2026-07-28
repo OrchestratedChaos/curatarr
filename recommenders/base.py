@@ -30,7 +30,6 @@ from utils import (
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_TV_NAME_TEMPLATE,
     GREEN,
-    MIN_WATCH_HISTORY_DEFAULT,
     RATING_MULTIPLIER_2_STAR,
     RATING_MULTIPLIER_3_STAR,
     RATING_MULTIPLIER_4_STAR,
@@ -39,6 +38,7 @@ from utils import (
     RATING_TIER_3_STAR,
     RATING_TIER_4_STAR,
     RATING_TIER_5_STAR,
+    RECOMMEND_FOR_NO_HISTORY_DEFAULT,
     RED,
     RESET,
     TIER_DIVERSE_PERCENT,
@@ -81,6 +81,7 @@ from utils import (
     print_similarity_breakdown,
     process_counters_from_cache,
     remove_labels_from_items,
+    remove_owned_collection,
     render_collection_name,
     resolve_media_type_overrides,
     save_media_cache,
@@ -860,33 +861,44 @@ class BaseRecommender(ABC):
             self.watched_data_counters = self._get_watched_data()
             self._save_watched_cache()
 
-        # #291: a user with too little watch history to build a
-        # meaningful profile from gets no collection at all, rather
-        # than one built from noise - self.watched_ids is populated by
-        # whichever watched-data builder actually ran for this user
-        # (movie.py's/tv.py's own per-user builder, or base.py's
-        # managed-users path - see #273), so this check sits above all
-        # of them and applies regardless of which one populated it.
-        # Returning {"plex_recommendations": []} here reaches the exact
-        # same "nothing to recommend" path movie.py/tv.py already
-        # handle for a user with zero matching candidates: movie.py
-        # never calls manage_plex_labels() at all in that case, and
-        # tv.py's own manage_plex_labels([]) returns immediately before
-        # touching Plex (see that method's own early-return on an empty
-        # list) - either way, an existing collection from a PRIOR run
-        # (before this user's watch history dropped, or before this
-        # config was set) is left completely untouched, never deleted.
-        min_watch_history = self.media_config.get("min_watch_history", MIN_WATCH_HISTORY_DEFAULT)
+        # #291: a user with ZERO watch history gets no collection built
+        # for them at all when movies.recommend_for_no_history/
+        # tv.recommend_for_no_history is explicitly set to False -
+        # self.watched_ids is populated by whichever watched-data
+        # builder actually ran for this user (movie.py's/tv.py's own
+        # per-user builder, or base.py's managed-users path - see #273),
+        # so this check sits above all of them and applies regardless
+        # of which one populated it.
+        #
+        # Default is True (create - see RECOMMEND_FOR_NO_HISTORY_DEFAULT's
+        # own comment in utils/config.py for the cold-start reasoning):
+        # a zero-history user gets EXACTLY today's behavior, no change,
+        # unless this is explicitly turned off.
+        #
+        # When explicitly off, returning {"plex_recommendations": []}
+        # here reaches the exact same "nothing to recommend" path
+        # movie.py/tv.py already handle for a user with zero matching
+        # candidates (movie.py never calls manage_plex_labels() at all
+        # in that case; manage_plex_labels([]) itself also returns
+        # immediately before touching Plex) - so on the default path an
+        # existing collection is always left untouched. Only on this
+        # explicit opt-out do we go further and actively remove a
+        # collection already sitting in Plex for this user (see
+        # _remove_collection_for_no_history) - never on the default path,
+        # and never for a user who has ANY watch history at all.
+        recommend_for_no_history = self.media_config.get(
+            "recommend_for_no_history", RECOMMEND_FOR_NO_HISTORY_DEFAULT
+        )
         watched_count = len(self.watched_ids)
-        if watched_count < min_watch_history:
+        if watched_count == 0 and not recommend_for_no_history:
             who = self.single_user or "the configured user(s)"
             media_section = "movies" if self.media_type == "movie" else "tv"
             log_warning(
-                f"Skipping {self.media_key} recommendations for {who}: only {watched_count} watched "
-                f"{self.media_key} (below the configured minimum of {min_watch_history} - "
-                f"see {media_section}.min_watch_history in tuning.yml). Any existing collection is "
-                "left as-is."
+                f"Skipping {self.media_key} recommendations for {who}: no watch history and "
+                f"{media_section}.recommend_for_no_history is disabled in tuning.yml. Removing "
+                "any existing collection this run may have previously created for them."
             )
+            self._remove_collection_for_no_history(who)
             return {"plex_recommendations": []}
 
         # Get all items from cache
@@ -975,7 +987,22 @@ class BaseRecommender(ABC):
             if cache_hits > 0:
                 logger.debug(f"Used {cache_hits} cached scores")
 
-            scored_items.sort(key=lambda x: x["similarity_score"], reverse=True)
+            # #291 tiebreaker: with no watch history (or any tie in
+            # general), every candidate can score identically (observed:
+            # every component of calculate_similarity_score returns 0.0
+            # against an empty profile) - Python's sort is stable, so an
+            # unbroken tie previously fell through to media-cache
+            # insertion order, which is alphabetical by title. Breaking
+            # ties by (rating, vote_count) instead means a cold-start (or
+            # any tied) collection surfaces well-regarded, well-known
+            # unwatched titles first rather than an arbitrary alphabetical
+            # slice - the standard cold-start fallback (recommend
+            # popular/well-rated items), not produce noise. Applies to
+            # every tie, not just all-zero-score cold start.
+            scored_items.sort(
+                key=lambda x: (x["similarity_score"], x.get("rating") or 0.0, x.get("vote_count") or 0),
+                reverse=True,
+            )
 
             if self.randomize_recommendations:
                 plex_recs = select_tiered_recommendations(
@@ -1133,7 +1160,21 @@ class BaseRecommender(ABC):
         self, all_candidates: Dict, unwatched_labeled: List, label_name: str, target_count: int
     ) -> List:
         """Update labels to keep only top-scoring items, return final collection."""
-        sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1][1], reverse=True)
+        # #291 tiebreaker - same rationale as get_recommendations()'s own
+        # scored_items.sort(): all_candidates values are (plex_item, score)
+        # tuples, and plex_item itself carries no TMDB rating/vote_count,
+        # so the tiebreak fields are looked up from the media cache by
+        # item_id (same cache/key shape _build_scored_candidates above
+        # already reads them from).
+        media_cache = self._get_media_cache()
+        media_items = media_cache.cache.get(self.media_key, {})
+
+        def _rank_key(entry):
+            item_id, (_plex_item, score) = entry
+            item_info = media_items.get(str(item_id)) or {}
+            return (score, item_info.get("rating") or 0.0, item_info.get("vote_count") or 0)
+
+        sorted_candidates = sorted(all_candidates.items(), key=_rank_key, reverse=True)
         top_candidates = sorted_candidates[:target_count]
         top_ids = {item_id for item_id, _ in top_candidates}
 
@@ -1385,6 +1426,60 @@ class BaseRecommender(ABC):
             log_error(f"Error managing Plex labels: {e}")
             print(traceback.format_exc())
             return False
+
+    def _compute_private_label_name(self, username: Optional[str] = None) -> str:
+        """This run's PrivateCollection_<user> label name - identical
+        formula to the private_label_name manage_plex_labels() computes
+        when it creates/updates a collection (same base label, same
+        build_label_name() call, same append_usernames source), so a
+        caller can identify/act on a user's EXISTING collection without
+        duplicating (and risking silently drifting from - see #261's
+        history of exactly that class of bug) that computation.
+
+        Args:
+            username: Defaults to self.single_user - the real per-user
+                identity every real caller (get_recommendations, via
+                _remove_collection_for_no_history) always has set.
+        """
+        users = self.users["plex_users"] or self.users["managed_users"]
+        append_usernames = self.config.get("collections", {}).get("append_usernames", True)
+        private_base_label = f"PrivateCollection{self._library_suffix_for_label()}"
+        return build_label_name(private_base_label, users, username or self.single_user, append_usernames)
+
+    def _remove_collection_for_no_history(self, who: str) -> None:
+        """#291 recommend_for_no_history: false path - remove any
+        collection curatarr already created for a user who now has zero
+        watch history. Called ONLY from get_recommendations()'s explicit
+        opt-out branch; never on the default (create) path, and never
+        for a user with any watch history at all.
+
+        Delegates the actual find/confirm/remove work to
+        utils.plex.remove_owned_collection, which trusts ONLY the
+        PrivateCollection_<user> label already on the collection - see
+        that function's own docstring for the full ownership-safety
+        rules (never title/emoji/name-pattern inference, ambiguous
+        matches are left alone and logged, every removal is logged).
+        """
+        if not self.config.get("collections", {}).get("add_label", True):
+            # add_label disabled means curatarr never applies
+            # PrivateCollection_* to anything - ownership can never be
+            # confirmed, so there is nothing safe to remove. Not an
+            # error; this run just never created labeled collections.
+            return
+
+        try:
+            section = self.plex.library.section(self.library_title)
+        except plexapi.exceptions.PlexApiException as e:
+            log_warning(
+                f"Could not access the Plex library section to check for an existing "
+                f"collection to remove for {who}: {e}"
+            )
+            return
+
+        private_label = self._compute_private_label_name(who if who != "the configured user(s)" else None)
+        media_section = "movies" if self.media_type == "movie" else "tv"
+        reason = f"no watch history and {media_section}.recommend_for_no_history is disabled"
+        remove_owned_collection(section, private_label, who, reason, logger)
 
     def _user_select_recommendations(self, recommended_items: List[Dict], operation_label: str) -> List[Dict]:
         """Prompt user to select recommendations - delegates to utility."""
