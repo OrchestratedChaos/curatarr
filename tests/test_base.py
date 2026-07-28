@@ -2057,7 +2057,7 @@ class TestGetManagedUsersWatchedData:
         recommender = _make_recommender(users={"plex_users": [], "managed_users": ["admin"], "admin_user": "admin"})
         recommender.watched_data_counters = {}
         recommender.plex = Mock()
-        item = Mock(ratingKey="10")
+        item = Mock(ratingKey="10", lastViewedAt=None, userRating=None, viewCount=1)
         recommender.plex.library.section.return_value.search.return_value = [item]
         media_cache = Mock()
         media_cache.cache = {"movies": {"10": {"tmdb_id": 555}}}

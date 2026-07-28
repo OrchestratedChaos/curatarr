@@ -160,28 +160,28 @@
   },
   "movie_managed_users": {
     "actors": {
-      "Alex Monroe": "0x1.0000000000000p+2",
-      "Casey Rhodes": "0x1.8000000000000p+1",
-      "Jordan Vance": "0x1.0000000000000p+2",
-      "Robin Alvarez": "0x1.8000000000000p+1",
-      "Sam Kestrel": "0x1.0000000000000p+2",
-      "Taylor Nguyen": "0x1.8000000000000p+1"
+      "Alex Monroe": "0x1.18a339c1b228dp+2",
+      "Casey Rhodes": "0x1.e479a6b69784ep+1",
+      "Jordan Vance": "0x1.a479a6b69784ep+1",
+      "Robin Alvarez": "0x1.599999999999ap+1",
+      "Sam Kestrel": "0x1.4ccccccccccccp+0",
+      "Taylor Nguyen": "0x1.599999999999ap+1"
     },
     "collections": {},
     "directors": {
-      "Marcus Webb": "0x1.8000000000000p+1",
-      "Nora Lin": "0x1.8000000000000p+1",
-      "Priya Anand": "0x1.0000000000000p+1",
-      "Ridley Stone": "0x1.0000000000000p+1"
+      "Marcus Webb": "0x1.cccccccccccccp+0",
+      "Nora Lin": "0x1.599999999999ap+1",
+      "Priya Anand": "0x1.3333333333333p+0",
+      "Ridley Stone": "0x1.0ae00d1cfdeb4p+1"
     },
     "genres": {
-      "action": "0x1.0000000000000p+2",
-      "comedy": "0x1.8000000000000p+1",
-      "romance": "0x1.0000000000000p+1",
-      "sci-fi": "0x1.8000000000000p+1"
+      "action": "0x1.a479a6b69784ep+1",
+      "comedy": "0x1.599999999999ap+1",
+      "romance": "0x1.0cccccccccccdp+1",
+      "sci-fi": "0x1.e479a6b69784ep+1"
     },
     "languages": {
-      "english": "0x1.4000000000000p+3"
+      "english": "0x1.f23cd35b4bc26p+2"
     },
     "tmdb_ids": [
       "101",
@@ -196,15 +196,15 @@
       "110"
     ],
     "tmdb_keywords": {
-      "coming-of-age": "0x1.0000000000000p+1",
-      "heist": "0x1.0000000000000p+1",
-      "revenge": "0x1.0000000000000p+0",
-      "road-trip": "0x1.0000000000000p+1",
-      "space-station": "0x1.8000000000000p+1",
-      "survival": "0x1.0000000000000p+1",
-      "time-travel": "0x1.0000000000000p+0",
-      "undercover": "0x1.0000000000000p+1",
-      "wedding": "0x1.0000000000000p+1"
+      "coming-of-age": "0x1.3333333333333p+0",
+      "heist": "0x1.97acd9e9cab81p+1",
+      "revenge": "-0x1.0000000000000p-1",
+      "road-trip": "0x1.0cccccccccccdp+1",
+      "space-station": "0x1.e479a6b69784ep+1",
+      "survival": "0x1.9999999999998p-4",
+      "time-travel": "0x1.3333333333333p-1",
+      "undercover": "0x1.3333333333333p+0",
+      "wedding": "0x1.0cccccccccccdp+1"
     }
   },
   "movie_plex_watched_alice": {
@@ -284,26 +284,26 @@
   },
   "tv_managed_users": {
     "actors": {
-      "Derek Cho": "0x1.0000000000000p+1",
-      "Elena Frost": "0x1.0000000000000p+1",
-      "Lucas Wren": "0x1.0000000000000p+1",
-      "Mira Solano": "0x1.8000000000000p+1",
-      "Nadia Okafor": "0x1.0000000000000p+1",
-      "Theo Baptiste": "0x1.8000000000000p+1"
+      "Derek Cho": "0x1.4cccccccccccdp+1",
+      "Elena Frost": "0x1.238346deb0141p+0",
+      "Lucas Wren": "0x1.3333333333333p+0",
+      "Mira Solano": "0x1.999999999999ap+1",
+      "Nadia Okafor": "0x1.3333333333333p+0",
+      "Theo Baptiste": "0x1.bd1ce07849adap+0"
     },
     "genres": {
-      "comedy": "0x1.8000000000000p+1",
-      "crime": "0x1.0000000000000p+1",
-      "sci-fi": "0x1.0000000000000p+1"
+      "comedy": "0x1.91c1a36f580a1p+1",
+      "crime": "-0x1.999999999999cp-3",
+      "sci-fi": "0x1.4cccccccccccdp+1"
     },
     "languages": {
-      "english": "0x1.c000000000000p+2"
+      "english": "0x1.627a6b51459e9p+2"
     },
     "studios": {
-      "bluecrest media": "0x1.0000000000000p+1",
-      "ferrous pictures": "0x1.0000000000000p+0",
-      "lumen works": "0x1.0000000000000p+1",
-      "northgate studios": "0x1.0000000000000p+1"
+      "bluecrest media": "-0x1.999999999999cp-3",
+      "ferrous pictures": "0x1.3333333333333p-1",
+      "lumen works": "0x1.44f4d6a28b3d4p+1",
+      "northgate studios": "0x1.4cccccccccccdp+1"
     },
     "tmdb_ids": [
       "201",
@@ -315,14 +315,14 @@
       "207"
     ],
     "tmdb_keywords": {
-      "exploration": "0x1.0000000000000p+1",
-      "first-contact": "0x1.0000000000000p+0",
-      "heist": "0x1.0000000000000p+0",
-      "investigation": "0x1.0000000000000p+1",
-      "noir": "0x1.0000000000000p+0",
-      "roommates": "0x1.0000000000000p+1",
-      "survival": "0x1.0000000000000p+0",
-      "workplace": "0x1.0000000000000p+1"
+      "exploration": "0x1.4cccccccccccdp+1",
+      "first-contact": "0x1.0000000000000p+1",
+      "heist": "0x1.3333333333333p-1",
+      "investigation": "-0x1.999999999999cp-3",
+      "noir": "-0x1.999999999999ap-1",
+      "roommates": "0x1.44f4d6a28b3d4p+1",
+      "survival": "0x1.3333333333333p-1",
+      "workplace": "0x1.44f4d6a28b3d4p+1"
     }
   },
   "tv_plex_watched_alice": {

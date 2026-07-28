@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.63] - 2026-07-27
+
+### Fixed
+
+- **`recommenders/base.py`'s `_get_managed_users_watched_data()` (used when `plex.managed_users` is configured instead of `users.list`) applied NO weighting at all - every watched item counted exactly 1.0, regardless of how many times it was rewatched, how the user rated it, or how recently it was watched (#273 PR2).** Verified: every real managed-users-mode profile's counter values were plain integers with zero negative signals, unlike `movie.py`'s/`tv.py`'s own per-user builders, which already apply recency/rating/rewatch weighting. Now calls the exact same formula those two use (`calculate_recency_multiplier` x `_calculate_rating_multiplier` x `calculate_rewatch_multiplier`, sourced from the same `switchUser()`-scoped library item this method already fetched via `#273` PR1's per-user token fix), including negative-signal support for low ratings.
+
+  No config flag - unlike PR1, this is a straightforward internal-consistency fix (apply the SAME weighting formula the other three builders already use to this fourth one), not a new opt-in behavior with a slower-rollout rationale.
+
+  **Verified against the real, live Plex library** (read-only): this install's real users aren't Plex Home/managed-users (they're configured via `users.list`, matched by login-style username - `get_configured_users()`'s `managed_users` validation only matches Plex's display-name `.title`, a separate, pre-existing mismatch out of this PR's scope), so this was verified via the one `managed_users` value that always resolves regardless (`"admin"`), isolating the comparison to weighting alone by patching only `process_counters_from_cache`'s call shape between an "old" and "new" pass over the exact same real watched-item set (132 watched movies both ways, confirming an isolated comparison): every counter dimension went from 100% integer-valued with zero negative signals (`genres`: min 1.0, 0 negative; `actors`: min 1.0, 0 negative; `directors`: min 1.0, 0 negative; `tmdb_keywords`: min 1.0, 0 negative) to widely fractional with real negative signals (`actors`: 271/293 non-integer, 12 negative; `directors`: 106/117 non-integer, 5 negative; `genres`: 23/24 non-integer; `tmdb_keywords`: 1273/1383 non-integer, 88 negative) - exactly the predicted shape, written down before the run.
+
 ## [2.10.62] - 2026-07-27
 
 ### Added
