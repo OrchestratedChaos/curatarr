@@ -344,6 +344,12 @@ button:disabled {
 .banner.error { border-left-color: var(--fail); color: var(--fail); }
 .banner.warn { border-left-color: var(--warn); color: var(--warn); }
 
+/* --- Per-stage run breakdown (#282/#288 - see run.html/results.html) --- */
+.stage-results { list-style: none; padding: 0; margin: 0 0 12px; }
+.stage-results li { padding: 2px 0; }
+.stage-results .ok { color: var(--ok); }
+.stage-results .error { color: var(--fail); }
+
 .update-banner {
   display: flex;
   align-items: center;

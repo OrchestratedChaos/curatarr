@@ -176,11 +176,36 @@ class TestBuildCommandDockerFullEngine:
         manager = self._manager("/data", "/app")
         cmd, _env, _log_name = manager._build_command("full", "all")
         script = cmd[2]
-        assert " && " in script
         movie_pos = script.index("movie.py")
         tv_pos = script.index("tv.py")
         external_pos = script.index("external.py")
         assert movie_pos < tv_pos < external_pos
+
+    def test_docker_full_engine_no_longer_uses_bare_and_chain(self, monkeypatch):
+        """#282/#288: a bare `cmd1 && cmd2 && cmd3` gave no indication of
+        *which* stage a failure stopped at - see _build_docker_full_script's
+        docstring. Replaced with explicit per-stage gating + markers."""
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[2]
+        assert " && " not in script
+
+    def test_docker_full_engine_emits_stage_markers_for_every_stage(self, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[2]
+        for stage in ("movie", "tv", "external"):
+            assert f"{job_runner_mod.STAGE_MARKER_PREFIX}:{stage}:" in script
+
+    def test_docker_full_engine_skips_later_stages_on_movie_failure(self, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = self._manager("/data", "/app")
+        cmd, _env, _log_name = manager._build_command("full", "all")
+        script = cmd[2]
+        assert f"{job_runner_mod.STAGE_MARKER_PREFIX}:tv:skipped" in script
+        assert f"{job_runner_mod.STAGE_MARKER_PREFIX}:external:skipped" in script
 
     def test_docker_full_engine_uses_code_root_not_project_root(self, monkeypatch):
         monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
@@ -246,7 +271,12 @@ class TestJobManagerStart:
         entirely (see TestBuildCommandDockerFullEngine) and chains the
         three recommenders directly instead - confirms that actually
         executes end to end (not just that _build_command constructs
-        the right argv), in the right order, exit code 0."""
+        the right argv), in the right order, exit code 0.
+
+        #282/#288: also confirms Job.stage_results shows all three
+        stages actually ran and succeeded - the structured signal
+        /run/status and /status.json now expose (see web/job_runner.py's
+        STAGE_MARKER_PREFIX)."""
         monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
         manager = _manager(curatarr_web_root)
         job = manager.start("full", "all", ["alice", "bob"])
@@ -258,6 +288,99 @@ class TestJobManagerStart:
         tv_idx = job.lines.index("TV recommendations done")
         external_idx = job.lines.index("External watchlists done")
         assert movie_idx < tv_idx < external_idx
+
+        assert job.stage_results == {"movie": "0", "tv": "0", "external": "0"}
+
+    def test_full_engine_in_docker_stops_after_movie_failure(self, tmp_path, monkeypatch):
+        """#282 regression: movie failing must stop tv/external from
+        ever running (matching the pre-existing `&&`/docker-
+        entrypoint.sh `set -e` semantics - verified against the real
+        production scripts in a real container, not just this fixture)
+        - AND must now say so structurally via stage_results instead of
+        leaving the web UI to guess why tv/external never ran."""
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        root = _make_root(tmp_path, 'import sys\nprint("Movie recommendations starting")\nsys.exit(3)\n')
+        manager = _manager(root)
+        job = manager.start("full", "all", ["alice", "bob"])
+        _wait_until_done(job)
+
+        assert job.returncode == 3
+        assert job.state == "failed"
+        # tv.py/external.py (the fixture's default fakes - see
+        # _make_root) never actually ran at all - only the skip
+        # banners do, which is the whole point of this fix (#282's own
+        # report: previously there was no banner or marker at all, just
+        # silence about why tv/external were missing).
+        assert not any("tv done" in line for line in job.lines)
+        assert not any("external done" in line for line in job.lines)
+        assert any("skipped: movie recommendations failed" in line for line in job.lines)
+        assert job.stage_results == {"movie": "3", "tv": "skipped", "external": "skipped"}
+
+    def test_full_engine_in_docker_stops_after_tv_failure(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        root = _make_root(tmp_path, 'print("Movie recommendations done")\n')
+        with open(os.path.join(root, "recommenders", "tv.py"), "w", encoding="utf-8") as f:
+            f.write("import sys\nprint('TV recommendations starting')\nsys.exit(2)\n")
+        manager = _manager(root)
+        job = manager.start("full", "all", ["alice", "bob"])
+        _wait_until_done(job)
+
+        assert job.returncode == 2
+        assert job.state == "failed"
+        assert any("Movie recommendations done" in line for line in job.lines)
+        assert any("TV recommendations starting" in line for line in job.lines)
+        # external.py (the fixture's default fake) never actually ran.
+        assert not any("external done" in line for line in job.lines)
+        assert any("skipped: TV recommendations failed" in line for line in job.lines)
+        assert job.stage_results == {"movie": "0", "tv": "2", "external": "skipped"}
+
+    def test_full_engine_external_produced_output_true_when_file_written(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        root = _make_root(tmp_path, 'print("Movie recommendations done")\n')
+        external_dir = os.path.join(root, "recommendations", "external")
+        with open(os.path.join(root, "recommenders", "external.py"), "w", encoding="utf-8") as f:
+            f.write(
+                "import os\n"
+                f"open(os.path.join({external_dir!r}, 'alice.html'), 'w').close()\n"
+                "print('External watchlists done')\n"
+            )
+        manager = _manager(root)
+        job = manager.start("full", "all", ["alice", "bob"])
+        _wait_until_done(job)
+
+        assert job.returncode == 0
+        assert job.stage_results == {"movie": "0", "tv": "0", "external": "0"}
+        assert job.external_produced_output is True
+
+    def test_full_engine_external_produced_output_false_when_no_file_written(self, curatarr_web_root, monkeypatch):
+        """#288: external.py exiting 0 without writing anything new
+        (e.g. a per-user exception it caught internally, as observed in
+        a real container run) must be distinguishable from a genuine
+        success with output - the fixture's own fake external.py only
+        prints, it never writes recommendations/external/*, so this is
+        exactly that shape."""
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+        manager = _manager(curatarr_web_root)
+        job = manager.start("full", "all", ["alice", "bob"])
+        _wait_until_done(job)
+
+        assert job.returncode == 0
+        assert job.external_produced_output is False
+
+    def test_external_engine_produced_output_not_applicable_on_failure(self, curatarr_web_root):
+        """external_produced_output stays None (not False) when the
+        stage itself failed - that failure already has its own signal
+        (returncode); a second, contradictory "no output" flag on top
+        of it would be confusing, not additionally informative."""
+        root = curatarr_web_root
+        with open(os.path.join(root, "recommenders", "external.py"), "w", encoding="utf-8") as f:
+            f.write("import sys\nsys.exit(1)\n")
+        manager = _manager(root)
+        job = manager.start("external", "all", ["alice", "bob"])
+        _wait_until_done(job)
+
+        assert job.returncode == 1
+        assert job.external_produced_output is None
 
     def test_runs_external_engine(self, curatarr_web_root):
         manager = _manager(curatarr_web_root)

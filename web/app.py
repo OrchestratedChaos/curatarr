@@ -724,7 +724,22 @@ def create_app(
                             "mtime": datetime.fromtimestamp(os.path.getmtime(path)),
                         }
                     )
-        return render_template("results.html", watchlists=watchlists, logs=list_log_files(logs_dir))
+        # #288: "No watchlists generated yet" is the right message
+        # before anyone has ever run anything, but was ALSO the only
+        # message ever shown when a full/external run had already
+        # completed and produced nothing - whether because an earlier
+        # stage failed (stage_results), external itself failed, or
+        # external ran and reported success while writing nothing (see
+        # web/job_runner.py's external_produced_output). Passing the
+        # last job's status dict lets results.html tell those apart
+        # instead of always showing the same "run recommendations
+        # first" text even right after a run that clearly did.
+        return render_template(
+            "results.html",
+            watchlists=watchlists,
+            logs=list_log_files(logs_dir),
+            job=app.job_manager.status(),
+        )
 
     @app.get("/results/watchlist/<path:filename>")
     def results_watchlist(filename):
