@@ -85,6 +85,7 @@ from utils import (
     normalize_genre,
     normalize_user_profile,
     record_recommender_run,
+    record_run_status,
     record_unhandled_error,
     save_json_cache,
     smart_open_html,
@@ -2296,6 +2297,12 @@ def _main_impl():
     project_root = get_project_root()
     config_path = os.path.join(project_root, "config/config.yml")
     config = load_config(config_path)
+    # #292: same directory get_last_run_status()/record_run_status()
+    # already use for movie.py/tv.py - external.py has no setup_log_file()
+    # call of its own (it writes recommendations/external/* output, not
+    # a logs/*.log file), so this is purely for the explicit run-status
+    # signal below, not an actual log file.
+    log_dir = os.path.join(project_root, "logs")
 
     # Suppress urllib3's InsecureRequestWarning ONLY when this config
     # actually opts out of certificate verification (verify_ssl: false,
@@ -2414,9 +2421,14 @@ def _main_impl():
                     )
                     if user_data:
                         all_users_data.append(user_data)
+                    # #292: explicit, structured outcome for this user's
+                    # external run - see utils/run_status.py's own
+                    # docstring and recommenders/movie.py's matching hook.
+                    record_run_status(log_dir, "external", username, True)
                 except Exception as e:
                     log_error(f"Error processing {username}: {e}")
                     traceback.print_exc()
+                    record_run_status(log_dir, "external", username, False, str(e))
 
             arr_export_data = all_users_data
         else:
@@ -2447,9 +2459,11 @@ def _main_impl():
 
                     if movie_runs or tv_runs:
                         all_users_data.append(_merge_user_runs(username, movie_runs, tv_runs))
+                    record_run_status(log_dir, "external", username, True)
                 except Exception as e:
                     log_error(f"Error processing {username}: {e}")
                     traceback.print_exc()
+                    record_run_status(log_dir, "external", username, False, str(e))
 
         # Build shared counts: how many users want each item
         total_users = len(all_users_data)

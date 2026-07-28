@@ -40,6 +40,7 @@ from utils import (
     log_warning,
     merge_movie_history,
     process_counters_from_cache,
+    record_run_status,
     run_recommender_main,
     setup_log_file,
     show_progress,
@@ -612,6 +613,16 @@ def process_recommendations(
     log_dir = os.path.join(get_project_root(), "logs")
     setup_log_file(log_dir, log_retention_days, single_user, "recommendations")
 
+    # #292: explicit, structured outcome for THIS user's movie run -
+    # see utils/run_status.py's own docstring for why this replaces
+    # grepping the log tail for English error strings. Records the
+    # real observed outcome (did processing for this user raise at
+    # all) independently of whether the fatal-keyword check below
+    # additionally decides to sys.exit() over it - recorded in the
+    # `finally` below so it always runs, including on that exit path.
+    run_success = True
+    run_detail = ""
+
     try:
         # Create recommender with single user context
         recommender = PlexMovieRecommender(
@@ -651,6 +662,8 @@ def process_recommendations(
     except Exception as e:
         print(f"\n{RED}An error occurred: {e}{RESET}")
         print(traceback.format_exc())
+        run_success = False
+        run_detail = str(e)
 
         # Check if this is a fatal error that should stop all processing
         error_msg = str(e).lower()
@@ -662,6 +675,8 @@ def process_recommendations(
             sys.exit(1)
 
     finally:
+        if single_user:
+            record_run_status(log_dir, "movie", single_user, run_success, run_detail)
         teardown_log_file(original_stdout, log_retention_days)
 
 

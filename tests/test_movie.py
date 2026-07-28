@@ -1624,6 +1624,78 @@ class TestProcessRecommendationsMovie:
         mock_exit.assert_not_called()
 
 
+class TestProcessRecommendationsRecordsRunStatus:
+    """#292: process_recommendations() records its own real observed
+    outcome via utils.run_status.record_run_status(), independent of
+    whether the fatal-keyword check separately decides to sys.exit()
+    over it - see web/status.py's get_last_run_status() docstring for
+    why this replaced grepping the log tail for English error strings."""
+
+    @patch("recommenders.movie.record_run_status")
+    @patch("recommenders.movie.PlexMovieRecommender")
+    @patch("recommenders.movie.teardown_log_file")
+    @patch("recommenders.movie.setup_log_file")
+    def test_success_records_true(self, mock_setup, mock_teardown, mock_recommender_cls, mock_record):
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {"plex_recommendations": []}
+        mock_instance.config = {"general": {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
+
+        mock_record.assert_called_once()
+        args, _kwargs = mock_record.call_args
+        assert args[1:] == ("movie", "alice", True, "")
+
+    @patch("recommenders.movie.record_run_status")
+    @patch("recommenders.movie.PlexMovieRecommender")
+    @patch("recommenders.movie.teardown_log_file")
+    @patch("recommenders.movie.setup_log_file")
+    def test_non_fatal_error_records_false_with_detail(
+        self, mock_setup, mock_teardown, mock_recommender_cls, mock_record
+    ):
+        mock_recommender_cls.side_effect = ValueError("Something else broke")
+
+        process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
+
+        args, _kwargs = mock_record.call_args
+        assert args[1:4] == ("movie", "alice", False)
+        assert "Something else broke" in args[4]
+
+    @patch("recommenders.movie.record_run_status")
+    @patch("recommenders.movie.PlexMovieRecommender")
+    @patch("recommenders.movie.teardown_log_file")
+    @patch("recommenders.movie.setup_log_file")
+    def test_fatal_error_still_records_before_exiting(
+        self, mock_setup, mock_teardown, mock_recommender_cls, mock_record
+    ):
+        """The finally block must run - and record - even on the
+        sys.exit(1) path (fatal errors), never skipped."""
+        mock_recommender_cls.side_effect = RuntimeError("Plex server unreachable")
+
+        with patch("recommenders.movie.sys.exit"):
+            process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
+
+        args, _kwargs = mock_record.call_args
+        assert args[1:4] == ("movie", "alice", False)
+
+    @patch("recommenders.movie.record_run_status")
+    @patch("recommenders.movie.PlexMovieRecommender")
+    @patch("recommenders.movie.teardown_log_file")
+    @patch("recommenders.movie.setup_log_file")
+    def test_no_single_user_never_records(self, mock_setup, mock_teardown, mock_recommender_cls, mock_record):
+        """An 'all users' caller with no single_user resolved yet must
+        never write a nonsensical run_status_movie_None.json."""
+        mock_instance = Mock()
+        mock_instance.get_recommendations.return_value = {"plex_recommendations": []}
+        mock_instance.config = {"general": {}}
+        mock_recommender_cls.return_value = mock_instance
+
+        process_recommendations({"general": {}}, "/path/to/config.yml", 0)
+
+        mock_record.assert_not_called()
+
+
 class TestLibraryFetchedOnceNotSixTimes:
     """#233 audit remediation batch D / PR1(a) regression coverage.
 

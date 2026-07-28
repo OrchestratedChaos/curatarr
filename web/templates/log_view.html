@@ -2,9 +2,23 @@
 {% block title %}{{ filename }} - Curatarr{% endblock %}
 {% block content %}
 <h1>{{ filename }}</h1>
-<p><a href="{{ url_for('results') }}">&larr; back to results</a></p>
+<p>
+  <a href="{{ url_for('results') }}">&larr; back to results</a>
+  &middot;
+  {% if full %}
+  <a href="{{ url_for('results_log', filename=filename) }}">Show last 500 lines</a>
+  {% else %}
+  <a href="{{ url_for('results_log', filename=filename, view='full') }}">Show full log</a>
+  {% endif %}
+</p>
 {% if empty_reason %}
 <p class="banner"><strong>Log is empty:</strong> {{ empty_reason }}</p>
+{% endif %}
+{% if truncated %}
+<p class="banner warn">
+  This log is larger than curatarr will display in full at once - showing the last
+  {{ "%.0f"|format(max_bytes / 1000000) }}MB instead of the true beginning.
+</p>
 {% endif %}
 <pre class="log-output">{{ content }}</pre>
 {% endblock %}

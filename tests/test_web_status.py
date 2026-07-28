@@ -9,12 +9,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 
 import web.status as status_mod
+from utils.run_status import record_run_status
 from web.status import (
+    LOG_VIEW_MAX_BYTES,
     TAIL_BYTES,
     display_name_safe_slug,
     find_user_watchlist,
     get_last_run_status,
     list_log_files,
+    read_log_full,
     read_log_tail,
 )
 
@@ -161,6 +164,89 @@ class TestGetLastRunStatus:
         assert result["timestamp"] is None
 
 
+class TestGetLastRunStatusExplicitSignal:
+    """#292: get_last_run_status() prefers utils.run_status's explicit,
+    structured signal over the legacy log-tail marker-matching
+    heuristic - see that module's own docstring for the two confirmed
+    failure modes this replaces (an error phrased outside the fixed
+    marker list; movie.py/tv.py sharing one log-filename pattern)."""
+
+    def test_prefers_explicit_success_over_log_content_saying_otherwise(self, tmp_path):
+        """The log content itself would say 'failed' under the legacy
+        heuristic - the explicit signal (what the code itself actually
+        observed) must win regardless."""
+        _write_log(
+            tmp_path,
+            "recommendations_alice_20260101_030000.log",
+            "Traceback (most recent call last):\nValueError\n",
+        )
+        record_run_status(str(tmp_path), "movie", "alice", True)
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "success"
+        assert result["reason"] is None
+
+    def test_prefers_explicit_failure_over_log_content_saying_otherwise(self, tmp_path):
+        """The concrete #292 precedent: a failure phrased in a way the
+        marker list never catches (e.g. "Cannot get lists: not
+        authenticated") must still surface as failed via the explicit
+        signal, and the failure detail itself is now available as
+        `reason` - previously only set for 'unknown', never 'failed'."""
+        _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "Everything looks fine\n")
+        record_run_status(str(tmp_path), "movie", "alice", False, "Cannot get lists: not authenticated")
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "failed"
+        assert result["reason"] == "Cannot get lists: not authenticated"
+
+    def test_compares_movie_and_tv_by_their_own_recorded_timestamp_not_log_mtime(self, tmp_path, monkeypatch):
+        """movie.py and tv.py both write to the identical
+        "recommendations_<user>_*.log" naming - get_last_run_status()
+        must resolve "which engine ran last" from each explicit
+        record's OWN timestamp, never from comparing log file mtimes
+        (which is exactly the ambiguity that let one engine's failure
+        hide behind the other's later, unrelated success)."""
+        import utils.run_status as run_status_mod
+
+        real_now = run_status_mod.datetime
+
+        class _FixedNow(real_now):
+            @classmethod
+            def now(cls, tz=None):
+                return real_now(2026, 1, 1, 3, 0, 0, tzinfo=tz)
+
+        monkeypatch.setattr(run_status_mod, "datetime", _FixedNow)
+        record_run_status(str(tmp_path), "movie", "alice", False, "movie blew up")
+
+        class _LaterNow(real_now):
+            @classmethod
+            def now(cls, tz=None):
+                return real_now(2026, 1, 1, 4, 0, 0, tzinfo=tz)
+
+        monkeypatch.setattr(run_status_mod, "datetime", _LaterNow)
+        record_run_status(str(tmp_path), "tv", "alice", True)
+
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "success"  # tv's record is newer
+
+    def test_falls_back_to_heuristic_when_no_explicit_signal_recorded(self, tmp_path):
+        """An install predating #292 (or a run from before it shipped)
+        has no run_status_*.json at all - must fall back to the legacy
+        log-tail heuristic exactly as before, never regress to
+        'unknown'/'never_run' just because the new signal is absent."""
+        _write_log(
+            tmp_path,
+            "recommendations_alice_20260101_030000.log",
+            "Traceback (most recent call last):\nValueError\n",
+        )
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["status"] == "failed"
+
+    def test_explicit_signal_still_resolves_log_file_for_view_log_link(self, tmp_path):
+        _write_log(tmp_path, "recommendations_alice_20260101_030000.log", "ok\n")
+        record_run_status(str(tmp_path), "movie", "alice", True)
+        result = get_last_run_status(str(tmp_path), "alice")
+        assert result["log_file"] == "recommendations_alice_20260101_030000.log"
+
+
 class TestListLogFiles:
     """Tests for list_log_files()"""
 
@@ -245,6 +331,58 @@ class TestReadLogTail:
         assert content == ""
         assert reason is not None
         assert "empty" in reason.lower()
+
+
+class TestReadLogFull:
+    """#283: the log viewer only ever showed a fixed-size tail with no
+    way to reach the START of a long run - read_log_full() is the
+    unbounded (up to LOG_VIEW_MAX_BYTES) alternative."""
+
+    def test_reads_entire_file_not_just_last_max_lines(self, tmp_path):
+        content = "\n".join(f"line{i}" for i in range(1000))
+        _write_log(tmp_path, "a.log", content)
+        result, reason, truncated = read_log_full(str(tmp_path), "a.log")
+        assert result.splitlines()[0] == "line0"
+        assert result.splitlines()[-1] == "line999"
+        assert reason is None
+        assert truncated is False
+
+    def test_truncated_true_when_file_exceeds_max_bytes(self, tmp_path):
+        _write_log(tmp_path, "a.log", "x" * 1000)
+        result, _reason, truncated = read_log_full(str(tmp_path), "a.log", max_bytes=100)
+        assert truncated is True
+        assert len(result) <= 100
+
+    def test_not_truncated_when_file_is_under_max_bytes(self, tmp_path):
+        _write_log(tmp_path, "a.log", "small\n")
+        _result, _reason, truncated = read_log_full(str(tmp_path), "a.log", max_bytes=LOG_VIEW_MAX_BYTES)
+        assert truncated is False
+
+    def test_raises_for_missing_file(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_log_full(str(tmp_path), "missing.log")
+
+    def test_raises_for_path_traversal(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_log_full(str(tmp_path), "../secret.log")
+
+    def test_rejects_non_log_extension(self, tmp_path):
+        (tmp_path / "config.yml").write_text("plex:\n  token: secret\n", encoding="utf-8")
+        with pytest.raises(FileNotFoundError):
+            read_log_full(str(tmp_path), "config.yml")
+
+    def test_redacts_secrets(self, tmp_path):
+        _write_log(tmp_path, "a.log", "token=abcdef123456\n")
+        content, _reason, _truncated = read_log_full(str(tmp_path), "a.log")
+        assert "abcdef123456" not in content
+
+    def test_empty_log_returns_reason(self, tmp_path):
+        _write_log(tmp_path, "a.log", "")
+        content, reason, truncated = read_log_full(str(tmp_path), "a.log")
+        assert content == ""
+        assert reason is not None
+        assert "empty" in reason.lower()
+        assert truncated is False
 
 
 class TestDisplayNameSafeSlug:
