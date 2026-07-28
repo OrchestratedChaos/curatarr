@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import Dict
 
 from .config import MAX_LOG_FILE_BYTES
-from .display import log_info, log_warning
+from .display import RESET, YELLOW, log_info, log_warning
 
 
 def get_code_root() -> str:
@@ -112,6 +112,21 @@ def migrate_legacy_cache_dir(legacy_dir: str, new_dir: str) -> None:
     recommenders/base.py's cache_dir setup) to the get_project_root()-
     resolved location.
 
+    legacy_dir is ALWAYS the real, on-disk source checkout's own cache/
+    directory - it's derived from __file__, never from config or
+    CURATARR_CONFIG_DIR. This function runs unconditionally on every
+    BaseRecommender construction (every recommender run), so ANY process
+    that sets CURATARR_CONFIG_DIR to a directory that doesn't already
+    have these cache files reaches here - not just a genuine one-time
+    upgrade. Confirmed: this previously used shutil.move(), and a
+    process pointed at a temporary/later-removed destination (a scratch
+    dir, a test harness, a misconfigured CURATARR_CONFIG_DIR) silently
+    relocated - not copied - a real install's cache files there with no
+    warning; deleting that destination afterward destroyed real user
+    data with nothing left to recover. COPIES instead now, specifically
+    to make that no longer possible: the source repo's cache/ is never
+    touched, regardless of what happens to the destination.
+
     In practice only reachable for a source install run with
     CURATARR_CONFIG_DIR set, where the two locations genuinely differ
     and the old one may still have files on disk:
@@ -126,11 +141,24 @@ def migrate_legacy_cache_dir(legacy_dir: str, new_dir: str) -> None:
     Callers don't need to special-case any of the above; legacy_dir
     equal to (or empty/missing at) new_dir all just no-op below.
 
-    Only moves files that don't already exist at the new location -
+    Only copies files that don't already exist at the new location -
     never overwrites/clobbers a cache the new location already has.
+    This existing per-file check is also what keeps a copy-based
+    migration from repeating itself forever: once a file has been
+    copied once, it exists at new_path, so every subsequent run's
+    os.path.exists(new_path) check skips it - no separate completion
+    marker needed, and (since the source is never deleted) nothing
+    about that check can ever regress into a delete.
+
     Never raises: any failure is logged as a warning and the run
     continues with whatever ended up on disk - worst case, an
     unmigrated cache simply regenerates rather than blocking a run.
+
+    Logs loudly (both print() and log_warning(), not the log_info() this
+    used before) whenever it actually copies anything - silent
+    relocation of a user's data was the core defect this fixes, so
+    finding out it happened must not depend on log level configuration
+    or on scrolling back through a log file.
     """
     try:
         if not os.path.isdir(legacy_dir):
@@ -138,7 +166,7 @@ def migrate_legacy_cache_dir(legacy_dir: str, new_dir: str) -> None:
         if os.path.realpath(legacy_dir) == os.path.realpath(new_dir):
             return
 
-        moved = []
+        copied = []
         for filename in os.listdir(legacy_dir):
             legacy_path = os.path.join(legacy_dir, filename)
             if not os.path.isfile(legacy_path):
@@ -146,17 +174,23 @@ def migrate_legacy_cache_dir(legacy_dir: str, new_dir: str) -> None:
             new_path = os.path.join(new_dir, filename)
             if os.path.exists(new_path):
                 # New location already has this cache - don't clobber it,
-                # just leave the stale legacy copy where it is.
+                # just leave the (also untouched) legacy copy where it is.
                 continue
             os.makedirs(new_dir, exist_ok=True)
-            shutil.move(legacy_path, new_path)
-            moved.append(filename)
+            # copy2 (not move/copy): preserves mtime/permissions, and -
+            # the entire point of this fix - leaves legacy_path in place.
+            # The real repo's cache/ is never modified by this function.
+            shutil.copy2(legacy_path, new_path)
+            copied.append(filename)
 
-        if moved:
-            log_info(
-                f"Migrated {len(moved)} cache file(s) from legacy location "
-                f"{legacy_dir} to {new_dir}: {', '.join(sorted(moved))}"
+        if copied:
+            message = (
+                f"Copied {len(copied)} cache file(s) from the legacy location "
+                f"{legacy_dir} to {new_dir} (originals left in place, unmodified): "
+                f"{', '.join(sorted(copied))}"
             )
+            print(f"{YELLOW}{message}{RESET}")
+            log_warning(message)
     except Exception as e:
         log_warning(f"Cache directory migration from {legacy_dir} skipped due to error: {e}")
 
