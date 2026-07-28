@@ -29,6 +29,7 @@ sys.exit() behavior above stays safe.
 import logging
 import os
 import queue
+import re
 import shlex
 import signal
 import subprocess
@@ -45,6 +46,15 @@ from .security import redact
 logger = logging.getLogger("curatarr")
 
 ENGINES = ("full", "movie", "tv", "external")
+
+# Prefix for the per-stage result lines the Docker `full` engine's
+# generated bash script (_build_docker_full_script) writes to stdout -
+# "__CURATARR_STAGE__:<stage>:<returncode-or-skipped>" - so _pump() can
+# tell a stage that never ran apart from one that ran and failed,
+# something the raw log/output alone doesn't otherwise convey (#282/
+# #288 - see _build_docker_full_script's docstring).
+STAGE_MARKER_PREFIX = "__CURATARR_STAGE__"
+_STAGE_MARKER_RE = re.compile(re.escape(STAGE_MARKER_PREFIX) + r":(\w+):(\S+)$")
 
 # Sentinel pushed onto subscriber queues when a job finishes, so SSE
 # consumers know to stop waiting for more output.
@@ -125,6 +135,61 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _build_docker_full_script(py: str, movie_script: str, tv_script: str, external_script: str) -> str:
+    """Build the `bash -c` script body for the Docker `full` engine:
+    movie -> tv -> external, explicitly gated and labeled (#282/#288 -
+    see the call site in _build_command's own comment for the full
+    history this replaces).
+
+    Semantics (deliberately identical to the pre-existing `&&` chain,
+    and to docker-entrypoint.sh's own `recommend full` under `set -e` -
+    both verified in a real container, not just read): if movie exits
+    non-zero, tv and external never run at all; if tv exits non-zero,
+    external never runs. Either way the script's own exit code is that
+    failing stage's returncode, so Job.state ("succeeded"/"failed") is
+    unchanged from today. What's added is purely observability: an
+    "=== X ===" banner per stage (matching docker-entrypoint.sh's own
+    convention) - including an explicit "(skipped: ... failed)" banner
+    for whichever stage(s) never ran, so the raw log itself says why,
+    not just silence - plus an f"{STAGE_MARKER_PREFIX}:<stage>:<result>"
+    line per stage (result is the stage's returncode, or the literal
+    "skipped") that _pump() parses into Job.stage_results.
+
+    py/movie_script/tv_script/external_script are all already
+    shlex.quote()'d by the caller - kept as plain str params (not
+    re-quoted here) so a test can assert on the exact paths/executable
+    it passed in.
+    """
+    return (
+        "set +e\n"
+        "echo '=== Movie recommendations ==='\n"
+        f"{py} {movie_script}\n"
+        "MOVIE_RC=$?\n"
+        f'echo "{STAGE_MARKER_PREFIX}:movie:$MOVIE_RC"\n'
+        'if [ "$MOVIE_RC" -ne 0 ]; then\n'
+        "  echo '=== TV recommendations === (skipped: movie recommendations failed)'\n"
+        f"  echo '{STAGE_MARKER_PREFIX}:tv:skipped'\n"
+        "  echo '=== External watchlists === (skipped: movie recommendations failed)'\n"
+        f"  echo '{STAGE_MARKER_PREFIX}:external:skipped'\n"
+        '  exit "$MOVIE_RC"\n'
+        "fi\n"
+        "echo '=== TV recommendations ==='\n"
+        f"{py} {tv_script}\n"
+        "TV_RC=$?\n"
+        f'echo "{STAGE_MARKER_PREFIX}:tv:$TV_RC"\n'
+        'if [ "$TV_RC" -ne 0 ]; then\n'
+        "  echo '=== External watchlists === (skipped: TV recommendations failed)'\n"
+        f"  echo '{STAGE_MARKER_PREFIX}:external:skipped'\n"
+        '  exit "$TV_RC"\n'
+        "fi\n"
+        "echo '=== External watchlists ==='\n"
+        f"{py} {external_script}\n"
+        "EXT_RC=$?\n"
+        f'echo "{STAGE_MARKER_PREFIX}:external:$EXT_RC"\n'
+        'exit "$EXT_RC"\n'
+    )
+
+
 class Job:
     """State for a single triggered run. Construct via JobManager.start()."""
 
@@ -147,6 +212,25 @@ class Job:
         self.lines: List[str] = []
         self._subscribers: List["queue.Queue"] = []
 
+        # Per-stage breakdown for the Docker `full` engine (#282/#288) -
+        # {"movie": "0", "tv": "1", "external": "skipped"}, in
+        # completion order, populated as STAGE_MARKER_PREFIX lines are
+        # read (see _pump()). Empty for every other engine/branch
+        # (single-engine runs, frozen's --run-recommender full, the
+        # non-Docker run.sh/run.ps1 path) - none of those emit stage
+        # markers, so there is nothing finer-grained than `state` to
+        # show for them.
+        self.stage_results: "Dict[str, str]" = {}
+        # Set (only ever to False) once _pump() confirms a `full`/
+        # `external` run's external stage exited 0 but wrote no new
+        # file under recommendations/external/ - the exact "succeeded,
+        # but produced nothing" shape #288 reported. None means this
+        # engine/run doesn't apply (external stage skipped, failed, or
+        # never part of this run) - deliberately distinct from True so
+        # a caller can tell "checked and fine" apart from "not
+        # applicable" instead of collapsing both into one boolean.
+        self.external_produced_output: Optional[bool] = None
+
     @property
     def state(self) -> str:
         if self.returncode is None:
@@ -158,6 +242,19 @@ class Job:
             self.lines.append(line)
             for q in self._subscribers:
                 _safe_queue_put(q, line)
+        # Stage markers (see STAGE_MARKER_PREFIX/_STAGE_MARKER_RE) are
+        # plain stdout lines from the recommender's point of view -
+        # they still go through the redact()/log-file/subscriber path
+        # above like any other line - this just additionally captures
+        # them structurally. Checked on every line (cheap: one regex
+        # match against an already-redacted, already-short line) rather
+        # than only for engine == "full", so a future engine reusing
+        # this marker format doesn't need a second call site.
+        match = _STAGE_MARKER_RE.search(line)
+        if match:
+            stage, result = match.group(1), match.group(2)
+            with self._data_lock:
+                self.stage_results[stage] = result
 
     def _finish(self, returncode: int) -> None:
         with self._data_lock:
@@ -197,6 +294,14 @@ class Job:
             "finished_at": self.finished_at,
             "returncode": self.returncode,
             "log_file": os.path.basename(self.log_path),
+            # See stage_results/external_produced_output's own
+            # docstrings above (#282/#288) - both default to "nothing
+            # to report" values ({} / None) for every engine/branch
+            # that doesn't populate them, so existing consumers of
+            # to_dict() that don't know about these two new keys are
+            # unaffected.
+            "stage_results": dict(self.stage_results),
+            "external_produced_output": self.external_produced_output,
         }
 
 
@@ -409,6 +514,30 @@ class JobManager:
                 # movie -> tv -> external order directly, same as
                 # frozen's own `--run-recommender full` (see
                 # curatarr_app.py) bypassing run.sh/run.ps1 entirely.
+                # #282/#288: a bare `cmd1 && cmd2 && cmd3` ran every
+                # stage fine whenever each one exited 0 (verified in a
+                # real container against the real recommenders), and
+                # correctly stopped at whichever stage failed - `&&`
+                # short-circuiting there matches docker-entrypoint.sh's
+                # own `recommend full` under `set -e` (also verified in
+                # a real container: it does NOT run every stage
+                # unconditionally either). What was actually missing
+                # was any indication, anywhere the web UI could see, of
+                # *which* stage a failure stopped at - a movie failure
+                # correctly skipping tv/external looked, from /run and
+                # /run/status, identical to tv/external having been
+                # silently dropped for no reason: no stage banners in
+                # the log (docker-entrypoint.sh at least has its own
+                # echo lines) and nothing in Job.to_dict() beyond one
+                # overall state/returncode.
+                # _build_docker_full_script keeps the exact same
+                # fail-fast semantics (never a fourth variant of "what
+                # does `full` mean" alongside run.sh/docker-
+                # entrypoint.sh/the frozen dispatcher's
+                # --run-recommender full) but adds explicit "=== X ==="
+                # banners plus a machine-readable
+                # f"{STAGE_MARKER_PREFIX}:<stage>:<rc-or-skipped>" line
+                # per stage that _pump() parses into Job.stage_results.
                 movie_script = os.path.join(code_root, "recommenders", "movie.py")
                 tv_script = os.path.join(code_root, "recommenders", "tv.py")
                 external_script = os.path.join(code_root, "recommenders", "external.py")
@@ -416,9 +545,9 @@ class JobManager:
                 cmd = [
                     "bash",
                     "-c",
-                    f"{py} {shlex.quote(movie_script)} && "
-                    f"{py} {shlex.quote(tv_script)} && "
-                    f"{py} {shlex.quote(external_script)}",
+                    _build_docker_full_script(
+                        py, shlex.quote(movie_script), shlex.quote(tv_script), shlex.quote(external_script)
+                    ),
                 ]
             elif os.name == "nt":
                 cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", os.path.join(code_root, "run.ps1")]
@@ -509,7 +638,47 @@ class JobManager:
             self._remove_lock()
             if job._run_lock is not None:
                 job._run_lock.release()
+            self._check_external_output(job)
             job._finish(returncode if returncode is not None else -1)
+
+    def _check_external_output(self, job: Job) -> None:
+        """#288: external.py can catch a per-user exception internally
+        and still exit 0 having written nothing new - "succeeded" with
+        no output is exactly the confusing shape that issue reported
+        (confirmed directly: a real container run hit an unrelated
+        per-user error, external.py logged it and moved on, and still
+        printed its own "Watchlists saved to: ..." success line).
+
+        Sets job.external_produced_output to False when the external
+        stage ran (engine == "external", or engine == "full" with
+        stage_results showing it wasn't skipped/failed - see
+        STAGE_MARKER_PREFIX) and exited 0 but recommendations/external/
+        has no file newer than the job's own start time; True when it
+        does. Left at its default None ("not applicable") for every
+        other case - a failed or skipped external stage already has its
+        own, more specific signal (returncode/stage_results), and a
+        second, contradictory "no output" flag on top of that would
+        only be confusing. Deliberately does NOT know about
+        tuning.yml's external_recommendations.enabled (a deliberately-
+        disabled stage legitimately produces no *new* file either) -
+        that's a display-layer concern for whatever renders this
+        alongside the current config, not this subprocess-result data.
+        """
+        if job.engine == "full":
+            if job.stage_results.get("external") != "0":
+                return  # failed, skipped, or never reached a marker at all
+        elif job.engine != "external" or job.returncode != 0:
+            return
+
+        external_dir = os.path.join(self.project_root, "recommendations", "external")
+        cutoff = job.started_at.timestamp()
+        try:
+            produced = any(
+                os.path.getmtime(os.path.join(external_dir, name)) >= cutoff for name in os.listdir(external_dir)
+            )
+        except OSError:
+            produced = False
+        job.external_produced_output = produced
 
     def terminate_running(self) -> None:
         """Best-effort: terminate the in-flight subprocess (and its

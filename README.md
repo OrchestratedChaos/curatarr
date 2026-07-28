@@ -890,6 +890,14 @@ Inspired by [netplexflix's](https://github.com/netplexflix) Movie/TV Recommendat
 
 ---
 
+## Support
+
+Curatarr is free and will stay free - no premium tier, no paywalled
+features, ever. If you'd like to support development, you can do so via
+[Ko-fi](https://ko-fi.com/orchestratedchaos). It's entirely optional and
+buys nothing - no priority support, no feature influence, no say over the
+roadmap. Just a way to say thanks if you feel like it.
+
 ## License
 
 MIT License. Use it, fork it, make it yours.

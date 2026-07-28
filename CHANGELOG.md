@@ -2,7 +2,7 @@
 
 All notable changes to Curatarr will be documented in this file.
 
-## [2.10.64] - 2026-07-27
+## [2.10.66] - 2026-07-27
 
 ### Fixed
 
@@ -13,6 +13,24 @@ All notable changes to Curatarr will be documented in this file.
   **Verified against the real, live Plex library** (read-only: only real Plex history/library-listing calls, no writes, no Trakt calls): `_build_profile_via_recommender()` is only ever reached as a fallback when no watched cache exists yet for a user/media type - already true for every one of this install's 6 real configured users, so there's no meaningful before/after to observe in normal use. Instead verified the function's previously-broken core behavior directly: two different real users (`ericarutyunov`, `homehouse165`) now get genuinely different profiles - 27 and 15 `tmdb_ids` respectively, exactly matching each user's own real watched-movie count already independently established in #273 PR1's verification (`ericarutyunov`: 27, `homehouse165`: 15) - both `Counter`-typed and both correctly under a `"keywords"` key, not `"tmdb_keywords"`.
 
   While verifying, found (but did not fix - out of this PR's scope) a pre-existing, unrelated test-isolation gap: `recommenders/external_sync.py` resolves its own cache directory via a `get_project_root()` binding conftest.py's `_isolated_recommender_cache_dir` autouse fixture doesn't patch (it only patches `recommenders.base`'s and `recommenders.external`'s own bindings), so any test exercising its Trakt-export-status recording writes a real (small, harmless) `cache/integration_status_trakt_export.json` into the actual repo instead of an isolated tmp dir.
+
+## [2.10.65] - 2026-07-27
+
+### Added
+
+- **GitHub Sponsor button (`.github/FUNDING.yml`) with a Ko-fi entry, plus a short "Support" note in the README.** Ko-fi only for now (other platforms undecided). Donations don't buy features, priority support, or roadmap influence - the README says so explicitly.
+
+## [2.10.64] - 2026-07-27
+
+### Fixed
+
+- **Docker `full` run (#282): TV/external recommendations never ran, with zero indication why.** The web UI's `full` engine, in Docker, chains `movie.py -> tv.py -> external.py` in one `bash -c "cmd1 && cmd2 && cmd3"` invocation (`web/job_runner.py`, since v2.10.56/#277). Verified in a real container against the real production recommenders: that chain already ran every stage correctly whenever each one exited 0, and correctly stopped at whichever stage failed - the same fail-fast behavior `docker-entrypoint.sh`'s own `recommend full` has under `set -e` (also independently verified in a real container: it does not run every stage unconditionally either). The actual defect was that a stage being skipped because an earlier one failed was completely silent - no banner in the log (unlike `docker-entrypoint.sh`'s own `=== X ===` lines) and nothing in `Job.to_dict()` beyond one overall `state`/`returncode` - so a movie failure correctly skipping tv/external was indistinguishable, from `/run` and `/run/status`, from tv/external having been dropped for no reason at all.
+
+  Replaced the bare `&&` chain with an explicit, per-stage script (`_build_docker_full_script`) that keeps the exact same semantics (movie failing stops tv and external; tv failing stops external; the script's own exit code is whichever stage failed) but adds an `=== X ===` banner per stage - including an explicit `(skipped: ... failed)` banner for whichever stage(s) never ran - plus a machine-readable `__CURATARR_STAGE__:<stage>:<returncode-or-skipped>` marker line that `_pump()` parses into a new `Job.stage_results` dict, now exposed via `/run/status`/`/status.json` and rendered on the Run page as a per-stage breakdown.
+
+- **`/results` and `/run` never distinguished "succeeded" from "succeeded but produced nothing" (#288).** Confirmed directly in a real container: `recommenders/external.py` can catch a per-user exception internally, log it, and still print its own "Watchlists saved to: ..." success line having written nothing new - exit code 0, `state: succeeded`, and `/results` showing the same generic "No watchlists generated yet" it shows before anyone has ever run anything at all. Added `Job.external_produced_output` (`JobManager._check_external_output`): after a `full`/`external` run whose external stage exited 0, checks whether `recommendations/external/` actually gained a file newer than the run's own start time. `/results` and `/run` now show a specific message distinguishing three cases instead of one generic one: external skipped because an earlier stage failed, external itself failed, or external "succeeded" but wrote nothing - each pointing at the run log. Deliberately does not second-guess `external_recommendations.enabled: false` (tuning.yml, #271) as a cause - a deliberately disabled stage legitimately produces no new file, which is not a bug.
+
+  New regression coverage in `tests/test_web_job_runner.py`: the full chain invokes all three stages and records `stage_results` when everything succeeds; a movie failure stops tv/external with `stage_results` showing `skipped`; a tv failure stops external the same way; `external_produced_output` is `True`/`False`/`None` (not applicable) in the write/no-write/failed cases respectively.
 
 ## [2.10.63] - 2026-07-27
 
