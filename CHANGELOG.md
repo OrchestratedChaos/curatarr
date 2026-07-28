@@ -2,6 +2,24 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.71] - 2026-07-27
+
+### Fixed
+
+- **`migrate_legacy_cache_dir()` could silently destroy a user's real cache - confirmed data loss, not theoretical.** `recommenders/base.py`'s `BaseRecommender.__init__` unconditionally calls this on every recommender construction. Its `legacy_dir` argument is ALWAYS the real source checkout's own `cache/` directory (computed from `__file__`, never from config or `CURATARR_CONFIG_DIR`), while the destination honors `CURATARR_CONFIG_DIR`. It used `shutil.move()` - any process that set `CURATARR_CONFIG_DIR` to a directory not already holding these cache files (a scratch dir, a test harness, someone experimenting, a misconfigured environment) silently *relocated* - not copied - the real install's cache files there, with only a `log_info()` line (easy to miss, and gated behind whatever logging level happened to be configured) marking it. Deleting that destination afterward destroyed the data permanently, with no backup.
+
+  Now **copies** (`shutil.copy2`, preserving mtime/permissions) instead of moving - the source checkout's `cache/` is never modified by this function, period, regardless of what later happens to the destination. The pre-existing per-file `if os.path.exists(new_path): continue` check (already there to avoid clobbering a destination file) is also what keeps a copy-based migration from repeating itself forever: once copied, a file exists at the destination, so every later call skips it - no separate completion marker needed, and since the source is never deleted, nothing about that check can regress into a delete.
+
+  **Made loud**: switched from `log_info()` to `log_warning()` (visible by default, colored) AND added a direct `print()` - a silent relocation was the core defect, so visibility can't depend on log-level configuration or scrolling back through a log file. The message states exactly what was copied, from where, to where, and how many files.
+
+  Did **not** restructure `BaseRecommender.__init__` to move this out of the constructor in this PR (flagged, not fixed - a constructor mutating the filesystem as a side effect is a separately surprising design worth revisiting, but a bigger change than a copy-not-move data-loss fix should also carry).
+
+  Audited other file-removal/rename call sites in `utils/user_migration.py` (renamed-user cache migration) and `utils/cache_prune.py` (orphaned-cache cleanup) for the same class of bug (a source path resolved one way, a destination resolved a genuinely different way) - neither exhibits it: both operate entirely within one already-consistently-resolved `cache_dir`, never across two independently-resolved directories, and `cache_prune`'s deletion is additionally gated behind an explicit `dry_run: false` opt-in (default `true`).
+
+  **Verified in a real container** (synthetic cache files only - never touched the real repo's own `cache/`, per this fix's own lesson): planted two cache files at the real legacy path (`/app/cache` inside the image), ran the migration against a scratch destination, confirmed both the source and destination held the files afterward, then deleted the scratch destination entirely - the legacy source files remained fully intact with their original content, exactly reproducing (safely) the scenario that previously caused permanent data loss.
+
+  New/updated regression coverage in `tests/test_helpers.py::TestMigrateLegacyCacheDir`: the core assertion (source files still exist after migration, regardless of the destination); idempotency (a second call never re-copies over or clobbers a destination file a real run has since updated); loud logging (both the `log_warning()` message and the direct `print()` mention the filenames and both paths); a copy failure still can't touch the source.
+
 ## [2.10.70] - 2026-07-27
 
 ### Fixed

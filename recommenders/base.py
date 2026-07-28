@@ -524,6 +524,17 @@ class BaseRecommender(ABC):
         legacy_cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
         self.cache_dir = os.path.join(get_project_root(), self.config.get("cache_dir", "cache"))
         os.makedirs(self.cache_dir, exist_ok=True)
+        # #291 (data-loss fix): migrate_legacy_cache_dir() now COPIES,
+        # never moves - see its own docstring for the real incident
+        # that changed this. Runs unconditionally on every construction
+        # of every recommender (a constructor mutating the filesystem
+        # as a side effect is itself a surprising design, flagged but
+        # not restructured out of __init__ in that same fix - a
+        # one-time explicit startup step would be a cleaner home for
+        # it, but that's a bigger change than a copy-not-move fix
+        # should also carry) - safe to call every time regardless,
+        # since its own per-file "already exists at destination" check
+        # makes every call after the first a no-op.
         migrate_legacy_cache_dir(legacy_cache_dir, self.cache_dir)
 
         # Load display options

@@ -554,11 +554,19 @@ class TestGetProjectRoot:
 
 class TestMigrateLegacyCacheDir:
     """Tests for migrate_legacy_cache_dir() - the best-effort, one-time
-    move of cache files from the pre-2.10.3 __file__-relative cache
-    directory to the get_project_root()-resolved one (see
-    recommenders/base.py's cache_dir setup)."""
+    COPY (never a move - see the function's own docstring for the real
+    data-loss incident this fixes) of cache files from the pre-2.10.3
+    __file__-relative cache directory to the get_project_root()-
+    resolved one (see recommenders/base.py's cache_dir setup)."""
 
-    def test_moves_files_to_new_location(self, tmp_path):
+    def test_copies_files_to_new_location_leaving_originals_in_place(self, tmp_path):
+        """The core regression test: legacy_dir (always the real source
+        checkout's own cache/ in production - see the function's
+        docstring) must still have every file afterward, regardless of
+        what happens to new_dir - this was a shutil.move() before,
+        which silently relocated (not copied) real user data whenever
+        new_dir pointed somewhere temporary, and destroyed it the
+        moment that destination was later removed."""
         legacy_dir = tmp_path / "legacy" / "cache"
         new_dir = tmp_path / "new" / "cache"
         legacy_dir.mkdir(parents=True)
@@ -567,10 +575,35 @@ class TestMigrateLegacyCacheDir:
 
         migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
 
-        assert not (legacy_dir / "all_movies_cache.json").exists()
-        assert not (legacy_dir / "watched_cache_plex_admin.json").exists()
+        # The whole point of this fix: the source is NEVER touched.
+        assert (legacy_dir / "all_movies_cache.json").read_text() == '{"movies": {}}'
+        assert (legacy_dir / "watched_cache_plex_admin.json").exists()
+        # And the destination gets a real copy, not just a reference.
         assert (new_dir / "all_movies_cache.json").read_text() == '{"movies": {}}'
         assert (new_dir / "watched_cache_plex_admin.json").exists()
+
+    def test_second_call_does_not_recopy_once_destination_exists(self, tmp_path):
+        """#291 (data-loss fix): the per-file os.path.exists(new_path)
+        check that already prevents clobbering an existing destination
+        file is also what keeps this from "migrating" forever once a
+        copy has genuinely happened once - no separate completion
+        marker needed, and since the source is never deleted, nothing
+        about this check can regress into losing data on a later run."""
+        legacy_dir = tmp_path / "legacy"
+        new_dir = tmp_path / "new"
+        legacy_dir.mkdir()
+        (legacy_dir / "all_movies_cache.json").write_text('"original"')
+
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+        # Simulate the destination file having since been updated by a
+        # real run (e.g. a fresh cache rebuild) - a second migration
+        # pass must never overwrite that with the stale legacy copy.
+        (new_dir / "all_movies_cache.json").write_text('"updated by a real run"')
+
+        migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
+
+        assert (new_dir / "all_movies_cache.json").read_text() == '"updated by a real run"'
+        assert (legacy_dir / "all_movies_cache.json").read_text() == '"original"'
 
     def test_does_not_overwrite_existing_file_at_new_location(self, tmp_path):
         legacy_dir = tmp_path / "legacy"
@@ -623,21 +656,30 @@ class TestMigrateLegacyCacheDir:
         assert (legacy_dir / "subdir" / "nested.json").exists()
 
     @patch("utils.helpers.log_warning")
-    @patch("utils.helpers.shutil.move")
-    def test_move_failure_logs_warning_and_does_not_raise(self, mock_move, mock_warn, tmp_path):
+    @patch("utils.helpers.shutil.copy2")
+    def test_copy_failure_logs_warning_and_does_not_raise(self, mock_copy, mock_warn, tmp_path):
         legacy_dir = tmp_path / "legacy"
         new_dir = tmp_path / "new"
         legacy_dir.mkdir()
         (legacy_dir / "all_movies_cache.json").write_text('"data"')
-        mock_move.side_effect = OSError("simulated move failure")
+        mock_copy.side_effect = OSError("simulated copy failure")
 
         # Must not raise.
         migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
 
         mock_warn.assert_called_once()
+        # And, since copy2 itself is mocked out to fail, the real
+        # filesystem call that would remove the source never happens
+        # either way - but assert it explicitly since that's the whole
+        # point: a failure here must never touch the source file.
+        assert (legacy_dir / "all_movies_cache.json").read_text() == '"data"'
 
-    @patch("utils.helpers.log_info")
-    def test_logs_migrated_filenames_at_info(self, mock_info, tmp_path):
+    @patch("utils.helpers.log_warning")
+    def test_logs_migrated_filenames_loudly(self, mock_warn, tmp_path, capsys):
+        """#291 (data-loss fix): must log at a visible level (log_warning,
+        not the log_info this used before) AND print directly, so this
+        is never silent regardless of logging configuration - silent
+        relocation of a user's data was the core defect."""
         legacy_dir = tmp_path / "legacy"
         new_dir = tmp_path / "new"
         legacy_dir.mkdir()
@@ -645,8 +687,14 @@ class TestMigrateLegacyCacheDir:
 
         migrate_legacy_cache_dir(str(legacy_dir), str(new_dir))
 
-        mock_info.assert_called_once()
-        assert "all_movies_cache.json" in mock_info.call_args[0][0]
+        mock_warn.assert_called_once()
+        warn_message = mock_warn.call_args[0][0]
+        assert "all_movies_cache.json" in warn_message
+        assert str(legacy_dir) in warn_message
+        assert str(new_dir) in warn_message
+
+        printed = capsys.readouterr().out
+        assert "all_movies_cache.json" in printed
 
 
 class TestNoWindowKwargs:
