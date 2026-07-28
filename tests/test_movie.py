@@ -558,9 +558,7 @@ class TestProcessRecommendationsLibraryParam:
     @patch("recommenders.movie.PlexMovieRecommender")
     @patch("recommenders.movie.teardown_log_file")
     @patch("recommenders.movie.setup_log_file")
-    def test_defaults_library_to_none(
-        self, mock_setup_log, mock_teardown, mock_recommender_cls, mock_record_status
-    ):
+    def test_defaults_library_to_none(self, mock_setup_log, mock_teardown, mock_recommender_cls, mock_record_status):
         """process_recommendations defaults library=None (legacy callers)."""
         mock_instance = Mock()
         mock_instance.get_recommendations.return_value = {"plex_recommendations": []}
