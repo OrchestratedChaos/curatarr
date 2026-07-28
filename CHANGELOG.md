@@ -2,7 +2,21 @@
 
 All notable changes to Curatarr will be documented in this file.
 
-## [2.10.60] - 2026-07-27
+## [2.10.61] - 2026-07-27
+
+### Added
+
+- **Profile-builder harness (#273 PR0) - hard gate before any of #273's production-code fixes.** Issue #273 found FOUR divergent user-profile builders - recommenders/movie.py's `_get_plex_watched_data()`, recommenders/tv.py's `_get_plex_watched_shows_data()`, recommenders/base.py's `_get_managed_users_watched_data()`, and recommenders/external.py's `build_user_profile()`/`load_user_profile_from_cache()` - three with verified production bugs. None of that sequence's downstream PRs are verifiable without a harness that can actually catch those bugs first.
+
+  `tests/e2e_plex_fixture.py`'s existing catalog **could not** catch any of them as shipped: it emits watch-history XML with no `userRating` (faithfully reproducing the real Plex `/status/sessions/history/all` endpoint, which never carries it either), and its `FakeMediaItem` had no `userRating` attribute at all, no per-user `viewCount` variation, and no `switchUser()`/per-user-token support. Extended it with `MOVIE_PER_USER_LIBRARY_STATE`/`SHOW_PER_USER_LIBRARY_STATE` (two users, alice and bob, with genuinely different nonzero `view_count`/`user_rating` values on items they've each actually watched), `FakePlexServer.switchUser()`, `FakeMyPlexAccount.user()`, `build_fake_plex_server_for_user()`, and `FakeSection.search(unwatched=...)` support (for `base.py`'s managed-users path) - without this, a harness built on the fixture as it shipped would have pinned the bugs as correct behavior, not caught them.
+
+  `tests/harness.py` (previously scoring-only) gained `run_profile_builders()`, driving all four builders directly against that extended fixture and snapshotting every counter key, magnitude (as `float.hex()` - exact bit pattern, same non-associativity reasoning the existing scoring harness already uses), sign, and populated-vs-empty dimension into a committed golden fixture (`tests/fixtures/profile_builder_harness/profile_builder_snapshot.json`, written via `python -m tests.harness --profile-builders --write`). `tests/test_profile_builder_harness.py` pins the live snapshot against that golden fixture, and separately proves the harness can tell buggy from fixed behavior (not just freeze whatever it happens to see today) with four direct assertions on the verified bugs:
+  - Movie ratings are never negative today (Plex history never carries `userRating`, and `movie.py` only reads it off history items).
+  - Both `movie.py`'s and `tv.py`'s own per-user builders show zero rewatch/rating signal for either fixture user today, despite the fixture giving them genuinely different watch state - both read that state through the one shared ADMIN-token library snapshot, not their own.
+  - `base.py`'s managed-users builder weights every watched item exactly 1.0 (no `weight` argument reaches `process_counters_from_cache()` at all).
+  - `external.py`'s `build_user_profile()` produces byte-identical output for two different usernames - the username parameter has zero effect on what gets scanned.
+
+  A future #273 PR that intentionally changes one of the four builders regenerates the golden fixture and explains the diff in that PR's description, per the same convention `tests/golden_external_harness.py` already established for `recommenders/external_render.py`. No production code changed in this PR - tests and fixtures only.
 
 ### Fixed
 
