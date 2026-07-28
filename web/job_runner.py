@@ -270,8 +270,30 @@ class Job:
         a browser tab that connects mid-run still sees the backlog
         before live lines start arriving.
         """
-        q: "queue.Queue" = queue.Queue(maxsize=SUBSCRIBER_QUEUE_MAXSIZE)
+        return self.try_subscribe(None)  # type: ignore[return-value]
+
+    def try_subscribe(self, max_subscribers: Optional[int]) -> Optional["queue.Queue"]:
+        """Like subscribe(), but returns None instead of registering a
+        new live subscriber if this job is still running AND already
+        has max_subscribers watching it (#287 - see
+        MAX_STREAM_SUBSCRIBERS_PER_JOB in web/app.py). max_subscribers
+        of None means no cap (this is what subscribe() itself calls
+        through to), so existing callers/tests are unaffected.
+
+        The cap only ever applies while running: a finished job's
+        subscribe() always succeeds regardless, since it replays the
+        backlog and immediately queues DONE_SENTINEL below rather than
+        registering a live subscriber that would occupy a thread for
+        any meaningful length of time - confirmed in a real container,
+        this path was never the actual thread-exhaustion mechanism
+        (that was many genuinely-still-watching subscribers of one
+        still-RUNNING job - see MAX_STREAM_SUBSCRIBERS_PER_JOB/
+        MAX_STREAM_SECONDS's own comments).
+        """
         with self._data_lock:
+            if self.returncode is None and max_subscribers is not None and len(self._subscribers) >= max_subscribers:
+                return None
+            q: "queue.Queue" = queue.Queue(maxsize=SUBSCRIBER_QUEUE_MAXSIZE)
             for line in self.lines:
                 _safe_queue_put(q, line)
             if self.returncode is not None:

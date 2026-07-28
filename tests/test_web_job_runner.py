@@ -497,6 +497,54 @@ class TestJobSubscribe:
         assert last == f"line {job_runner_mod.SUBSCRIBER_QUEUE_MAXSIZE + 499}"
 
 
+class TestJobTrySubscribe:
+    """#287: Job.try_subscribe() - the concurrent-viewer cap
+    web/app.py's run_stream() uses to bound how many threads one
+    still-running job's SSE viewers can pin at once."""
+
+    def test_subscribe_is_try_subscribe_with_no_cap(self, curatarr_web_root):
+        """subscribe() itself must stay uncapped - only run_stream()
+        opts into a cap via try_subscribe() directly."""
+        manager = _manager(curatarr_web_root)
+        job = manager.start("external", "all", ["alice"])
+        _wait_until_done(job)
+        assert job.subscribe() is not None
+
+    def test_try_subscribe_rejects_once_running_job_is_at_cap(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv("CURATARR_TEST_SLOW", "2")
+        manager = _manager(curatarr_web_root)
+        job = manager.start("movie", "alice", ["alice"])
+
+        q1 = job.try_subscribe(1)
+        assert q1 is not None
+        assert job.try_subscribe(1) is None  # already at the cap of 1
+
+        job.unsubscribe(q1)
+        assert job.try_subscribe(1) is not None  # freed a slot
+        _wait_until_done(job)
+
+    def test_try_subscribe_cap_does_not_apply_to_a_finished_job(self, curatarr_web_root):
+        """A finished job's subscribe always succeeds regardless of the
+        cap - it replays the backlog and queues DONE_SENTINEL rather
+        than registering a live subscriber that would occupy anything
+        for any meaningful length of time (confirmed in a real
+        container: this was never the actual thread-exhaustion
+        mechanism - see web/app.py's MAX_STREAM_SUBSCRIBERS_PER_JOB)."""
+        manager = _manager(curatarr_web_root)
+        job = manager.start("external", "all", ["alice"])
+        _wait_until_done(job)
+        for _ in range(5):
+            assert job.try_subscribe(1) is not None
+
+    def test_try_subscribe_none_cap_never_rejects(self, curatarr_web_root, monkeypatch):
+        monkeypatch.setenv("CURATARR_TEST_SLOW", "2")
+        manager = _manager(curatarr_web_root)
+        job = manager.start("movie", "alice", ["alice"])
+        for _ in range(10):
+            assert job.try_subscribe(None) is not None
+        _wait_until_done(job)
+
+
 class TestPumpFailureHandling:
     """Tests for _pump()'s failure paths - H1 (open() failure must not
     wedge the job/lock forever) and M1 (non-UTF8 output, always reaping

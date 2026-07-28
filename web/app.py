@@ -84,6 +84,39 @@ DEFAULT_PORT = 8787
 # keepalive comment - see run_stream()'s generate().
 SSE_HEARTBEAT_SECONDS = 15.0
 
+# #287: bounds how long a single /run/stream connection may occupy one
+# of waitress's THREADS worker threads (see web/docker_server.py's own
+# comment - sized "for one open SSE live-log stream", not many)
+# before this proactively closes it. Confirmed in a real container:
+# waitress dispatches a streaming WSGI response to ONE task thread for
+# the connection's ENTIRE lifetime (it synchronously iterates the
+# generator - see waitress/task.py's WSGITask.execute), so a run that
+# takes many minutes previously let a single stream pin a thread for
+# that whole time with no upper bound at all. EventSource's own
+# default behavior auto-reconnects after any server-initiated close
+# that isn't a fatal HTTP-level error (see generate() below - it just
+# returns, ending the response normally, no error event) - the browser
+# picks the stream back up on its own a few seconds later, replaying
+# the backlog via Job.subscribe(), with no code needed here to make
+# that happen.
+MAX_STREAM_SECONDS = 120.0
+
+# #287: caps concurrent /run/stream subscribers for the SAME running
+# job. Only one job ever runs at a time (JobManager enforces this), so
+# every additional viewer watching it live is a fully redundant stream
+# of identical output, each pinning one more of only THREADS (8)
+# waitress worker threads for as long as it stays open. Confirmed in a
+# real container: as few as THREADS concurrently open streams during
+# one live run - not stuck, not misbehaving, just genuinely still
+# watching - exhausts the pool and freezes the ENTIRE app (every
+# route, not just streaming ones) until a stream closes or the run
+# ends. Reserves at least half the pool for everything else (the
+# dashboard, /run/status polling, /results, config screens) even in
+# the worst case where every viewer leaves a tab open. A viewer over
+# the cap isn't left with nothing - app.js falls back to polling
+# /run/status (see static/app.js) instead of a live-tailing stream.
+MAX_STREAM_SUBSCRIBERS_PER_JOB = 4
+
 # Applied to served watchlist HTML (see results_watchlist()). Primary
 # XSS defense is escaping at generation time (recommenders/
 # external_render.py); this is defense-in-depth so that even a gap
@@ -675,12 +708,53 @@ def create_app(
         if job is None:
             abort(404)
 
+        # #287: a late subscriber to an already-finished job already
+        # gets its full backlog replayed followed by an immediate
+        # `done` (Job.subscribe()/try_subscribe() below - confirmed
+        # correct in a real container, this was never the actual
+        # thread-exhaustion mechanism) and closes right away rather
+        # than hanging - cheap enough that it's simplest to let that
+        # existing path handle it rather than special-casing it here.
+        # app.js now only opens a stream at all for a job it already
+        # knows is running (see static/app.js) - this route still
+        # serves any other caller that reaches it directly for an
+        # already-finished job exactly as it always has.
+        q = job.try_subscribe(MAX_STREAM_SUBSCRIBERS_PER_JOB)
+        if q is None:
+            # #287: already at the concurrent-viewer cap for this job -
+            # tell the client to fall back to polling instead of
+            # opening a connection that would just make the thread
+            # exhaustion this cap exists to prevent one connection
+            # closer.
+            def generate_busy():
+                yield (
+                    "event: busy\n"
+                    "data: too many viewers already watching this run - "
+                    "falling back to polling /run/status\n\n"
+                )
+
+            return Response(
+                stream_with_context(generate_busy()),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
         def generate():
-            q = job.subscribe()
+            start = time.monotonic()
             try:
                 while True:
+                    remaining = MAX_STREAM_SECONDS - (time.monotonic() - start)
+                    if remaining <= 0:
+                        # #287: proactively end this response instead of
+                        # ever letting one connection hold its thread
+                        # indefinitely (see MAX_STREAM_SECONDS's own
+                        # comment) - not an error, so EventSource
+                        # reconnects on its own and picks up right where
+                        # it left off via Job.subscribe()'s backlog
+                        # replay.
+                        return
                     try:
-                        item = q.get(timeout=SSE_HEARTBEAT_SECONDS)
+                        item = q.get(timeout=min(SSE_HEARTBEAT_SECONDS, remaining))
                     except queue.Empty:
                         # No new output in a while - send a keepalive
                         # comment instead of blocking forever. A closed
