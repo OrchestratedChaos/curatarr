@@ -420,6 +420,113 @@ class TestPlexTVRecommenderWeights:
         assert "studio" in recommender.weights
         assert "actor" in recommender.weights
 
+    @patch("recommenders.base.log_warning")
+    @patch("recommenders.tv.ShowCache")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_fully_default_weights_with_no_config_still_sum_to_one(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_warn
+    ):
+        """Regression guard: an install with NO tv:/weights: override at all
+        (weights_config == {}) must keep getting curatarr's own baked-in
+        5-dimension default profile - genre/actor/studio/keyword/language -
+        which is designed as a whole to already sum to 1.0. This must NOT
+        change when the omitted-language-in-a-partial-config fix (below)
+        ships, or every zero-config TV install would start warning too."""
+        mock_load.return_value = {"plex": {"url": "http://localhost", "token": "abc"}, "general": {}, "weights": {}}
+        mock_users.return_value = {"plex_users": ["user1"], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={"shows": {}})
+
+        recommender = PlexTVRecommender("/path/to/config.yml")
+
+        assert recommender.weights["language"] == 0.05
+        assert sum(recommender.weights.values()) == pytest.approx(1.0)
+        mock_warn.assert_not_called()
+
+    @patch("recommenders.base.log_warning")
+    @patch("recommenders.tv.ShowCache")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_omitted_language_in_explicit_config_defaults_to_zero(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_warn
+    ):
+        """Reproduces the real bug: an owner's tv:/weights: block matching
+        config/tuning.example.yml's own documented 4-key template
+        (genre/studio/actor/keyword, no language key at all) already sums
+        to 1.0 on its own. Before this fix, the missing language key
+        silently defaulted to 0.05, making the total 1.05 and applying a
+        scoring dimension the user never configured. It must now default
+        to 0 and the total must be exactly 1.0, with no warning logged."""
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "weights": {"genre": 0.25, "studio": 0.10, "actor": 0.20, "keyword": 0.45},
+        }
+        mock_users.return_value = {"plex_users": ["user1"], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={"shows": {}})
+
+        recommender = PlexTVRecommender("/path/to/config.yml")
+
+        assert recommender.weights["language"] == 0.0
+        assert recommender.weights["genre"] == 0.25
+        assert recommender.weights["studio"] == 0.10
+        assert recommender.weights["actor"] == 0.20
+        assert recommender.weights["keyword"] == 0.45
+        assert sum(recommender.weights.values()) == pytest.approx(1.0)
+        mock_warn.assert_not_called()
+
+    @patch("recommenders.base.log_warning")
+    @patch("recommenders.tv.ShowCache")
+    @patch("recommenders.base.init_plex")
+    @patch("recommenders.base.get_configured_users")
+    @patch("recommenders.base.get_tmdb_config")
+    @patch("recommenders.base.load_config")
+    @patch("os.makedirs")
+    def test_explicit_language_weight_in_partial_config_still_honored(
+        self, mock_makedirs, mock_load, mock_tmdb, mock_users, mock_plex, mock_cache, mock_warn
+    ):
+        """An explicit language weight, even alongside a partial
+        override of the other 4 keys, must be used exactly as given -
+        this fix only changes the default applied when the key is
+        absent, never a value the user actually set."""
+        mock_load.return_value = {
+            "plex": {"url": "http://localhost", "token": "abc"},
+            "general": {},
+            "weights": {"genre": 0.20, "studio": 0.10, "actor": 0.20, "keyword": 0.40, "language": 0.10},
+        }
+        mock_users.return_value = {"plex_users": ["user1"], "managed_users": [], "admin_user": "admin"}
+        mock_tmdb.return_value = {"use_keywords": True, "api_key": "key"}
+        mock_section = Mock()
+        mock_section.all.return_value = []
+        mock_plex_inst = Mock()
+        mock_plex_inst.library.section.return_value = mock_section
+        mock_plex.return_value = mock_plex_inst
+        mock_cache.return_value = Mock(cache={"shows": {}})
+
+        recommender = PlexTVRecommender("/path/to/config.yml")
+
+        assert recommender.weights["language"] == 0.10
+        assert sum(recommender.weights.values()) == pytest.approx(1.0)
+        mock_warn.assert_not_called()
+
 
 class TestPlexTVRecommenderLibraryMethods:
     """Tests for PlexTVRecommender library methods."""
