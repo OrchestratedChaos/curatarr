@@ -25,6 +25,7 @@ from recommenders.external import (
     TMDB_ANIMATION_GENRE_ID,
     TMDB_PROVIDERS,
     TV_MOVIE_GENRE_ID,
+    _build_profile_via_recommender,
     _empty_categorized,
     _merge_categorized,
     _merge_user_runs,
@@ -33,6 +34,7 @@ from recommenders.external import (
     _pu_resolve_context,
     _stamp_library_id,
     categorize_by_streaming_service,
+    discover_candidates_by_profile,
     discover_popular_by_genre,
     export_to_trakt,
     find_horizon_movies,
@@ -4194,7 +4196,7 @@ class TestProcessUserMovieLibraryBranches:
 
     @patch("recommenders.external.generate_markdown")
     @patch("recommenders.external.categorize_by_streaming_service")
-    @patch("recommenders.external.build_user_profile")
+    @patch("recommenders.external._build_profile_via_recommender")
     @patch("recommenders.external.save_cache")
     @patch("recommenders.external.load_cache")
     @patch("recommenders.external.load_ignore_list")
@@ -4425,7 +4427,7 @@ class TestProcessUserTvLibraryBranches:
 
     @patch("recommenders.external.generate_markdown")
     @patch("recommenders.external.categorize_by_streaming_service")
-    @patch("recommenders.external.build_user_profile")
+    @patch("recommenders.external._build_profile_via_recommender")
     @patch("recommenders.external.save_cache")
     @patch("recommenders.external.load_cache")
     @patch("recommenders.external.load_ignore_list")
@@ -4646,6 +4648,142 @@ class TestThinProfile:
     def test_thin_profile_threshold_constant(self):
         """Test threshold constant is set correctly"""
         assert THIN_PROFILE_THRESHOLD == 40
+
+    def test_is_thin_profile_coerces_plain_dict_genres(self):
+        """#273 PR3: genres doesn't have to already be a Counter - a
+        plain dict (e.g. straight off a JSON cache read) works too."""
+        plain_dict_profile = {"genres": {"Action": 20, "Comedy": 15, "Drama": 10, "Thriller": 5}}
+        assert is_thin_profile(plain_dict_profile) is False
+
+    def test_is_thin_profile_missing_genres_key(self):
+        """#273 PR3: no 'genres' key at all is treated as an empty (thin) profile."""
+        assert is_thin_profile({}) is True
+
+
+class TestDiscoverCandidatesByProfileKeyCoercion:
+    """#273 PR3: discover_candidates_by_profile's genre/keyword lookups
+    (user_profile["genres"].most_common()/user_profile["keywords"].most_common())
+    used to assume the caller always handed over Counter objects keyed
+    exactly "genres"/"keywords" - true for load_user_profile_from_cache()'s
+    own return shape, but not guaranteed for every caller. Both are now
+    coerced to Counter if not already one, and keywords accepts either
+    "keywords" or "tmdb_keywords" (the raw watched_data_counters key
+    name)."""
+
+    @patch("recommenders.external.requests.get")
+    def test_plain_dict_genres_and_tmdb_keywords_key_do_not_raise(self, mock_get):
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        # Plain dicts (not Counter), and "tmdb_keywords" (not "keywords") -
+        # the raw watched_data_counters shape recommenders/movie.py's/
+        # tv.py's own builders produce, as opposed to
+        # load_user_profile_from_cache()'s renamed-to-Counter shape.
+        user_profile = {"genres": {"nonexistent-genre-xyz": 5}, "tmdb_keywords": {"some-keyword": 3}}
+
+        # Must not raise (AttributeError: 'dict' object has no attribute
+        # 'most_common', or KeyError: 'keywords') - the whole point of
+        # this test.
+        candidates = discover_candidates_by_profile(
+            tmdb_api_key="fake_key",
+            user_profile=user_profile,
+            library_data={"tmdb_ids": set(), "titles": set()},
+            media_type="movie",
+        )
+        assert isinstance(candidates, dict)
+
+    @patch("recommenders.external.requests.get")
+    def test_counter_genres_and_keywords_key_still_work(self, mock_get):
+        """Regression: the pre-existing shape (Counter-valued, 'keywords'
+        key - load_user_profile_from_cache()'s own return shape) must
+        keep working identically."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        user_profile = {
+            "genres": Counter({"nonexistent-genre-xyz": 5}),
+            "keywords": Counter({"some-keyword": 3}),
+        }
+        candidates = discover_candidates_by_profile(
+            tmdb_api_key="fake_key",
+            user_profile=user_profile,
+            library_data={"tmdb_ids": set(), "titles": set()},
+            media_type="movie",
+        )
+        assert isinstance(candidates, dict)
+
+    @patch("recommenders.external.requests.get")
+    def test_missing_genres_and_keywords_keys_do_not_raise(self, mock_get):
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        candidates = discover_candidates_by_profile(
+            tmdb_api_key="fake_key",
+            user_profile={},
+            library_data={"tmdb_ids": set(), "titles": set()},
+            media_type="movie",
+        )
+        assert candidates == {}
+
+
+class TestBuildProfileViaRecommender:
+    """Tests for _build_profile_via_recommender (#273 PR3) - replaces
+    the deleted build_user_profile(). Constructs the real
+    PlexMovieRecommender/PlexTVRecommender for `username` directly
+    (the same "shared path" recommenders/movie.py's/tv.py's own
+    builders use) rather than re-implementing a second, independently
+    buggy Plex scan."""
+
+    @patch("recommenders.external.get_project_root", return_value="/fake/root")
+    @patch("recommenders.movie.PlexMovieRecommender")
+    def test_movie_returns_counter_profile_from_recommender(self, mock_recommender_cls, mock_root):
+        mock_recommender = Mock()
+        mock_recommender.watched_data_counters = {
+            "genres": {"action": 2.0},
+            "directors": {"Some Director": 1.0},
+            "actors": {"Some Actor": 1.5},
+            "tmdb_keywords": {"heist": 0.6},
+            "languages": {"english": 2.0},
+            "tmdb_ids": {101, 102},
+        }
+        mock_recommender_cls.return_value = mock_recommender
+
+        profile = _build_profile_via_recommender("alice", "movie")
+
+        mock_recommender_cls.assert_called_once_with("/fake/root/config/config.yml", single_user="alice")
+        assert isinstance(profile["genres"], Counter)
+        assert profile["genres"]["action"] == 2.0
+        # tmdb_keywords -> keywords, matching load_user_profile_from_cache()'s
+        # own renaming convention.
+        assert profile["keywords"]["heist"] == 0.6
+        assert profile["tmdb_ids"] == {101, 102}
+
+    @patch("recommenders.external.get_project_root", return_value="/fake/root")
+    @patch("recommenders.tv.PlexTVRecommender")
+    def test_tv_media_type_uses_plex_tv_recommender(self, mock_recommender_cls, mock_root):
+        mock_recommender = Mock()
+        mock_recommender.watched_data_counters = {"genres": {"drama": 1.0}}
+        mock_recommender_cls.return_value = mock_recommender
+
+        profile = _build_profile_via_recommender("alice", "tv")
+
+        mock_recommender_cls.assert_called_once_with("/fake/root/config/config.yml", single_user="alice")
+        assert profile["genres"]["drama"] == 1.0
+
+    @patch("recommenders.external.log_warning")
+    @patch("recommenders.external.get_project_root", return_value="/fake/root")
+    @patch("recommenders.movie.PlexMovieRecommender")
+    def test_construction_failure_returns_empty_profile_not_raise(self, mock_recommender_cls, mock_root, mock_warn):
+        mock_recommender_cls.side_effect = Exception("Plex unreachable")
+
+        profile = _build_profile_via_recommender("alice", "movie")
+
+        assert profile["genres"] == Counter()
+        assert profile["tmdb_ids"] == set()
+        mock_warn.assert_called_once()
 
 
 class TestDiscoverPopularByGenre:

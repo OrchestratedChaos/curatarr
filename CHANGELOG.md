@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.66] - 2026-07-27
+
+### Fixed
+
+- **`recommenders/external.py`'s `build_user_profile()` had a fatal, unfixable-in-place bug (#273 PR3): its `username` parameter had zero effect on the output** - it always scanned whatever `plex` connection the caller already had (the one shared admin-token connection every caller in this file uses), never `username`'s own. Deleted entirely and replaced with `_build_profile_via_recommender()`, which constructs the real `PlexMovieRecommender`/`PlexTVRecommender` for `username` directly - the same "shared path" `recommenders/movie.py`'s and `recommenders/tv.py`'s own watched-data builders already use (and already benefit from #273 PR1's/PR2's fixes). As a side effect, this also persists a real, correctly-weighted watched-cache file to disk on first use, so `load_user_profile_from_cache()` finds it on the very next call instead of paying the same slow full-Plex-scan cost forever (`build_user_profile()`'s own docstring already called itself out as slow).
+
+  `is_thin_profile()` and `discover_popular_by_genre()`'s genre/keyword iteration both called `.most_common()` directly on `user_profile["genres"]`/`user_profile["keywords"]`, assuming the caller always handed over `Counter` objects keyed exactly `"genres"`/`"keywords"` - true for `load_user_profile_from_cache()`'s own return shape, but not guaranteed for every caller (in particular, a caller handing over `watched_data_counters` in its raw, `"tmdb_keywords"`-keyed, not-necessarily-`Counter`-typed shape directly). Both now coerce to `Counter` if not already one, and the keyword lookup accepts either `"keywords"` or `"tmdb_keywords"`.
+
+  **Verified against the real, live Plex library** (read-only: only real Plex history/library-listing calls, no writes, no Trakt calls): `_build_profile_via_recommender()` is only ever reached as a fallback when no watched cache exists yet for a user/media type - already true for every one of this install's 6 real configured users, so there's no meaningful before/after to observe in normal use. Instead verified the function's previously-broken core behavior directly: two different real users (`ericarutyunov`, `homehouse165`) now get genuinely different profiles - 27 and 15 `tmdb_ids` respectively, exactly matching each user's own real watched-movie count already independently established in #273 PR1's verification (`ericarutyunov`: 27, `homehouse165`: 15) - both `Counter`-typed and both correctly under a `"keywords"` key, not `"tmdb_keywords"`.
+
+  While verifying, found (but did not fix - out of this PR's scope) a pre-existing, unrelated test-isolation gap: `recommenders/external_sync.py` resolves its own cache directory via a `get_project_root()` binding conftest.py's `_isolated_recommender_cache_dir` autouse fixture doesn't patch (it only patches `recommenders.base`'s and `recommenders.external`'s own bindings), so any test exercising its Trakt-export-status recording writes a real (small, harmless) `cache/integration_status_trakt_export.json` into the actual repo instead of an isolated tmp dir.
+
 ## [2.10.65] - 2026-07-27
 
 ### Added

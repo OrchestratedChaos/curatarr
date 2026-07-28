@@ -57,7 +57,6 @@ from recommenders.huntarr import (
 from recommenders.streaming import categorize_by_streaming_service
 from utils import (
     CYAN,
-    DEFAULT_RATING_MULTIPLIERS,
     GREEN,
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
@@ -66,8 +65,6 @@ from utils import (
     TMDB_RATE_LIMIT_DELAY,
     TMDB_REQUEST_TIMEOUT,
     YELLOW,
-    calculate_recency_multiplier,
-    calculate_rewatch_multiplier,
     calculate_similarity_score,
     clickable_link,
     enhance_profile_with_trakt,
@@ -80,7 +77,6 @@ from utils import (
     get_streaming_services_for_user,
     get_tmdb_config,
     get_tmdb_id_from_imdb,
-    get_tmdb_keywords,
     get_trakt_discovery_candidates,
     load_config,
     load_json_cache,
@@ -269,13 +265,28 @@ def discover_candidates_by_profile(
     candidates: Dict[int, Dict] = {}  # tmdb_id -> basic info
     media = "movie" if media_type == "movie" else "tv"
 
-    # Get genres for this iteration's range
-    all_genres = list(user_profile["genres"].most_common(20))
+    # Get genres for this iteration's range. Coerced to Counter (#273
+    # PR3) rather than assumed - user_profile can come from
+    # load_user_profile_from_cache()/_build_profile_via_recommender()
+    # (already Counter-valued) or, in principle, a caller handing over
+    # plain-dict-shaped data directly (e.g. straight off a JSON cache
+    # read), which .most_common() can't be called on.
+    genres_counter = user_profile.get("genres")
+    if not isinstance(genres_counter, Counter):
+        genres_counter = Counter(genres_counter or {})
+    all_genres = list(genres_counter.most_common(20))
     top_genres = all_genres[genre_start:genre_end]
     genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == "movie" else TMDB_TV_GENRE_IDS
 
-    # Get keywords for this iteration's range
-    all_keywords = list(user_profile["keywords"].most_common(40))
+    # Get keywords for this iteration's range. Accepts either 'keywords'
+    # (this file's own internal convention - see
+    # load_user_profile_from_cache()'s/_build_profile_via_recommender()'s
+    # return shape) or 'tmdb_keywords' (the raw watched_data_counters key
+    # name recommenders/movie.py's/tv.py's own builders use) - #273 PR3.
+    keywords_counter = user_profile.get("keywords", user_profile.get("tmdb_keywords"))
+    if not isinstance(keywords_counter, Counter):
+        keywords_counter = Counter(keywords_counter or {})
+    all_keywords = list(keywords_counter.most_common(40))
     top_keywords = all_keywords[keyword_start:keyword_end]
 
     # Search by genres for this iteration
@@ -417,7 +428,14 @@ def discover_candidates_by_profile(
 
 def is_thin_profile(user_profile: Dict) -> bool:
     """Check if profile has too few items for reliable matching."""
-    total_items = sum(user_profile.get("genres", Counter()).values())
+    # Coerced to Counter (#273 PR3) - see discover_popular_by_genre's own
+    # identical note above; .values() happens to work on a plain dict
+    # too, but coercing here keeps this function's input contract
+    # consistent with every other user_profile consumer in this file.
+    genres = user_profile.get("genres")
+    if not isinstance(genres, Counter):
+        genres = Counter(genres or {})
+    total_items = sum(genres.values())
     return total_items < THIN_PROFILE_THRESHOLD
 
 
@@ -568,117 +586,66 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
         return None
 
 
-def build_user_profile(plex: Any, config: Dict, username: str, media_type: str = "movie") -> Dict:
+def _build_profile_via_recommender(username: str, media_type: str) -> Dict:
+    """Replaces the deleted build_user_profile() (#273 PR3).
+
+    build_user_profile() had a fatal, unfixable-in-place bug (#3): its
+    `username` parameter had zero effect on the output - it always
+    scanned whatever `plex` connection the caller already had (the one
+    shared admin-token connection every caller in this file uses),
+    never username's own. Rather than maintaining a second,
+    independent, username-aware Plex-scanning implementation here (a
+    third copy of logic recommenders/movie.py's and recommenders/tv.py's
+    own watched-data builders already get right, including #273 PR1's
+    per-user token fix), this constructs the real
+    PlexMovieRecommender/PlexTVRecommender for `username` directly - the
+    same "shared path" those internal recommenders already use. That
+    also means this benefits from every one of #273 PR1's/PR2's fixes
+    automatically, and - unlike build_user_profile() - persists a real,
+    correctly-weighted watched-cache file to disk as a side effect of
+    construction, so load_user_profile_from_cache() finds it on the very
+    next call for this user instead of paying this same slow full-Plex-
+    scan cost forever.
+
+    Constructs its own config_path via get_project_root() (matching
+    _main_impl()'s own resolution) rather than threading one through
+    every caller's signature (process_user()/process_user_movie_library()/
+    process_user_tv_library()/_pu_build_profiles() never otherwise need
+    one - callers here already hold an in-memory `config`/`plex`, which
+    this intentionally does NOT reuse; a second Plex connection is the
+    cost of reusing the real, correct recommender construction instead
+    of a bespoke scan, and this is only ever reached when no cache
+    exists yet for this user/media type - not the common case).
+
+    Returns the profile in the exact same shape
+    load_user_profile_from_cache() returns (Counter-valued, 'keywords'
+    not 'tmdb_keywords') for consistency between the two - though
+    is_thin_profile()/discover_popular_by_genre() (the two real
+    consumers) defensively accept either key name and coerce to Counter
+    regardless, since a future caller could still hand either shape.
     """
-    Build weighted user profile from ALL watch history.
-    Uses same weighting as internal recommenders: ratings + rewatches + recency.
+    from recommenders.movie import PlexMovieRecommender
+    from recommenders.tv import PlexTVRecommender
 
-    NOTE: This is slow! Use load_user_profile_from_cache() first when possible.
+    config_path = os.path.join(get_project_root(), "config/config.yml")
+    recommender_cls = PlexMovieRecommender if media_type == "movie" else PlexTVRecommender
 
-    Returns:
-        dict: Weighted counters for genres, actors, directors/studios, keywords, languages
-    """
-    library_name = config["plex"].get("movie_library" if media_type == "movie" else "tv_library")
-    library = plex.library.section(library_name)
-    all_items = library.all()
-    total_items = len(all_items)
-    print(f"Building {media_type} profile for {username} ({total_items} items to scan)...")
+    wdc: Dict[str, Any] = {}
+    try:
+        recommender = recommender_cls(config_path, single_user=username)
+        wdc = recommender.watched_data_counters or {}
+    except Exception as e:
+        log_warning(f"Could not build {media_type} profile for {username} via recommender: {e}")
 
-    # Get recency config
-    recency_config = config.get("recency_decay", {})
-    recency_enabled = recency_config.get("enabled", True)
-
-    counters: Dict[str, Any] = {
-        "genres": Counter(),
-        "directors": Counter(),  # movies
-        "studios": Counter(),  # TV shows
-        "actors": Counter(),
-        "keywords": Counter(),
-        "languages": Counter(),
-        "tmdb_ids": set(),
+    return {
+        "genres": Counter(wdc.get("genres", {})),
+        "directors": Counter(wdc.get("directors", {})),
+        "studios": Counter(wdc.get("studios", {})),
+        "actors": Counter(wdc.get("actors", {})),
+        "keywords": Counter(wdc.get("tmdb_keywords", wdc.get("keywords", {}))),
+        "languages": Counter(wdc.get("languages", {})),
+        "tmdb_ids": set(wdc.get("tmdb_ids", [])),
     }
-
-    # Get account for user checking - construction alone validates the
-    # token (raises if invalid), same as before; the account object
-    # itself was never used past this point.
-    MyPlexAccount(token=config["plex"]["token"])
-    tmdb_api_key = get_tmdb_config(config)["api_key"]
-
-    watched_count = 0
-
-    for i, item in enumerate(all_items, 1):
-        # Show progress periodically or at the end
-        if i % PROGRESS_UPDATE_FREQUENCY == 0 or i == total_items:
-            print(f"\r  Scanning library: {i}/{total_items} ({int(i / total_items * 100)}%)", end="", flush=True)
-
-        if not item.isWatched:
-            continue
-
-        watched_count += 1
-
-        # Get view count for rewatch multiplier
-        view_count = getattr(item, "viewCount", 1) or 1
-        rewatch_mult = calculate_rewatch_multiplier(view_count)
-
-        # Get last viewed date for recency multiplier
-        recency_mult = 1.0
-        if recency_enabled and hasattr(item, "lastViewedAt") and item.lastViewedAt:
-            # Plex returns datetime object, convert to timestamp for calculate_recency_multiplier
-            last_viewed = item.lastViewedAt
-            if hasattr(last_viewed, "timestamp"):
-                last_viewed = int(last_viewed.timestamp())
-            recency_mult = calculate_recency_multiplier(last_viewed, recency_config)
-
-        # Get user rating (convert 1-10 to multiplier)
-        user_rating = getattr(item, "userRating", None)
-        if user_rating:
-            rating_int = max(0, min(10, int(round(user_rating))))
-            rating_mult = DEFAULT_RATING_MULTIPLIERS.get(rating_int, 1.0)
-        else:
-            # Use audience rating as fallback, but with less weight
-            audience_rating = getattr(item, "audienceRating", 5.0) or 5.0
-            rating_int = max(0, min(10, int(round(audience_rating))))
-            rating_mult = DEFAULT_RATING_MULTIPLIERS.get(rating_int, 1.0) * 0.5  # Half weight for audience rating
-
-        # Combined multiplier
-        multiplier = rewatch_mult * recency_mult * rating_mult
-
-        # Extract attributes from Plex item
-        for genre in item.genres:
-            counters["genres"][genre.tag] += multiplier
-
-        if media_type == "movie":
-            for director in getattr(item, "directors", []):
-                counters["directors"][director.tag] += multiplier
-        else:
-            if hasattr(item, "studio") and item.studio:
-                counters["studios"][item.studio.lower()] += multiplier
-
-        # Top 3 actors
-        for actor in list(getattr(item, "roles", []))[:3]:
-            counters["actors"][actor.tag] += multiplier
-
-        # Get TMDB keywords (need to fetch from TMDB)
-        tmdb_id = None
-        for guid in item.guids:
-            if "tmdb://" in guid.id:
-                try:
-                    tmdb_id = int(guid.id.split("tmdb://")[1])
-                    counters["tmdb_ids"].add(tmdb_id)
-                    break
-                except (ValueError, IndexError) as e:
-                    logger.debug(f"Error parsing TMDB ID from guid {guid.id}: {e}")
-
-        if tmdb_id:
-            keywords = get_tmdb_keywords(tmdb_api_key, tmdb_id, media_type)
-            for keyword in keywords:
-                counters["keywords"][keyword] += multiplier
-
-    print()  # Newline after progress indicator
-    print(f"  Found {watched_count} watched {media_type}s")
-    print(f"  Top genres: {dict(counters['genres'].most_common(5))}")
-
-    return counters
 
 
 def get_library_items(plex: Any, library_name: str, media_type: str = "movie") -> Dict[str, Set]:
@@ -1346,11 +1313,11 @@ def _pu_build_profiles(plex, config, username):
     # Cache is pre-computed by internal recommenders with proper weighting
     movie_profile = load_user_profile_from_cache(config, username, "movie")
     if not movie_profile:
-        movie_profile = build_user_profile(plex, config, username, "movie")
+        movie_profile = _build_profile_via_recommender(username, "movie")
 
     show_profile = load_user_profile_from_cache(config, username, "tv")
     if not show_profile:
-        show_profile = build_user_profile(plex, config, username, "show")
+        show_profile = _build_profile_via_recommender(username, "tv")
 
     # Enhance profiles with Trakt watch history (streaming services not in Plex)
     # Only for users in the Trakt mapping
@@ -1866,7 +1833,7 @@ def process_user_movie_library(config, plex, username, library):
 
     movie_profile = load_user_profile_from_cache(config, username, "movie")
     if not movie_profile:
-        movie_profile = build_user_profile(plex, config, username, "movie")
+        movie_profile = _build_profile_via_recommender(username, "movie")
 
     tmdb_api_key = get_tmdb_config(config)["api_key"]
     trakt_config = config.get("trakt", {})
@@ -2079,7 +2046,7 @@ def process_user_tv_library(config, plex, username, library):
 
     show_profile = load_user_profile_from_cache(config, username, "tv")
     if not show_profile:
-        show_profile = build_user_profile(plex, config, username, "show")
+        show_profile = _build_profile_via_recommender(username, "tv")
 
     tmdb_api_key = get_tmdb_config(config)["api_key"]
     trakt_config = config.get("trakt", {})

@@ -1,22 +1,4 @@
 {
-  "external_build_user_profile_movie_alice": {
-    "actors": {},
-    "directors": {},
-    "genres": {},
-    "keywords": {},
-    "languages": {},
-    "studios": {},
-    "tmdb_ids": []
-  },
-  "external_build_user_profile_movie_bob": {
-    "actors": {},
-    "directors": {},
-    "genres": {},
-    "keywords": {},
-    "languages": {},
-    "studios": {},
-    "tmdb_ids": []
-  },
   "external_load_cache_movie_alice": {
     "actors": {
       "Alex Monroe": "0x1.70a3d70a3d70ap-3",
@@ -156,6 +138,81 @@
       "205",
       "206",
       "207"
+    ]
+  },
+  "external_profile_via_recommender_movie_alice": {
+    "actors": {
+      "Alex Monroe": "0x1.70a3d70a3d70ap-3",
+      "Casey Rhodes": "0x1.eb851eb851eb8p-4",
+      "Jordan Vance": "0x1.70a3d70a3d70ap-3",
+      "Robin Alvarez": "0x1.eb851eb851eb8p-4",
+      "Sam Kestrel": "0x1.eb851eb851eb8p-4",
+      "Taylor Nguyen": "0x1.eb851eb851eb8p-5"
+    },
+    "directors": {
+      "Marcus Webb": "0x1.eb851eb851eb8p-4",
+      "Nora Lin": "0x1.eb851eb851eb8p-5",
+      "Priya Anand": "0x1.eb851eb851eb8p-5",
+      "Ridley Stone": "0x1.eb851eb851eb8p-4"
+    },
+    "genres": {
+      "action": "0x1.eb851eb851eb8p-3",
+      "sci-fi": "0x1.70a3d70a3d70ap-3"
+    },
+    "keywords": {
+      "heist": "0x1.eb851eb851eb8p-4",
+      "revenge": "0x1.eb851eb851eb8p-5",
+      "road-trip": "0x1.eb851eb851eb8p-5",
+      "space-station": "0x1.70a3d70a3d70ap-3",
+      "survival": "0x1.eb851eb851eb8p-4",
+      "time-travel": "0x1.eb851eb851eb8p-5",
+      "undercover": "0x1.eb851eb851eb8p-4"
+    },
+    "languages": {
+      "english": "0x1.70a3d70a3d70ap-2"
+    },
+    "studios": {},
+    "tmdb_ids": [
+      "101",
+      "102",
+      "103",
+      "104",
+      "105",
+      "106"
+    ]
+  },
+  "external_profile_via_recommender_movie_bob": {
+    "actors": {
+      "Alex Monroe": "0x1.eb851eb851eb8p-5",
+      "Casey Rhodes": "0x1.eb851eb851eb8p-5",
+      "Jordan Vance": "0x1.eb851eb851eb8p-5",
+      "Robin Alvarez": "0x1.eb851eb851eb8p-5",
+      "Sam Kestrel": "0x1.eb851eb851eb8p-4",
+      "Taylor Nguyen": "0x1.eb851eb851eb8p-4"
+    },
+    "directors": {
+      "Marcus Webb": "0x1.eb851eb851eb8p-5",
+      "Nora Lin": "0x1.eb851eb851eb8p-4",
+      "Priya Anand": "0x1.eb851eb851eb8p-5"
+    },
+    "genres": {
+      "comedy": "0x1.70a3d70a3d70ap-3",
+      "romance": "0x1.eb851eb851eb8p-4"
+    },
+    "keywords": {
+      "coming-of-age": "0x1.eb851eb851eb8p-4",
+      "road-trip": "0x1.eb851eb851eb8p-5",
+      "wedding": "0x1.eb851eb851eb8p-4"
+    },
+    "languages": {
+      "english": "0x1.eb851eb851eb8p-3"
+    },
+    "studios": {},
+    "tmdb_ids": [
+      "107",
+      "108",
+      "109",
+      "110"
     ]
   },
   "movie_managed_users": {

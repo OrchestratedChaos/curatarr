@@ -277,7 +277,6 @@ def run_profile_builders() -> dict:
             patch("recommenders.external.MyPlexAccount", FakeMyPlexAccount),
             patch("recommenders.base.migrate_legacy_cache_dir", lambda legacy_dir, new_dir: None),
             patch("utils.plex._capped_get", make_fake_capped_get()),
-            patch("recommenders.external.get_tmdb_keywords", lambda *a, **kw: []),
         ):
             # --- (1) & (2): movie.py's / tv.py's own per-user builders ---
             os.environ["CURATARR_CONFIG_DIR"] = plex_users_root
@@ -295,13 +294,12 @@ def run_profile_builders() -> dict:
             managed_tv_rec = PlexTVRecommender(managed_config_path)
             snapshot["tv_managed_users"] = _counters_to_jsonable(managed_tv_rec.watched_data_counters)
 
-            # --- (4) & (5): external.py's load_user_profile_from_cache()
+            # --- (4): external.py's load_user_profile_from_cache()
             # (reads the REAL on-disk cache files (1) above just wrote,
             # via each recommender's own __init__-time _save_watched_cache()
-            # call) and build_user_profile() (bug #3: username is inert -
-            # see this module's own report). Neither reads config.yml off
-            # disk, so CURATARR_CONFIG_DIR is irrelevant here; a small,
-            # standalone config dict is enough. ---
+            # call). Doesn't read config.yml off disk, so
+            # CURATARR_CONFIG_DIR is irrelevant here; a small, standalone
+            # config dict is enough. ---
             external_config = {
                 "plex": {
                     "url": "http://127.0.0.1:32400",
@@ -320,9 +318,19 @@ def run_profile_builders() -> dict:
                         _counters_to_jsonable(loaded) if loaded else None
                     )
 
+            # --- (5): external.py's _build_profile_via_recommender()
+            # (#273 PR3 - replaces the deleted build_user_profile(),
+            # which had bug #3: username was inert). Unlike
+            # load_user_profile_from_cache() above, this constructs a
+            # REAL PlexMovieRecommender internally (the "shared path" -
+            # see its own docstring), resolving config_path via
+            # get_project_root(), so CURATARR_CONFIG_DIR must be pointed
+            # at the plex_users project again (left set to managed_root
+            # by step (3) above). ---
+            os.environ["CURATARR_CONFIG_DIR"] = plex_users_root
             for username in ("alice", "bob"):
-                built = external_module.build_user_profile(fake_plex, external_config, username, "movie")
-                snapshot[f"external_build_user_profile_movie_{username}"] = _counters_to_jsonable(built)
+                built = external_module._build_profile_via_recommender(username, "movie")
+                snapshot[f"external_profile_via_recommender_movie_{username}"] = _counters_to_jsonable(built)
     finally:
         if old_cwd_env is None:
             os.environ.pop("CURATARR_CONFIG_DIR", None)
