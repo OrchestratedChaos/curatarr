@@ -135,6 +135,31 @@
   </fieldset>
 
   <fieldset>
+    <legend>Collection naming (#286)</legend>
+    <p class="muted">
+      Controls the name curatarr gives each user's recommendation collection in Plex. Leave blank to keep the
+      default shown here. Placeholders: <code>{user}</code> (the collection's resolved display name) and
+      <code>{media_type}</code> (renders as "Movie"/"TV"). An invalid template - an unknown placeholder or
+      malformed braces - is rejected below rather than silently accepted; at run time (e.g. from a hand-edited
+      tuning.yml) the same invalid template instead falls back to the default and logs a warning, so a bad value
+      there can never crash a run.
+    </p>
+    <p class="muted">
+      The multi-library disambiguation suffix (e.g. " (Movies 4K)") is always appended after this template
+      renders, for every install with more than one library of the same media type - do not add it to the
+      template yourself.
+    </p>
+    <label>Movie collection name
+      <input type="text" name="collections_movie_name_template" value="{{ collections.movie_name_template }}">
+    </label>
+    {{ field_error(errors, 'collections_movie_name_template') }}
+    <label>TV collection name
+      <input type="text" name="collections_tv_name_template" value="{{ collections.tv_name_template }}">
+    </label>
+    {{ field_error(errors, 'collections_tv_name_template') }}
+  </fieldset>
+
+  <fieldset>
     <legend>General</legend>
     <label>Updates
       <select name="general_update_mode">

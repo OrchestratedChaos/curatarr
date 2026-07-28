@@ -104,3 +104,25 @@ def validate_weights_sum(weights: Dict[str, float], field: str, errors: Dict[str
     total = sum(float(v) for v in weights.values())
     if abs(total - 1.0) > WEIGHT_SUM_TOLERANCE:
         errors[field] = f"Weights must sum to 1.0 (currently {total:.4f})"
+
+
+def validate_collection_template(value: str, field: str, errors: Dict[str, str], media_type: str) -> None:
+    """Validates a collections.movie_name_template/tv_name_template
+    value (#267/#286) against the exact rules utils.labels.
+    render_collection_name applies at run time: str.format() with only
+    {user}/{media_type} available.
+
+    render_collection_name() itself never raises - an invalid template
+    there falls back to the matching DEFAULT_*_NAME_TEMPLATE and logs a
+    warning, so a bad tuning.yml edit can never crash a recommender run.
+    This validator deliberately does NOT reuse that lenient behavior:
+    same as validate_weights_sum above, a UI-driven typo/malformed
+    template is rejected outright here rather than silently accepted
+    only to fall back at every actual run with nothing but a log line
+    to explain why.
+    """
+    media_type_label = "Movie" if media_type == "movie" else "TV"
+    try:
+        value.format(user="Test User", media_type=media_type_label)
+    except (KeyError, IndexError, ValueError) as e:
+        errors[field] = f"Invalid template ({e}) - only {{user}} and {{media_type}} placeholders are supported"

@@ -1,6 +1,7 @@
 """Settings / Tuning screen: scoring weights, quality filters, recency
 decay, rating multipliers, negative signals, external-recommendations
-tuning, and general/logging options.
+tuning, collection naming templates (#286), and general/logging
+options.
 
 #290: the sync-safety fields (Sonarr/Radarr/Trakt auto_sync/user_mode/
 plex_users) used to ALSO be a fully editable, separately-submitted copy
@@ -30,6 +31,7 @@ from flask import redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap
 
 from utils.config import UPDATE_MODES, get_update_mode
+from utils.labels import DEFAULT_MOVIE_NAME_TEMPLATE, DEFAULT_TV_NAME_TEMPLATE
 from utils.scheduler import WEEKDAY_NAMES, describe_next_run, parse_schedule_config
 
 from .config_io import (
@@ -39,7 +41,13 @@ from .config_io import (
     load_module,
     module_path,
 )
-from .config_validate import validate_choice, validate_float, validate_int, validate_weights_sum
+from .config_validate import (
+    validate_choice,
+    validate_collection_template,
+    validate_float,
+    validate_int,
+    validate_weights_sum,
+)
 
 LOG_LEVEL_CHOICES = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -163,6 +171,7 @@ def _settings_view(
     bad_ratings = negsig.get("bad_ratings") or {}
     dropped_shows = negsig.get("dropped_shows") or {}
     external = tuning.get("external_recommendations") or {}
+    collections = tuning.get("collections") or {}
     general = core.get("general") or {}
     logging_cfg = core.get("logging") or {}
     schedule_cfg = core.get("schedule") or {}
@@ -224,6 +233,14 @@ def _settings_view(
             "max_iterations": external.get("max_iterations", 8),
             "language": external.get("language") or "",
             "auto_open_html": bool(external.get("auto_open_html", False)),
+        },
+        # #286: only the two name-template fields (#274) are surfaced
+        # here - collections.add_label/label_name/append_usernames/
+        # rename_on_template_change/private_collections are config-file-
+        # only for now, out of scope for this screen.
+        "collections": {
+            "movie_name_template": collections.get("movie_name_template") or DEFAULT_MOVIE_NAME_TEMPLATE,
+            "tv_name_template": collections.get("tv_name_template") or DEFAULT_TV_NAME_TEMPLATE,
         },
         "general": {
             # get_update_mode() resolves the effective mode, falling back
@@ -343,6 +360,22 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
         "language": form.get("ext_language", "").strip(),
         "auto_open_html": flag("ext_auto_open_html"),
     }
+    # #286: blank (or whitespace-only) means "use the default" - same
+    # as leaving collections.movie_name_template/tv_name_template unset
+    # in a hand-edited tuning.yml (config/tuning.example.yml's own
+    # documented way to do this) - rather than saving a literal empty
+    # string template. Written as the actual default constant (not
+    # omitted) so what's on disk always matches what's rendered; see
+    # config/tuning.example.yml's own byte-identical default.
+    movie_name_template = form.get("collections_movie_name_template", "").strip() or DEFAULT_MOVIE_NAME_TEMPLATE
+    tv_name_template = form.get("collections_tv_name_template", "").strip() or DEFAULT_TV_NAME_TEMPLATE
+    validate_collection_template(movie_name_template, "collections_movie_name_template", errors, "movie")
+    validate_collection_template(tv_name_template, "collections_tv_name_template", errors, "tv")
+    collections = {
+        "movie_name_template": movie_name_template,
+        "tv_name_template": tv_name_template,
+    }
+
     update_mode = form.get("general_update_mode", "notify")
     validate_choice(update_mode, "general_update_mode", errors, UPDATE_MODES)
     general = {
@@ -380,6 +413,7 @@ def _parse_settings_form(form, errors: Dict[str, str]) -> Dict:
         "rating_multipliers": rating_multipliers,
         "negative_signals": negative_signals,
         "external": external,
+        "collections": collections,
         "general": general,
         "logging": {"level": logging_level},
         "schedule": schedule,
@@ -444,6 +478,14 @@ def _apply_settings(
     ext_section["max_iterations"] = ext["max_iterations"]
     ext_section["language"] = ext["language"] or None
     ext_section["auto_open_html"] = ext["auto_open_html"]
+
+    # #286: only writes the two name-template keys - add_label/
+    # label_name/append_usernames/rename_on_template_change/
+    # private_collections (also under collections:) are untouched,
+    # same field-scoping guarantee as every other section here (#290).
+    collections_section = ensure_section(tuning, "collections")
+    collections_section["movie_name_template"] = parsed["collections"]["movie_name_template"]
+    collections_section["tv_name_template"] = parsed["collections"]["tv_name_template"]
 
     ensure_section(core, "general").update(parsed["general"])
     ensure_section(core, "logging")["level"] = parsed["logging"]["level"]

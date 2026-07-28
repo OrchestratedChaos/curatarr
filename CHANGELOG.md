@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.76] - 2026-07-27
+
+### Added
+
+- **Collection naming templates (#274) surfaced in the web UI's Settings screen (#286).** `collections.movie_name_template`/`collections.tv_name_template` were only ever editable by hand-editing `config/tuning.yml` since #274 shipped them - the only remaining item on the original web-UI-parity queue.
+
+  The existing default renders byte-identical to today's output for anyone who never touches this screen - the two new fields fall back to the exact same `utils.labels.DEFAULT_MOVIE_NAME_TEMPLATE`/`DEFAULT_TV_NAME_TEMPLATE` constants the recommender itself uses, not a re-typed copy of them (same #261-class guardrail as this project's other config defaults). Leaving a field blank on save means "use the default" - it's written back as that exact default constant rather than a literal empty-string template, matching `config/tuning.example.yml`'s own documented way to reset this (deleting the line).
+
+  New `web/config_validate.py::validate_collection_template()` rejects an invalid template (unknown placeholder, malformed braces) outright with a visible inline field error, rather than mirroring `utils.labels.render_collection_name()`'s own runtime behavior (silently falls back to the default and logs a warning - by design, so a bad hand-edited `tuning.yml` can never crash a run). Same deliberate divergence this screen's `validate_weights_sum` already establishes: a UI-driven typo shouldn't be silently accepted only to fall back at every actual run with nothing but a log line to explain why.
+
+  The screen also explains that the multi-library disambiguation suffix (e.g. " (Movies 4K)") is always appended after the template renders, so a user doesn't try to add it themselves.
+
+  Field-scoped the same way every other section on this screen already is (#290): only `movie_name_template`/`tv_name_template` are read/written here - `collections.add_label`/`label_name`/`append_usernames`/`rename_on_template_change`/`private_collections` (same YAML section, but not owned by this screen) are left untouched. Audited `web/config_connections.py` and every other config screen first - none currently render an editable `collections.*` field, so there was no #290-class duplicate-field clobber risk to begin with here.
+
+  New coverage: `tests/test_web_config_validate.py::TestValidateCollectionTemplate` (valid/invalid templates for both media types); `tests/test_web_config_settings.py::TestCollectionNaming` (default rendering matches the real constants byte-for-byte, custom templates persist, blank/omitted fields save the real default rather than an empty string, an invalid template is rejected with a visible error and never corrupts the existing file, and saving this screen never touches the other `collections.*` keys it doesn't own).
+
 ## [2.10.75] - 2026-07-27
 
 ### Fixed

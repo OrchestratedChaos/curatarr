@@ -20,6 +20,7 @@ import pytest
 import yaml
 
 from utils.config import get_update_mode
+from utils.labels import DEFAULT_MOVIE_NAME_TEMPLATE, DEFAULT_TV_NAME_TEMPLATE
 from web.app import create_app
 from web.config_io import module_path
 
@@ -301,6 +302,122 @@ class TestSaveNeverTouchesSyncSafety:
                 assert f'name="{svc}_{field}"' not in text
         # Still shows the current (Connections-owned) value read-only.
         assert "combined" in text  # sonarr_user_mode from CONNECTIONS_FORM above
+
+
+class TestCollectionNaming:
+    """#286: surfaces collections.movie_name_template/tv_name_template
+    (#267/PR#274) on this screen. The existing default must render
+    byte-identical to today's output for anyone who never touches this
+    - see utils.labels.DEFAULT_MOVIE_NAME_TEMPLATE/DEFAULT_TV_NAME_TEMPLATE,
+    which this screen falls back to and this test class imports rather
+    than re-typing (avoids the class of bug #261 already covers:
+    hand-copied defaults drifting out of sync with the real ones)."""
+
+    def test_get_shows_the_real_default_when_unset(self, client):
+        c, app, root = client
+        resp = c.get("/config/settings")
+        text = resp.data.decode()
+        assert f'value="{DEFAULT_MOVIE_NAME_TEMPLATE}"' in text
+        assert f'value="{DEFAULT_TV_NAME_TEMPLATE}"' in text
+
+    def test_saves_custom_templates_to_tuning_yml(self, client):
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form["collections_movie_name_template"] = "Movie picks for {user}"
+        form["collections_tv_name_template"] = "{media_type} picks for {user}"
+        resp = c.post("/config/settings", data=form)
+        assert resp.status_code == 303
+
+        tuning = _read_yaml(root, "tuning")
+        assert tuning["collections"]["movie_name_template"] == "Movie picks for {user}"
+        assert tuning["collections"]["tv_name_template"] == "{media_type} picks for {user}"
+
+    def test_blank_field_saves_the_real_default_rather_than_empty_string(self, client):
+        """Leaving the field blank means "use the default" (matches
+        config/tuning.example.yml's own documented way to do this by
+        deleting the line) - not a literal empty-string template."""
+        c, app, root = client
+        form = dict(VALID_FORM)
+        form["collections_movie_name_template"] = "   "
+        form["collections_tv_name_template"] = ""
+        c.post("/config/settings", data=form)
+
+        tuning = _read_yaml(root, "tuning")
+        assert tuning["collections"]["movie_name_template"] == DEFAULT_MOVIE_NAME_TEMPLATE
+        assert tuning["collections"]["tv_name_template"] == DEFAULT_TV_NAME_TEMPLATE
+
+    def test_omitted_fields_also_default(self, client):
+        """VALID_FORM itself never sets either field - the baseline
+        save path (every other test in this file using VALID_FORM
+        as-is) must not blow up or write a blank template."""
+        c, app, root = client
+        assert "collections_movie_name_template" not in VALID_FORM
+        c.post("/config/settings", data=VALID_FORM)
+
+        tuning = _read_yaml(root, "tuning")
+        assert tuning["collections"]["movie_name_template"] == DEFAULT_MOVIE_NAME_TEMPLATE
+        assert tuning["collections"]["tv_name_template"] == DEFAULT_TV_NAME_TEMPLATE
+
+    def test_invalid_movie_template_rejected_with_visible_error(self, client):
+        c, app, root = client
+        bad = dict(VALID_FORM)
+        bad["collections_movie_name_template"] = "Oops {typo}"
+        resp = c.post("/config/settings", data=bad)
+        assert resp.status_code == 400
+        assert b"Invalid template" in resp.data
+
+    def test_invalid_tv_template_rejected_with_visible_error(self, client):
+        c, app, root = client
+        bad = dict(VALID_FORM)
+        bad["collections_tv_name_template"] = "Oops {"
+        resp = c.post("/config/settings", data=bad)
+        assert resp.status_code == 400
+        assert b"Invalid template" in resp.data
+
+    def test_invalid_template_does_not_corrupt_existing_tuning_file(self, client):
+        c, app, root = client
+        c.post("/config/settings", data=VALID_FORM)  # establish a valid baseline
+        before = _read_yaml(root, "tuning")
+
+        bad = dict(VALID_FORM)
+        bad["collections_movie_name_template"] = "Oops {typo}"
+        c.post("/config/settings", data=bad)
+
+        after = _read_yaml(root, "tuning")
+        assert after == before
+
+    def test_save_does_not_touch_other_collections_keys(self, client):
+        """add_label/label_name/append_usernames/rename_on_template_change/
+        private_collections all live under the same collections: section
+        but are config-file-only (not owned by this screen) - saving the
+        two template fields here must not clobber them, same field-
+        scoping guarantee #290 already established for other sections."""
+        c, app, root = client
+        tuning_path = module_path(root, "tuning")
+        with open(tuning_path, "w", encoding="utf-8") as f:
+            f.write(
+                "collections:\n"
+                "  add_label: false\n"
+                "  label_name: CustomLabel\n"
+                "  append_usernames: false\n"
+                "  private_collections: false\n"
+            )
+
+        form = dict(VALID_FORM)
+        form["collections_movie_name_template"] = "Movie picks for {user}"
+        c.post("/config/settings", data=form)
+
+        tuning = _read_yaml(root, "tuning")
+        assert tuning["collections"]["movie_name_template"] == "Movie picks for {user}"
+        assert tuning["collections"]["add_label"] is False
+        assert tuning["collections"]["label_name"] == "CustomLabel"
+        assert tuning["collections"]["append_usernames"] is False
+        assert tuning["collections"]["private_collections"] is False
+
+    def test_explains_multi_library_suffix_is_appended_separately(self, client):
+        c, app, root = client
+        resp = c.get("/config/settings")
+        assert b"disambiguation suffix" in resp.data
 
 
 class TestValidation:

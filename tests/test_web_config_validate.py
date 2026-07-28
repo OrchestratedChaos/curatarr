@@ -6,8 +6,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils.labels import DEFAULT_MOVIE_NAME_TEMPLATE
 from web.config_validate import (
     validate_choice,
+    validate_collection_template,
     validate_float,
     validate_int,
     validate_required,
@@ -128,3 +130,49 @@ class TestValidateWeightsSum:
         errors = {}
         validate_weights_sum({"a": 0.3333333, "b": 0.3333333, "c": 0.3333334}, "weights", errors)
         assert errors == {}
+
+
+class TestValidateCollectionTemplate:
+    """#286: same reject-outright convention as validate_weights_sum
+    above, rather than mirroring utils.labels.render_collection_name's
+    own runtime fallback-with-a-logged-warning behavior - see that
+    function's docstring/#267 for why the runtime path is deliberately
+    lenient; a UI submission doesn't need to be."""
+
+    def test_default_template_passes(self):
+        errors = {}
+        validate_collection_template(DEFAULT_MOVIE_NAME_TEMPLATE, "f", errors, "movie")
+        assert errors == {}
+
+    def test_both_placeholders_pass_for_either_media_type(self):
+        errors = {}
+        validate_collection_template("{media_type} picks for {user}", "f", errors, "tv")
+        assert errors == {}
+
+    def test_no_placeholders_at_all_passes(self):
+        """A template with neither placeholder is unusual but not
+        malformed - str.format() with extra unused kwargs never raises."""
+        errors = {}
+        validate_collection_template("Recommended", "f", errors, "movie")
+        assert errors == {}
+
+    def test_unknown_placeholder_fails(self):
+        errors = {}
+        validate_collection_template("Oops {usr}", "f", errors, "movie")
+        assert "f" in errors
+        assert "Invalid template" in errors["f"]
+
+    def test_malformed_braces_fail(self):
+        errors = {}
+        validate_collection_template("Oops {", "f", errors, "movie")
+        assert "f" in errors
+
+    def test_movie_and_tv_render_media_type_label_correctly(self):
+        """{media_type} alone must not itself be treated as an unknown
+        placeholder for either media_type argument."""
+        errors_movie: dict = {}
+        errors_tv: dict = {}
+        validate_collection_template("{media_type}", "f", errors_movie, "movie")
+        validate_collection_template("{media_type}", "f", errors_tv, "tv")
+        assert errors_movie == {}
+        assert errors_tv == {}
