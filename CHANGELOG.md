@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.82] - 2026-07-28
+
+### Changed
+
+- **`profile_accuracy.enabled` now defaults to `true` (was `false`). Recommendations WILL change for every non-admin user on the next run.** This flag (added, default-off, by the #273 PR1 fix documented further down this file) gates a defect fix, not a preference: every user's recommendation profile was being built from the SERVER ADMIN's own Plex watch history, ratings, and view counts instead of their own. `utils/cli.py`'s `update_config_for_user` swaps the configured username between runs but never swaps the Plex TOKEN, and `BaseRecommender._get_all_library_items()` caches one library snapshot shared across every user processed in a run - so `viewCount`/`userRating`, both per-account Plex state, could only ever reflect the admin's own account, regardless of whose profile was supposedly being built. Separately, movie rating weighting was dead code entirely: Plex's watch-history API (`/status/sessions/history/all`) never returns `userRating` at all (verified against 2,475 real history entries across 6 real accounts), so every movie fell back to the unrated multiplier and a genuinely disliked movie could never produce a negative signal.
+
+  Per-user recommendations are this product's core function - a user named Nadia should get Nadia's recommendations, not the admin's. Shipping the #273 PR1 fix default-off meant every existing install kept the admin-contaminated behavior until someone found the flag; that's backwards for a defect this fundamental, so the default flips here.
+
+  **What to expect after upgrading:** every configured non-admin user's watched-data profile is rebuilt from their OWN Plex account (via `switchUser`) instead of the shared admin snapshot, and movie ratings are read from the Plex library item instead of the (never-populated) history API. The very next run does a full profile rescore - `compute_profile_hash` changes because the underlying profile data changes - not an incremental one; a deliberate one-time cost, not a bug. Measured on a real 6-user library: per-user top-10 recommendation overlap between the old (admin-contaminated) and new (per-user) output was 8/10, 8/10, 7/10, 6/10, 3/10, and 1/10 - the thinnest watch-history profiles changed the most, exactly as expected since they were the most diluted by admin data under the old behavior.
+
+  **To keep the old (admin-contaminated) output unchanged for a release**, set `profile_accuracy.enabled: false` in `config/tuning.yml`. The flag is not being removed - anyone who has tuned expectations around the current output can opt back out at any time.
+
 ## [2.10.81] - 2026-07-28
 
 ### Removed

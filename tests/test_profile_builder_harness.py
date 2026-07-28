@@ -107,36 +107,39 @@ class TestProfileBuilderHarnessCatchesTheFourBugs:
             "make this pinned-bug assertion stale."
         )
 
-    def test_bug2_movie_watched_data_shows_no_rewatch_or_rating_signal_today(self):
-        """Bug #2: alice's and bob's fixture overrides give them
-        genuinely different, nonzero view_counts/ratings on the movies
-        they've each watched (see MOVIE_PER_USER_LIBRARY_STATE) - but
-        movie.py's _get_plex_watched_data() only ever reads that state
-        through the shared ADMIN-token library snapshot
-        (_get_all_library_items()), which reports 0/None for every item
-        regardless of user. The only per-movie unit weight in play
-        today is therefore RATING_MULTIPLIER_UNRATED (unrated) times
-        whatever recency bucket this fixture's watch timestamps fall
-        into (tests/e2e_plex_fixture.py's history timestamps are fixed
-        at ~2023-11-14 - already >365 days in the past and only growing
-        more so, always the oldest/smallest decay bucket) times
-        rewatch_multiplier(1) (view_count is never seen at all on this
-        legacy path) - every genre-counter value for BOTH users should
-        be a plain integer multiple of that one unit."""
+    def test_bug2_movie_watched_data_now_applies_per_user_weighting_by_default(self):
+        """Bug #2 - FIXED BY DEFAULT (#273 PR1, profile_accuracy.enabled
+        flipped on by default in v2.10.82): alice's and bob's fixture
+        overrides give them genuinely different, nonzero
+        view_counts/ratings on the movies they've each watched (see
+        MOVIE_PER_USER_LIBRARY_STATE) - movie.py's
+        _get_plex_watched_data() now reads that state through EACH
+        user's own Plex-token library snapshot
+        (_get_all_library_items_for_user), not the shared ADMIN-token
+        snapshot that always reported 0/None regardless of user. Not
+        every genre-counter value for both users is still a plain
+        integer multiple of the legacy unrated/oldest-recency-bucket
+        unit weight anymore - this is the golden-fixture-diff PR0's own
+        docstring predicted (see test_bug4's own note below): a #273 PR
+        intentionally changing one of the builders regenerates the
+        snapshot and updates this test to assert the FIXED shape
+        instead of the bug, same as test_bug4 already did."""
         live = run_profile_builders()
         unit = RATING_MULTIPLIER_UNRATED * calculate_recency_multiplier(0, {}) * calculate_rewatch_multiplier(1)
+        any_non_multiple = False
         for username in ("alice", "bob"):
             genres = live[f"movie_plex_watched_{username}"]["genres"]
             assert genres, f"expected at least one genre counted for {username}'s movie profile"
             for value_hex in genres.values():
                 value = float.fromhex(value_hex)
                 multiple = value / unit
-                assert abs(multiple - round(multiple)) < 1e-9, (
-                    f"{username}'s genre weight {value} is not a plain multiple of the "
-                    f"unrated/oldest-recency-bucket unit weight ({unit}) - per-user "
-                    "rewatch/rating weighting may already be wired up correctly (#273 "
-                    "PR1), which would make this pinned-bug assertion stale."
-                )
+                if abs(multiple - round(multiple)) >= 1e-9:
+                    any_non_multiple = True
+        assert any_non_multiple, (
+            "every genre weight for both users is still a plain multiple of the legacy "
+            "unrated/oldest-recency-bucket unit weight - the profile_accuracy "
+            "default-on fix (#273 PR1) may have regressed."
+        )
 
     def test_bug4_managed_users_builder_now_applies_real_weighting(self):
         """Bug #4 - FIXED (#273 PR2): base.py's _get_managed_users_watched_data()

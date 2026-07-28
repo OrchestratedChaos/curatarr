@@ -649,13 +649,14 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
     def test_profile_accuracy_defaults_match(self):
         """#273: recommenders/movie.py's _get_plex_watched_data() and
         recommenders/tv.py's _get_plex_watched_shows_data() both read
-        this with this exact fallback default (False) - see also
+        this with this exact fallback default (True, since v2.10.82 -
+        was False before that; see CHANGELOG) - see also
         tests/test_config.py's own note in this class's docstring about
         why this guardrail exists: a documented example value drifting
         from the real code default (#261) is exactly the class of bug
         this class exists to catch."""
         tuning = self._load_example_tuning()
-        assert tuning["profile_accuracy"]["enabled"] is False
+        assert tuning["profile_accuracy"]["enabled"] is True
 
     def test_recommend_for_no_history_defaults_match(self):
         """#291: BaseRecommender.get_recommendations() reads
