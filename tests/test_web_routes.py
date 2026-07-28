@@ -345,6 +345,61 @@ class TestRunPage:
         assert len(job._subscribers) == 0
         _wait_until_idle(app)
 
+    def test_run_stream_over_subscriber_cap_gets_busy_event(self, client, monkeypatch):
+        """#287: confirmed in a real container that as few as THREADS
+        (8) concurrently open, perfectly legitimate SSE streams for one
+        still-running job exhausts waitress's whole thread pool and
+        freezes the entire app. MAX_STREAM_SUBSCRIBERS_PER_JOB caps
+        concurrent viewers of the SAME job well below that - a viewer
+        over the cap gets a `busy` event (app.js falls back to polling
+        /run/status - see static/app.js) instead of a connection that
+        would just make the exhaustion this cap exists to prevent one
+        connection closer, and is never added to job._subscribers."""
+        c, app, root = client
+        monkeypatch.setattr(app_module, "MAX_STREAM_SUBSCRIBERS_PER_JOB", 1)
+        monkeypatch.setenv("CURATARR_TEST_SLOW", "2")
+        c.post("/run", data={"engine": "movie", "user": "alice"})
+        job = app.job_manager.current_job()
+
+        resp1 = c.get("/run/stream")
+        chunks = iter(resp1.response)
+        next(chunks)  # pull one chunk so the first stream has actually subscribed
+        assert len(job._subscribers) == 1
+
+        resp2 = c.get("/run/stream")
+        assert resp2.status_code == 200
+        body2 = resp2.get_data(as_text=True)
+        assert "event: busy" in body2
+        assert len(job._subscribers) == 1  # the rejected stream was never added
+
+        resp1.close()
+        _wait_until_idle(app)
+
+    def test_run_stream_max_seconds_closes_without_done_event(self, client, monkeypatch):
+        """#287: a single stream must never be allowed to hold its
+        server-side thread indefinitely regardless of how long the job
+        itself takes (confirmed in a real container: a run can take
+        many minutes with no prior upper bound at all on one
+        connection's lifetime). Closing without a `done` event (not an
+        error) lets EventSource's own default auto-reconnect behavior
+        pick the stream back up - app.js deliberately has no onerror
+        handler that would call .close() and defeat that (see
+        static/app.js)."""
+        c, app, root = client
+        monkeypatch.setattr(app_module, "MAX_STREAM_SECONDS", 0.05)
+        monkeypatch.setenv("CURATARR_TEST_SLOW", "2")
+        c.post("/run", data={"engine": "movie", "user": "alice"})
+        job = app.job_manager.current_job()
+
+        resp = c.get("/run/stream")
+        body = resp.get_data(as_text=True)
+        assert "event: done" not in body
+        assert len(job._subscribers) == 0  # unsubscribed on the way out
+        assert app.job_manager.is_running()  # the job itself is unaffected
+
+        _wait_until_idle(app)
+        _wait_until_idle(app)
+
     def test_run_status_json_idle(self, client):
         c, app, root = client
         resp = c.get("/run/status")
