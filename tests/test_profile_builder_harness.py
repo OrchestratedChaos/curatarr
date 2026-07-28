@@ -138,19 +138,34 @@ class TestProfileBuilderHarnessCatchesTheFourBugs:
                     "PR1), which would make this pinned-bug assertion stale."
                 )
 
-    def test_bug4_managed_users_builder_applies_no_weighting_today(self):
-        """Bug #4: base.py's _get_managed_users_watched_data() passes no
-        `weight` to process_counters_from_cache() - every watched item
-        counts exactly 1.0 (no recency/rewatch/rating multiplier at
-        all), so every counter value should be a plain positive
-        integer."""
+    def test_bug4_managed_users_builder_now_applies_real_weighting(self):
+        """Bug #4 - FIXED (#273 PR2): base.py's _get_managed_users_watched_data()
+        used to pass no weight to process_counters_from_cache() at all -
+        every watched item counted exactly 1.0 (no recency/rewatch/rating
+        multiplier whatsoever). It now applies the same
+        recency/rating/rewatch formula movie.py's/tv.py's own per-user
+        builders already use. This is the golden-fixture-diff PR0's own
+        docstring predicted: a future #273 PR intentionally changing one
+        of the four builders regenerates the snapshot and updates this
+        test to assert the FIXED shape instead of the bug - not every
+        counter value is a plain integer anymore, and alice's fixture
+        override (a movie rated 2.0 - a real dislike) now produces a
+        genuine negative signal here too, same as it already does for
+        movie.py's/tv.py's own per-user builders (see
+        TestProfileBuilderHarnessCatchesTheFourBugs.test_bug1... above)."""
         live = run_profile_builders()
-        for key in ("movie_managed_users", "tv_managed_users"):
-            genres = live[key]["genres"]
-            assert genres, f"expected at least one genre counted for {key}"
-            for value_hex in genres.values():
-                value = float.fromhex(value_hex)
-                assert value == int(value), f"{key}: expected an integer (weight=1.0 always), got {value}"
+        movie_genres = live["movie_managed_users"]["genres"]
+        assert movie_genres, "expected at least one genre counted for movie_managed_users"
+        assert any(float.fromhex(v) != int(float.fromhex(v)) for v in movie_genres.values()), (
+            "every movie_managed_users genre weight is still a plain integer - the #273 PR2 "
+            "weighting fix may have regressed."
+        )
+        movie_keywords = live["movie_managed_users"]["tmdb_keywords"]
+        assert any(float.fromhex(v) < 0 for v in movie_keywords.values()), (
+            "expected at least one negative-signal keyword weight in movie_managed_users "
+            "(alice's fixture-override dislike on movie 102) - the #273 PR2 weighting fix "
+            "may have regressed."
+        )
 
     def test_bug3_external_build_user_profile_ignores_username(self):
         """Bug #3: build_user_profile()'s username parameter has zero

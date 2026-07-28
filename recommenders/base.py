@@ -49,6 +49,8 @@ from utils import (
     add_labels_to_items,
     apply_user_label_restrictions,
     build_label_name,
+    calculate_recency_multiplier,
+    calculate_rewatch_multiplier,
     categorize_labeled_items,
     check_cache_version,
     cleanup_legacy_unnamed_collection,
@@ -716,6 +718,11 @@ class BaseRecommender(ABC):
         else:
             users_to_process = self.users["managed_users"] or [admin_user]
 
+        negative_signal_count = 0
+        ns_config = self.config.get("negative_signals", {})
+        cap_penalty = ns_config.get("bad_ratings", {}).get("cap_penalty", 0.5)
+        recency_config = self.config.get("recency_decay", {})
+
         for username in users_to_process:
             try:
                 if username.lower() == admin_user.lower():
@@ -733,7 +740,43 @@ class BaseRecommender(ABC):
 
                     item_info = self._get_media_cache().cache[self.media_key].get(str(item.ratingKey))
                     if item_info:
-                        process_counters_from_cache(item_info, counters, media_type=self.media_type)
+                        # #273 PR2: this path previously called
+                        # process_counters_from_cache() with no weight,
+                        # rating, view_count, or viewed_at at all - every
+                        # watched item counted exactly 1.0 regardless of
+                        # how many times it was rewatched, how it was
+                        # rated, or how recently it was watched (verified:
+                        # every real managed-users profile's counter
+                        # values were plain integers, no fractional
+                        # weighting whatsoever). Now uses the exact same
+                        # recency/rating/rewatch formula movie.py's and
+                        # tv.py's own per-user builders already apply,
+                        # sourced from this same switchUser()-scoped
+                        # library item (already fixed to be per-user, not
+                        # shared-admin, by #273 PR1's
+                        # _get_all_library_items_for_user - this method
+                        # already called search() through that same
+                        # per-user connection before this PR, only the
+                        # weighting itself was missing).
+                        last_viewed_at = getattr(item, "lastViewedAt", None)
+                        viewed_at = int(last_viewed_at.timestamp()) if last_viewed_at else None
+                        recency_multiplier = (
+                            calculate_recency_multiplier(viewed_at, recency_config) if viewed_at else 1.0
+                        )
+                        rating_multiplier = self._calculate_rating_multiplier(getattr(item, "userRating", None))
+                        rewatch_multiplier = calculate_rewatch_multiplier(getattr(item, "viewCount", None) or 1)
+                        weight = recency_multiplier * rating_multiplier * rewatch_multiplier
+
+                        if weight < 0:
+                            negative_signal_count += 1
+                            logger.debug(
+                                f"Negative signal: {item_info.get('title')} "
+                                f"(rating: {getattr(item, 'userRating', None)}, weight: {weight:.2f})"
+                            )
+
+                        process_counters_from_cache(
+                            item_info, counters, media_type=self.media_type, weight=weight, cap_penalty=cap_penalty
+                        )
 
                         if tmdb_id := item_info.get("tmdb_id"):
                             counters["tmdb_ids"].add(tmdb_id)
@@ -743,6 +786,8 @@ class BaseRecommender(ABC):
                 continue
 
         logger.debug(f"Collected {len(counters['tmdb_ids'])} unique TMDB IDs from managed users")
+        if negative_signal_count > 0:
+            logger.info(f"Processed {negative_signal_count} {self.media_key} as negative signals (low ratings)")
 
         return counters
 
