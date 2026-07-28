@@ -206,8 +206,9 @@ negative_signals:
 #     Plex state, not their own.
 # Enabling/upgrading into this default changes existing users' actual
 # recommendations (previously-invisible dislikes can now suppress
-# similar content, and non-admin users stop getting the admin's own
-# profile) and forces a one-time full profile rescore on the next run
+# similar content, and non-admin users' rewatch/rating weighting stops
+# being computed from the admin's own Plex state) and forces a
+# one-time full profile rescore on the next run
 # after the flag flips (the profile hash changes) - a deliberate
 # one-time cost, not a bug. Set enabled: false to keep the old
 # (admin-contaminated) output unchanged for a release. See CHANGELOG
