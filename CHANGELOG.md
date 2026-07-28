@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.65] - 2026-07-27
+
+### Added
+
+- **GitHub Sponsor button (`.github/FUNDING.yml`) with a Ko-fi entry, plus a short "Support" note in the README.** Ko-fi only for now (other platforms undecided). Donations don't buy features, priority support, or roadmap influence - the README says so explicitly.
+
 ## [2.10.64] - 2026-07-27
 
 ### Fixed
