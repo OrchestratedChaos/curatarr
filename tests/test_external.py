@@ -4666,25 +4666,27 @@ class TestDiscoverCandidatesByProfileKeyCoercion:
     used to assume the caller always handed over Counter objects keyed
     exactly "genres"/"keywords" - true for load_user_profile_from_cache()'s
     own return shape, but not guaranteed for every caller. Both are now
-    coerced to Counter if not already one, and keywords accepts either
-    "keywords" or "tmdb_keywords" (the raw watched_data_counters key
-    name)."""
+    coerced to Counter if not already one.
+
+    #273 PR4: no longer accepts "tmdb_keywords" as an alternate keyword
+    key (removed along with the other now-provably-dead #273 compat
+    shims - see CHANGELOG: every real caller of this function always
+    uses "keywords", never the raw watched_data_counters storage key
+    "tmdb_keywords")."""
 
     @patch("recommenders.external.requests.get")
-    def test_plain_dict_genres_and_tmdb_keywords_key_do_not_raise(self, mock_get):
+    def test_plain_dict_genres_and_keywords_do_not_raise(self, mock_get):
         mock_response = Mock()
         mock_response.status_code = 404
         mock_get.return_value = mock_response
 
-        # Plain dicts (not Counter), and "tmdb_keywords" (not "keywords") -
-        # the raw watched_data_counters shape recommenders/movie.py's/
-        # tv.py's own builders produce, as opposed to
-        # load_user_profile_from_cache()'s renamed-to-Counter shape.
-        user_profile = {"genres": {"nonexistent-genre-xyz": 5}, "tmdb_keywords": {"some-keyword": 3}}
+        # Plain dicts (not Counter) - the .most_common() coercion is the
+        # thing under test here, not the key name (see class docstring
+        # for why "tmdb_keywords" is no longer an accepted alternative).
+        user_profile = {"genres": {"nonexistent-genre-xyz": 5}, "keywords": {"some-keyword": 3}}
 
         # Must not raise (AttributeError: 'dict' object has no attribute
-        # 'most_common', or KeyError: 'keywords') - the whole point of
-        # this test.
+        # 'most_common') - the whole point of this test.
         candidates = discover_candidates_by_profile(
             tmdb_api_key="fake_key",
             user_profile=user_profile,

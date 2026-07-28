@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.67] - 2026-07-27
+
+### Fixed
+
+- **Removed dead "keywords" / "tmdb_keywords" dual-key compatibility fallbacks (#273 PR4, final PR of the #273 remediation sequence).** `utils/scoring.py`'s `calculate_similarity_score()`/`normalize_user_profile()` (4 call sites) and `recommenders/external.py`'s `discover_popular_by_genre()`/`_build_profile_via_recommender()` (2 call sites, both added by #273 PR3) all defensively accepted a profile keyed either `"keywords"` (this codebase's scoring-layer convention) or `"tmdb_keywords"` (the raw `watched_data_counters`/on-disk cache storage key `utils/counters.py`'s `create_empty_counters()` uses).
+
+  Audited every real caller of these functions - `recommenders/movie.py`'s and `recommenders/tv.py`'s own `_calculate_similarity_from_cache()`, `recommenders/external.py`'s `load_user_profile_from_cache()`/`_build_profile_via_recommender()`/its own TMDB-candidate `content_info` construction, and `tests/harness.py`'s own scoring-harness fixture - every single one already, always, translates `"tmdb_keywords"` (the storage-layer name) to `"keywords"` (the scoring-layer name) before ever calling into `calculate_similarity_score()`. The `"tmdb_keywords"` fallback branch was therefore dead code no real caller had ever actually exercised - confirmed directly: two of `tests/test_scoring.py`'s existing tests had been constructing profiles keyed `"tmdb_keywords"` specifically to test this fallback, and a third's assertion (a score-capping ceiling check) had silently stopped exercising its keyword-matching arm entirely without ever failing. All three updated to use `"keywords"` (their own tests' original intent), along with one `tests/test_external.py` test that exercised the now-removed `discover_popular_by_genre()` fallback.
+
+  This does NOT touch the storage-layer convention at all - `create_empty_counters()`, `process_counters_from_cache()`, and every real `watched_cache_plex_<user>.json`/`tv_watched_cache_plex_<user>.json` on disk still use `"tmdb_keywords"` exactly as before; only the scoring-layer boundary's now-provably-unreachable tolerance for that same name was removed.
+
+  **Verified against the real, live Plex library** (read-only: no Plex writes, no Trakt calls): re-scored all 161 real unwatched-movie candidates for a real user against their real, freshly-built watched profile using the current (post-PR4) code - 50 candidates still received a non-zero keyword-score contribution (confirming `"keywords"`, the one surviving key, still matches real TMDB keyword data correctly end to end), and two consecutive scoring passes produced byte-identical results (determinism unaffected). Zero behavioral delta was predicted for this PR (a pure dead-code removal, unlike PR1/PR2/PR3's genuine behavior changes) and none was observed.
+
 ## [2.10.66] - 2026-07-27
 
 ### Fixed
