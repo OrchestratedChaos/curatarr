@@ -278,12 +278,14 @@ def discover_candidates_by_profile(
     top_genres = all_genres[genre_start:genre_end]
     genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == "movie" else TMDB_TV_GENRE_IDS
 
-    # Get keywords for this iteration's range. Accepts either 'keywords'
-    # (this file's own internal convention - see
-    # load_user_profile_from_cache()'s/_build_profile_via_recommender()'s
-    # return shape) or 'tmdb_keywords' (the raw watched_data_counters key
-    # name recommenders/movie.py's/tv.py's own builders use) - #273 PR3.
-    keywords_counter = user_profile.get("keywords", user_profile.get("tmdb_keywords"))
+    # Get keywords for this iteration's range. Coerced to Counter (#273
+    # PR3) rather than assumed - every real caller (load_user_profile_
+    # from_cache()/_build_profile_via_recommender() below) always uses
+    # 'keywords' as the key (never the raw watched_data_counters
+    # 'tmdb_keywords' storage name - both translate that before
+    # returning), so no dual-key fallback is needed here (#273 PR4
+    # removed one that was never actually reachable - see CHANGELOG).
+    keywords_counter = user_profile.get("keywords")
     if not isinstance(keywords_counter, Counter):
         keywords_counter = Counter(keywords_counter or {})
     all_keywords = list(keywords_counter.most_common(40))
@@ -619,10 +621,12 @@ def _build_profile_via_recommender(username: str, media_type: str) -> Dict:
 
     Returns the profile in the exact same shape
     load_user_profile_from_cache() returns (Counter-valued, 'keywords'
-    not 'tmdb_keywords') for consistency between the two - though
-    is_thin_profile()/discover_popular_by_genre() (the two real
-    consumers) defensively accept either key name and coerce to Counter
-    regardless, since a future caller could still hand either shape.
+    not 'tmdb_keywords') - the ONE shape every real consumer of a
+    profile dict in this file (is_thin_profile(),
+    discover_popular_by_genre(), calculate_similarity_score()) expects;
+    #273 PR4 removed the dual-key ('keywords' or 'tmdb_keywords')
+    tolerance that used to sit at each of those call sites, since no
+    real caller ever needed it - see CHANGELOG.
     """
     from recommenders.movie import PlexMovieRecommender
     from recommenders.tv import PlexTVRecommender
@@ -642,7 +646,7 @@ def _build_profile_via_recommender(username: str, media_type: str) -> Dict:
         "directors": Counter(wdc.get("directors", {})),
         "studios": Counter(wdc.get("studios", {})),
         "actors": Counter(wdc.get("actors", {})),
-        "keywords": Counter(wdc.get("tmdb_keywords", wdc.get("keywords", {}))),
+        "keywords": Counter(wdc.get("tmdb_keywords", {})),
         "languages": Counter(wdc.get("languages", {})),
         "tmdb_ids": set(wdc.get("tmdb_ids", [])),
     }

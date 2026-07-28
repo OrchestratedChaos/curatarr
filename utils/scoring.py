@@ -60,7 +60,17 @@ def normalize_user_profile(user_prefs: Dict, tfidf_penalty_threshold: float = 0.
         "studios": max_positive(user_prefs.get("studios", {})),
         "actors": max_positive(user_prefs.get("actors", {})),
         "languages": max_positive(user_prefs.get("languages", {})),
-        "keywords": max_positive(user_prefs.get("keywords", user_prefs.get("tmdb_keywords", {}))),
+        # #273 PR4: "keywords" is the ONLY key any real caller ever uses
+        # here (recommenders/movie.py's/tv.py's/external.py's own
+        # watched-data builders all translate their storage-layer
+        # 'tmdb_keywords' key to 'keywords' before calling into this
+        # module - see each builder's own _calculate_similarity_from_cache/
+        # load_user_profile_from_cache/_build_profile_via_recommender).
+        # The "or user_prefs.get('tmdb_keywords', ...)" fallback that used
+        # to sit here was dead code no real caller ever exercised -
+        # removed along with the other #273-related compat shims (see
+        # CHANGELOG).
+        "keywords": max_positive(user_prefs.get("keywords", {})),
     }
     user_prefs["_max_counts"] = max_counts
 
@@ -245,7 +255,7 @@ def _redistribute_weights(weights: Dict, user_profile: Dict, media_type: str = "
     has_studios = bool(user_profile.get("studios", {})) if media_type == "tv" else False
     has_actors = bool(user_profile.get("actors", {}))
     has_languages = bool(user_profile.get("languages", {}))
-    has_keywords = bool(user_profile.get("keywords", user_profile.get("tmdb_keywords", {})))
+    has_keywords = bool(user_profile.get("keywords", {}))
 
     # Get original weights
     genre_w = weights.get("genre", weights.get("genre_weight", 0.20))
@@ -829,7 +839,7 @@ def calculate_similarity_score(
             "studios": Counter(user_profile.get("studios", {})),
             "actors": Counter(user_profile.get("actors", {})),
             "languages": Counter(user_profile.get("languages", {})),
-            "keywords": Counter(user_profile.get("keywords", user_profile.get("tmdb_keywords", {}))),
+            "keywords": Counter(user_profile.get("keywords", {})),
         }
 
         # Use pre-computed max counts if available (from normalize_user_profile)
@@ -915,7 +925,7 @@ def calculate_similarity_score(
         score_breakdown["details"]["language"] = lang_detail
 
         # --- Keyword Score (with embedded TF-IDF penalty) ---
-        content_keywords = content_info.get("keywords", content_info.get("tmdb_keywords", []))
+        content_keywords = content_info.get("keywords", [])
         keyword_weight = effective_weights.get("keyword", 0.45)
         keyword_tfidf_threshold = _tfidf_threshold(user_profile, "keywords", max_counts["keywords"], options)
         keyword_final, _keyword_penalty_w, keyword_details = _score_keyword_component(

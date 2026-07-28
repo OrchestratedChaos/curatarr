@@ -303,7 +303,11 @@ class TestCalculateSimilarityScore:
     def test_keyword_match(self):
         """Test keyword matching."""
         content = {"keywords": ["superhero", "origin story"]}
-        profile = {"tmdb_keywords": {"superhero": 10, "origin story": 5}}
+        # "keywords" (#273 PR4 - the one canonical name every real caller
+        # uses; the "tmdb_keywords" dual-key tolerance this test used to
+        # exercise was dead code no real caller ever needed - see
+        # CHANGELOG).
+        profile = {"keywords": {"superhero": 10, "origin story": 5}}
 
         score, breakdown = calculate_similarity_score(content, profile)
 
@@ -362,7 +366,7 @@ class TestCalculateSimilarityScore:
         profile = {
             "genres": {"action": 100, "comedy": 100, "drama": 100, "thriller": 100},
             "actors": {"A": 100, "B": 100, "C": 100, "D": 100, "E": 100},
-            "tmdb_keywords": {"kw1": 100, "kw2": 100, "kw3": 100, "kw4": 100, "kw5": 100},
+            "keywords": {"kw1": 100, "kw2": 100, "kw3": 100, "kw4": 100, "kw5": 100},  # #273 PR4
             "directors": {"Dir1": 100},
         }
 
@@ -538,8 +542,9 @@ class TestNegativeSignalsScoring:
     def test_negative_keyword_reduces_score(self):
         """Test that negative keyword preference reduces score."""
         content = {"keywords": ["superhero", "origin story"]}
-        profile_positive = {"tmdb_keywords": {"superhero": 10, "origin story": 5}}
-        profile_with_negative = {"tmdb_keywords": {"superhero": 10, "origin story": -3}}
+        # "keywords" (#273 PR4) - see test_keyword_match's own note above.
+        profile_positive = {"keywords": {"superhero": 10, "origin story": 5}}
+        profile_with_negative = {"keywords": {"superhero": 10, "origin story": -3}}
 
         score_positive, _ = calculate_similarity_score(content, profile_positive)
         score_negative, _ = calculate_similarity_score(content, profile_with_negative)
