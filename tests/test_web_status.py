@@ -13,7 +13,6 @@ from utils.run_status import record_run_status
 from web.status import (
     LOG_VIEW_MAX_BYTES,
     TAIL_BYTES,
-    display_name_safe_slug,
     find_user_watchlist,
     get_last_run_status,
     list_log_files,
@@ -385,33 +384,30 @@ class TestReadLogFull:
         assert truncated is False
 
 
-class TestDisplayNameSafeSlug:
-    """Tests for display_name_safe_slug()"""
-
-    def test_uses_display_name_when_configured(self):
-        config = {"users": {"preferences": {"alice": {"display_name": "Alice A"}}}}
-        assert display_name_safe_slug(config, "alice") == "alice_a"
-
-    def test_falls_back_to_username_when_no_display_name(self):
-        config = {"users": {"preferences": {}}}
-        assert display_name_safe_slug(config, "bob") == "bob"
-
-    def test_handles_none_config(self):
-        assert display_name_safe_slug(None, "bob") == "bob"
-
-
 class TestFindUserWatchlist:
     """Tests for find_user_watchlist()"""
 
-    def test_prefers_per_user_file(self, tmp_path):
+    def test_ignores_stray_per_user_html_file(self, tmp_path):
+        """The per-user "<slug>_watchlist.html" preference was removed
+        (recommenders/external_render.py has never written that file in
+        this repo's tracked history - only six-month-old stragglers
+        predating it ever existed on disk, since deleted). Even if one
+        is somehow present, this must still resolve to the combined
+        file, not the per-user one.
+        """
         config = {"users": {"preferences": {"alice": {"display_name": "Alice A"}}}}
         (tmp_path / "alice_a_watchlist.html").write_text("<html></html>")
         (tmp_path / "watchlist.html").write_text("<html></html>")
         result = find_user_watchlist(str(tmp_path), config, "alice")
-        assert result == "alice_a_watchlist.html"
+        assert result == "watchlist.html"
 
-    def test_falls_back_to_combined_file(self, tmp_path):
+    def test_falls_back_to_combined_file_with_user_markdown_present(self, tmp_path):
+        """The realistic case: this user's own per-user markdown
+        (which does regenerate every run - generate_markdown()) exists
+        alongside the combined HTML. Resolves to the combined file.
+        """
         config = {"users": {"preferences": {"alice": {"display_name": "Alice A"}}}}
+        (tmp_path / "alice_a_watchlist.md").write_text("# Alice A")
         (tmp_path / "watchlist.html").write_text("<html></html>")
         result = find_user_watchlist(str(tmp_path), config, "alice")
         assert result == "watchlist.html"

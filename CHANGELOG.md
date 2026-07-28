@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.81] - 2026-07-28
+
+### Removed
+
+- **Dead per-user watchlist HTML preference in `web/status.py`'s `find_user_watchlist()`, and six stale, seven-month-old files it was checking for.** The dashboard's per-user "watchlist" link resolved a per-user `<display_name>_watchlist.html` file first, falling back to the combined, all-users `watchlist.html` only if that per-user file didn't exist. `recommenders/external_render.py` has never written that per-user HTML file anywhere in this repo's tracked history (only the per-user markdown via `generate_markdown()` and the combined HTML via `generate_combined_html()`) - the only files ever matching that pattern on disk (`recommendations/external/{user}_watchlist.html`) were dated January 2026, predating this repo's tracked history (a filter-repo truncation), and were never regenerated since. Every install was therefore already silently falling through to the combined-file branch - removing the per-user preference changes nothing anyone sees. Deleted the six stale files (`eric_`, `home_`, `jason_`, `lynn_`, `nadia_`, `natasha_watchlist.html`); the per-user `.md` files and the live, daily-regenerating combined `watchlist.html` are untouched.
+
 ## [2.10.80] - 2026-07-28
 
 ### Fixed

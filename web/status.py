@@ -231,29 +231,27 @@ def list_log_files(logs_dir: str) -> List[Dict]:
     return entries
 
 
-def display_name_safe_slug(config: Dict, username: str) -> str:
-    """Mirror recommenders/external_render.py's filename derivation:
-    display_name (falling back to the username itself), lowercased,
-    spaces replaced with underscores.
-    """
-    prefs = (config or {}).get("users", {}).get("preferences", {}) or {}
-    display_name = (prefs.get(username) or {}).get("display_name", username)
-    return str(display_name).lower().replace(" ", "_")
-
-
 def find_user_watchlist(external_dir: str, config: Dict, username: str) -> Optional[str]:
     """Return the basename of this user's generated watchlist, if any.
 
-    Prefers the per-user "<display_name>_watchlist.html" file that
-    recommenders/external_render.py writes; falls back to the combined
-    (all-users, tabbed) "watchlist.html" if that's all that exists yet.
-    Returns None if neither has been generated.
-    """
-    slug = display_name_safe_slug(config, username)
-    per_user = f"{slug}_watchlist.html"
-    if os.path.isfile(os.path.join(external_dir, per_user)):
-        return per_user
+    Returns the combined (all-users, tabbed) "watchlist.html" if it's
+    been generated, else None.
 
+    Used to prefer a per-user "<display_name>_watchlist.html"
+    file first. recommenders/external_render.py has never written that
+    file in this repo's tracked history (only the per-user markdown and
+    the combined HTML - see generate_markdown()/generate_combined_html()
+    there); the only files matching that pattern on disk were six-month-old
+    stragglers from before this repo's history was truncated (a
+    filter-repo at root commit dbd2054), never regenerated, and are now
+    deleted. Every caller (web/app.py's dashboard()) was therefore
+    already silently falling through to this same combined-file return
+    on every real install - removing the dead branch changes nothing
+    users see. config/username are still accepted (rather than
+    narrowing this function's signature) so this stays a drop-in
+    replacement for that one caller; neither is used internally
+    anymore.
+    """
     combined = "watchlist.html"
     if os.path.isfile(os.path.join(external_dir, combined)):
         return combined
