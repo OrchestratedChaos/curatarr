@@ -12,8 +12,11 @@ from utils.config import (
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_RATING_MULTIPLIERS,
     ENV_VAR_OVERRIDES,
+    KNOWN_MEDIA_SECTION_KEYS,
+    KNOWN_ROOT_CONFIG_KEYS,
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
+    MOVIES_ONLY_MEDIA_SECTION_KEYS,
     UPDATE_MODES,
     _deep_merge_dicts,
     check_cache_version,
@@ -30,6 +33,7 @@ from utils.config import (
     load_config,
     load_resolved_config,
     resolve_media_type_overrides,
+    warn_unknown_config_keys,
 )
 
 
@@ -1764,3 +1768,151 @@ class TestGetUpdateMode:
         result = get_effective_arr_config(config, library)
         assert result["enabled"] is True
         assert result["root_folder"] == "/tv"
+
+
+class TestWarnUnknownConfigKeys:
+    """#316 (second half): a config key nothing reads must say so.
+
+    The first half of #316 - `movies:`/`tv:` `quality_filters` and
+    `randomize_recommendations` being read from the wrong depth - was
+    already fixed by the resolve_media_type_overrides() consolidation
+    (see TestResolveMediaTypeOverrides* above, which prove the nested
+    layout resolves). What was missing, and what these tests cover, is
+    the warning that stops the *next* such key from going silently inert.
+    """
+
+    def test_unknown_root_key_warns(self):
+        warnings = warn_unknown_config_keys({"plex": {}, "notathing": 1})
+        assert any("notathing" in w for w in warnings)
+
+    def test_known_root_keys_do_not_warn(self):
+        config = {key: {} for key in KNOWN_ROOT_CONFIG_KEYS}
+        assert warn_unknown_config_keys(config) == []
+
+    def test_uppercase_root_key_does_not_warn(self):
+        """get_config_section() accepts an uppercase spelling, so a
+        config using one genuinely works - warning would be a false
+        positive."""
+        assert warn_unknown_config_keys({"TMDB": {"api_key": "x"}}) == []
+
+    def test_unknown_movies_section_key_warns(self):
+        warnings = warn_unknown_config_keys({"movies": {"limit_results": 5, "bogus_key": True}})
+        assert any("bogus_key" in w and "movies:" in w for w in warnings)
+
+    def test_unknown_tv_section_key_warns(self):
+        warnings = warn_unknown_config_keys({"tv": {"bogus_key": True}})
+        assert any("bogus_key" in w and "tv:" in w for w in warnings)
+
+    def test_documented_media_section_keys_do_not_warn(self):
+        movies = {key: True for key in KNOWN_MEDIA_SECTION_KEYS | MOVIES_ONLY_MEDIA_SECTION_KEYS}
+        tv = {key: True for key in KNOWN_MEDIA_SECTION_KEYS}
+        assert warn_unknown_config_keys({"movies": movies, "tv": tv}) == []
+
+    def test_show_director_under_tv_warns_as_movies_only(self):
+        """The asymmetric case: a real key, spelled right, that simply
+        does nothing where it was put."""
+        warnings = warn_unknown_config_keys({"tv": {"show_director": True}})
+        assert len(warnings) == 1
+        assert "show_director" in warnings[0]
+        assert "movies-only" in warnings[0]
+
+    def test_show_director_under_movies_does_not_warn(self):
+        assert warn_unknown_config_keys({"movies": {"show_director": True}}) == []
+
+    def test_typo_gets_a_suggestion(self):
+        warnings = warn_unknown_config_keys({"movies": {"limit_result": 5}})
+        assert len(warnings) == 1
+        assert "did you mean 'limit_results'" in warnings[0]
+
+    def test_non_dict_media_section_is_ignored_not_crashed_on(self):
+        """A malformed `movies:` (e.g. left empty, or set to a scalar)
+        must not take config loading down with it."""
+        assert warn_unknown_config_keys({"movies": None}) == []
+        assert warn_unknown_config_keys({"tv": "nonsense"}) == []
+
+    def test_load_config_warns_for_real_files(self):
+        """End-to-end through load_config(), so this covers the call
+        site and the post-merge ordering, not just the function."""
+        import shutil
+
+        config_dir = tempfile.mkdtemp()
+        try:
+            config_path = os.path.join(config_dir, "config.yml")
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump({"plex": {"url": "http://x", "token": "t"}}, f)
+            with open(os.path.join(config_dir, "tuning.yml"), "w", encoding="utf-8") as f:
+                yaml.safe_dump({"movies": {"randomise_recommendations": False}}, f)
+
+            config = load_config(config_path)
+            # Loading still succeeds - warn-only, never fatal.
+            assert config["plex"]["url"] == "http://x"
+
+            warnings = warn_unknown_config_keys(config)
+            assert any("randomise_recommendations" in w for w in warnings)
+            # British spelling is close enough to earn a suggestion.
+            assert any("did you mean 'randomize_recommendations'" in w for w in warnings)
+        finally:
+            shutil.rmtree(config_dir)
+
+
+class TestKnownRootConfigKeysCoverThePublishedExamples:
+    """Standing guard, same pattern as
+    TestResolveMediaTypeOverridesKeyEnumeration: if a shipped example
+    config grows a new top-level section and KNOWN_ROOT_CONFIG_KEYS
+    isn't updated to match, every user who copies that example starts
+    getting a spurious "nothing reads it" warning for a key that is in
+    fact read. Fail here instead.
+    """
+
+    @staticmethod
+    def _example(name):
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(repo_root, "config", name), "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+
+    def test_config_example_top_level_keys_are_all_known(self):
+        keys = set(self._example("config.example.yml").keys())
+        assert keys <= KNOWN_ROOT_CONFIG_KEYS, (
+            f"config.example.yml has unlisted top-level keys: {keys - KNOWN_ROOT_CONFIG_KEYS}"
+        )
+
+    def test_tuning_example_top_level_keys_are_all_known(self):
+        keys = set(self._example("tuning.example.yml").keys())
+        assert keys <= KNOWN_ROOT_CONFIG_KEYS, (
+            f"tuning.example.yml has unlisted top-level keys: {keys - KNOWN_ROOT_CONFIG_KEYS}"
+        )
+
+    def test_module_config_names_are_known_root_keys(self):
+        """Each module file lands under its own name as a root key."""
+        for module in ("trakt", "radarr", "sonarr", "mdblist", "simkl"):
+            assert module in KNOWN_ROOT_CONFIG_KEYS
+
+    def test_example_media_section_keys_are_all_known(self):
+        """The movies:/tv: allow-lists must cover what the example file
+        actually documents, or copying it verbatim produces warnings."""
+        tuning = self._example("tuning.example.yml")
+        movies_allowed = KNOWN_MEDIA_SECTION_KEYS | MOVIES_ONLY_MEDIA_SECTION_KEYS
+        assert set(tuning["movies"].keys()) <= movies_allowed, (
+            f"tuning.example.yml movies: has unlisted keys: {set(tuning['movies'].keys()) - movies_allowed}"
+        )
+        assert set(tuning["tv"].keys()) <= KNOWN_MEDIA_SECTION_KEYS, (
+            f"tuning.example.yml tv: has unlisted keys: {set(tuning['tv'].keys()) - KNOWN_MEDIA_SECTION_KEYS}"
+        )
+
+    def test_migrate_config_sections_are_all_known_root_keys(self):
+        """utils/migrate_config.py has its own hardcoded enumeration of
+        every sanctioned top-level section (it decides what survives a
+        migration). If a section is sanctioned enough to be preserved
+        there but missing here, a migrated config warns about a key that
+        the project itself just carried forward - so tie the two lists
+        together rather than maintaining them independently.
+
+        This is the test that would have caught `streaming_services`
+        (read by recommenders/external.py) and `platform` being absent
+        from KNOWN_ROOT_CONFIG_KEYS.
+        """
+        from utils.migrate_config import CORE_SECTIONS, FEATURE_MODULES, TUNING_SECTIONS
+
+        sanctioned = set(CORE_SECTIONS) | set(TUNING_SECTIONS) | set(FEATURE_MODULES)
+        missing = sanctioned - KNOWN_ROOT_CONFIG_KEYS
+        assert not missing, f"sections migrate_config.py preserves but KNOWN_ROOT_CONFIG_KEYS omits: {missing}"

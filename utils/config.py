@@ -3,6 +3,7 @@ Configuration utilities for Curatarr.
 Handles config loading, section access, and rating multipliers.
 """
 
+import difflib
 import json
 import os
 import re
@@ -13,7 +14,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.83"
+__version__ = "2.10.84"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
@@ -390,6 +391,174 @@ def get_env_override(section: str, key: str) -> Optional[str]:
     return None
 
 
+# =============================================================================
+# #316: loud detection of config keys nothing reads.
+#
+# The bug class this exists to kill: a key that is spelled plausibly, sits
+# at a plausible depth, parses as valid YAML, and is then silently never
+# read - so the setting is simply inert and the operator has no signal at
+# all. That is exactly how `movies:`/`tv:` `quality_filters` and
+# `randomize_recommendations` stayed non-functional through several
+# releases (see CHANGELOG 2.10.23 and this module's
+# resolve_media_type_overrides docstring). The resolution paths themselves
+# were consolidated and fixed then; this is the other half of #316 - the
+# standing warning so the next such key can't go quiet.
+#
+# Deliberately warn-only, never fatal: an unknown key is far more likely
+# to be a typo or a leftover from an older release than something worth
+# refusing to start over, and failing closed here would turn a cosmetic
+# config wart into an outage on an unattended scheduled run.
+# =============================================================================
+
+# Every top-level section any shipped code path actually reads. Sourced
+# from config/*.example.yml plus a sweep of real root-level reads in the
+# codebase - see TestKnownRootConfigKeysCoverThePublishedExamples, which
+# fails if an example file grows a section that isn't listed here.
+#
+# `weights` and `quality_filters` are the legacy pre-2.10.23 root-level
+# spellings, still honored as a fallback tier by resolve_media_type_over
+# rides() and BaseRecommender.get_recommendations() respectively - they
+# are read, so they must not warn.
+KNOWN_ROOT_CONFIG_KEYS = frozenset(
+    {
+        # config.yml
+        "plex",
+        "tmdb",
+        "users",
+        "plex_users",
+        "general",
+        "logging",
+        "schedule",
+        "huntarr",
+        "tautulli",
+        "libraries",
+        "cache_dir",
+        # Read by recommenders/external.py as the global service list
+        # that users.preferences.<user>.streaming_services unions onto -
+        # see get_streaming_services_for_user().
+        "streaming_services",
+        # Nothing reads `platform` today, but migrate_config.CORE_SECTIONS
+        # deliberately preserves it across a migration, so it is a
+        # sanctioned section rather than a stray key. Listed here on
+        # purpose: warning about something the project itself carries
+        # forward would be noise, and noise is what gets a warning like
+        # this one tuned out.
+        "platform",
+        # tuning.yml (merged into root by _load_module_configs)
+        "movies",
+        "tv",
+        "collections",
+        "external_recommendations",
+        "recency_decay",
+        "rating_multipliers",
+        "negative_signals",
+        "profile_accuracy",
+        # module files, each landing under its own key
+        "trakt",
+        "radarr",
+        "sonarr",
+        "mdblist",
+        "simkl",
+        # legacy root-level fallbacks (still read - see note above)
+        "weights",
+        "quality_filters",
+    }
+)
+
+# Keys meaningful inside a `movies:`/`tv:` section of tuning.yml. Split
+# because `show_director` is movies-only: TV has no director-equivalent
+# display option, so resolve_media_type_overrides() never reads it for
+# TV and setting it there is silently inert - precisely the shape of bug
+# this whole section exists to surface.
+KNOWN_MEDIA_SECTION_KEYS = frozenset(
+    {
+        "limit_results",
+        "randomize_recommendations",
+        "normalize_counters",
+        "show_summary",
+        "show_genres",
+        "show_cast",
+        "show_language",
+        "show_rating",
+        "show_imdb_link",
+        "weights",
+        "quality_filters",
+        "recommend_for_no_history",
+    }
+)
+MOVIES_ONLY_MEDIA_SECTION_KEYS = frozenset({"show_director"})
+
+
+def _suggest_similar_key(unknown: str, known) -> str:
+    """Return a ' (did you mean ...)' fragment for a likely typo, or ''."""
+    matches = difflib.get_close_matches(unknown.lower(), sorted(known), n=1, cutoff=0.72)
+    return f" (did you mean '{matches[0]}'?)" if matches else ""
+
+
+def warn_unknown_config_keys(config: dict) -> List[str]:
+    """
+    Log a warning for every config key nothing in the codebase reads.
+
+    Checks two levels - the merged root, and the `movies:`/`tv:` sections
+    of tuning.yml, which is where the #316 class of silent-ignore bug
+    actually bit. Key lookups are case-insensitive because
+    get_config_section() itself accepts an uppercase spelling (`TMDB:`,
+    `MOVIES:`) for backwards compatibility, so warning on those would be
+    a false positive on a config that genuinely works.
+
+    Args:
+        config: The merged root config dict, as built by load_config()
+
+    Returns:
+        The warning messages emitted, in order - returned (not just
+        logged) so tests can assert on them without capturing log output.
+    """
+    warnings: List[str] = []
+
+    def _warn(message: str) -> None:
+        warnings.append(message)
+        log_warning(message)
+
+    for key in config:
+        if not isinstance(key, str) or key.lower() in KNOWN_ROOT_CONFIG_KEYS:
+            continue
+        _warn(
+            f"Unrecognized config key '{key}' at the top level of your "
+            f"config - nothing reads it, so it has no effect"
+            f"{_suggest_similar_key(key, KNOWN_ROOT_CONFIG_KEYS)}"
+        )
+
+    for section_name in ("movies", "tv"):
+        section = config.get(section_name, config.get(section_name.upper()))
+        if not isinstance(section, dict):
+            continue
+        allowed = KNOWN_MEDIA_SECTION_KEYS
+        if section_name == "movies":
+            allowed = allowed | MOVIES_ONLY_MEDIA_SECTION_KEYS
+
+        for key in section:
+            if not isinstance(key, str) or key.lower() in allowed:
+                continue
+            # Distinguish "this key doesn't exist" from "this key exists
+            # but not here" - the second is much more confusing to hit,
+            # because the operator has seen it work under the other
+            # section and reasonably assumes it is symmetric.
+            if key.lower() in MOVIES_ONLY_MEDIA_SECTION_KEYS:
+                _warn(
+                    f"Config key '{key}' under '{section_name}:' is "
+                    f"movies-only and is ignored for TV - remove it, or "
+                    f"move it under 'movies:'"
+                )
+            else:
+                _warn(
+                    f"Unrecognized config key '{key}' under "
+                    f"'{section_name}:' - nothing reads it, so it has no "
+                    f"effect{_suggest_similar_key(key, allowed)}"
+                )
+
+    return warnings
+
+
 def load_config(config_path: str) -> dict:
     """
     Load YAML configuration with modular config file support.
@@ -451,6 +620,12 @@ def load_config(config_path: str) -> dict:
                     config[section] = {}
                 config[section][key] = value
                 log_info(f"Using {env_var} from environment")
+
+        # #316: last step, after every merge/override above, so this sees
+        # exactly the dict the rest of the app will read - not an
+        # intermediate state that would warn about a key tuning.yml was
+        # about to supply, or miss one a module file just introduced.
+        warn_unknown_config_keys(config)
 
         return config
     except Exception as e:

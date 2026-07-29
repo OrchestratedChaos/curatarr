@@ -32,14 +32,21 @@ Grab the binary for your platform - no Python, no `git clone`:
 | Linux arm64 | `curatarr-linux-arm64` |
 
 macOS binaries are Apple Silicon only - Intel Mac users should run from
-source (see [Quick Start](#quick-start) below). Details in
-[docs/BINARIES.md](docs/BINARIES.md).
+source (see [Quick Start](#quick-start) below). Linux binaries need
+glibc 2.28+ (Debian 12+, Ubuntu 22.04+, RHEL/Rocky/AlmaLinux 9+ - check
+yours with `ldd --version`); older distros should also run from source.
+Details in [docs/BINARIES.md](docs/BINARIES.md).
 
 [Latest release](https://github.com/OrchestratedChaos/curatarr/releases/latest) · full platform-specific steps and checksums in [docs/BINARIES.md](docs/BINARIES.md)
 
-Double-click it and it opens the dashboard at `http://127.0.0.1:8787` in your browser - no Python install, no terminal.
+Run it (macOS/Linux: `chmod +x` the downloaded file first - see
+[docs/BINARIES.md](docs/BINARIES.md) for the exact per-OS steps) and it
+opens the dashboard at `http://127.0.0.1:8787` in your browser - no
+Python install, no terminal required.
 
-First run, your OS will warn about an unsigned binary - Windows SmartScreen: **More info → Run anyway**; macOS Gatekeeper: right-click → **Open**. Details in [docs/BINARIES.md](docs/BINARIES.md#unsigned-binaries).
+First run, your OS will warn about an unsigned binary - Windows SmartScreen: **More info → Run anyway**; macOS Gatekeeper: right-click → **Open** (a plain double-click on a fresh download won't offer that option - it has to be right-click the first time). Details in [docs/BINARIES.md](docs/BINARIES.md#unsigned-binaries).
+
+**First-time setup:** there's no separate wizard - the dashboard opens with nothing configured yet ("No users configured"). Use the top nav's **Connections** screen to add your Plex/TMDB/etc. details, then **Users** to add your Plex users, then **Settings** for scoring and scheduling. See [Web UI](#web-ui-beta) below for what each screen does.
 
 Binaries self-update: the app notifies you (CLI and web UI banner) when a newer release exists, and the web UI's **Update now** button (or `curatarr --self-update` from a terminal) downloads it, cryptographically verifies it (signed checksum + hash match - see [docs/BINARIES.md](docs/BINARIES.md#self-updating)), and swaps itself in place. No manual download required, but nothing applies automatically without you clicking/running one of those - for that, use a [source install](#quick-start) and set `general.update_mode: force`.
 
@@ -54,7 +61,7 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 - **Recency bias** — Recent watches influence recommendations more
 - **Rewatch detection** — Content you love gets weighted higher
 - **Genre exclusions** — Skip horror for the kids, documentaries for movie night
-- **Auto-updating collections** — `🎬 John - Recommendations` appears in Plex (customizable naming template — `collections.movie_name_template`/`tv_name_template` in tuning.yml)
+- **Auto-updating collections** — `🎬 John - Recommendation` appears in Plex (customizable naming template — `collections.movie_name_template`/`tv_name_template` in tuning.yml)
 
 ### For Acquisition (What to Get)
 - **External watchlists** — Content NOT in your library that users would love
@@ -67,22 +74,54 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 - **Genre balancing** — Matches user viewing habits proportionally
 
 ### For You (Simple & Robust)
-- **One command** — `./run.sh` handles everything
+- **One file, no install** — download the binary and run it; `./run.sh` handles everything from source
 - **Multi-library support** — Each Plex library gets its own Sonarr/Radarr root folder, quality profile, tags, monitor/search, and optionally its own *arr instance; recommendations run per-library so Movies, TV, Anime, and Kids each follow their own rules
 - **Modular config** — Main settings plus optional integration files
 - **Update notifications** — Notifies (CLI + dismissible web UI banner) when a newer signed release exists, for every `update_mode` including `off`; set `update_mode: force` to auto-apply on each run instead
 - **Smart caching** — Auto-clears incompatible caches after updates
-- **Auto-scheduling** — Optional daily cron job
+- **Auto-scheduling** — Optional daily run: the built-in in-app scheduler (Settings screen, no cron needed) or host cron/Task Scheduler
 - **Clean logs** — Know exactly what happened
 
 ---
 
 ## Quick Start
 
-Below is the source install (Python required, auto-updates via signed releases).
-Prefer a no-Python download instead? See [Download](#download) above.
+Prefer a no-Python, no-Docker download instead? See [Download](#download)
+above - that's the easiest path for most people. The options below cover
+Docker and running from a source checkout (Python required for the
+latter - also the path if you're developing or contributing, though
+fully supported for regular use too, with its own auto-update).
 
-### macOS / Linux
+### Docker
+No Python install needed - runs the same web UI as the
+[standalone binary](#download), packaged as a container image instead.
+```bash
+git clone https://github.com/OrchestratedChaos/curatarr.git
+cd curatarr
+./setup.sh              # Interactive setup wizard (recommended)
+```
+
+Or manually configure instead of the wizard:
+```bash
+cp config/config.example.yml config/config.yml
+# Edit config/config.yml with your details
+```
+
+**Before starting it**, set `CURATARR_AUTH_TOKEN` in `docker-compose.yml`
+(uncomment the line and set it to e.g. `openssl rand -hex 32`) - the
+container always binds `0.0.0.0` internally regardless of the host port
+mapping, so it refuses to start without one. Then:
+```bash
+docker compose up -d
+```
+
+Open `http://localhost:8787` and log in at `/login` with the token you
+set. No build required - `docker-compose.yml` pulls the published
+multi-arch (amd64/arm64) image from GHCR. See
+[docs/DOCKER.md](docs/DOCKER.md) for volumes, authentication, scheduling
+recommendation runs, and updating.
+
+### macOS / Linux (from source)
 Requires Python 3.10+ (`python3 --version`). `run.sh` checks this up front and
 tells you clearly if it isn't met - it won't leave a half-updated install.
 ```bash
@@ -91,7 +130,7 @@ cd curatarr
 ./run.sh    # Setup wizard runs on first launch
 ```
 
-### Windows (PowerShell)
+### Windows (PowerShell, from source)
 Requires Python 3.10+ (`python --version`). `run.ps1` checks this up front and
 tells you clearly if it isn't met - it won't leave a half-updated install.
 ```powershell
@@ -103,26 +142,6 @@ cd curatarr
 Below the Python floor, or don't want to manage a Python install at all? Use
 the [standalone binary](#download) instead - it bundles its own Python and
 UI deps, so it's unaffected by this.
-
-### Docker
-```bash
-git clone https://github.com/OrchestratedChaos/curatarr.git
-cd curatarr
-./setup.sh              # Interactive setup wizard (recommended)
-docker compose up -d
-```
-
-Or manually configure:
-```bash
-cp config/config.example.yml config/config.yml
-# Edit config/config.yml with your details
-docker compose up -d
-```
-
-Opens the same web UI as below at `http://localhost:8787` - no
-build required, `docker-compose.yml` pulls the published multi-arch
-(amd64/arm64) image from GHCR. See [docs/DOCKER.md](docs/DOCKER.md) for
-volumes, scheduling recommendation runs, and updating.
 
 First run takes 5-10 minutes to analyze your library. After that, it's fast.
 
@@ -158,8 +177,11 @@ hand-editing YAML:
   instead of typing names by hand, and can be re-run any time Plex users change.
 - **Settings** (`/config/settings`) - scoring weights, quality filters, recency
   decay, rating multipliers, negative signals, external recommendation limits,
-  and the Sonarr/Radarr/Trakt auto-sync safety toggles (surfaced with a warning -
-  turning auto-sync on starts writing to your download clients on every run).
+  a **Scheduling** section (enable the in-app scheduler - a daily time, optional
+  weekday restriction - as an alternative to host cron/Task Scheduler; see
+  [Scheduling](#scheduling) below), and the Sonarr/Radarr/Trakt auto-sync
+  safety toggles (surfaced with a warning - turning auto-sync on starts
+  writing to your download clients on every run).
 - **Libraries** (`/config/libraries`) - manage multiple Plex libraries, each
   with its own Sonarr/Radarr root folder, quality profile, tags, monitor/search
   behavior, and optionally its own *arr instance. Same "Fetch from Plex" button
@@ -179,6 +201,10 @@ written atomically, so a bad submission can't corrupt your config files.
 | Results | Connections |
 |---|---|
 | ![Results](docs/img/results.png) | ![Connections](docs/img/connections.png) |
+
+| Libraries |
+|---|
+| ![Libraries](docs/img/libraries.png) |
 
 ---
 
@@ -245,10 +271,10 @@ progress) lives instead on the authenticated `/status.json`, which - like
 ### In Plex
 Collections automatically appear:
 ```
-🎬 John - Recommendations       (50 movies)
-🎬 Sarah - Recommendations      (50 movies)
-📺 John - Recommendations       (20 shows)
-📺 Sarah - Recommendations      (20 shows)
+🎬 John - Recommendation       (50 movies)
+🎬 Sarah - Recommendation      (50 movies)
+📺 John - Recommendation       (20 shows)
+📺 Sarah - Recommendation      (20 shows)
 ```
 
 Pin them to your home screen. They update daily.
@@ -412,9 +438,21 @@ general:
   log_retention_days: 7        # Keep logs for 7 days
 
 logging:
-  level: INFO                  # DEBUG, INFO, WARNING, ERROR
-  format: text                 # text (default) | json - see Observability below
+  verbosity: quiet              # off | quiet (default) | verbose - see below
+  format: text                  # text (default) | json - see Observability below
 ```
+
+`logging.verbosity` controls how much gets logged: `quiet` (default) -
+run start/completion/failure per engine and user, scheduled-run
+confirmations, unhandled errors, and any external API (Plex/TMDB/
+Tautulli/Sonarr/Radarr/Trakt/Simkl/MDBList) failure; `verbose` - all of
+that plus per-item filtering decisions, discovery iterations, and cache
+hits; `off` - errors only. Also overridable via the `CURATARR_LOG_LEVEL`
+environment variable for a one-off troubleshooting run. An explicit
+`logging.level` (`DEBUG`, `INFO`, `WARNING`, or `ERROR`) is still read
+as a legacy override if set and takes precedence over `verbosity` -
+only needed for `WARNING`, the one standard level with no
+verbosity-tier equivalent.
 
 `general.update_mode` controls how Curatarr handles new releases:
 - `notify` (default) — CLI prints a one-line notice and the web UI shows a
@@ -509,7 +547,10 @@ export:
   plex_users: [your_username]
 ```
 
-**Setup:** Run `./run.sh` and follow Step 6, or manually create `config/trakt.yml`.
+**Setup:** In the web UI (binary, Docker, or source), use the
+**Connections** screen - no file editing needed. From a source checkout
+you can instead run `./run.sh` and follow Step 6, or hand-write
+`config/trakt.yml`.
 
 ### Sonarr Integration (Optional)
 
@@ -536,7 +577,9 @@ monitor: false              # Don't monitor for new episodes
 search_missing: false       # Don't search for episodes
 ```
 
-**Setup:** Run `./run.sh` and follow Step 7, or manually create `config/sonarr.yml`.
+**Setup:** In the web UI (binary, Docker, or source), use the
+**Connections** screen. From a source checkout you can instead run
+`./run.sh` and follow Step 7, or hand-write `config/sonarr.yml`.
 
 **User modes:**
 - `mapping` — Only sync users listed in `plex_users`
@@ -568,7 +611,9 @@ monitor: false              # Don't monitor for downloads
 search_for_movie: false     # Don't search for movie
 ```
 
-**Setup:** Run `./run.sh` and follow Step 8, or manually create `config/radarr.yml`.
+**Setup:** In the web UI (binary, Docker, or source), use the
+**Connections** screen. From a source checkout you can instead run
+`./run.sh` and follow Step 8, or hand-write `config/radarr.yml`.
 
 ### MDBList Integration (Optional)
 
@@ -590,7 +635,12 @@ list_prefix: Curatarr       # Lists named "Curatarr Movies", "Curatarr TV"
 replace_existing: true      # Clear list before adding (vs. append)
 ```
 
-**Setup:** Run `./run.sh` and follow Step 9, or manually create `config/mdblist.yml`.
+**Setup:** This one has no Connections screen yet, so it's a hand-written
+file either way: `config/mdblist.yml` in a source checkout, or
+`mdblist.yml` inside your data directory for a binary install
+(`~/.curatarr`, or `%APPDATA%\curatarr` on Windows - see
+[docs/BINARIES.md](docs/BINARIES.md#where-data-lives)). From source you
+can also run `./run.sh` and follow Step 9.
 
 **Tip:** MDBList exports work great with [Agregarr](https://agregarr.org) for Plex collection placeholders. See the [wiki](https://github.com/OrchestratedChaos/curatarr/wiki/Agregarr-Integration) for setup instructions.
 
@@ -623,7 +673,10 @@ export:
   plex_users: [your_username]
 ```
 
-**Setup:** Run `./run.sh` and follow Step 10, or manually create `config/simkl.yml`.
+**Setup:** Like MDBList above, no Connections screen yet - hand-write
+`config/simkl.yml` in a source checkout, or `simkl.yml` in your data
+directory for a binary install (`~/.curatarr`, or `%APPDATA%\curatarr` on
+Windows). From source you can also run `./run.sh` and follow Step 10.
 
 ### Huntarr: Collection Movie Finder
 
@@ -651,7 +704,11 @@ huntarr:
 **Both features appear as separate tabs in the HTML watchlist, centered below user tabs.**
 
 **Command-line flag:**
-- `--huntarr-only` — Run only Huntarr features, skip recommendations (`./run.sh --huntarr-only`)
+- `--huntarr-only` — Run only Huntarr features, skip recommendations.
+  Source install: `./run.sh --huntarr-only`. Binary: the flag passes
+  through the packaged entrypoint as
+  `curatarr --run-recommender external --huntarr-only`, or just use the
+  web UI's **External** run button.
 
 **Caching:** Collection data cached for 7 days. IMDB IDs cached permanently. Cache auto-invalidates when your library changes.
 
@@ -719,7 +776,7 @@ curatarr/
 │   ├── external.py          # External watchlist generator
 │   └── base.py              # Shared base classes
 ├── utils/                   # Shared utilities (23 modules)
-├── tests/                   # Unit tests (~1,754 across 41 files)
+├── tests/                   # Unit tests (~2,900 across 61 files)
 ├── run.sh                   # Main entry point (macOS/Linux)
 ├── run.ps1                  # Main entry point (Windows)
 ├── run-ui.sh                # Web UI launcher (macOS/Linux)
@@ -740,15 +797,38 @@ curatarr/
 
 ## Scheduling
 
-First run prompts for automatic scheduling. Or add manually:
+Two ways to get recurring runs - pick one. Running both means two
+separate runs at two different times, each unaware of the other.
 
-### macOS / Linux (cron)
+### Option A: the in-app scheduler (no cron needed)
+
+Enable it on the web UI's **Settings** screen (see [Web UI](#web-ui-beta)
+above): set a daily time and, optionally, restrict it to specific
+weekdays. Runs the full pipeline (movie, tv, external) from inside the
+same long-running process - no host cron, no scheduled task - and works
+the same way for a source install, Docker, or a downloaded binary. Off
+by default. If the scheduled time arrives mid-run, that occurrence is
+skipped and logged, never queued; a missed occurrence (app was down at
+the scheduled time) is never made up later - only the next real
+occurrence fires.
+
+### Option B: host cron / Task Scheduler
+
+Source installs' first run also prompts to set this up. Or add manually:
+
+#### macOS / Linux (cron)
 ```bash
-# Daily at 3 AM
+# Daily at 3 AM - source install
 0 3 * * * cd /path/to/curatarr && ./run.sh >> logs/daily-run.log 2>&1
-```
 
-### Windows (Task Scheduler)
+# Daily at 3 AM - binary install (no checkout to cd into; logs land in
+# ~/.curatarr/logs regardless)
+0 3 * * * /path/to/curatarr-linux-x86_64 --run-recommender full
+```
+Most binary users won't need this at all - the built-in scheduler on the
+Settings screen covers it without touching cron.
+
+#### Windows (Task Scheduler)
 The PowerShell script offers to create a scheduled task automatically. Or manually:
 1. Open Task Scheduler
 2. Create Basic Task → "Curatarr"
@@ -757,7 +837,7 @@ The PowerShell script offers to create a scheduled task automatically. Or manual
    - Program: `powershell.exe`
    - Arguments: `-ExecutionPolicy Bypass -File "C:\path\to\curatarr\run.ps1"`
 
-### Docker (cron on host)
+#### Docker (cron on host)
 ```bash
 # Daily at 3 AM
 0 3 * * * cd /path/to/curatarr && docker compose run --rm curatarr-recommend >> logs/daily-run.log 2>&1
@@ -792,8 +872,11 @@ They're skipped until they have enough watch history.
 # Check logs
 tail -100 logs/daily-run.log
 
-# Run with debug output
+# Run with debug output (source install)
 ./run.sh --debug
+
+# Binary install: same flag, and logs go to ~/.curatarr/logs/curatarr.log
+./curatarr-macos-arm64 --debug
 
 # Verify config
 python3 -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
