@@ -65,6 +65,7 @@ from utils import (
     TMDB_RATE_LIMIT_DELAY,
     TMDB_REQUEST_TIMEOUT,
     YELLOW,
+    build_profile_from_counters,
     calculate_similarity_score,
     clickable_link,
     enhance_profile_with_trakt,
@@ -565,17 +566,9 @@ def load_user_profile_from_cache(config: Dict, username: str, media_type: str = 
             print(f"  Empty watched_data_counters in cache for {username}")
             return None
 
-        # Convert to Counter format expected by scoring
-        # Note: cache uses 'tmdb_keywords' for keywords
-        profile = {
-            "genres": Counter(wdc.get("genres", {})),
-            "directors": Counter(wdc.get("directors", {})),
-            "studios": Counter(wdc.get("studios", {})),
-            "actors": Counter(wdc.get("actors", {})),
-            "keywords": Counter(wdc.get("tmdb_keywords", {})),
-            "languages": Counter(wdc.get("languages", {})),
-            "tmdb_ids": set(wdc.get("tmdb_ids", [])),
-        }
+        # #317: shared storage->profile translation (this is where the
+        # cache's 'tmdb_keywords' becomes scoring's 'keywords').
+        profile = build_profile_from_counters(wdc)
 
         watched_count = cache_data.get("watched_count", len(profile["genres"]))
         print(
@@ -643,15 +636,10 @@ def _build_profile_via_recommender(username: str, media_type: str) -> Dict:
     except Exception as e:
         log_warning(f"Could not build {media_type} profile for {username} via recommender: {e}")
 
-    return {
-        "genres": Counter(wdc.get("genres", {})),
-        "directors": Counter(wdc.get("directors", {})),
-        "studios": Counter(wdc.get("studios", {})),
-        "actors": Counter(wdc.get("actors", {})),
-        "keywords": Counter(wdc.get("tmdb_keywords", {})),
-        "languages": Counter(wdc.get("languages", {})),
-        "tmdb_ids": set(wdc.get("tmdb_ids", [])),
-    }
+    # #317: same shared translation load_user_profile_from_cache() uses,
+    # which is what keeps this function's documented "exact same shape"
+    # guarantee true by construction rather than by two copies agreeing.
+    return build_profile_from_counters(wdc)
 
 
 def get_library_items(plex: Any, library_name: str, media_type: str = "movie") -> Dict[str, Set]:

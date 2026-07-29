@@ -14,7 +14,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.85"
+__version__ = "2.10.86"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 6  # v6: NOT a format change - a SCORING change (2.10.85's

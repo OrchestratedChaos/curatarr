@@ -37,6 +37,58 @@ def create_empty_counters(media_type: str = "movie") -> Dict:
     return counters
 
 
+def build_profile_from_counters(watched_data_counters: Optional[Dict]) -> Dict:
+    """
+    Turn stored `watched_data_counters` into the scoring-profile dict.
+
+    #317: THE single translation between the storage shape (what
+    create_empty_counters() above builds and the watched-cache files
+    persist) and the profile shape every scoring consumer expects. It
+    replaces four separate implementations that had drifted apart:
+
+      - recommenders/movie.py's `_calculate_similarity_from_cache`
+        (genres/directors/actors/languages/keywords, plain dicts)
+      - recommenders/tv.py's `_calculate_similarity_from_cache`
+        (same, but studios instead of directors)
+      - recommenders/external.py's `load_user_profile_from_cache`
+        (Counter-valued, both directors AND studios, plus tmdb_ids)
+      - recommenders/external.py's `_build_profile_via_recommender`
+        (byte-identical to the one above it)
+
+    The one rename that has to happen here and is easy to get wrong:
+    storage calls it **`tmdb_keywords`**, scoring calls it
+    **`keywords`**. Every one of the four builders did that rename by
+    hand; doing it once removes the chance of a fifth caller forgetting
+    and silently scoring with an empty keyword dimension.
+
+    Emits the full key set regardless of media type - deliberately.
+    `utils.scoring._redistribute_weights()` gates `has_directors` on
+    `media_type == "movie"` and `has_studios` on `media_type == "tv"`,
+    so the irrelevant one is never read and carrying it costs nothing;
+    gating here instead would mean every caller has to pass a media_type
+    it otherwise doesn't need. Values are Counters (matching the two
+    external.py builders); `calculate_similarity_score()` re-wraps
+    whatever it gets in `Counter()` anyway, so the plain-dict callers
+    are unaffected by the change.
+
+    Args:
+        watched_data_counters: The stored counters dict, or None
+
+    Returns:
+        Profile dict keyed as scoring expects
+    """
+    wdc = watched_data_counters or {}
+    return {
+        "genres": Counter(wdc.get("genres", {})),
+        "directors": Counter(wdc.get("directors", {})),
+        "studios": Counter(wdc.get("studios", {})),
+        "actors": Counter(wdc.get("actors", {})),
+        "keywords": Counter(wdc.get("tmdb_keywords", {})),
+        "languages": Counter(wdc.get("languages", {})),
+        "tmdb_ids": set(wdc.get("tmdb_ids", [])),
+    }
+
+
 def _apply_capped_weight(counter: Dict[str, float], key: str, weight: float, cap_penalty: float = 0.5) -> None:
     """
     Apply weight to counter with optional capping for negative values.

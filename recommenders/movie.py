@@ -21,6 +21,7 @@ from utils import (
     RED,
     RESET,
     TOP_CAST_COUNT,
+    build_profile_from_counters,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
@@ -526,14 +527,9 @@ class PlexMovieRecommender(BaseRecommender):
     # ------------------------------------------------------------------------
     def _calculate_similarity_from_cache(self, movie_info: Dict) -> Tuple[float, Dict]:
         """Calculate similarity score using cached movie data and return score with breakdown"""
-        # Build user profile from watched data
-        user_profile = {
-            "genres": self.watched_data.get("genres", {}),
-            "directors": self.watched_data.get("directors", {}),
-            "actors": self.watched_data.get("actors", {}),
-            "languages": self.watched_data.get("languages", {}),
-            "keywords": self.watched_data.get("tmdb_keywords", {}),
-        }
+        # #317: single shared storage->profile translation (including the
+        # tmdb_keywords -> keywords rename) - see build_profile_from_counters.
+        user_profile = build_profile_from_counters(self.watched_data)
 
         # Build content info dict
         content_info = {

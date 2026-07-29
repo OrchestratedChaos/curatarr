@@ -4,7 +4,12 @@ Tests for utils/counters.py - Counter utility functions.
 
 from collections import Counter
 
-from utils.counters import _apply_capped_weight, create_empty_counters, process_counters_from_cache
+from utils.counters import (
+    _apply_capped_weight,
+    build_profile_from_counters,
+    create_empty_counters,
+    process_counters_from_cache,
+)
 
 
 class TestCreateEmptyCounters:
@@ -409,3 +414,94 @@ class TestProcessCountersPreCalculatedWeight:
         process_counters_from_cache(media_info, counters, weight=0.0)
 
         assert counters["genres"]["action"] == 5.0  # Unchanged
+
+
+class TestBuildProfileFromCounters:
+    """#317: the single storage->profile translation that replaced four
+    drifting copies (recommenders/movie.py's and tv.py's
+    _calculate_similarity_from_cache, and external.py's
+    load_user_profile_from_cache + _build_profile_via_recommender)."""
+
+    STORED = {
+        "genres": {"action": 3.0},
+        "directors": {"Dir X": 2.0},
+        "studios": {"HBO": 1.5},
+        "actors": {"Actor A": 4.0},
+        "languages": {"english": 7.0},
+        "tmdb_keywords": {"heist": 5.0},
+        "tmdb_ids": [11, 22],
+    }
+
+    def test_renames_tmdb_keywords_to_keywords(self):
+        """The one rename every copy had to do by hand: storage says
+        'tmdb_keywords', scoring says 'keywords'. Getting this wrong
+        silently scores with an empty keyword dimension."""
+        profile = build_profile_from_counters(self.STORED)
+        assert profile["keywords"] == Counter({"heist": 5.0})
+        assert "tmdb_keywords" not in profile
+
+    def test_emits_every_key_scoring_reads(self):
+        profile = build_profile_from_counters(self.STORED)
+        for key in ("genres", "directors", "studios", "actors", "languages", "keywords"):
+            assert key in profile, f"scoring reads {key!r} but the profile lacks it"
+
+    def test_values_are_counters(self):
+        profile = build_profile_from_counters(self.STORED)
+        for key in ("genres", "directors", "studios", "actors", "languages", "keywords"):
+            assert isinstance(profile[key], Counter), f"{key} should be a Counter"
+
+    def test_tmdb_ids_becomes_a_set(self):
+        profile = build_profile_from_counters(self.STORED)
+        assert profile["tmdb_ids"] == {11, 22}
+
+    def test_none_and_empty_are_safe(self):
+        """external.py's _build_profile_via_recommender passes {} when
+        recommender construction fails - must not explode."""
+        for empty in (None, {}):
+            profile = build_profile_from_counters(empty)
+            assert profile["genres"] == Counter()
+            assert profile["keywords"] == Counter()
+            assert profile["tmdb_ids"] == set()
+
+    def test_both_directors_and_studios_present_regardless_of_media_type(self):
+        """Deliberate: utils.scoring._redistribute_weights() gates
+        has_directors on media_type == 'movie' and has_studios on
+        'tv', so the irrelevant one is never read. Emitting both keeps
+        this function media-type-agnostic - callers don't have to pass a
+        media_type they otherwise don't need."""
+        profile = build_profile_from_counters({"directors": {"D": 1}, "studios": {"S": 1}})
+        assert profile["directors"] == Counter({"D": 1})
+        assert profile["studios"] == Counter({"S": 1})
+
+    def test_is_the_only_translation_left(self):
+        """Standing guard: if a new copy of the storage->profile mapping
+        appears, this fails.
+
+        The tell is a `"keywords":` profile key built by wrapping
+        `tmdb_keywords` in a Counter. BOTH halves are required, because
+        each on its own has a legitimate non-profile use:
+
+        - `Counter(` alone: utils/scoring.py re-wraps an already
+          profile-shaped dict (it reads `"keywords"`, never
+          `"tmdb_keywords"`).
+        - `tmdb_keywords` alone: the recommenders build a per-item
+          `content_info` with `"keywords": info.get("tmdb_keywords", [])`.
+          That is the content side of scoring, a plain list, not a user
+          profile - it is not this translation.
+        """
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        rename = re.compile(r"""["']keywords["']\s*:\s*Counter\(.*tmdb_keywords""")
+        offenders = []
+        for path in list((root / "recommenders").glob("*.py")) + list((root / "utils").glob("*.py")):
+            if path.name == "counters.py":
+                continue  # the one legitimate home
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if rename.search(line):
+                    offenders.append(f"{path.relative_to(root)}:{lineno}")
+        assert not offenders, (
+            f"storage->profile translation duplicated outside utils/counters.py: {offenders} - "
+            f"call build_profile_from_counters() instead (see #317)"
+        )
