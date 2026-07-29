@@ -294,7 +294,28 @@ class Job:
             if self.returncode is None and max_subscribers is not None and len(self._subscribers) >= max_subscribers:
                 return None
             q: "queue.Queue" = queue.Queue(maxsize=SUBSCRIBER_QUEUE_MAXSIZE)
-            for line in self.lines:
+            # Replay only what this queue can actually hold. `self.lines`
+            # is unbounded (a long run accumulates every line), but `q`
+            # caps at SUBSCRIBER_QUEUE_MAXSIZE and _safe_queue_put()
+            # evicts oldest-first to stay there - so replaying the full
+            # backlog did O(len(self.lines)) work to arrive at exactly
+            # the same final queue contents as replaying the last
+            # SUBSCRIBER_QUEUE_MAXSIZE. Identical result, bounded cost.
+            #
+            # This mattered because MAX_STREAM_SECONDS (web/app.py)
+            # deliberately ends each SSE response so EventSource
+            # reconnects, and every reconnect lands back here. On a long
+            # run that made replay cost grow with elapsed output, on a
+            # fixed interval - and all of it under _data_lock, which
+            # _append_line() needs for every single line, so the thread
+            # pumping the subprocess's stdout stalled behind it. The
+            # slowdown compounded the longer a run went.
+            #
+            # Still inside the lock on purpose: releasing it between the
+            # snapshot and _subscribers.append(q) below would drop any
+            # line emitted in that window. Bounded work under the lock is
+            # the fix, not less locking.
+            for line in self.lines[-SUBSCRIBER_QUEUE_MAXSIZE:]:
                 _safe_queue_put(q, line)
             if self.returncode is not None:
                 _safe_queue_put(q, DONE_SENTINEL)

@@ -1118,6 +1118,101 @@ class TestApplyActiveWeightRedistribution:
         assert score == pytest.approx(0.5)
 
 
+class TestRedistributionDistinguishesAbsentFromUnmatched:
+    """The fix for the sparse-metadata inflation bug: a dimension that
+    scored 0 only earns its weight back if the ITEM had no data for it.
+    A zero scored against data the item genuinely has is a real signal
+    and must keep costing the item its weight.
+
+    Before this, `comp_score == 0` alone triggered redistribution, so
+    the fewer dimensions an item matched on, the more weight piled onto
+    whichever one did - inverting the ranking. Measured on a real
+    225-movie profile: mean final score 0.545 for items scoring on 1
+    dimension vs 0.384 for 3, with 9 of the top 10 recommendations
+    matching on genre alone.
+    """
+
+    COMPONENT_SCORES = {
+        "genre": 0.2,
+        "director": 0.0,
+        "studio": 0.0,
+        "actor": 0.0,
+        "language": 0.0,
+        "keyword": 0.0,
+    }
+    WEIGHTS = {"genre": 0.25, "director": 0.15, "studio": 0, "actor": 0.20, "language": 0.05, "keyword": 0.45}
+
+    def test_absent_data_still_redistributes(self):
+        """Original intent preserved: an item with no keyword/cast/etc.
+        data isn't penalized for metadata it never had."""
+        has_data = {
+            "genre": True,
+            "director": False,
+            "studio": False,
+            "actor": False,
+            "language": False,
+            "keyword": False,
+        }
+        score = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS, has_data)
+        assert score > 0.2
+
+    def test_present_but_unmatched_data_does_not_redistribute(self):
+        """The fix: the item HAS keywords/cast/director, they just don't
+        match this user. That zero is earned and must stick."""
+        has_data = {"genre": True, "director": True, "studio": False, "actor": True, "language": True, "keyword": True}
+        score = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS, has_data)
+        assert score == pytest.approx(0.2)
+
+    def test_sparse_item_no_longer_outranks_richly_matching_item(self):
+        """End-to-end shape of the bug: a genre-only match must not beat
+        an item that matches on several dimensions."""
+        sparse_scores = {"genre": 0.2, "director": 0.0, "studio": 0.0, "actor": 0.0, "language": 0.0, "keyword": 0.0}
+        sparse_has_data = {
+            "genre": True,
+            "director": True,
+            "studio": False,
+            "actor": True,
+            "language": True,
+            "keyword": True,
+        }
+        sparse = _apply_active_weight_redistribution(0.2, sparse_scores, self.WEIGHTS, sparse_has_data)
+
+        rich_scores = {"genre": 0.1, "director": 0.05, "studio": 0.0, "actor": 0.08, "language": 0.02, "keyword": 0.15}
+        rich_raw = sum(rich_scores.values())
+        rich_has_data = dict(sparse_has_data)
+        rich = _apply_active_weight_redistribution(rich_raw, rich_scores, self.WEIGHTS, rich_has_data)
+
+        assert rich > sparse, f"richly-matching item ({rich}) must outrank genre-only item ({sparse})"
+
+    def test_partial_absence_redistributes_only_the_absent_share(self):
+        """Mixed case: keyword data absent (redistribute its 0.45), cast
+        data present but unmatched (its 0.20 stays lost)."""
+        has_data = {"genre": True, "director": True, "studio": False, "actor": True, "language": True, "keyword": False}
+        mixed = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS, has_data)
+
+        all_absent = {k: (k == "genre") for k in has_data}
+        everything = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS, all_absent)
+
+        assert 0.2 < mixed < everything
+
+    def test_omitting_the_map_preserves_legacy_behavior(self):
+        """Existing callers/tests that don't pass content_has_data must
+        be unaffected."""
+        legacy = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS)
+        explicit_absent = _apply_active_weight_redistribution(
+            0.2, self.COMPONENT_SCORES, self.WEIGHTS, {k: False for k in self.COMPONENT_SCORES}
+        )
+        assert legacy == pytest.approx(explicit_absent)
+        assert legacy > 0.2
+
+    def test_unknown_component_defaults_to_having_data(self):
+        """A component missing from the map is treated as 'has data', so
+        a future dimension added without updating the map fails closed
+        (no inflation) rather than silently redistributing."""
+        score = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS, {"genre": True})
+        assert score == pytest.approx(0.2)
+
+
 class TestApplyPopularityDampeningHelper:
     """Tests for _apply_popularity_dampening() (see also TestPopularityDampening
     above, which exercises the same behavior through the public function)."""

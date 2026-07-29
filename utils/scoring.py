@@ -685,18 +685,48 @@ def _score_keyword_component(
 
 
 def _apply_active_weight_redistribution(
-    score: float, component_scores: Dict[str, float], effective_weights: Dict
+    score: float,
+    component_scores: Dict[str, float],
+    effective_weights: Dict,
+    content_has_data: Optional[Dict[str, bool]] = None,
 ) -> float:
     """
-    Per-item weight redistribution: for dimensions that scored 0 on *this*
-    item, move their weight onto the dimensions that did score (weighted
-    proportionally by each active dimension's own effective weight), so a
-    single item isn't penalized just for not having, say, language data.
+    Per-item weight redistribution: for dimensions this item carries no
+    data for at all, move their weight onto the dimensions that did
+    score (proportionally by each active dimension's own effective
+    weight), so an item isn't penalized just for lacking, say, a
+    language field.
 
     Distinct from _redistribute_weights(), which redistributes at the
     profile level for dimensions the user has no preference data for at
-    all - this operates per-item on whichever dimensions already have a
-    nonzero effective weight but scored 0 for this specific item.
+    all - this operates per-item.
+
+    IMPORTANT - "absent" is not "didn't match". This function used to
+    redistribute on `comp_score == 0` alone, which conflated two very
+    different cases:
+
+      - the item has no data for that dimension (no keywords, no cast
+        listed) - genuinely not the item's fault, redistribute; and
+      - the item HAS that data and it simply scored zero against this
+        user's profile (its keywords aren't ones they watch, or the
+        TF-IDF penalty clamped the component to 0) - a real, meaningful
+        zero.
+
+    Treating the second case as redistributable inverted the ranking:
+    the fewer dimensions an item matched on, the more weight piled onto
+    whichever one did, so an item matching on nothing but generic genres
+    had its genre ratio scaled across the entire weight budget. Measured
+    on a real 225-movie profile before this fix: mean final score 0.545
+    for items with 1 scoring dimension vs 0.384 for items with 3, and 9
+    of the top 10 recommendations matched on genre alone - with 81 of
+    117 items holding keyword data that scored 0 and being rewarded for
+    it. Sparse or poorly-matching items outranked richly-described ones
+    that matched on several dimensions imperfectly.
+
+    `content_has_data` maps component name -> whether this item carries
+    any data for that dimension. Omitted (None) preserves the old
+    score-based behavior, so existing callers/tests that don't supply it
+    are unaffected.
 
     component_scores must be the *rounded* score_breakdown values (e.g.
     score_breakdown["genre_score"]), not the raw per-dimension floats -
@@ -707,11 +737,18 @@ def _apply_active_weight_redistribution(
 
     for comp, comp_score in component_scores.items():
         weight = effective_weights.get(comp, 0)
-        if weight > 0:
-            if comp_score > 0:
-                active_weights[comp] = (weight, comp_score / weight if weight > 0 else 0)
-            else:
-                lost_weight += weight
+        if weight <= 0:
+            continue
+
+        if comp_score > 0:
+            active_weights[comp] = (weight, comp_score / weight)
+            continue
+
+        # Scored zero. Only give its weight away if the item had nothing
+        # to score in the first place; a zero against present data is a
+        # real signal and must keep costing the item its weight.
+        if content_has_data is None or not content_has_data.get(comp, True):
+            lost_weight += weight
 
     if lost_weight > 0 and active_weights:
         total_active_weight = sum(w for w, _ in active_weights.values())
@@ -881,6 +918,7 @@ def calculate_similarity_score(
 
         # --- Director Score (movies only) ---
         director_final = 0.0
+        content_directors: List = []
         if media_type == "movie":
             content_directors = content_info.get("directors", [])
             director_weight = effective_weights.get("director", 0.15)
@@ -894,6 +932,7 @@ def calculate_similarity_score(
         # --- Studio Score (TV only) ---
         studio_final = 0.0
         studio_detail = None
+        content_studio: Any = []
         if media_type == "tv":
             content_studio = content_info.get("studio", content_info.get("studios", []))
             studio_weight = effective_weights.get("studio", 0.15)
@@ -944,7 +983,24 @@ def calculate_similarity_score(
             "language": score_breakdown["language_score"],
             "keyword": score_breakdown["keyword_score"],
         }
-        score = _apply_active_weight_redistribution(score, component_scores, effective_weights)
+        # Whether this item carries any data per dimension, so a zero
+        # scored against data the item HAS keeps costing it its weight -
+        # only genuinely absent data is redistributed. See
+        # _apply_active_weight_redistribution's docstring.
+        #
+        # director/studio are media-type gated above (director is movies
+        # only, studio TV only); the dimension that doesn't apply reports
+        # False here, which is the "absent, redistribute" case and
+        # matches how it was already treated.
+        content_has_data = {
+            "genre": bool(content_genres),
+            "director": bool(content_directors) if media_type == "movie" else False,
+            "studio": bool(content_studio) if media_type == "tv" else False,
+            "actor": bool(content_cast),
+            "language": bool(content_language) and content_language != "N/A",
+            "keyword": bool(content_keywords),
+        }
+        score = _apply_active_weight_redistribution(score, component_scores, effective_weights, content_has_data)
 
         score = min(score, 1.0)
 

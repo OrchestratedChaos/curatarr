@@ -1,0 +1,26 @@
+#!/bin/bash
+# Reject any commit message carrying a Co-Authored-By trailer.
+#
+# Curatarr does not accept outside contributions (see CLAUDE.md) and its
+# commits are single-author. An AI assistant appending its own
+# "Co-Authored-By:" trailer put a second author on a public commit that
+# then shipped in a signed release, where it cannot be rewritten without
+# invalidating the tag. This hook makes that unrepeatable at the git
+# level rather than relying on anyone - human or agent - remembering.
+#
+# Blocks regardless of casing/spacing, since git's trailer parsing is
+# itself case-insensitive.
+msg_file="$1"
+
+if grep -qiE '^[[:space:]]*co-authored-by[[:space:]]*:' "$msg_file"; then
+    echo "" >&2
+    echo "COMMIT REJECTED: message contains a Co-Authored-By trailer." >&2
+    echo "" >&2
+    grep -inE '^[[:space:]]*co-authored-by[[:space:]]*:' "$msg_file" | sed 's/^/    /' >&2
+    echo "" >&2
+    echo "This repo's commits are single-author. Remove the trailer and commit again." >&2
+    echo "" >&2
+    exit 1
+fi
+
+exit 0

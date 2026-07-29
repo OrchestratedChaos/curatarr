@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.85] - 2026-07-28
+
+### Fixed
+
+- **Items matching on FEWER dimensions were scoring HIGHER, inverting the top of every recommendation list.** `_apply_active_weight_redistribution()` moved a dimension's weight onto the dimensions that did score whenever that dimension scored `0` - but `comp_score == 0` conflates two different things: the item has no data for that dimension (not the item's fault, redistribute - the original intent, e.g. a missing language field), and the item HAS that data and it simply scored zero against this user (its keywords aren't ones they watch, or the TF-IDF penalty clamped the component). The second case was being rewarded: the less an item matched, the more weight piled onto whichever dimension did, so a title matching on nothing but generic genres had its genre ratio scaled across the entire weight budget.
+
+  Measured on a real 225-movie profile before the fix: mean final score **0.545** for items scoring on 1 dimension vs **0.384** for 3 and **0.384-0.396** for 3-4 - monotonically backwards. Nine of the top ten recommendations matched on genre alone, each showing a genre component of ~0.19 amplified to a ~0.78 final score (a clean 4x), and **81 of 117** scored items held real keyword data that scored 0 and were rewarded for it. The visible symptom was a Disney Channel TV movie sitting at #3 for an adult profile on four generic genre tokens, with the whole top ten compressed into a 72-80% band because they were all the same kind of near-empty match.
+
+  Redistribution now requires the item to genuinely lack data for that dimension. `calculate_similarity_score()` passes a per-dimension `content_has_data` map; a component absent from that map defaults to "has data", so a future dimension added without updating the map fails closed (no inflation) rather than silently redistributing. Omitting the map entirely preserves the previous behavior, so existing callers are unaffected. **Recommendations will visibly change** - richly-described titles that match on several dimensions imperfectly now outrank sparse or poorly-matching ones, which is the intended ordering.
+
+- **The run page got progressively slower and less responsive the longer a run went.** `Job.try_subscribe()` replayed the entire unbounded `self.lines` backlog into a queue capped at `SUBSCRIBER_QUEUE_MAXSIZE` (2000), while holding `_data_lock`. Since `_safe_queue_put()` evicts oldest-first, replaying 50,000 lines did 50,000 puts to arrive at exactly the same final 2000 - ~96% of the work discarded. `MAX_STREAM_SECONDS` (web/app.py) deliberately ends each SSE response so `EventSource` reconnects, and every reconnect landed back in that replay, so the cost grew with elapsed output on a fixed 2-minute interval. All of it under the lock that `_append_line()` needs for every single line, so the thread pumping the subprocess's stdout stalled behind each replay. Now replays only the last `SUBSCRIBER_QUEUE_MAXSIZE` lines - identical resulting queue contents, constant cost. The replay deliberately stays inside the lock: releasing it between the snapshot and `_subscribers.append(q)` would drop any line emitted in that window.
+
 ## [2.10.84] - 2026-07-28
 
 ### Added
