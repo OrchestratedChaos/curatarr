@@ -17,7 +17,18 @@ from .display import log_error, log_info, log_warning
 __version__ = "2.10.85"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
-CACHE_VERSION = 5  # v5: Added rating/vote_count to TV show cache entries so
+CACHE_VERSION = 6  # v6: NOT a format change - a SCORING change (2.10.85's
+# per-item weight-redistribution fix, see CHANGELOG). Cached per-item scores
+# are keyed on profile_hash alone (recommenders/base.py's cache-hit branch in
+# get_recommendations()), which captures the user's watch profile but NOT the
+# scoring code that produced the number. So a scoring fix is a silent no-op on
+# every existing install - every item is a cache hit against a score computed
+# by the OLD algorithm - until that user's profile happens to change. Confirmed
+# empirically while shipping 2.10.85: the fix changed nothing on a real install
+# until this constant moved. Any future change to how scores are CALCULATED
+# needs this bump too, not just changes to what the cache stores.
+#
+# v5: Added rating/vote_count to TV show cache entries so
 # tv: quality_filters (min_rating/min_vote_count) actually apply - they were
 # previously silently a no-op for TV (see CHANGELOG). Bumping this forces a
 # one-time full rebuild of BOTH the movie and show caches on next run (this
