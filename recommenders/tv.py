@@ -23,6 +23,7 @@ from utils import (
     RESET,
     TOP_CAST_COUNT,
     YELLOW,
+    build_profile_from_counters,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
     calculate_similarity_score,
@@ -573,14 +574,9 @@ class PlexTVRecommender(BaseRecommender):
     # ------------------------------------------------------------------------
     def _calculate_similarity_from_cache(self, show_info: Dict) -> Tuple[float, Dict]:
         """Calculate similarity score using cached show data and return score with breakdown"""
-        # Build user profile from watched data
-        user_profile = {
-            "genres": self.watched_data.get("genres", {}),
-            "studios": self.watched_data.get("studios", {}),
-            "actors": self.watched_data.get("actors", {}),
-            "languages": self.watched_data.get("languages", {}),
-            "keywords": self.watched_data.get("tmdb_keywords", {}),
-        }
+        # #317: single shared storage->profile translation (including the
+        # tmdb_keywords -> keywords rename) - see build_profile_from_counters.
+        user_profile = build_profile_from_counters(self.watched_data)
 
         # Build content info dict
         content_info = {

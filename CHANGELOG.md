@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.86] - 2026-07-29
+
+### Changed
+
+- **The storage-to-profile translation existed in four hand-maintained copies; there is now one (#317).** Every scoring consumer needs `watched_data_counters` (the shape `create_empty_counters()` builds and the watched-cache files persist) turned into the profile dict `calculate_similarity_score()` reads. Four places did that conversion independently - `recommenders/movie.py` and `recommenders/tv.py` in `_calculate_similarity_from_cache()`, plus `recommenders/external.py` in both `load_user_profile_from_cache()` and `_build_profile_via_recommender()` - and they had already drifted: the two external.py copies were byte-identical to each other and emitted Counters with all seven keys, while the movie/tv copies emitted five plain-dict keys apiece. All four now call a single `build_profile_from_counters()` in `utils/counters.py`.
+
+  What makes this worth consolidating rather than leaving alone is the one rename buried in it: storage calls the field **`tmdb_keywords`**, scoring calls it **`keywords`**. Each of the four copies performed that rename by hand, and `keyword` carries the single largest default weight (0.45). A fifth caller written from the obvious-looking pattern - copying `"keywords": wdc.get("keywords", {})` - would not crash, would not warn, and would silently score every item with an empty keyword dimension. A standing guard test now fails if that mapping reappears anywhere in `recommenders/` or `utils/` outside its one home.
+
+  **No behavior change**, which was the requirement rather than a hope: `CACHE_VERSION` is deliberately left at 6, since unlike 2.10.85 this alters no score. The movie and TV paths now receive the two extra keys their five-key dicts omitted (`studios`/`tmdb_ids` for movies, `directors`/`tmdb_ids` for TV), and those are unreachable by construction - `_redistribute_weights()` gates `has_directors` on `media_type == "movie"` and `has_studios` on `media_type == "tv"`, and zeroes the corresponding weight the same way, so a movie profile's `studios` can never reach an effective weight. Verified rather than reasoned about: a differential over 3000 randomized profile/content pairs across both media types, scoring each with the old five-key dict and the new seven-key one, produced identical final scores and identical component breakdowns in every case.
+
 ## [2.10.85] - 2026-07-28
 
 ### Fixed

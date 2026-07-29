@@ -82,6 +82,7 @@ from .config import (
 
 # Counter utilities
 from .counters import (
+    build_profile_from_counters,
     create_empty_counters,
     process_counters_from_cache,
 )
@@ -520,6 +521,7 @@ __all__ = [
     "calculate_similarity_score",
     "select_tiered_recommendations",
     # Counters
+    "build_profile_from_counters",
     "create_empty_counters",
     "process_counters_from_cache",
     # Helpers
