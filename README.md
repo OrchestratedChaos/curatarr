@@ -74,7 +74,7 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 - **Genre balancing** — Matches user viewing habits proportionally
 
 ### For You (Simple & Robust)
-- **One command** — `./run.sh` handles everything
+- **One file, no install** — download the binary and run it; `./run.sh` handles everything from source
 - **Multi-library support** — Each Plex library gets its own Sonarr/Radarr root folder, quality profile, tags, monitor/search, and optionally its own *arr instance; recommendations run per-library so Movies, TV, Anime, and Kids each follow their own rules
 - **Modular config** — Main settings plus optional integration files
 - **Update notifications** — Notifies (CLI + dismissible web UI banner) when a newer signed release exists, for every `update_mode` including `off`; set `update_mode: force` to auto-apply on each run instead
@@ -547,7 +547,10 @@ export:
   plex_users: [your_username]
 ```
 
-**Setup:** Run `./run.sh` and follow Step 6, or manually create `config/trakt.yml`.
+**Setup:** In the web UI (binary, Docker, or source), use the
+**Connections** screen - no file editing needed. From a source checkout
+you can instead run `./run.sh` and follow Step 6, or hand-write
+`config/trakt.yml`.
 
 ### Sonarr Integration (Optional)
 
@@ -574,7 +577,9 @@ monitor: false              # Don't monitor for new episodes
 search_missing: false       # Don't search for episodes
 ```
 
-**Setup:** Run `./run.sh` and follow Step 7, or manually create `config/sonarr.yml`.
+**Setup:** In the web UI (binary, Docker, or source), use the
+**Connections** screen. From a source checkout you can instead run
+`./run.sh` and follow Step 7, or hand-write `config/sonarr.yml`.
 
 **User modes:**
 - `mapping` — Only sync users listed in `plex_users`
@@ -606,7 +611,9 @@ monitor: false              # Don't monitor for downloads
 search_for_movie: false     # Don't search for movie
 ```
 
-**Setup:** Run `./run.sh` and follow Step 8, or manually create `config/radarr.yml`.
+**Setup:** In the web UI (binary, Docker, or source), use the
+**Connections** screen. From a source checkout you can instead run
+`./run.sh` and follow Step 8, or hand-write `config/radarr.yml`.
 
 ### MDBList Integration (Optional)
 
@@ -628,7 +635,12 @@ list_prefix: Curatarr       # Lists named "Curatarr Movies", "Curatarr TV"
 replace_existing: true      # Clear list before adding (vs. append)
 ```
 
-**Setup:** Run `./run.sh` and follow Step 9, or manually create `config/mdblist.yml`.
+**Setup:** This one has no Connections screen yet, so it's a hand-written
+file either way: `config/mdblist.yml` in a source checkout, or
+`mdblist.yml` inside your data directory for a binary install
+(`~/.curatarr`, or `%APPDATA%\curatarr` on Windows - see
+[docs/BINARIES.md](docs/BINARIES.md#where-data-lives)). From source you
+can also run `./run.sh` and follow Step 9.
 
 **Tip:** MDBList exports work great with [Agregarr](https://agregarr.org) for Plex collection placeholders. See the [wiki](https://github.com/OrchestratedChaos/curatarr/wiki/Agregarr-Integration) for setup instructions.
 
@@ -661,7 +673,10 @@ export:
   plex_users: [your_username]
 ```
 
-**Setup:** Run `./run.sh` and follow Step 10, or manually create `config/simkl.yml`.
+**Setup:** Like MDBList above, no Connections screen yet - hand-write
+`config/simkl.yml` in a source checkout, or `simkl.yml` in your data
+directory for a binary install (`~/.curatarr`, or `%APPDATA%\curatarr` on
+Windows). From source you can also run `./run.sh` and follow Step 10.
 
 ### Huntarr: Collection Movie Finder
 
@@ -689,7 +704,11 @@ huntarr:
 **Both features appear as separate tabs in the HTML watchlist, centered below user tabs.**
 
 **Command-line flag:**
-- `--huntarr-only` — Run only Huntarr features, skip recommendations (`./run.sh --huntarr-only`)
+- `--huntarr-only` — Run only Huntarr features, skip recommendations.
+  Source install: `./run.sh --huntarr-only`. Binary: the flag passes
+  through the packaged entrypoint as
+  `curatarr --run-recommender external --huntarr-only`, or just use the
+  web UI's **External** run button.
 
 **Caching:** Collection data cached for 7 days. IMDB IDs cached permanently. Cache auto-invalidates when your library changes.
 
@@ -799,9 +818,15 @@ Source installs' first run also prompts to set this up. Or add manually:
 
 #### macOS / Linux (cron)
 ```bash
-# Daily at 3 AM
+# Daily at 3 AM - source install
 0 3 * * * cd /path/to/curatarr && ./run.sh >> logs/daily-run.log 2>&1
+
+# Daily at 3 AM - binary install (no checkout to cd into; logs land in
+# ~/.curatarr/logs regardless)
+0 3 * * * /path/to/curatarr-linux-x86_64 --run-recommender full
 ```
+Most binary users won't need this at all - the built-in scheduler on the
+Settings screen covers it without touching cron.
 
 #### Windows (Task Scheduler)
 The PowerShell script offers to create a scheduled task automatically. Or manually:
@@ -847,8 +872,11 @@ They're skipped until they have enough watch history.
 # Check logs
 tail -100 logs/daily-run.log
 
-# Run with debug output
+# Run with debug output (source install)
 ./run.sh --debug
+
+# Binary install: same flag, and logs go to ~/.curatarr/logs/curatarr.log
+./curatarr-macos-arm64 --debug
 
 # Verify config
 python3 -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
