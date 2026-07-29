@@ -2,6 +2,14 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.84] - 2026-07-28
+
+### Documentation
+
+- **README audited against what actually ships and rewritten where it had drifted - no functional or behavior change.** Docker's quick-start never mentioned `CURATARR_AUTH_TOKEN`, which `web/docker_server.py` requires at startup (the container always binds `0.0.0.0` internally regardless of the host port mapping, so it fails closed without one) - following the README's old steps verbatim would not have started. The in-app scheduler (#264 - `utils/scheduler.py`/`web/scheduler_runner.py`, a `schedule:` config block, a Settings-screen "Scheduling" section) wasn't mentioned anywhere; only host cron/Task Scheduler was documented. The default collection name shown (`... - Recommendations`) didn't match the actual default template (`utils/labels.py`: `... - Recommendation`, singular). The General Settings example documented only the legacy `logging.level`, not the current default `logging.verbosity` (off/quiet/verbose, #284). The binary Download section didn't mention the Linux glibc 2.28+ floor (in `docs/BINARIES.md` already) or what a first-time user actually does once the dashboard opens with nothing configured (per `docs/BINARIES.md`'s own "Where data lives" section: the Connections/Users/Settings screens, no separate wizard). Project Structure's test count ("~1,754 across 41 files") was stale (currently ~2,900 across 61 files).
+
+  Restructured Quick Start so Docker (no Python required) comes before the source install instead of after it, matching Download's existing binary-first framing; source install stays fully documented (it has its own auto-update and is not just for development) but is no longer the lead option. Everything verified directly against the relevant code (`web/docker_server.py`, `utils/scheduler.py`, `web/scheduler_runner.py`, `utils/labels.py`, `config/config.example.yml`) and docs (`docs/BINARIES.md`, `docs/DOCKER.md`) rather than assumed - no invented flows or numbers.
+
 ## [2.10.83] - 2026-07-28
 
 ### Documentation
