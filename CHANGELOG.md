@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.89] - 2026-07-30
+
+### Added
+
+- **"Update now" now shows progress while it works, and says what actually happened when it's done.** Previously it printed one static line ("This can take up to a minute"), went silent for the entire restart, and then simply reloaded the page - never reporting success or failure. You inferred the result from a version number, and a *failed* update looked identical to a successful one, because the worker deliberately relaunches the UI either way. The banner now carries an indeterminate progress bar with a labelled step ("Step 3 of 4: Downloading and verifying the update") and an elapsed-seconds counter, then resolves to `✓ Updated to v2.10.89.` or `✗ <reason>. See logs/update_apply.log.`
+
+  The bar is **indeterminate on purpose - there is no percentage.** The server is dead for almost the whole update (the worker kills it, applies, and starts a fresh one), so nothing is in a position to measure real progress. A percentage would have to be elapsed-time against a guessed duration, which would keep climbing toward 100% while a genuinely hung update sat there - worse than showing no number at all. The step labels are time-based estimates and are presented as steps rather than as measured progress; the *outcome* is not estimated at all.
+
+  The outcome is read from a new `logs/update_status.json` that the worker writes as it goes, exposed by a new `GET /update/status`. It has to be a file rather than in-memory state for the same reason the progress can't be live: the page reconnects to a brand new process with no memory of the update. `begin_update()` resets the file before spawning, since the previous update's verdict is otherwise still sitting on disk and would be read as this one's the moment the page reconnected; the client additionally ignores any status older than its own click. A frozen binary's outcome is deliberately left unknown - its swap and relaunch are performed by an external script that outlives the worker, so the worker genuinely cannot know, and the UI renders that as a neutral reload rather than guessing a verdict.
+
+  On failure the page **does not reload**, since reloading would destroy the only explanation the user ever gets, and the button is re-enabled to retry. On success it reloads after showing the result so the banner clears. Verified by driving the client's own branches - updated / failed / no_update / aborted / stale / unknown - against a stubbed DOM and `fetch`.
+
 ## [2.10.88] - 2026-07-30
 
 ### Fixed

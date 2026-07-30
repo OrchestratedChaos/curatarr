@@ -94,6 +94,7 @@ decision directly.
 """
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -135,6 +136,79 @@ from utils.update_check import update_available
 logger = logging.getLogger("curatarr")
 
 UPDATE_LOG_FILENAME = "update_apply.log"
+
+# Machine-readable sibling of UPDATE_LOG_FILENAME, so the UI can report
+# what actually happened instead of silently reloading and leaving the
+# user to infer it from a version number.
+#
+# A FILE rather than in-memory state, specifically because the server
+# process does not survive an update: the worker kills it, applies, and
+# starts a brand new one. Anything held in memory dies with it. The page
+# reconnects to a process that has no idea an update just happened, so
+# the outcome has to be written somewhere both sides can see.
+UPDATE_STATUS_FILENAME = "update_status.json"
+
+# Phases a source-install worker moves through, in order. The UI shows
+# these as "Step N of 4"; the worker stamps each one into the status
+# file as it starts it.
+#
+# Deliberately coarse. The genuinely slow phase is "applying" (git fetch
+# + signature verify + checkout + a possible dependency reinstall), and
+# nothing inside run.sh --apply-verified-update reports sub-progress, so
+# inventing finer steps would mean inventing their timing too.
+UPDATE_PHASES = ("preparing", "stopping", "applying", "relaunching")
+
+# Terminal values for the status file's "outcome" field. `None` while
+# still running.
+UPDATE_OUTCOME_UPDATED = "updated"
+UPDATE_OUTCOME_NO_UPDATE = "no_update"
+UPDATE_OUTCOME_FAILED = "failed"
+UPDATE_OUTCOME_ABORTED = "aborted"
+
+
+def update_status_path(logs_dir: str) -> str:
+    return os.path.join(logs_dir, UPDATE_STATUS_FILENAME)
+
+
+def write_update_status(logs_dir: str, **fields) -> None:
+    """Merge `fields` into the status file. Never raises.
+
+    Best-effort by design: this is progress reporting for a UI, and a
+    status write failing must never be the thing that breaks an update
+    that would otherwise have succeeded. Every caller is on the worker's
+    critical path.
+
+    Written to a temp file and moved into place so the server - which
+    may poll this concurrently, and which is a *different process* - can
+    never read a half-written file.
+    """
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+        current = read_update_status(logs_dir)
+        current.update(fields)
+        path = update_status_path(logs_dir)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(current, f)
+        os.replace(tmp, path)
+    except Exception as e:  # pragma: no cover - best-effort by contract
+        logger.debug(f"could not write update status: {e}")
+
+
+def read_update_status(logs_dir: str) -> dict:
+    """Current update status, or {} if there isn't one / it's unreadable.
+
+    Returns {} rather than raising on malformed JSON: a corrupt status
+    file means "we don't know", which the UI renders as a neutral
+    "finished - check the log", never as a false success or failure.
+    """
+    try:
+        with open(update_status_path(logs_dir), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
 
 # A git fetch against a slow/unreachable remote shouldn't hang the
 # /update/apply request itself - this is just the *precondition check*
@@ -376,6 +450,23 @@ class UpdateManager:
                 tag = check_verified_update(self.project_root)
             if not tag:
                 raise UpdateNotAvailableError("No newer release available to update to.")
+            # Reset before spawning, not after: the file persists across
+            # the restart (that's the point), so a previous run's
+            # terminal `outcome` is still sitting in it. Left in place,
+            # the page would read the OLD update's verdict as this one's
+            # the instant it reconnected. started_at lets the client
+            # ignore anything staler than its own click, too.
+            write_update_status(
+                self.logs_dir,
+                tag=tag,
+                phase=UPDATE_PHASES[0],
+                step=1,
+                total_steps=len(UPDATE_PHASES),
+                started_at=time.time(),
+                outcome=None,
+                detail="",
+                finished_at=None,
+            )
             self._spawn_worker(host, port)
             return tag
         except Exception:
@@ -793,6 +884,48 @@ def _run_frozen_verify_and_handoff(project_root: str, old_pid: int, port: int) -
         print(f"[update-worker] FATAL: could not launch hand-off script: {e}", flush=True)
 
 
+def _record_apply_outcome(logs_dir: str, output: str) -> None:
+    """Translate run.sh's/run.ps1's one-line verdict into the status file.
+
+    That contract is exactly one of `UPDATED:<tag>`, `NO_UPDATE`, or
+    `FAILED:<reason>` (see run.sh's --apply-verified-update). Anything
+    else is treated as unknown rather than guessed at - reporting a
+    confident "updated" off an unrecognized string is precisely the kind
+    of false success this whole file exists to stop.
+    """
+    if output.startswith("UPDATED:"):
+        tag = output.split(":", 1)[1].strip()
+        write_update_status(
+            logs_dir,
+            outcome=UPDATE_OUTCOME_UPDATED,
+            tag=tag,
+            detail=f"Updated to {tag}.",
+            finished_at=time.time(),
+        )
+    elif output == "NO_UPDATE":
+        write_update_status(
+            logs_dir,
+            outcome=UPDATE_OUTCOME_NO_UPDATE,
+            detail="Already up to date - nothing was changed.",
+            finished_at=time.time(),
+        )
+    elif output.startswith("FAILED:"):
+        reason = output.split(":", 1)[1].strip()
+        write_update_status(
+            logs_dir,
+            outcome=UPDATE_OUTCOME_FAILED,
+            detail=reason or "The update could not be applied.",
+            finished_at=time.time(),
+        )
+    else:
+        write_update_status(
+            logs_dir,
+            outcome=UPDATE_OUTCOME_FAILED,
+            detail="The update step returned an unrecognized result - see the log.",
+            finished_at=time.time(),
+        )
+
+
 def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
     """The actual detached sequence - see this module's docstring for
     the why. Plain print()s: stdout/stderr were already redirected to
@@ -824,6 +957,8 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
     the frozen-binary hand-off machinery applies to it.
     """
     print(f"[update-worker] starting, old pid={old_pid}, target={host}:{port}", flush=True)
+    logs_dir = os.path.join(project_root, "logs")
+    write_update_status(logs_dir, phase="preparing", step=1, total_steps=len(UPDATE_PHASES))
 
     try:
         time.sleep(RESPONSE_FLUSH_DELAY_SECONDS)
@@ -843,6 +978,15 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
                 "aborting this update attempt, old server left untouched",
                 flush=True,
             )
+            # The old server is deliberately left alive here, so unlike
+            # every other terminal state the page never loses its
+            # connection - it just needs to be told why nothing happened.
+            write_update_status(
+                logs_dir,
+                outcome=UPDATE_OUTCOME_ABORTED,
+                detail="A recommender run is in progress - nothing was changed. Try again once it finishes.",
+                finished_at=time.time(),
+            )
             return
 
         if getattr(sys, "frozen", False):
@@ -857,10 +1001,25 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
                 # falling through to the source-only relaunch code below
                 # would be wrong for a binary install) - log it and stop.
                 print(f"[update-worker] UNEXPECTED ERROR in frozen apply/hand-off: {e}", flush=True)
+            # No outcome here, deliberately. A frozen binary's swap and
+            # relaunch are done by an EXTERNAL script that outlives this
+            # process entirely (see utils/self_update_handoff.py), so
+            # this worker genuinely cannot know whether it succeeded.
+            # Claiming either verdict would be a guess; the UI treats a
+            # missing outcome as "finished, check the version", which is
+            # the honest rendering.
+            write_update_status(
+                logs_dir,
+                phase="relaunching",
+                step=len(UPDATE_PHASES),
+                detail="Handed off to the installer - the app will restart on its own.",
+                finished_at=time.time(),
+            )
             print("[update-worker] worker exiting (frozen path complete)", flush=True)
             return
 
         print("[update-worker] shutting down old server...", flush=True)
+        write_update_status(logs_dir, phase="stopping", step=2, total_steps=len(UPDATE_PHASES))
         _shut_down_old_server(old_pid, OLD_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
 
         script = _updater_script(project_root)
@@ -877,6 +1036,7 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
             apply_cmd = [_posix_bash_path(), script, "--apply-verified-update"]
 
         print("[update-worker] applying verified update...", flush=True)
+        write_update_status(logs_dir, phase="applying", step=3, total_steps=len(UPDATE_PHASES))
         try:
             result = subprocess.run(
                 apply_cmd,
@@ -890,19 +1050,33 @@ def _run_worker(project_root: str, old_pid: int, host: str, port: int) -> None:
             print(f"[update-worker] apply result: {output!r} (exit {result.returncode})", flush=True)
             if result.stderr:
                 print(f"[update-worker] apply stderr: {result.stderr.strip()}", flush=True)
+            _record_apply_outcome(logs_dir, output)
         except Exception as e:
             # Whatever happened, fall through to relaunching below anyway -
             # an apply step that couldn't even run is exactly the same
             # "stay on the current version" outcome as NO_UPDATE/FAILED.
             print(f"[update-worker] apply step raised: {e}", flush=True)
+            write_update_status(
+                logs_dir,
+                outcome=UPDATE_OUTCOME_FAILED,
+                detail=f"The update step could not run: {e}",
+                finished_at=time.time(),
+            )
     except Exception as e:
         # Last-resort catch-all for the SOURCE path above (the frozen
         # branch already returns before reaching here either way) -
         # nothing above this point may ever skip the unconditional
         # relaunch below.
         print(f"[update-worker] UNEXPECTED ERROR (still relaunching): {e}", flush=True)
+        write_update_status(
+            logs_dir,
+            outcome=UPDATE_OUTCOME_FAILED,
+            detail=f"Unexpected error during update: {e}",
+            finished_at=time.time(),
+        )
 
     print(f"[update-worker] relaunching UI on port {port}...", flush=True)
+    write_update_status(logs_dir, phase="relaunching", step=4, total_steps=len(UPDATE_PHASES))
     try:
         _relaunch_and_verify(project_root, port)
     except Exception as e:
