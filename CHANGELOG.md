@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.87] - 2026-07-30
+
+### Fixed
+
+- **`run.sh` and `run-ui.sh` ignored a project-local virtualenv, so a checkout with a working `./.venv` refused to start on any machine whose system Python was older than the floor.** Both scripts called bare `python3`/`pip3` and took whatever `PATH` handed them. On macOS, `python3` is the Command Line Tools' 3.9.6, so `./run-ui.sh` in a checkout with a perfectly good 3.12 `.venv` two directories away died on `Python 3.9.6 found, but curatarr's web UI requires Python 3.10+` - naming an interpreter the user hadn't chosen and wasn't using. A new shared `scripts/lib/python-env.sh` resolves the interpreter once, preferring an already-activated venv (`$VIRTUAL_ENV`), then `./.venv`, then `./venv`, then `python3`; `CURATARR_NO_VENV=1` opts out. This is the bash side catching up to `run.ps1`, which has always resolved `$pythonCmd` once and invoked `& $pythonCmd -m pip`.
+
+  The reason this is more than a `PATH` prepend: **a `uv venv` contains no pip at all** (nor does `python -m venv --without-pip`). Putting `.venv/bin` first on `PATH` therefore redirects `python3` into the venv while leaving `pip3` resolving to the *system* pip - so dependencies install into the system interpreter, the venv still can't import them, and each launch's `if ! python3 -c "import flask"` guard reinstalls them forever. That silent split is a worse bug than the one being fixed, so pip is now always addressed as `$CURATARR_PYTHON -m pip` (`curatarr_pip`, which bootstraps via `ensurepip` when the venv has no pip yet), and `run.sh`'s `command -v pip3` probe - which would have found the system pip and reported success - now asks the resolved interpreter instead.
+
+  Adopting a venv also *prepends* its `bin/` to `PATH` exactly as `activate` does, so the remaining plain `python3 ...` invocations (the YAML one-liners, `python3 recommenders/movie.py`, `trakt_sync.py`) run under it without every call site having to spell it out. A venv is used even when it turns out to be below the floor - silently ignoring one the user deliberately created would be the more surprising of the two behaviors - but the floor message now names the venv path and the `CURATARR_NO_VENV=1` escape hatch, so a stale venv produces an obvious diagnosis instead of a baffling one. Verified end to end on a machine whose system `python3` is 3.9.6: `run-ui.sh` now reports `Using virtualenv: .../.venv`, starts, serves HTTP 200, and the listening process is `.venv/bin/python3 -m web.app`.
+
 ## [2.10.86] - 2026-07-29
 
 ### Changed

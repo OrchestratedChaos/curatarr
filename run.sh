@@ -34,6 +34,21 @@ cd "$SCRIPT_DIR"
 # keeps its own copy - see scripts/lib/colors.sh's docstring for why).
 source "$SCRIPT_DIR/scripts/lib/colors.sh"
 
+# Prefer a project-local virtualenv (./.venv, ./venv) or an already
+# activated one over whatever `python3` PATH happens to point at - also
+# used by run-ui.sh. Must be sourced BEFORE pip-install.sh, whose
+# curatarr_pip_install goes through the interpreter this resolves.
+source "$SCRIPT_DIR/scripts/lib/python-env.sh"
+curatarr_resolve_python "$SCRIPT_DIR"
+# When a venv is adopted this also prepends its bin/ to PATH, the same way
+# `activate` does - so the plain `python3 ...` invocations further down
+# (the yaml one-liners, `python3 recommenders/movie.py`, trakt_sync.py)
+# run under it too, without each call site having to spell it out. The
+# places that must NOT rely on PATH - anything invoking pip, and the
+# version floor gate - use "$CURATARR_PYTHON" explicitly instead, because
+# a venv can lack its own pip binary while still being the interpreter
+# that has to import the result. See scripts/lib/python-env.sh.
+
 # Shared "hash-verified lockfile, fall back to plain requirements" pip
 # install helper - also used by run-ui.sh.
 source "$SCRIPT_DIR/scripts/lib/pip-install.sh"
@@ -52,7 +67,7 @@ check_and_install_dependencies() {
     echo ""
 
     # Check Python 3
-    if ! command -v python3 &> /dev/null; then
+    if ! command -v "$CURATARR_PYTHON" &> /dev/null; then
         echo -e "${RED}❌ Python 3 not found${NC}"
         echo ""
         echo "Please install Python 3.10+ from:"
@@ -62,8 +77,12 @@ check_and_install_dependencies() {
         exit 1
     fi
 
-    PYTHON_VERSION=$(python3 --version | awk '{print $2}')
-    echo -e "${GREEN}✓ Python $PYTHON_VERSION found${NC}"
+    PYTHON_VERSION=$("$CURATARR_PYTHON" --version | awk '{print $2}')
+    if [ -n "$CURATARR_VENV" ]; then
+        echo -e "${GREEN}✓ Python $PYTHON_VERSION found${NC} ${CYAN}(virtualenv: $CURATARR_VENV)${NC}"
+    else
+        echo -e "${GREEN}✓ Python $PYTHON_VERSION found${NC}"
+    fi
 
     # Python floor gate. requirements.lock's own header declares the
     # actual floor via the `--python-version X.Y` in its regenerate
@@ -76,6 +95,15 @@ check_and_install_dependencies() {
         if [ -n "$REQUIRED_PYTHON" ] && ! version_ge "$PYTHON_VERSION" "$REQUIRED_PYTHON"; then
             echo -e "${RED}❌ Python $PYTHON_VERSION found, but curatarr requires Python $REQUIRED_PYTHON+${NC}"
             echo ""
+            # Name the interpreter when it came from a venv - otherwise
+            # "Python 3.9.6 found" is baffling on a machine whose own
+            # `python3` is new enough.
+            if [ -n "$CURATARR_VENV" ]; then
+                echo "That interpreter is the virtualenv at $CURATARR_VENV"
+                echo "($CURATARR_PYTHON), not your system python3. Recreate it with a"
+                echo "newer Python, or set CURATARR_NO_VENV=1 to ignore it."
+                echo ""
+            fi
             echo "Nothing has been changed - your existing setup is untouched."
             echo "To proceed, either:"
             echo "  - Upgrade Python to $REQUIRED_PYTHON+ (https://www.python.org/downloads/ or"
@@ -88,18 +116,22 @@ check_and_install_dependencies() {
         fi
     fi
 
-    # Check pip3
-    if ! command -v pip3 &> /dev/null; then
-        echo -e "${YELLOW}pip3 not found, attempting to install...${NC}"
-        python3 -m ensurepip --upgrade || {
-            echo -e "${RED}❌ Failed to install pip3${NC}"
-            echo "Please install pip3 manually:"
-            echo "  - macOS: python3 -m ensurepip --upgrade"
+    # Check pip. Asks the RESOLVED interpreter whether it has pip, rather
+    # than asking PATH whether a `pip3` binary exists anywhere: a uv-created
+    # venv has no pip of its own, so `command -v pip3` would happily find
+    # the SYSTEM pip and every install would land outside the venv. See
+    # scripts/lib/python-env.sh (curatarr_pip) for the full rationale.
+    if ! "$CURATARR_PYTHON" -m pip --version &> /dev/null; then
+        echo -e "${YELLOW}pip not found for $CURATARR_PYTHON, attempting to install...${NC}"
+        "$CURATARR_PYTHON" -m ensurepip --upgrade || {
+            echo -e "${RED}❌ Failed to install pip${NC}"
+            echo "Please install pip manually:"
+            echo "  - $CURATARR_PYTHON -m ensurepip --upgrade"
             echo "  - Linux: sudo apt install python3-pip"
             exit 1
         }
     fi
-    echo -e "${GREEN}✓ pip3 found${NC}"
+    echo -e "${GREEN}✓ pip found${NC}"
 
     # Install Python dependencies - prefer the fully-hashed lock file
     # (requirements.lock, generated from requirements.txt - see the
@@ -148,7 +180,7 @@ check_and_install_dependencies() {
         fi
     else
         echo -e "${RED}❌ Failed to install Python dependencies${NC}"
-        echo "Try running manually: pip3 install -r requirements.txt"
+        echo "Try running manually: $CURATARR_PYTHON -m pip install -r requirements.txt"
         exit 1
     fi
 
