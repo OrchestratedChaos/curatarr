@@ -105,6 +105,29 @@ import threading
 import time
 from typing import Optional
 
+# A source install spawns this module as a PLAIN SCRIPT - `sys.executable
+# os.path.abspath(__file__)`, see UpdateManager._spawn_worker - which puts
+# THIS file's own directory (web/) at sys.path[0], not the project root.
+# The `from utils import ...` below therefore could not resolve, and the
+# detached worker died with `ModuleNotFoundError: No module named 'utils'`
+# before doing anything at all. `cwd` IS set to the project root by the
+# spawner, but cwd is not on sys.path for a script invocation - only the
+# script's own directory is - so that didn't help.
+#
+# The failure was invisible from the UI: the worker's traceback goes to
+# logs/update_apply.log, the server had already returned 202 "started",
+# and the page just polled /healthz until it timed out. Worse, the
+# server's own in-memory `_in_progress` flag stayed True forever, so
+# every later click returned 409 CONFLICT until the process was
+# restarted - i.e. one failed update permanently disabled the button.
+#
+# Guarded on __package__ so it applies ONLY to that script invocation:
+# imported normally (`from web import update_apply`) or run as
+# `-m web.update_apply`, the project root is already on the path and
+# this is a no-op rather than a duplicate entry.
+if __package__ in (None, ""):  # pragma: no cover - only true for the spawned-as-script worker
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils import self_update, self_update_handoff
 from utils.helpers import no_window_kwargs, resolve_system_executable
 from utils.update_check import update_available
@@ -257,9 +280,48 @@ class UpdateManager:
         self.logs_dir = logs_dir
         self._lock = threading.Lock()
         self._in_progress = False
+        self._worker: Optional[subprocess.Popen] = None
+
+    def _in_progress_locked(self) -> bool:
+        """Whether an update is genuinely still running. CALL WITH _lock HELD.
+
+        `_in_progress` alone is not enough. subprocess.Popen() succeeds as
+        soon as the child is spawned, so a worker that dies immediately
+        afterwards - which is exactly what happened when it couldn't
+        import `utils` (see the sys.path note at the top of this module) -
+        left this flag True with nothing alive to ever clear it. The
+        server survived, every later "Update now" got 409 CONFLICT, and
+        the only cure was restarting the process: a single transient
+        worker failure permanently disabled the button.
+
+        So the flag is now cross-checked against the worker actually
+        being alive. poll() works here because start_new_session only
+        detaches the session/process group - the worker is still this
+        process's child, so it's still reapable.
+
+        Note the normal, successful path never reaches the False branch:
+        the worker's whole job is to kill THIS process, so a live update
+        ends with the server gone rather than with anything observing the
+        worker exit. This only fires when the worker died without taking
+        the server with it - i.e. precisely the stuck case.
+        """
+        if not self._in_progress:
+            return False
+        worker = self._worker
+        if worker is not None and worker.poll() is not None:
+            logger.warning(
+                f"Update worker (pid {worker.pid}) exited with code {worker.returncode} "
+                f"without restarting the server - clearing the in-progress flag. "
+                f"See {os.path.join(self.logs_dir, UPDATE_LOG_FILENAME)}."
+            )
+            self._in_progress = False
+            self._worker = None
+            return False
+        return True
 
     def is_in_progress(self) -> bool:
-        return self._in_progress
+        with self._lock:
+            return self._in_progress_locked()
 
     def begin_update(self, host: str, port: int) -> str:
         """
@@ -296,9 +358,10 @@ class UpdateManager:
         Returns the (advisory, for a frozen binary) tag being applied.
         """
         with self._lock:
-            if self._in_progress:
+            if self._in_progress_locked():
                 raise UpdateAlreadyInProgressError("An update is already being applied.")
             self._in_progress = True
+            self._worker = None
 
         try:
             if os.environ.get("RUNNING_IN_DOCKER") == "true":
@@ -421,8 +484,12 @@ class UpdateManager:
         else:
             popen_kwargs["start_new_session"] = True
 
-        subprocess.Popen(cmd, **popen_kwargs)  # type: ignore[call-overload]  # mypy can't resolve Popen's overloads against a dynamically-built **dict splat
-        logger.info(f"Update worker started for {host}:{port} (log: {log_path})")
+        # Keep the handle: _in_progress_locked() polls it so a worker that
+        # dies without restarting the server can't wedge the button.
+        proc = subprocess.Popen(cmd, **popen_kwargs)  # type: ignore[call-overload]  # mypy can't resolve Popen's overloads against a dynamically-built **dict splat
+        with self._lock:
+            self._worker = proc
+        logger.info(f"Update worker started for {host}:{port} (log: {log_path}, pid: {proc.pid})")
 
 
 # =============================================================================
