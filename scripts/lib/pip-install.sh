@@ -5,7 +5,13 @@
 # independently (their own comments cross-referenced each other's
 # copy - see the 2.10.18 audit-remediation pass).
 #
-# Only the pip3 invocation + fallback decision is shared here - each
+# Requires scripts/lib/python-env.sh to have been sourced first, and
+# curatarr_resolve_python to have run: the actual pip invocation goes
+# through curatarr_pip (i.e. `$CURATARR_PYTHON -m pip`), never a bare
+# `pip3`, so a project-local venv without its own pip can't end up
+# installing into the system interpreter. See that file for why.
+#
+# Only the pip invocation + fallback decision is shared here - each
 # caller keeps its own success/failure messaging (run.sh wants colored
 # checkmark/warning output and a hard `exit 1` on total failure;
 # run-ui.sh is quieter and relies on `set -e`) via optional callback
@@ -56,7 +62,7 @@ curatarr_pip_install() {
             lock_args="$lock_args -r $f"
         done
         # shellcheck disable=SC2086  # intentional word-splitting of -r flags
-        if pip3 install --require-hashes $lock_args --quiet; then
+        if curatarr_pip install --require-hashes $lock_args --quiet; then
             CURATARR_PIP_INSTALL_MODE="hash-verified"
             return 0
         fi
@@ -76,7 +82,7 @@ curatarr_pip_install() {
     [ "$any_req_exists" -eq 1 ] || return 1
 
     # shellcheck disable=SC2086
-    if pip3 install $req_args --quiet; then
+    if curatarr_pip install $req_args --quiet; then
         CURATARR_PIP_INSTALL_MODE="fallback"
         return 0
     fi
