@@ -2,6 +2,20 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.88] - 2026-07-30
+
+### Fixed
+
+- **The web UI's "Update now" button never worked on a source install, and one click permanently disabled it.** Two separate defects, found together on a real install where an update attempt had left `logs/update_apply.log` holding nothing but a traceback and every subsequent click returning `409 CONFLICT` for a day afterwards.
+
+  **1. The detached worker couldn't import its own dependencies.** `UpdateManager._spawn_worker` launches it as a plain script - `sys.executable os.path.abspath(__file__)` - which puts `web/` at `sys.path[0]`, not the project root. Its module-level `from utils import self_update, self_update_handoff` therefore raised `ModuleNotFoundError: No module named 'utils'` and the worker died before doing any work at all. The spawner does pass `cwd=project_root`, which makes it look like it should resolve, but cwd is not on `sys.path` for a script invocation - only the script's own directory is. `web/update_apply.py` now puts the project root on `sys.path` before those imports, guarded on `__package__` so it stays a no-op when imported normally or run via `-m`.
+
+  Nothing surfaced any of this: the route had already returned `202 started`, the traceback went to a log file, and the page just polled `/healthz` until it timed out with "Update is taking longer than expected".
+
+  **2. A dead worker wedged the button forever.** `subprocess.Popen()` succeeds the instant the child is spawned, so a worker that dies a millisecond later still counts as a successful spawn. `_in_progress` was set to `True` with nothing alive to ever clear it - and it lives in memory in a server process that (because the update failed) never restarted. Every later "Update now" hit `UpdateAlreadyInProgressError` -> 409. A single transient worker failure permanently disabled updates until the process was manually restarted. `is_in_progress()` now cross-checks the flag against the worker actually being alive via `poll()`, so a worker that exits without restarting the server no longer blocks anything. The normal success path is unaffected - a real update ends with this server process killed, so nothing is left to observe the worker's exit.
+
+  Both are covered by regression tests that fail against the previous code: the worker is spawned as a script from two different working directories and asserted not to raise `ModuleNotFoundError`, and the stuck-flag path is driven through `begin_update()` to prove a crashed predecessor no longer blocks a retry while a genuinely concurrent update still does.
+
 ## [2.10.87] - 2026-07-30
 
 ### Fixed
