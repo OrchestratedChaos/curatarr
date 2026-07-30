@@ -48,6 +48,16 @@
             <button type="submit" aria-label="Dismiss update notice">&times;</button>
           </form>
         </span>
+        {# Hidden until an update actually starts. The bar is
+           INDETERMINATE on purpose - see the STEPS comment in the script
+           below for why there is no percentage. #}
+        <div class="update-progress" id="update-progress" hidden>
+          <div class="update-progress-track">
+            <div class="update-progress-bar" id="update-progress-bar"></div>
+          </div>
+          <span class="update-progress-step" id="update-progress-step"
+                role="status" aria-live="polite"></span>
+        </div>
       </div>
       <script>
         (function () {
@@ -64,6 +74,7 @@
           if (!btn) { return; }
           var textEl = document.getElementById('update-banner-text');
           var dismissForm = document.getElementById('update-banner-dismiss-form');
+          var banner = document.getElementById('update-banner');
           var POLL_INTERVAL_MS = 2000;
           var POLL_TOTAL_MS = 60000;
           // The worker sleeps this long before touching anything (see
@@ -72,19 +83,111 @@
           // server and short-circuit as "done" before anything happened.
           var INITIAL_DELAY_MS = 2500;
 
+          var progressEl = document.getElementById('update-progress');
+          var barEl = document.getElementById('update-progress-bar');
+          var stepEl = document.getElementById('update-progress-step');
+          var startedAt = 0;
+          var stepTimer = null;
+
+          // Elapsed-time step labels. These mirror UPDATE_PHASES in
+          // web/update_apply.py, but the timings are ESTIMATES and
+          // deliberately presented as such (the bar is indeterminate,
+          // never a percentage). The worker does write a real phase to
+          // logs/update_status.json as it goes - but the server is dead
+          // for almost all of this window, so nothing can be asked for
+          // it until it's over. Showing a fake percentage against an
+          // unknowable duration would be worse than showing none: it
+          // would keep climbing while a hung update sat there.
+          var STEPS = [
+            { at: 0,     label: 'Step 1 of 4: Preparing' },
+            { at: 2000,  label: 'Step 2 of 4: Stopping the current version' },
+            { at: 5000,  label: 'Step 3 of 4: Downloading and verifying the update' },
+            { at: 20000, label: 'Step 4 of 4: Restarting' }
+          ];
+
           function setMessage(msg) {
             textEl.textContent = msg;
           }
 
+          function currentStepLabel(elapsed) {
+            var label = STEPS[0].label;
+            for (var i = 0; i < STEPS.length; i++) {
+              if (elapsed >= STEPS[i].at) { label = STEPS[i].label; }
+            }
+            return label;
+          }
+
+          function startProgress() {
+            startedAt = Date.now();
+            if (progressEl) { progressEl.hidden = false; }
+            if (barEl) { barEl.classList.add('indeterminate'); }
+            stepTimer = setInterval(function () {
+              var elapsed = Date.now() - startedAt;
+              if (stepEl) {
+                stepEl.textContent = currentStepLabel(elapsed) +
+                  '  ·  ' + Math.round(elapsed / 1000) + 's';
+              }
+            }, 500);
+          }
+
+          function stopProgress() {
+            if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
+            if (barEl) { barEl.classList.remove('indeterminate'); }
+            if (progressEl) { progressEl.hidden = true; }
+          }
+
           function resetToIdle(msg) {
+            stopProgress();
             setMessage(msg);
             btn.disabled = false;
             if (dismissForm) { dismissForm.style.display = ''; }
           }
 
+          // Report what actually happened, from the worker's own record.
+          // Only trusted if it belongs to THIS attempt: the status file
+          // survives the restart by design, so a previous update's
+          // verdict is still on disk until the next one starts.
+          function reportOutcome() {
+            fetch('/update/status', { cache: 'no-store' })
+              .then(function (resp) { return resp.json(); })
+              .then(function (s) {
+                var stale = !s || !s.started_at || (s.started_at * 1000) < (startedAt - 5000);
+                if (stale || !s.outcome) {
+                  // Unknown (frozen hand-off, or an unreadable file) -
+                  // say so plainly and let the reloaded page's version
+                  // speak for itself rather than guessing a verdict.
+                  setMessage('Reconnected - reloading...');
+                  window.location.reload();
+                  return;
+                }
+                if (s.outcome === 'updated') {
+                  banner.classList.remove('warn');
+                  banner.classList.add('ok');
+                  setMessage('✓ ' + (s.detail || 'Updated.') + ' Reloading...');
+                  setTimeout(function () { window.location.reload(); }, 1500);
+                  return;
+                }
+                // no_update / failed / aborted: do NOT reload. Reloading
+                // would wipe the only explanation the user ever gets.
+                banner.classList.remove('warn');
+                banner.classList.add(s.outcome === 'no_update' ? 'ok' : 'error');
+                var mark = s.outcome === 'no_update' ? '✓ ' : '✗ ';
+                var detail = s.detail || 'The update did not complete.';
+                // run.sh's FAILED:<reason> strings aren't guaranteed to be
+                // punctuated, so don't run straight into the next sentence.
+                if (!/[.!?]$/.test(detail)) { detail += '.'; }
+                var suffix = s.outcome === 'failed' ? ' See logs/update_apply.log.' : '';
+                resetToIdle(mark + detail + suffix);
+              })
+              .catch(function () {
+                setMessage('Reconnected - reloading...');
+                window.location.reload();
+              });
+          }
+
           function pollHealthz(deadline) {
             if (Date.now() > deadline) {
-              setMessage('Update is taking longer than expected - check logs/update_apply.log, or restart curatarr manually.');
+              resetToIdle('Update is taking longer than expected - check logs/update_apply.log, or restart curatarr manually.');
               return;
             }
             fetch('/healthz', { cache: 'no-store' })
@@ -93,11 +196,14 @@
                 return resp.json();
               })
               .then(function () {
-                // Something answered again - old code or new, either
-                // way reload and let the page's own banner logic show
-                // whatever's actually true now.
-                setMessage('Reconnected - reloading...');
-                window.location.reload();
+                // Something answered again - old code or new. Which one
+                // it is, and whether the update actually worked, comes
+                // from the worker's own record, not from the mere fact
+                // that a server is listening: the worker relaunches the
+                // UI on failure too, so "it came back" is not success.
+                stopProgress();
+                setMessage('Reconnected - checking result...');
+                reportOutcome();
               })
               .catch(function () {
                 setTimeout(function () { pollHealthz(deadline); }, POLL_INTERVAL_MS);
@@ -120,7 +226,8 @@
                   resetToIdle((result.data && result.data.error) || 'Could not start the update.');
                   return;
                 }
-                setMessage('Updating to ' + result.data.tag + '... the page will reconnect automatically. This can take up to a minute.');
+                setMessage('Updating to ' + result.data.tag + '... the page will reconnect automatically.');
+                startProgress();
                 setTimeout(function () {
                   pollHealthz(Date.now() + POLL_TOTAL_MS);
                 }, INITIAL_DELAY_MS);

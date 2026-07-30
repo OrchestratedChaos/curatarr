@@ -85,6 +85,7 @@ from .update_apply import (
     UpdateAlreadyInProgressError,
     UpdateManager,
     UpdateNotAvailableError,
+    read_update_status,
 )
 
 DEFAULT_PORT = 8787
@@ -494,6 +495,36 @@ def create_app(
         already exposed via /healthz and /status.json - just never
         rendered anywhere a human looks at it directly before this."""
         return {"curatarr_version": __version__}
+
+    @app.get("/update/status")
+    def update_status():
+        """What the last/current update is doing, for base.html's progress UI.
+
+        Exists because the server does NOT survive an update - the worker
+        kills it, applies, and starts a fresh one. The page that reconnects
+        is talking to a process with no memory of the update, so the
+        outcome has to come off disk (logs/update_status.json, written by
+        the worker itself - see web/update_apply.py).
+
+        Unauthenticated for the same reason as /healthz: this app's only
+        boundary is binding 127.0.0.1 plus the origin/host guard, and a
+        phase name and version tag are no more sensitive than the version
+        /healthz already returns. Deliberately returns only what the UI
+        renders - no paths, no command lines, no stderr.
+        """
+        status = read_update_status(app.config["LOGS_DIR"])
+        return jsonify(
+            {
+                "phase": status.get("phase"),
+                "step": status.get("step"),
+                "total_steps": status.get("total_steps"),
+                "tag": status.get("tag"),
+                "outcome": status.get("outcome"),
+                "detail": status.get("detail"),
+                "started_at": status.get("started_at"),
+                "finished_at": status.get("finished_at"),
+            }
+        )
 
     @app.post("/update/dismiss")
     def update_dismiss():
