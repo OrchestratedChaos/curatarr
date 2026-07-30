@@ -7,6 +7,7 @@ from collections import Counter
 
 import pytest
 
+from utils.config import MAX_REDISTRIBUTION_MULTIPLIER
 from utils.scoring import (
     ScoringOptions,
     _apply_active_weight_redistribution,
@@ -1185,15 +1186,27 @@ class TestRedistributionDistinguishesAbsentFromUnmatched:
         assert rich > sparse, f"richly-matching item ({rich}) must outrank genre-only item ({sparse})"
 
     def test_partial_absence_redistributes_only_the_absent_share(self):
-        """Mixed case: keyword data absent (redistribute its 0.45), cast
-        data present but unmatched (its 0.20 stays lost)."""
-        has_data = {"genre": True, "director": True, "studio": False, "actor": True, "language": True, "keyword": False}
-        mixed = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS, has_data)
+        """Mixed case: keyword data absent (redistribute its weight), cast
+        data present but unmatched (its weight stays lost).
 
-        all_absent = {k: (k == "genre") for k in has_data}
-        everything = _apply_active_weight_redistribution(0.2, self.COMPONENT_SCORES, self.WEIGHTS, all_absent)
+        Uses deliberately small absent weights so
+        MAX_REDISTRIBUTION_MULTIPLIER doesn't bind. With this class's real
+        WEIGHTS both branches would be clipped to the cap and land on the
+        identical value, hiding the very difference this asserts - that's
+        the cap working as intended, not a regression, and it is covered
+        directly in TestRedistributionIsCapped.
+        """
+        weights = {"genre": 0.90, "actor": 0.05, "keyword": 0.05}
+        scores = {"genre": 0.40, "actor": 0.0, "keyword": 0.0}
 
-        assert 0.2 < mixed < everything
+        mixed = _apply_active_weight_redistribution(
+            0.40, scores, weights, {"genre": True, "actor": True, "keyword": False}
+        )
+        everything = _apply_active_weight_redistribution(
+            0.40, scores, weights, {"genre": True, "actor": False, "keyword": False}
+        )
+
+        assert 0.40 < mixed < everything
 
     def test_omitting_the_map_preserves_legacy_behavior(self):
         """Existing callers/tests that don't pass content_has_data must
@@ -1234,3 +1247,80 @@ class TestApplyPopularityDampeningHelper:
         score, dampening = _apply_popularity_dampening(0.8, {"vote_count": 500000}, options)
         assert score < 0.8
         assert dampening is not None
+
+
+class TestRedistributionIsCapped:
+    """The other half of the sparse-metadata fix.
+
+    Distinguishing "absent" from "didn't match" (see
+    TestRedistributionDistinguishesAbsentFromUnmatched above) correctly
+    pushed down items whose PRESENT data scored zero - and thereby
+    floated the one item with genuinely ABSENT data to the very top,
+    because its redistribution was still unbounded.
+
+    Observed on a real 186-candidate library: a title with no
+    tmdb_keywords at all, scored against a profile weighting keyword at
+    0.5 (half the entire budget), had that whole 0.5 moved onto
+    genre+language (0.30 active) for a 2.67x multiplier - raw 0.247 ->
+    0.658 - taking it from a true rank of #54 to #1. Every other title
+    in the top twelve was being scaled by 1.00-1.07x.
+    """
+
+    def test_a_large_absent_dimension_cannot_take_over_the_score(self):
+        """The real case: keyword weight 0.5 absent, 0.30 active."""
+        component_scores = {"genre": 0.197, "language": 0.05, "keyword": 0.0}
+        weights = {"genre": 0.25, "language": 0.05, "keyword": 0.5}
+        has_data = {"genre": True, "language": True, "keyword": False}
+
+        result = _apply_active_weight_redistribution(0.247, component_scores, weights, has_data)
+
+        # Uncapped this would be 0.247 * (0.30+0.50)/0.30 = 0.659.
+        assert result == pytest.approx(0.247 * MAX_REDISTRIBUTION_MULTIPLIER, rel=1e-6)
+        assert result < 0.35
+
+    def test_a_small_absent_dimension_is_still_fully_forgiven(self):
+        """The original, legitimate intent must survive: a missing
+        language field (0.05) is below the cap and redistributes whole."""
+        component_scores = {"genre": 0.20, "keyword": 0.40, "language": 0.0}
+        weights = {"genre": 0.25, "keyword": 0.5, "language": 0.05}
+        has_data = {"genre": True, "keyword": True, "language": False}
+
+        result = _apply_active_weight_redistribution(0.60, component_scores, weights, has_data)
+
+        uncapped = 0.60 * (0.75 + 0.05) / 0.75
+        assert result == pytest.approx(uncapped, rel=1e-6), "a small gap should not be clipped"
+
+    def test_multiplier_never_exceeds_the_cap(self):
+        """Sweep the absent share; the effective amplification must be
+        monotonic up to the cap and never past it."""
+        for absent in [0.05, 0.1, 0.2, 0.4, 0.6, 0.8]:
+            weights = {"genre": 0.2, "keyword": absent}
+            component_scores = {"genre": 0.2, "keyword": 0.0}
+            has_data = {"genre": True, "keyword": False}
+            result = _apply_active_weight_redistribution(0.2, component_scores, weights, has_data)
+            assert result <= 0.2 * MAX_REDISTRIBUTION_MULTIPLIER + 1e-9, f"cap breached at absent={absent}"
+
+    def test_cap_does_not_affect_items_with_nothing_absent(self):
+        """An item with data everywhere is untouched by any of this."""
+        component_scores = {"genre": 0.2, "keyword": 0.4}
+        weights = {"genre": 0.25, "keyword": 0.5}
+        has_data = {"genre": True, "keyword": True}
+        assert _apply_active_weight_redistribution(0.6, component_scores, weights, has_data) == 0.6
+
+    def test_richly_described_item_outranks_the_sparse_one(self):
+        """The ranking property that actually matters, stated directly."""
+        weights = {"genre": 0.25, "actor": 0.2, "keyword": 0.5, "language": 0.05}
+
+        sparse = _apply_active_weight_redistribution(
+            0.247,
+            {"genre": 0.197, "language": 0.05, "actor": 0.0, "keyword": 0.0},
+            weights,
+            {"genre": True, "language": True, "actor": True, "keyword": False},
+        )
+        rich = _apply_active_weight_redistribution(
+            0.40,
+            {"genre": 0.15, "actor": 0.05, "keyword": 0.20, "language": 0.0},
+            weights,
+            {"genre": True, "actor": True, "keyword": True, "language": False},
+        )
+        assert rich > sparse, "an item matching on three dimensions must beat one matching on genre alone"

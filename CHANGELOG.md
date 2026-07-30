@@ -2,6 +2,24 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.10.90] - 2026-07-30
+
+### Fixed
+
+- **An item with no data at all for a heavily-weighted dimension could still take over the top of the list.** 2.10.85 stopped redistributing weight away from dimensions whose data was *present but unmatched*; it left redistribution for *genuinely absent* data unbounded. That correctly pushed the unmatched items down - and thereby floated the one item with truly missing metadata straight to #1.
+
+  Measured on a real 186-candidate library. A title with `tmdb_keywords: []` (one of only 3 such items out of 327) scored against a profile weighting `keyword` at **0.5 - half the entire budget**. That whole 0.5 moved onto genre+language (0.30 active), multiplying its score by `(0.30+0.50)/0.30 = 2.67x`: raw **0.247 -> 0.658**, taking it from a true rank of **#54 to #1**, ahead of every richly-described title that matched on several dimensions. Every other title in the top twelve was being scaled by 1.00-1.07x.
+
+  The flawed assumption was treating "no data" as *"don't penalize it"*. That's right for a missing `language` field worth 0.05; it's wrong for a dimension worth half the budget, where it turns "we know nothing about this item" into "everything we do know counts 2.67x as much".
+
+  Redistribution is now capped by `MAX_REDISTRIBUTION_MULTIPLIER` (1.25): small gaps stay fully forgiven, and past the cap the remaining weight simply stays lost, because an item we know less about genuinely has less evidence of matching. On the same real data this moves the offending title to **#31** and leaves the rest of the top ten identical; the maximum amplification anywhere in the candidate pool is now exactly 1.25x. **`CACHE_VERSION` is bumped to 7** - as with 2.10.85, a scoring change that doesn't move it is a silent no-op on every existing install, since per-item scores are cached against the profile hash and not against the scoring code.
+
+- **The run page still froze on long runs - a second, independent quadratic, this one in the browser.** 2.10.85 fixed the server side (`Job.try_subscribe` replaying an unbounded backlog on every SSE reconnect), which made the page *load* fast while the tab still locked up. The remaining cost was in `web/static/app.js`: `output.textContent += line` per message. Reading `textContent` materializes the whole accumulated log into a fresh string and writing it destroys every child node and rebuilds one, so each line costs O(total so far) - and `scrollTop = scrollHeight` on every line forced a synchronous layout of a steadily growing element on top of that.
+
+  Measured in Chrome, appending N lines the old way vs. the new: 500 -> **1089ms/5ms**, 1000 -> **4333ms/10ms**, 2000 -> **16333ms/21ms**, 4000 -> **66216ms/50ms**. Time quadruples each time N doubles. A real full run emitted **11,505 lines**, which extrapolates to roughly **nine minutes** of blocked main thread.
+
+  Lines are now buffered and written once per animation frame, appending a new text node instead of rewriting the whole element, with the retained tail bounded at 5000 lines (trimmed in one pass every 1000, so the amortized per-line cost stays constant). Auto-scroll only follows the tail if you were already at the bottom, so scrolling up to read something no longer yanks the view back down. A hidden tab - where `requestAnimationFrame` never fires - flushes directly once 1000 lines have piled up rather than buffering without bound.
+
 ## [2.10.89] - 2026-07-30
 
 ### Added
