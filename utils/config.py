@@ -14,10 +14,15 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.89"
+__version__ = "2.10.90"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
-CACHE_VERSION = 6  # v6: NOT a format change - a SCORING change (2.10.85's
+CACHE_VERSION = 7  # v7: another SCORING change, not a format one - the
+# MAX_REDISTRIBUTION_MULTIPLIER cap below (2.10.90). Same reasoning as v6
+# immediately after this: a scoring change that doesn't move this constant
+# is invisible on every existing install.
+#
+# v6: NOT a format change - a SCORING change (2.10.85's
 # per-item weight-redistribution fix, see CHANGELOG). Cached per-item scores
 # are keyed on profile_hash alone (recommenders/base.py's cache-hit branch in
 # get_recommendations()), which captures the user's watch profile but NOT the
@@ -78,6 +83,25 @@ TFIDF_GENRE_PENALTY = 0.3  # Max 30% penalty per rare genre
 TFIDF_KEYWORD_PENALTY = 0.15  # Max 15% penalty per rare keyword
 UNSEEN_GENRE_PENALTY = 0.1  # Penalty for genres user has never watched
 UNSEEN_KEYWORD_PENALTY = 0.02  # Penalty for keywords user has never seen
+
+# Ceiling on per-item weight redistribution (utils/scoring.py's
+# _apply_active_weight_redistribution). When an item carries no data at
+# all for a dimension, that dimension's weight moves onto the ones that
+# did score - which is right for a small dimension (a missing language
+# field, weight 0.05) and badly wrong for a large one.
+#
+# Measured on a real library: a title with no tmdb_keywords, against a
+# profile weighting keyword at 0.5 - half the whole budget - had its
+# score multiplied by 2.67x and jumped from a true rank of #54 to #1,
+# ahead of every title that actually matched on several dimensions.
+# Everything else was being scaled by 1.00-1.07x.
+#
+# 1.25 keeps small gaps forgiven while refusing to let an absent
+# dimension take over the score: past this point the remaining weight
+# stays lost, because an item we know less about genuinely has less
+# evidence of matching. Raising this re-opens that failure; lowering it
+# toward 1.0 approaches "absent scores zero".
+MAX_REDISTRIBUTION_MULTIPLIER = 1.25
 
 # Popularity dampening for very popular content (prevents blockbusters dominating)
 POPULARITY_DAMPENING_FACTOR = 0.03  # ~3% penalty per order of magnitude above threshold

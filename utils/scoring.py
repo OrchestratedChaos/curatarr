@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from .config import (
+    MAX_REDISTRIBUTION_MULTIPLIER,
     POPULARITY_DAMPENING_CAP,
     POPULARITY_DAMPENING_FACTOR,
     TFIDF_GENRE_PENALTY,
@@ -753,6 +754,35 @@ def _apply_active_weight_redistribution(
     if lost_weight > 0 and active_weights:
         total_active_weight = sum(w for w, _ in active_weights.values())
         if total_active_weight > 0:
+            # Cap how far redistribution may amplify a score.
+            #
+            # Forgiving a missing dimension is right when the dimension is
+            # SMALL - an item with no language field (weight 0.05) should
+            # not be marked down for it. It is wrong when the dimension is
+            # large, because then "we know nothing about this item" turns
+            # into "everything we do know counts several times over".
+            #
+            # Measured on a real 186-candidate library: one title had no
+            # tmdb_keywords at all, and keyword weight was 0.5 - half the
+            # entire budget. Its whole 0.5 moved onto genre+language
+            # (0.30 active), multiplying its score by (0.30+0.50)/0.30 =
+            # 2.67x, from a raw 0.247 to 0.658. That took it from a true
+            # rank of #54 to #1, ahead of every richly-described title
+            # that matched on several dimensions. Every other item in the
+            # top twelve was being scaled by 1.00-1.07x.
+            #
+            # This is the other half of the fix in 2.10.85, which stopped
+            # rewarding items whose PRESENT data scored zero. That
+            # correctly pushed those items down - and thereby floated the
+            # one item with genuinely ABSENT data to the top, since its
+            # redistribution was left untouched.
+            multiplier = (total_active_weight + lost_weight) / total_active_weight
+            if multiplier > MAX_REDISTRIBUTION_MULTIPLIER:
+                # Keep only as much lost weight as the cap allows, and
+                # let the remainder stay lost: an item we know less about
+                # genuinely has less evidence of matching.
+                lost_weight = (MAX_REDISTRIBUTION_MULTIPLIER - 1.0) * total_active_weight
+
             for _comp, (weight, ratio) in active_weights.items():
                 extra_weight = lost_weight * (weight / total_active_weight)
                 extra_score = extra_weight * ratio
