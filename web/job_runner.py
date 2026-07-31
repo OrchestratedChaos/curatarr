@@ -190,6 +190,31 @@ def _build_docker_full_script(py: str, movie_script: str, tv_script: str, extern
     )
 
 
+# A progress update: some stable prefix followed by "<n>/<total> (<pct>%)".
+# The prefix is the "family" - two updates belong to the same run of
+# progress only if their prefixes match, so "Processing movie 5/337 (1%)"
+# collapses onto "Processing movie 4/337 (1%)" but NOT onto
+# "Processing alice's watched 4/233 (1%)". A line carrying genuinely new
+# information is never collapsed, only a counter advancing in place.
+_PROGRESS_LINE_RE = re.compile(r"^(?P<prefix>.*?)\s*\d+\s*/\s*\d+\s*\(\s*\d+\s*%\s*\)\s*$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def progress_family(line: str) -> Optional[str]:
+    """
+    Return a progress line's stable prefix, or None if it isn't one.
+
+    Color codes are stripped before matching - the recommender wraps
+    these in CYAN/RESET, and the escape sequences would otherwise sit
+    between the prefix and the counter and defeat the match.
+    """
+    plain = _ANSI_RE.sub("", line).strip()
+    match = _PROGRESS_LINE_RE.match(plain)
+    if not match:
+        return None
+    return match.group("prefix").strip()
+
+
 class Job:
     """State for a single triggered run. Construct via JobManager.start()."""
 
@@ -238,8 +263,23 @@ class Job:
         return "succeeded" if self.returncode == 0 else "failed"
 
     def _append_line(self, line: str) -> None:
+        # Counter/percentage progress updates collapse onto the previous
+        # line instead of piling up (see progress_family). The recommender
+        # writes these with a bare \r and no newline - correct in a
+        # terminal, where each overwrites the last - but Python opens the
+        # subprocess pipe in text mode, and universal-newline translation
+        # turns every \r into its own line. A 337-item scan therefore
+        # arrived here as 337 separate lines. Collapsing here keeps
+        # self.lines (which backs both backlog replay and the stored log)
+        # to one line per progress run; web/static/app.js applies the
+        # same rule to the live DOM, since subscribers still receive every
+        # individual update in order to animate.
+        family = progress_family(line)
         with self._data_lock:
-            self.lines.append(line)
+            if family is not None and self.lines and progress_family(self.lines[-1]) == family:
+                self.lines[-1] = line
+            else:
+                self.lines.append(line)
             for q in self._subscribers:
                 _safe_queue_put(q, line)
         # Stage markers (see STAGE_MARKER_PREFIX/_STAGE_MARKER_RE) are

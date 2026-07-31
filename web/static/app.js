@@ -80,44 +80,120 @@
   var flushScheduled = false;
   var lineCount = 0;
 
+  // Counter/percentage progress updates overwrite in place rather than
+  // stacking up. The recommender writes these with a bare \r and no
+  // newline - correct in a terminal, where each overwrites the last -
+  // but the subprocess pipe is opened in text mode, and universal-newline
+  // translation turns every \r into its own line before it reaches us.
+  // A 337-item scan arrived as 337 separate lines.
+  //
+  // Only a counter advancing under an unchanged prefix collapses. A line
+  // carrying genuinely new information never does, and the final update
+  // of a run (the 100%) is committed permanently once a different line
+  // follows it, so completed steps stay in the log.
+  //
+  // Deliberately mirrored from web/job_runner.py's progress_family():
+  // the server needs the rule to keep its stored log and backlog replay
+  // clean, the client needs it because subscribers still receive every
+  // individual update in order to animate the counter.
+  var PROGRESS_RE = /^(.*?)\s*\d+\s*\/\s*\d+\s*\(\s*\d+\s*%\s*\)$/;
+  var ANSI_RE = /\x1b\[[0-9;]*m/g;
+  var liveFamily = null; // family of the progress run currently animating
+  var liveText = null; // its latest text, not yet committed to the log
+  var liveNode = null; // the trailing node it renders into
+
+  function progressFamily(text) {
+    var m = PROGRESS_RE.exec(String(text).replace(ANSI_RE, '').trim());
+    return m ? m[1].trim() : null;
+  }
+
   function nearBottom() {
     // Checked BEFORE appending, since appending changes scrollHeight.
     return output.scrollHeight - output.scrollTop - output.clientHeight < 40;
   }
 
+  function renderLive() {
+    if (liveText === null) { return; }
+    if (!liveNode) {
+      liveNode = document.createElement('span');
+      output.appendChild(liveNode);
+    }
+    liveNode.textContent = liveText + '\n';
+  }
+
+  // Fold the finished progress line into the permanent log. Queued as a
+  // normal pending line so it takes the same trim/scroll path as any
+  // other, rather than becoming a second way for text to reach the DOM.
+  function commitLive() {
+    if (liveText === null) { return; }
+    pending.push(liveText);
+    liveText = null;
+    liveFamily = null;
+    if (liveNode) {
+      output.removeChild(liveNode);
+      liveNode = null;
+    }
+  }
+
+  function scheduleFlush() {
+    if (flushScheduled) { return; }
+    flushScheduled = true;
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(flushLines);
+    } else {
+      setTimeout(flushLines, 16);
+    }
+  }
+
   function flushLines() {
     flushScheduled = false;
-    if (!pending.length) { return; }
+    if (!pending.length && liveText === null) { return; }
     // Don't yank the view back down if the user has scrolled up to read
     // something - only keep following the tail if they were already there.
     var stick = nearBottom();
-    output.appendChild(document.createTextNode(pending.join('\n') + '\n'));
-    lineCount += pending.length;
-    pending.length = 0;
-    if (lineCount > MAX_LINES) {
-      // O(n), but only once every (MAX_LINES - TRIM_TO) lines, so the
-      // amortized cost per line stays constant.
-      var kept = output.textContent.split('\n').slice(-TRIM_TO);
-      output.textContent = kept.join('\n');
-      lineCount = kept.length;
+    if (pending.length) {
+      var node = document.createTextNode(pending.join('\n') + '\n');
+      // Committed lines must land BEFORE the animating progress line,
+      // which is always the last child while its run is in flight.
+      if (liveNode) {
+        output.insertBefore(node, liveNode);
+      } else {
+        output.appendChild(node);
+      }
+      lineCount += pending.length;
+      pending.length = 0;
+      if (lineCount > MAX_LINES) {
+        // O(n), but only once every (MAX_LINES - TRIM_TO) lines, so the
+        // amortized cost per line stays constant.
+        var kept = output.textContent.split('\n').slice(-TRIM_TO);
+        output.textContent = kept.join('\n');
+        lineCount = kept.length;
+        // Rewriting textContent destroyed every child, liveNode included.
+        liveNode = null;
+      }
     }
+    renderLive();
     if (stick) { output.scrollTop = output.scrollHeight; }
   }
 
   function appendLine(text) {
+    var family = progressFamily(text);
+    if (family !== null) {
+      // A different progress run starting means the previous one ended -
+      // keep its last state rather than overwriting it with the new run.
+      if (family !== liveFamily) { commitLive(); }
+      liveFamily = family;
+      liveText = text;
+      scheduleFlush();
+      return;
+    }
+    commitLive();
     pending.push(text);
     // requestAnimationFrame doesn't fire in a background tab, so a
     // hidden page would otherwise buffer without bound - flush directly
     // once enough has piled up.
     if (pending.length >= 1000) { flushLines(); return; }
-    if (!flushScheduled) {
-      flushScheduled = true;
-      if (window.requestAnimationFrame) {
-        window.requestAnimationFrame(flushLines);
-      } else {
-        setTimeout(flushLines, 16);
-      }
-    }
+    scheduleFlush();
   }
 
   if (output && window.CURATARR_JOB_RUNNING) {
