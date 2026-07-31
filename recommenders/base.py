@@ -30,6 +30,8 @@ from utils import (
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_TV_NAME_TEMPLATE,
     GREEN,
+    IGNORED_REC_MIN_DAYS_SHOWN,
+    IGNORED_REC_PENALTY,
     RATING_MULTIPLIER_2_STAR,
     RATING_MULTIPLIER_3_STAR,
     RATING_MULTIPLIER_4_STAR,
@@ -48,18 +50,28 @@ from utils import (
     WEIGHT_SUM_TOLERANCE,
     YELLOW,
     add_labels_to_items,
+    apply_ignored_penalties,
     apply_user_label_restrictions,
+    assess_pool_health,
+    build_corpus_idf,
     build_label_name,
+    build_target_distribution,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
+    calibrate_recommendations,
+    calibration_report,
     categorize_labeled_items,
     check_cache_version,
     cleanup_legacy_unnamed_collection,
     cleanup_old_collections,
     create_empty_counters,
+    describe_least_informative,
     enhance_profile_with_trakt,
     extract_ids_from_guids,
     fetch_tmdb_with_retry,
+    find_ignored_recommendations,
+    find_supply_gaps,
+    format_health_report,
     get_configured_users,
     get_excluded_genres_for_user,
     get_full_language_name,
@@ -67,6 +79,7 @@ from utils import (
     get_library_imdb_ids_from_items,
     get_max_rating_for_user,
     get_negative_multiplier,
+    get_negative_signals_config,
     get_project_root,
     get_tmdb_config,
     get_tmdb_id_for_item,
@@ -563,6 +576,13 @@ class BaseRecommender(ABC):
         # existing documented/tested behavior for installs that already set it.
         default_limit = self.limit_results * CANDIDATE_BUFFER_MULTIPLIER
         self.limit_plex_results = general_config.get("limit_plex_results", default_limit)
+        # Quality gate + calibration (config/tuning.yml movies:/tv:), both
+        # resolved by resolve_media_type_overrides() and both defaulting to
+        # 0.0 = off, so an install that sets neither is bit-for-bit
+        # unchanged. See utils/calibration.py for what calibration does.
+        self.min_similarity = self.config["min_similarity"]
+        self.calibration_strength = self.config["calibration_strength"]
+
         self.randomize_recommendations = self.config["randomize_recommendations"]
         self.normalize_counters = self.config["normalize_counters"]
         self.show_summary = self.config["show_summary"]
@@ -947,6 +967,18 @@ class BaseRecommender(ABC):
                 f"(rating: {min_rating}+, votes: {min_vote_count}+)"
             )
 
+        # Corpus IDF over the whole library, built once per run (see
+        # utils/corpus_idf.py). Scoring falls back to its previous
+        # behavior wherever these come back empty.
+        self.genre_idf = build_corpus_idf(all_items.values(), "genres")
+        self.keyword_idf = build_corpus_idf(all_items.values(), "tmdb_keywords")
+        if self.keyword_idf and logger.isEnabledFor(logging.DEBUG):
+            discounted = describe_least_informative(self.keyword_idf)
+            summary = ", ".join(f"{t} ({w:.2f})" for t, w in discounted)
+            logger.debug(f"Least informative keywords (discounted by corpus IDF): {summary}")
+
+        self._report_library_health(unwatched_items)
+
         if not unwatched_items:
             log_warning(f"No unwatched {self.media_key} found matching your criteria.")
             plex_recs = []
@@ -1001,6 +1033,20 @@ class BaseRecommender(ABC):
                 key=lambda x: (x["similarity_score"], x.get("rating") or 0.0, x.get("vote_count") or 0),
                 reverse=True,
             )
+
+            # Quality gate. Applied here as well as in _update_labels_by_rank
+            # so the printed recommendation list never advertises items the
+            # collection would refuse - previously this list ran all the way
+            # down the candidate buffer regardless of score.
+            if self.min_similarity > 0:
+                above_floor = [x for x in scored_items if x["similarity_score"] >= self.min_similarity]
+                dropped = len(scored_items) - len(above_floor)
+                if dropped:
+                    logger.debug(
+                        f"Score floor dropped {dropped} of {len(scored_items)} scored candidates "
+                        f"below min_similarity {self.min_similarity:.2f}"
+                    )
+                scored_items = above_floor
 
             if self.randomize_recommendations:
                 plex_recs = select_tiered_recommendations(
@@ -1154,6 +1200,158 @@ class BaseRecommender(ABC):
 
         return filtered
 
+    def _collection_label_name(self) -> str:
+        """
+        This user's collection label - the same value manage_plex_labels()
+        builds, factored out so the ignored-recommendation feedback can
+        key into label_dates before any collection work runs.
+        """
+        base_label = self.config.get("collections", {}).get("label_name", "Recommended")
+        base_label = f"{base_label}{self._library_suffix_for_label()}"
+        # Same derivation manage_plex_labels() uses - self.users is the
+        # dict from get_configured_users(); build_label_name() wants the
+        # flat username LIST off it, not the dict. Getting this wrong
+        # would silently produce a label that matches nothing in
+        # label_dates, and the feedback would quietly never fire.
+        users = self.users["plex_users"] or self.users["managed_users"]
+        append_usernames = self.config.get("collections", {}).get("append_usernames", True)
+        return build_label_name(base_label, users, self.single_user, append_usernames)
+
+    def _apply_ignored_recommendation_feedback(self) -> None:
+        """
+        Fold declined recommendations into the profile as negative signal
+        (utils/ignored_recs.py).
+
+        Must run BEFORE compute_profile_hash(): the penalties change the
+        profile, and the hash is what invalidates cached item scores.
+        Applying them after would leave every score cached against the
+        pre-penalty profile and the feedback would have no effect until
+        something else happened to change the profile.
+        """
+        signals = get_negative_signals_config(self.config)
+        if not signals.get("enabled", True):
+            return
+        ignored_config = signals.get("ignored_recommendations", {})
+        if not ignored_config.get("enabled", True):
+            return
+
+        label_dates = getattr(self, "label_dates", None)
+        if not label_dates:
+            return
+
+        try:
+            ignored = find_ignored_recommendations(
+                label_dates,
+                self._collection_label_name(),
+                self.watched_ids,
+                min_days_shown=ignored_config.get("min_days_shown", IGNORED_REC_MIN_DAYS_SHOWN),
+            )
+            if not ignored:
+                return
+
+            media_items = self._get_media_cache().cache.get(self.media_key, {})
+            ignored_items = [media_items[str(rk)] for rk, _days in ignored if str(rk) in media_items]
+            if not ignored_items:
+                return
+
+            applied = apply_ignored_penalties(
+                self.watched_data_counters,
+                ignored_items,
+                penalty=ignored_config.get("penalty", IGNORED_REC_PENALTY),
+            )
+            print(
+                f"{YELLOW}Negative feedback: {len(ignored_items)} recommendation(s) shown "
+                f"but never watched are now counted against this profile{RESET}"
+            )
+            logger.debug(f"Ignored-recommendation penalties applied: {applied}")
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            logger.debug(f"Ignored-recommendation feedback skipped: {e}")
+
+    def _report_library_health(self, unwatched_items: List[Dict]) -> None:
+        """
+        Measure and report candidate supply (utils/library_health.py).
+
+        Also stashes the resulting supply gaps on the instance so the
+        external/Radarr discovery path can aim acquisition at the genres
+        this profile wants and the library cannot serve, instead of at
+        the genres it already holds most of.
+        """
+        self.supply_gaps = []
+        try:
+            genre_counter = (self.watched_data_counters or {}).get("genres") or {}
+            target_distribution = build_target_distribution(genre_counter)
+
+            # Depletion is a statement about a user having consumed their
+            # library, which is meaningless without watch history: a
+            # zero-history user facing a small library has not "watched
+            # most of it", and telling them so would be simply false.
+            # Cold start is handled by the recommend_for_no_history path,
+            # not by this report.
+            if not target_distribution:
+                logger.debug("Skipping library health report: no watch history to assess supply against")
+                return
+
+            health = assess_pool_health(len(unwatched_items), self.limit_results)
+            self.supply_gaps = find_supply_gaps(
+                target_distribution,
+                [[g.lower() for g in (i.get("genres") or [])] for i in unwatched_items],
+            )
+
+            for line in format_health_report(health, self.supply_gaps, self.media_key):
+                if health.depleted:
+                    log_warning(line)
+                else:
+                    print(line)
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            # Reporting must never take down a run that would otherwise
+            # produce a collection.
+            logger.debug(f"Library health report skipped: {e}")
+
+    def _select_calibrated(self, sorted_candidates: List, media_items: Dict, target_count: int) -> List:
+        """
+        Pick the final `target_count` items from score-sorted candidates.
+
+        With calibration disabled (the default) this is the historical
+        plain truncation. With it enabled, the selection instead matches
+        the collection's genre mix to the user's actual watch-history mix
+        - see utils/calibration.py.
+
+        Returns the selected (item_id, (plex_item, score)) entries.
+        """
+        if self.calibration_strength <= 0:
+            return sorted_candidates[:target_count]
+
+        genre_counter = (self.watched_data_counters or {}).get("genres") or {}
+        target_distribution = build_target_distribution(genre_counter)
+        if not target_distribution:
+            # Cold start: no profile to calibrate against, so score order
+            # (which _rank_key already falls back to rating/votes for) is
+            # the only meaningful signal.
+            return sorted_candidates[:target_count]
+
+        def _genres(entry):
+            item_id, _ = entry
+            item_info = media_items.get(str(item_id)) or {}
+            return [g.lower() for g in (item_info.get("genres") or [])]
+
+        selected = calibrate_recommendations(
+            sorted_candidates,
+            target_count,
+            get_genres=_genres,
+            get_score=lambda entry: entry[1][1],
+            target_distribution=target_distribution,
+            calibration_strength=self.calibration_strength,
+        )
+
+        if selected:
+            print(
+                f"{GREEN}Calibrated collection to profile genre mix (strength {self.calibration_strength:.2f}){RESET}"
+            )
+            for genre, target, actual in calibration_report(target_distribution, [_genres(e) for e in selected]):
+                print(f"  {genre:<20} profile {target * 100:5.1f}%  ->  collection {actual * 100:5.1f}%")
+
+        return selected
+
     def _update_labels_by_rank(
         self, all_candidates: Dict, unwatched_labeled: List, label_name: str, target_count: int
     ) -> List:
@@ -1173,7 +1371,30 @@ class BaseRecommender(ABC):
             return (score, item_info.get("rating") or 0.0, item_info.get("vote_count") or 0)
 
         sorted_candidates = sorted(all_candidates.items(), key=_rank_key, reverse=True)
-        top_candidates = sorted_candidates[:target_count]
+
+        # Quality gate before size. A collection short of target_count is a
+        # truthful report that the library is exhausted for this user;
+        # padding it to target_count with sub-threshold items is not.
+        if self.min_similarity > 0:
+            eligible = [c for c in sorted_candidates if c[1][1] >= self.min_similarity]
+            dropped = len(sorted_candidates) - len(eligible)
+            if dropped:
+                log_warning(
+                    f"{dropped} of {len(sorted_candidates)} candidates scored below "
+                    f"min_similarity {self.min_similarity:.2f} and were excluded"
+                )
+            sorted_candidates = eligible
+
+        top_candidates = self._select_calibrated(sorted_candidates, media_items, target_count)
+
+        if len(top_candidates) < target_count:
+            log_warning(
+                f"Collection is {target_count - len(top_candidates)} short of the configured "
+                f"{target_count}: only {len(top_candidates)} candidates qualified. The library "
+                f"is running out of unwatched {self.media_key} matching this profile - consider "
+                f"adding new content rather than lowering the bar."
+            )
+
         top_ids = {item_id for item_id, _ in top_candidates}
 
         current_ids = {int(m.ratingKey) for m in unwatched_labeled}

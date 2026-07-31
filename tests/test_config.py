@@ -463,6 +463,8 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         result = resolve_media_type_overrides({"movies": movies}, MEDIA_TYPE_MOVIE)
 
         assert result["limit_results"] == movies["limit_results"]
+        assert result["min_similarity"] == movies["min_similarity"]
+        assert result["calibration_strength"] == movies["calibration_strength"]
         assert result["randomize_recommendations"] == movies["randomize_recommendations"]
         assert result["show_summary"] == movies["show_summary"]
         assert result["show_cast"] == movies["show_cast"]
@@ -486,6 +488,8 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         result = resolve_media_type_overrides({"tv": tv}, MEDIA_TYPE_TV)
 
         assert result["limit_results"] == tv["limit_results"]
+        assert result["min_similarity"] == tv["min_similarity"]
+        assert result["calibration_strength"] == tv["calibration_strength"]
         assert result["randomize_recommendations"] == tv["randomize_recommendations"]
         assert result["normalize_counters"] == tv["normalize_counters"]
         assert result["show_summary"] == tv["show_summary"]
@@ -505,6 +509,8 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         tuning = self._load_example_tuning()
         covered_movie_keys = {
             "limit_results",
+            "min_similarity",
+            "calibration_strength",
             "randomize_recommendations",
             "show_summary",
             "show_cast",
@@ -519,6 +525,8 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         }
         covered_tv_keys = {
             "limit_results",
+            "min_similarity",
+            "calibration_strength",
             "randomize_recommendations",
             "normalize_counters",
             "show_summary",

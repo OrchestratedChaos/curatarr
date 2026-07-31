@@ -250,6 +250,10 @@ class PlexTVRecommender(BaseRecommender):
         self._enhance_profile_with_trakt()
 
         # Compute profile hash for score caching
+        # Fold declined recommendations into the profile BEFORE hashing -
+        # the hash is what invalidates cached scores (utils/ignored_recs.py).
+        self._apply_ignored_recommendation_feedback()
+
         self.profile_hash = compute_profile_hash(self.watched_data_counters)
 
         print("Fetching library metadata (for existing Shows checks)...")
@@ -596,6 +600,8 @@ class PlexTVRecommender(BaseRecommender):
             weights=self.weights,
             normalize_counters=self.normalize_counters,
             use_fuzzy_keywords=self.use_tmdb_keywords,
+            genre_idf=getattr(self, "genre_idf", None),
+            keyword_idf=getattr(self, "keyword_idf", None),
         )
 
         # Apply franchise/spinoff bonus based on shared production companies

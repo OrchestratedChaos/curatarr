@@ -14,10 +14,18 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.10.90"
+__version__ = "2.11.0"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
-CACHE_VERSION = 7  # v7: another SCORING change, not a format one - the
+CACHE_VERSION = 8  # v8: SCORING change - corpus IDF (utils/corpus_idf.py)
+# now discounts genre/keyword matches by how ubiquitous the term is across
+# the library. Same reasoning as v7/v6 below: per-item scores are cached
+# against profile_hash, which captures the user's profile but NOT the
+# scoring code, so without this bump every existing install would keep
+# serving scores computed by the pre-IDF algorithm and the change would be
+# invisible until each user's profile happened to shift.
+#
+# v7: another SCORING change, not a format one - the
 # MAX_REDISTRIBUTION_MULTIPLIER cap below (2.10.90). Same reasoning as v6
 # immediately after this: a scoring change that doesn't move this constant
 # is invisible on every existing install.
@@ -62,6 +70,22 @@ DEFAULT_LIMIT_RESULTS = {"movie": 50, "tv": 20}
 # call sites in recommenders/base.py; now derived from limit_results so
 # the buffer scales with it automatically.
 CANDIDATE_BUFFER_MULTIPLIER = 2
+
+# Library supply health (utils/library_health.py). Below this
+# candidates-per-slot ratio the selection stage has effectively no
+# discretion left - at 1:1 "the top N" is just "all of them", and
+# quality floors or calibration downstream have nothing to choose
+# between. Flagged so an exhausted library is reported as such instead
+# of silently producing weak collections. 3:1 is the point at which
+# eviction stops being able to meaningfully improve a collection.
+POOL_DEPLETION_RATIO = 3.0
+# Minimum share of a profile a genre must hold before a shortfall in it
+# is worth reporting - a genre the user barely watches is not a supply
+# problem.
+SUPPLY_GAP_MIN_PROFILE_SHARE = 0.03
+# Minimum profile-vs-available shortfall before it counts as a gap
+# rather than noise.
+SUPPLY_GAP_MIN_SHORTFALL = 0.02
 TOP_POOL_PERCENTAGE = 0.1  # Top 10% for randomization pool
 
 # Media type constants - use these instead of hardcoded strings
@@ -77,6 +101,60 @@ MEDIA_KEY_SHOWS = "shows"
 TIER_SAFE_PERCENT = 0.6  # 60% safe picks from top scores
 TIER_DIVERSE_PERCENT = 0.3  # 30% diverse picks from mid-tier
 TIER_WILDCARD_PERCENT = 0.1  # 10% wildcard picks for discovery
+
+# Minimum similarity score an item must reach to enter a Plex collection
+# (config/tuning.yml movies:/tv: `min_similarity`). The library
+# recommendation path previously had no quality gate at all, so a
+# collection was always padded to limit_results no matter how weak the
+# remaining candidates were - a user who has watched most of their
+# library would get items scoring ~12% presented as recommendations.
+# (The external-recommendation path has always had its own equivalent:
+# external_recommendations.min_relevance_score.) Defaults to 0.0 =
+# disabled, so existing installs keep exactly today's behavior until
+# they opt in.
+DEFAULT_MIN_SIMILARITY = 0.0
+
+# Calibrated recommendations - see utils/calibration.py for the method
+# (Steck, RecSys 2018). `lambda` trades relevance against how closely the
+# collection's genre mix matches the user's actual watch history.
+# Defaults to 0.0 = disabled (plain top-N by score, today's behavior).
+DEFAULT_CALIBRATION_STRENGTH = 0.0
+# Suggested starting value when a user turns calibration on. 0.5 weights
+# relevance and calibration equally; Steck reports the relevance cost of
+# calibrating stays small well past this point.
+SUGGESTED_CALIBRATION_STRENGTH = 0.5
+# Steck's smoothing constant for KL(target || list) - keeps the
+# divergence finite when the list omits a genre the user watches.
+CALIBRATION_SMOOTHING_ALPHA = 0.01
+# Scale factor putting the KL term on the same footing as the similarity
+# term in calibrate_recommendations()'s objective.
+#
+# Adding one item to an already-large list barely moves that list's genre
+# distribution, so a marginal KL change is ~1e-3 while a marginal
+# similarity change is ~1e-1. Unscaled, similarity dominates until
+# lambda is within ~0.01 of 1.0 - Steck's own experiments use 0.99 for
+# exactly this reason. That makes a terrible configuration knob: 0.5
+# would be indistinguishable from off. Scaling the divergence by this
+# factor maps the useful range back onto a plain 0.0-1.0 dial, where
+# 0.25/0.5/0.75 are all meaningfully different. Derived from the
+# unscaled behavior: strength 0.5 here reproduces roughly lambda=0.99.
+CALIBRATION_DIVERGENCE_SCALE = 100.0
+
+# Corpus-level IDF (utils/corpus_idf.py) - the missing half of the
+# "TF-IDF" in utils/scoring.py, which only ever measured rarity within a
+# user's own profile and never across the library. Without it,
+# ubiquitous structural metadata ("sequel" - 28% of the reference
+# library, "aftercreditsstinger" - 14%) scores like genuine taste signal.
+#
+# Smallest corpus worth deriving term distribution from. Below this,
+# document frequency is too noisy to distinguish "ubiquitous" from
+# "happens to appear twice", so no weighting is applied at all.
+IDF_MIN_CORPUS_SIZE = 30
+# Floor for an IDF multiplier. A term in literally every item carries no
+# information, but zeroing it would silently erase a scoring dimension
+# for items whose metadata is entirely common terms - degrade, never
+# silently drop (CLAUDE.md).
+IDF_MIN_WEIGHT = 0.05
 
 # TF-IDF scoring penalties for rare/unseen content attributes
 TFIDF_GENRE_PENALTY = 0.3  # Max 30% penalty per rare genre
@@ -134,6 +212,22 @@ DEFAULT_NEGATIVE_MULTIPLIERS = {
 
 # Default threshold for negative signals (Plex 0-10 scale)
 DEFAULT_NEGATIVE_THRESHOLD = 3  # Ratings 0-3 become negative signals
+
+# Ignored-recommendation negative signal (utils/ignored_recs.py). An item
+# that sat in a user's collection this long without being watched counts
+# as declined - the impression-level feedback every large recommender
+# leans on, which curatarr recorded (label_dates) but never read.
+# Three weeks is long enough to outlast "saving it for the weekend".
+IGNORED_REC_MIN_DAYS_SHOWN = 21
+# Total negative weight one ignored title contributes, split across the
+# terms it carries. Small on purpose: one ignored title is weak evidence,
+# twenty sharing a genre is not.
+IGNORED_REC_PENALTY = 0.5
+# Hard floor on how negative a term may go, as a fraction of the
+# profile's largest positive count. Without it a long run of ignored
+# recommendations could bury a genre permanently, leaving the profile
+# unable to recover if the user's taste swung back.
+IGNORED_REC_MAX_PROFILE_FRACTION = 0.25
 
 # #291: whether a user with zero watch history still gets a
 # Recommended collection built for them. Default True (create - see
@@ -508,6 +602,8 @@ KNOWN_ROOT_CONFIG_KEYS = frozenset(
 KNOWN_MEDIA_SECTION_KEYS = frozenset(
     {
         "limit_results",
+        "min_similarity",
+        "calibration_strength",
         "randomize_recommendations",
         "normalize_counters",
         "show_summary",
@@ -780,16 +876,27 @@ def get_negative_signals_config(config: Optional[dict] = None) -> dict:
                 "max_completion_percent": 25,
                 "penalty_multiplier": -0.4,
             },
+            "ignored_recommendations": {
+                "enabled": True,
+                "min_days_shown": IGNORED_REC_MIN_DAYS_SHOWN,
+                "penalty": IGNORED_REC_PENALTY,
+            },
         }
 
     ns = config.get("negative_signals", {})
 
     # If master switch is off, return disabled config
     if not ns.get("enabled", True):
-        return {"enabled": False, "bad_ratings": {"enabled": False}, "dropped_shows": {"enabled": False}}
+        return {
+            "enabled": False,
+            "bad_ratings": {"enabled": False},
+            "dropped_shows": {"enabled": False},
+            "ignored_recommendations": {"enabled": False},
+        }
 
     bad_ratings = ns.get("bad_ratings", {})
     dropped_shows = ns.get("dropped_shows", {})
+    ignored_recs = ns.get("ignored_recommendations", {})
 
     return {
         "enabled": True,
@@ -803,6 +910,11 @@ def get_negative_signals_config(config: Optional[dict] = None) -> dict:
             "min_episodes_watched": dropped_shows.get("min_episodes_watched", 2),
             "max_completion_percent": dropped_shows.get("max_completion_percent", 25),
             "penalty_multiplier": dropped_shows.get("penalty_multiplier", -0.4),
+        },
+        "ignored_recommendations": {
+            "enabled": ignored_recs.get("enabled", True),
+            "min_days_shown": ignored_recs.get("min_days_shown", IGNORED_REC_MIN_DAYS_SHOWN),
+            "penalty": ignored_recs.get("penalty", IGNORED_REC_PENALTY),
         },
     }
 
@@ -882,6 +994,8 @@ def resolve_media_type_overrides(config: Dict, media_type: str) -> Dict:
     media_config = config.get(media_section, config.get(media_section.upper(), {})) or {}
 
     config["limit_results"] = media_config.get("limit_results", DEFAULT_LIMIT_RESULTS[media_type])
+    config["min_similarity"] = media_config.get("min_similarity", DEFAULT_MIN_SIMILARITY)
+    config["calibration_strength"] = media_config.get("calibration_strength", DEFAULT_CALIBRATION_STRENGTH)
     config["randomize_recommendations"] = media_config.get(
         "randomize_recommendations", general_config.get("randomize_recommendations", True)
     )
