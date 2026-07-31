@@ -14,10 +14,16 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.11.1"
+__version__ = "2.12.0"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
-CACHE_VERSION = 8  # v8: SCORING change - corpus IDF (utils/corpus_idf.py)
+CACHE_VERSION = 9  # v9: new cache FIELD - `content_rating` per item
+# (recommenders/movie.py/tv.py _process_item), used by calibration to hold
+# a collection to the profile's certificate mix and not just its genre mix.
+# Unlike v6-v8 this is a genuine format change: without a rebuild the field
+# is simply absent and certificate calibration silently no-ops.
+#
+# v8: SCORING change - corpus IDF (utils/corpus_idf.py)
 # now discounts genre/keyword matches by how ubiquitous the term is across
 # the library. Same reasoning as v7/v6 below: per-item scores are cached
 # against profile_hash, which captures the user's profile but NOT the
@@ -139,6 +145,20 @@ CALIBRATION_SMOOTHING_ALPHA = 0.01
 # 0.25/0.5/0.75 are all meaningfully different. Derived from the
 # unscaled behavior: strength 0.5 here reproduces roughly lambda=0.99.
 CALIBRATION_DIVERGENCE_SCALE = 100.0
+# Relative weight of each calibration dimension (utils/calibration.py's
+# calibrate_multi). Genre says what a title is ABOUT; the certificate says
+# who it is FOR, and on real libraries only the certificate is reliable
+# about the latter - measured on the reference library, `family` is
+# attached to Frequency and Skyscraper while the live-action R.I.P.D.
+# carries `animation`, and genuine children's films often carry no kid
+# genre at all. By certificate the same split is clean: G 90% / PG 51%
+# kid-tagged against 1% for both PG-13 and R.
+#
+# Weighted equally: genre still drives what kind of story surfaces, the
+# certificate stops a collection drifting to content aimed at a different
+# audience than the profile watches.
+CALIBRATION_GENRE_WEIGHT = 1.0
+CALIBRATION_CERTIFICATE_WEIGHT = 1.0
 
 # Corpus-level IDF (utils/corpus_idf.py) - the missing half of the
 # "TF-IDF" in utils/scoring.py, which only ever measured rarity within a

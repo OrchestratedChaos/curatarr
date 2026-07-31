@@ -36,7 +36,7 @@ they actually watch it, and the highest-scoring examples of it.
 """
 
 import math
-from typing import Callable, Dict, Iterable, List, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple, TypeVar
 
 from utils.config import (
     CALIBRATION_DIVERGENCE_SCALE,
@@ -222,6 +222,114 @@ def calibrate_recommendations(
         selected_genres.append(get_genres(chosen))
 
     return selected
+
+
+def calibrate_multi(
+    candidates: Sequence[T],
+    limit: int,
+    get_score: Callable[[T], float],
+    dimensions: Sequence["CalibrationDimension"],
+    calibration_strength: float = DEFAULT_CALIBRATION_STRENGTH,
+) -> List[T]:
+    """
+    Calibrate against several categorical attributes at once.
+
+    Genre alone is not sufficient on real libraries. Measured on the
+    reference library, genre says what a film is *about* but is a poor
+    guide to who it is *for*: `family` is attached to Frequency (a sci-fi
+    crime thriller) and Skyscraper, the live-action R.I.P.D. carries
+    `animation`, and genuine children's films (Invisible Sister,
+    Goosebumps 2, Honey I Shrunk the Kids) carry no kid genre at all.
+    The certificate separates cleanly over the same set - G is 90%
+    kid-tagged and PG 51%, against 1% for both PG-13 and R.
+
+    Calibrating on genre alone therefore optimizes a noisy proxy: a
+    collection can match a profile's genre mix closely while holding 2.4x
+    the user's own share of G/PG titles, which is exactly what was
+    observed. Each dimension contributes its own KL term, weighted, so
+    "what it's about" and "who it's for" are both held to the profile.
+
+    Args:
+        candidates: Items to select from, best-first.
+        limit: Maximum number of items to return.
+        get_score: Extract an item's similarity score.
+        dimensions: The attributes to calibrate against.
+        calibration_strength: 0 disables; see calibrate_recommendations.
+
+    Returns:
+        The selected items, best-first.
+    """
+    if limit <= 0:
+        return []
+    ordered = list(candidates)
+
+    active = [d for d in dimensions if d.target and d.weight > 0]
+    if not active or calibration_strength <= 0 or len(ordered) <= limit:
+        return ordered[:limit]
+
+    selected: List[T] = []
+    selected_values: List[List[Sequence[str]]] = [[] for _ in active]
+    remaining = ordered[:]
+
+    while len(selected) < limit and remaining:
+        best_index = 0
+        best_value = -math.inf
+
+        for i, candidate in enumerate(remaining):
+            divergence = 0.0
+            for d_i, dim in enumerate(active):
+                trial = selected_values[d_i] + [dim.get_values(candidate)]
+                divergence += dim.weight * kl_divergence(dim.target, list_distribution(trial))
+            value = (1 - calibration_strength) * get_score(candidate) - (
+                calibration_strength * CALIBRATION_DIVERGENCE_SCALE * divergence
+            )
+            if value > best_value:
+                best_value = value
+                best_index = i
+
+        chosen = remaining.pop(best_index)
+        selected.append(chosen)
+        for d_i, dim in enumerate(active):
+            selected_values[d_i].append(dim.get_values(chosen))
+
+    return selected
+
+
+class CalibrationDimension(NamedTuple):
+    """
+    One categorical attribute to calibrate against.
+
+    `get_values` returns the attribute's values for an item as a
+    sequence, so single-valued attributes (a certificate) and
+    multi-valued ones (genres) share one code path - a single-valued
+    attribute is just a one-element sequence, which list_distribution
+    then treats as full weight on that value.
+    """
+
+    name: str
+    target: Dict[str, float]
+    get_values: Callable[[Any], Sequence[str]]
+    weight: float = 1.0
+
+
+def build_certificate_distribution(content_ratings: Iterable[Optional[str]]) -> Dict[str, float]:
+    """
+    Normalize a sequence of certificates into a distribution.
+
+    Items with no certificate are skipped rather than bucketed into an
+    "unknown" category: an unrated film is not evidence about audience,
+    and giving unknown its own share would let a library with patchy
+    metadata calibrate toward "unknown".
+    """
+    counts: Dict[str, float] = {}
+    for value in content_ratings:
+        if not value:
+            continue
+        counts[str(value).strip()] = counts.get(str(value).strip(), 0.0) + 1.0
+    total = sum(counts.values())
+    if total <= 0:
+        return {}
+    return {k: v / total for k, v in counts.items()}
 
 
 def calibration_report(

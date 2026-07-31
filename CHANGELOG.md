@@ -2,6 +2,34 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.12.0] - 2026-07-31
+
+### Fixed
+
+- **Calibration was holding collections to the wrong attribute: genre tags say what a title is *about*, not who it is *for*.** 2.11.0 calibrated a collection's genre mix to the profile's, and on the reported library it barely helped - the user's own G/PG share is 13.5%, the collection's was 31.8%, and genre-only calibration moved that by four points.
+
+  Measured on the real library, the genre tags simply do not identify children's content. `family` is attached to **Frequency** (a sci-fi crime thriller), **Skyscraper** and **Galaxy Quest**; the live-action **R.I.P.D.** carries `animation`. In the other direction **Invisible Sister**, **Goosebumps 2** and **Honey, I Shrunk the Kids** are children's films carrying no kid genre at all. Any genre-based approach - the original `exclude_genres: children`, which matched 6 of 337 titles, or calibration - is optimizing a proxy that is wrong in both directions.
+
+  The certificate splits the same set cleanly:
+
+  | certificate | titles | genre-tagged "kid" |
+  |---|---|---|
+  | G | 31 | 90% |
+  | PG | 59 | 51% |
+  | PG-13 | 120 | 1% |
+  | R | 115 | 1% |
+
+  Calibration now holds a collection to the profile's **certificate** mix as well as its genre mix (`calibrate_multi`, one weighted KL term per dimension). Verified end to end against the live Plex library with every candidate scored through the recommender's own path: G+PG share **34.0% -> 18.0%** against a 13.5% target, closing 78% of the gap, at a *lower* relevance cost than genre-only calibration (mean score 0.176 vs 0.179). Genre alone, on the same data, managed 30.0%.
+
+  It remains calibration, not exclusion - a certificate the user genuinely watches still appears, at their own rate.
+
+  **`CACHE_VERSION` is bumped to 9.** Unlike v6-v8 this is a real format change: `content_rating` is a new per-item cache field, and without a rebuild it is simply absent and certificate calibration silently does nothing.
+
+### Notes
+
+- New tuning knobs are `CALIBRATION_GENRE_WEIGHT` / `CALIBRATION_CERTIFICATE_WEIGHT` in `utils/config.py` (both 1.0). Setting the certificate weight to 0 restores 2.11.0's genre-only behavior exactly.
+- `CLAUDE.md` gains a "Measuring results" section recording how these numbers must be taken - the Plex collection is the artifact, not the printed log list; `log_warning` does not reach the per-user log; Tautulli's `rating_key`s go stale after a library re-scan. Several wrong conclusions during this investigation came from reading proxies instead of the thing itself.
+
 ## [2.11.1] - 2026-07-31
 
 ### Fixed

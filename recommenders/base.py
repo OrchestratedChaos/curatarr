@@ -24,6 +24,8 @@ from plexapi.myplex import MyPlexAccount
 
 from utils import (
     CACHE_VERSION,
+    CALIBRATION_CERTIFICATE_WEIGHT,
+    CALIBRATION_GENRE_WEIGHT,
     CANDIDATE_BUFFER_MULTIPLIER,
     CYAN,
     DEFAULT_MOVIE_NAME_TEMPLATE,
@@ -49,16 +51,18 @@ from utils import (
     TMDB_RATE_LIMIT_DELAY,
     WEIGHT_SUM_TOLERANCE,
     YELLOW,
+    CalibrationDimension,
     add_labels_to_items,
     apply_ignored_penalties,
     apply_user_label_restrictions,
     assess_pool_health,
+    build_certificate_distribution,
     build_corpus_idf,
     build_label_name,
     build_target_distribution,
     calculate_recency_multiplier,
     calculate_rewatch_multiplier,
-    calibrate_recommendations,
+    calibrate_multi,
     calibration_report,
     categorize_labeled_items,
     check_cache_version,
@@ -1334,21 +1338,49 @@ class BaseRecommender(ABC):
             item_info = media_items.get(str(item_id)) or {}
             return [g.lower() for g in (item_info.get("genres") or [])]
 
-        selected = calibrate_recommendations(
+        def _certificate(entry):
+            item_id, _ = entry
+            item_info = media_items.get(str(item_id)) or {}
+            cert = item_info.get("content_rating")
+            # An item with no certificate contributes nothing to this
+            # dimension rather than being bucketed as "unknown" - see
+            # build_certificate_distribution.
+            return [str(cert).strip()] if cert else []
+
+        dimensions = [
+            CalibrationDimension("genre", target_distribution, _genres, CALIBRATION_GENRE_WEIGHT),
+        ]
+
+        # Certificate dimension: what the profile is rated, not just what
+        # it is about. Built from the watched items' own certificates
+        # rather than a profile counter, since nothing tracks them there.
+        cert_target = build_certificate_distribution(
+            (media_items.get(str(rk)) or {}).get("content_rating") for rk in self.watched_ids
+        )
+        if cert_target:
+            dimensions.append(
+                CalibrationDimension("certificate", cert_target, _certificate, CALIBRATION_CERTIFICATE_WEIGHT)
+            )
+        else:
+            logger.debug("No certificates on watched items - calibrating on genre alone")
+
+        selected = calibrate_multi(
             sorted_candidates,
             target_count,
-            get_genres=_genres,
             get_score=lambda entry: entry[1][1],
-            target_distribution=target_distribution,
+            dimensions=dimensions,
             calibration_strength=self.calibration_strength,
         )
 
         if selected:
-            print(
-                f"{GREEN}Calibrated collection to profile genre mix (strength {self.calibration_strength:.2f}){RESET}"
-            )
+            dims = "+".join(d.name for d in dimensions)
+            strength = self.calibration_strength
+            print(f"{GREEN}Calibrated collection to profile {dims} mix (strength {strength:.2f}){RESET}")
             for genre, target, actual in calibration_report(target_distribution, [_genres(e) for e in selected]):
                 print(f"  {genre:<20} profile {target * 100:5.1f}%  ->  collection {actual * 100:5.1f}%")
+            if cert_target:
+                for cert, target, actual in calibration_report(cert_target, [_certificate(e) for e in selected]):
+                    print(f"  [{cert:<18}] profile {target * 100:5.1f}%  ->  collection {actual * 100:5.1f}%")
 
         return selected
 
