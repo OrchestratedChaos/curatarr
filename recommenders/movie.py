@@ -223,6 +223,10 @@ class PlexMovieRecommender(BaseRecommender):
         # Enhance profile with Trakt watch history (if enabled)
         self._enhance_profile_with_trakt()
 
+        # Fold declined recommendations into the profile BEFORE hashing -
+        # the hash is what invalidates cached scores (utils/ignored_recs.py).
+        self._apply_ignored_recommendation_feedback()
+
         # Compute profile hash for score caching
         self.profile_hash = compute_profile_hash(self.watched_data_counters)
 
@@ -550,6 +554,8 @@ class PlexMovieRecommender(BaseRecommender):
             weights=self.weights,
             normalize_counters=self.normalize_counters,
             use_fuzzy_keywords=self.use_tmdb_keywords,
+            genre_idf=getattr(self, "genre_idf", None),
+            keyword_idf=getattr(self, "keyword_idf", None),
         )
 
         # Apply collection bonus for sequels/prequels

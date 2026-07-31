@@ -15,6 +15,16 @@ from .cache import (
     save_watched_cache,
 )
 
+# Calibrated recommendation re-ranking (Steck, RecSys 2018)
+from .calibration import (
+    build_target_distribution,
+    calibrate_recommendations,
+    calibration_report,
+    item_genre_distribution,
+    kl_divergence,
+    list_distribution,
+)
+
 # CLI utilities
 from .cli import (
     get_users_from_config,
@@ -28,20 +38,30 @@ from .cli import (
 )
 from .config import (
     CACHE_VERSION,
+    CALIBRATION_DIVERGENCE_SCALE,
+    CALIBRATION_SMOOTHING_ALPHA,
     CANDIDATE_BUFFER_MULTIPLIER,
     COLLECTION_BONUS_BASE,
     COLLECTION_BONUS_CAP,
     COLLECTION_BONUS_LOG_FACTOR,
+    DEFAULT_CALIBRATION_STRENGTH,
     DEFAULT_LIMIT_RESULTS,
+    DEFAULT_MIN_SIMILARITY,
     DEFAULT_NEGATIVE_MULTIPLIERS,
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_RATING,
     DEFAULT_RATING_MULTIPLIERS,
+    IDF_MIN_CORPUS_SIZE,
+    IDF_MIN_WEIGHT,
+    IGNORED_REC_MAX_PROFILE_FRACTION,
+    IGNORED_REC_MIN_DAYS_SHOWN,
+    IGNORED_REC_PENALTY,
     MEDIA_KEY_MOVIES,
     MEDIA_KEY_SHOWS,
     MEDIA_TYPE_MOVIE,
     MEDIA_TYPE_TV,
     PLEX_REQUEST_TIMEOUT,
+    POOL_DEPLETION_RATIO,
     RADARR_REQUEST_TIMEOUT,
     RATING_MULTIPLIER_2_STAR,
     RATING_MULTIPLIER_3_STAR,
@@ -53,6 +73,8 @@ from .config import (
     RATING_TIER_5_STAR,
     RECOMMEND_FOR_NO_HISTORY_DEFAULT,
     SONARR_REQUEST_TIMEOUT,
+    SUPPLY_GAP_MIN_PROFILE_SHARE,
+    SUPPLY_GAP_MIN_SHORTFALL,
     TIER_DIVERSE_PERCENT,
     TIER_SAFE_PERCENT,
     TIER_WILDCARD_PERCENT,
@@ -78,6 +100,14 @@ from .config import (
     load_config,
     load_resolved_config,
     resolve_media_type_overrides,
+)
+
+# Corpus-level IDF - the missing half of scoring's "TF-IDF"
+from .corpus_idf import (
+    build_corpus_idf,
+    build_document_frequency,
+    describe_least_informative,
+    idf_weight,
 )
 
 # Counter utilities
@@ -129,6 +159,12 @@ from .helpers import (
     normalize_title,
 )
 
+# Negative feedback from declined recommendations
+from .ignored_recs import (
+    apply_ignored_penalties,
+    find_ignored_recommendations,
+)
+
 # Integration-health signal (explicit, structured last-attempt status -
 # see module docstring for why this exists instead of log-string matching)
 from .integration_status import (
@@ -145,6 +181,17 @@ from .labels import (
     categorize_labeled_items,
     remove_labels_from_items,
     render_collection_name,
+)
+
+# Library supply health - is ranking still the constraint?
+from .library_health import (
+    PoolHealth,
+    SupplyGap,
+    assess_pool_health,
+    find_supply_gaps,
+    format_health_report,
+    gaps_to_dict,
+    prioritize_discovery_genres,
 )
 
 # MDBList utilities
@@ -384,7 +431,19 @@ __all__ = [
     "TMDB_RATE_LIMIT_DELAY",
     "DEFAULT_RATING",
     "WEIGHT_SUM_TOLERANCE",
+    "CALIBRATION_DIVERGENCE_SCALE",
+    "IDF_MIN_CORPUS_SIZE",
+    "IDF_MIN_WEIGHT",
+    "IGNORED_REC_MAX_PROFILE_FRACTION",
+    "IGNORED_REC_MIN_DAYS_SHOWN",
+    "IGNORED_REC_PENALTY",
+    "POOL_DEPLETION_RATIO",
+    "SUPPLY_GAP_MIN_PROFILE_SHARE",
+    "SUPPLY_GAP_MIN_SHORTFALL",
+    "CALIBRATION_SMOOTHING_ALPHA",
+    "DEFAULT_CALIBRATION_STRENGTH",
     "DEFAULT_LIMIT_RESULTS",
+    "DEFAULT_MIN_SIMILARITY",
     "CANDIDATE_BUFFER_MULTIPLIER",
     "TOP_POOL_PERCENTAGE",
     "MEDIA_TYPE_MOVIE",
@@ -520,6 +579,29 @@ __all__ = [
     "calculate_rewatch_multiplier",
     "calculate_similarity_score",
     "select_tiered_recommendations",
+    # Corpus IDF
+    "build_corpus_idf",
+    "build_document_frequency",
+    "describe_least_informative",
+    "idf_weight",
+    # Ignored-recommendation negative feedback
+    "apply_ignored_penalties",
+    "find_ignored_recommendations",
+    # Library supply health
+    "PoolHealth",
+    "SupplyGap",
+    "assess_pool_health",
+    "find_supply_gaps",
+    "format_health_report",
+    "gaps_to_dict",
+    "prioritize_discovery_genres",
+    # Calibration
+    "build_target_distribution",
+    "calibrate_recommendations",
+    "calibration_report",
+    "item_genre_distribution",
+    "kl_divergence",
+    "list_distribution",
     # Counters
     "build_profile_from_counters",
     "create_empty_counters",

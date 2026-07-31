@@ -2,6 +2,48 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.11.0] - 2026-07-31
+
+### Added
+
+- **Calibrated recommendations - the collection's genre mix now matches your actual viewing, instead of the leftovers in your library.** Reported as "why is my Recommended collection full of children's movies?" on a profile that is **3.8% family/animation**. Last night's collection was **38%**.
+
+  The scorer was not at fault. Measured against the real candidate pool: family/animation was **37.8%** of the 127 eligible candidates and **38.0%** of the delivered top 50 - a selection bias of **1.01x**, i.e. none. Ranking by score faithfully reproduced the composition of what was left. The user had watched **233 of 334** movies, and what survives fifteen years of watching everything else is disproportionately the titles bought for the kids.
+
+  This is the failure mode Harald Steck describes in *Calibrated Recommendations* (Netflix, RecSys 2018): greedy top-N does not preserve a user's taste distribution. Steck's example runs the other way - 70% action / 30% romance yields a 100% action list, the minority interest erased - but it is the same defect, the list's distribution drifting from the profile's, and the same fix works in both directions. New `movies:`/`tv:` `calibration_strength` (default `0.0` = off) greedily maximizes `(1 - s) * sum(similarity) - s * SCALE * KL(profile || collection)`.
+
+  On the reported profile it moves kid-genre mass **18.0% -> 12.5%** at `0.10`/`0.5`, and **-> 6.7%** with no score floor, while pulling every major genre toward its profile share (thriller 6.8% -> 11.7%, action 3.6% -> 12.4%). It is explicitly **not** a genre exclusion: a genre you genuinely watch still appears, at the rate you watch it, represented by its best-scoring titles - which is what a blunt `exclude_genres: family` could never do.
+
+  `calibration_strength` is a plain 0.0-1.0 dial rather than Steck's raw lambda. A marginal KL change is ~1e-3 against a ~1e-1 marginal similarity change, so unscaled, similarity dominates until lambda is within 0.01 of 1.0 (Steck's own experiments use 0.99). `CALIBRATION_DIVERGENCE_SCALE` maps that useful range back onto 0.0-1.0 so 0.25/0.5/0.75 are all meaningfully different.
+
+  Note calibration matches genre **mass**, not title count. A six-genre action/adventure/comedy/sci-fi/family title contributes ~1/6 of its weight to `family`, because it is mostly the action film it also is. A collection calibrated to a 2.5% family profile can still hold a visible number of titles that carry a family tag among several others.
+
+- **A minimum-similarity floor for library collections, which may now come in under `limit_results` rather than pad itself.** The library path had no quality gate at all - it filled to `limit_results` regardless of score, so the reported collection ran down to **12.2% similarity** and presented it as a recommendation. The external path has always had `external_recommendations.min_relevance_score`; this is its library-side counterpart. New `movies:`/`tv:` `min_similarity` (default `0.0` = off, preserving existing behavior). A short collection is a truthful report that the library is exhausted for that profile, and it now says so instead of quietly padding.
+
+  **These two interact, and the interaction is worth knowing before tuning either.** Calibration works by choosing; the floor shrinks what there is to choose from. On the reported library: floor `0.00` leaves 132 candidates, `0.15` leaves 71, `0.20` leaves 52 - and past ~52, with a 50-slot collection, calibration has nothing left to select between and silently becomes a no-op. `0.10` + `0.5` is the recommended starting pair.
+
+- **Corpus-level IDF - the missing half of what the scorer called "TF-IDF".** Every rarity penalty in `utils/scoring.py` was computed against the *user's own profile*: a term rare **for you** was penalized. Nothing ever asked how common the term is across the library, which is what the IDF in TF-IDF actually means (inverse *document* frequency).
+
+  So structural, non-discriminative metadata read as taste. On the reference library `sequel` appears in **28%** of titles and `aftercreditsstinger` in 14%, yet both outranked `survival` (2%) and `nasa` (1%) in the user's profile - because they are frequent everywhere, which is precisely why they say nothing. The observable effect: **22 of the top 50 were sequels** against a 28% library baseline.
+
+  Matches are now scaled by `log(N / (1 + df)) / log(N)`, bounded to `[0.05, 1.0]`. On the real library this discounts `sequel` to **0.216** and `aftercreditsstinger` to **0.337** while `nasa` keeps **0.761**. A term absent from the corpus takes the full 1.0 - the library holding nothing else with it makes it *more* distinctive, not less - and the floor is 0.05 rather than 0 so an item whose metadata is entirely common terms degrades instead of silently losing a whole dimension. **`CACHE_VERSION` is bumped to 8**; as with 2.10.85 and 2.10.90, a scoring change that does not move it is a silent no-op on every existing install.
+
+- **Negative feedback from recommendations that were shown and never watched.** The strongest signal a recommender gets is not what you watched - it is what it put in front of you that you declined. Curatarr already had both halves and never connected them: `label_dates` has always recorded when each item entered a collection, and `utils/scoring.py` has always had `elif genre_count < 0` / `elif count < 0` branches for negative preference. **Nothing ever wrote one.** An item you passed over every night was re-recommended with an identical score every night, forever.
+
+  A title labeled for `min_days_shown` (default 21) and still unwatched now decrements its genres and keywords. The penalty is split across the terms an item carries, so a seven-genre title does not deliver seven times the punishment of a two-genre one for the same single act of being ignored; and no term may fall below 25% of the profile's largest positive count, so a long run of ignores cannot bury a genre so deep the profile could never recover if taste swung back. Applied **before** `compute_profile_hash()` - the hash is what invalidates cached scores, so applying it after would have left the feedback inert. Configured under `negative_signals.ignored_recommendations`.
+
+- **Library supply health, and acquisition that targets the gap instead of deepening it.** Every change above improves how candidates are *chosen*; none creates candidates. With 132 candidates for a 50-slot collection (2.6:1), selection has almost no discretion left - a large catalog is nearer 1000:1, which is why ranking is the binding constraint there and supply is the binding constraint here.
+
+  Runs now report the ratio, flag a depleted pool, and list under-supplied genres - those the profile wants more of than the unwatched pool can offer. On the reported profile: science fiction **13.8% wanted / 3.8% available**, thriller 14.0% / 7.3%, action 12.3% / 6.6%.
+
+  That list is also now wired into external discovery, which is the part that actually fixes anything. `discover_candidates_by_profile()` searched a profile's **top** genres - fetching more of whatever the library is already thickest in, the exact opposite of what an exhausted library needs. Gap genres now lead the search order, so acquisition fills the hole. With no gaps (a healthy library) the order is unchanged from before.
+
+  Depletion is deliberately **not** reported for a user with no watch history: a zero-history user facing a small library has not "watched most of it", and saying so would be false. Cold start remains the `recommend_for_no_history` path's job.
+
+### Notes
+
+- Every new setting defaults to off or to its pre-existing behavior, so upgrading changes nothing until you opt in - except `CACHE_VERSION`, which forces a one-time cache rebuild on first run.
+
 ## [2.10.90] - 2026-07-30
 
 ### Fixed

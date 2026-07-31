@@ -2457,6 +2457,173 @@ class TestUpdateLabelsByRank:
         assert [int(i.ratingKey) for i in result] == [2, 1]
 
 
+class TestMinSimilarityFloor:
+    """
+    config/tuning.yml movies:/tv: min_similarity - the library path's
+    quality gate.
+
+    Before this existed the collection was always padded to
+    limit_results no matter how weak the remaining candidates were, so a
+    user who had watched most of their library got sub-15%-similarity
+    items presented as recommendations.
+    """
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_disabled_by_default_pads_to_target(self, mock_remove, mock_add):
+        """Default 0.0 must reproduce the historical fill-to-target behavior."""
+        recommender = _make_recommender()
+        assert recommender.min_similarity == 0.0
+        candidates = {1: (Mock(ratingKey=1), 0.9), 2: (Mock(ratingKey=2), 0.01)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=2)
+
+        assert len(result) == 2
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_excludes_candidates_below_floor(self, mock_remove, mock_add):
+        recommender = _make_recommender()
+        recommender.min_similarity = 0.2
+        candidates = {1: (Mock(ratingKey=1), 0.9), 2: (Mock(ratingKey=2), 0.05)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=2)
+
+        assert [int(i.ratingKey) for i in result] == [1]
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_collection_comes_in_short_rather_than_padding(self, mock_remove, mock_add):
+        """
+        A collection under target_count is a truthful report that the
+        library is exhausted for this profile. Padding it with
+        sub-threshold items is what produced the original complaint.
+        """
+        recommender = _make_recommender()
+        recommender.min_similarity = 0.5
+        candidates = {i: (Mock(ratingKey=i), 0.1) for i in range(1, 11)}
+        candidates[1] = (Mock(ratingKey=1), 0.8)
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=10)
+
+        assert len(result) == 1
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_score_exactly_at_floor_is_kept(self, mock_remove, mock_add):
+        """The gate is >=, not > - a score landing exactly on the
+        configured threshold qualifies."""
+        recommender = _make_recommender()
+        recommender.min_similarity = 0.25
+        candidates = {1: (Mock(ratingKey=1), 0.25)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=5)
+
+        assert [int(i.ratingKey) for i in result] == [1]
+
+
+class TestLibraryHealthReport:
+    """BaseRecommender._report_library_health (utils/library_health.py)."""
+
+    @patch("recommenders.base.log_warning")
+    def test_no_watch_history_reports_nothing(self, mock_warn):
+        """
+        Depletion means "this user consumed their library" - which is
+        meaningless without watch history. A zero-history user facing a
+        small library has NOT watched most of it, and saying so would be
+        false. Cold start is the recommend_for_no_history path's job.
+        """
+        recommender = _make_recommender()
+        recommender.watched_data_counters = {}
+        recommender._report_library_health([{"genres": ["action"]}])
+        mock_warn.assert_not_called()
+        assert recommender.supply_gaps == []
+
+    @patch("recommenders.base.log_warning")
+    def test_depleted_pool_warns_for_a_user_with_history(self, mock_warn):
+        recommender = _make_recommender()
+        recommender.watched_data_counters = {"genres": {"thriller": 50.0}}
+        recommender.limit_results = 50
+        recommender._report_library_health([{"genres": ["comedy"]}])
+        assert mock_warn.called
+
+    @patch("recommenders.base.log_warning")
+    def test_supply_gaps_are_recorded_for_discovery(self, mock_warn):
+        """The gap list is what redirects external acquisition."""
+        recommender = _make_recommender()
+        recommender.watched_data_counters = {"genres": {"thriller": 90.0, "comedy": 10.0}}
+        recommender.limit_results = 2
+        recommender._report_library_health([{"genres": ["comedy"]}, {"genres": ["comedy"]}])
+        assert any(g.genre == "thriller" for g in recommender.supply_gaps)
+
+    @patch("recommenders.base.log_warning")
+    def test_reporting_failure_never_breaks_a_run(self, mock_warn):
+        recommender = _make_recommender()
+        recommender.watched_data_counters = {"genres": {"thriller": 50.0}}
+        recommender._report_library_health([{"genres": None}, "not-a-dict"])
+        assert recommender.supply_gaps == []
+
+
+class TestSelectCalibrated:
+    """
+    config/tuning.yml movies:/tv: calibration_strength - see
+    utils/calibration.py.
+    """
+
+    @staticmethod
+    def _recommender_with_genres(genre_map, profile_genres, strength):
+        recommender = _make_recommender()
+        recommender.calibration_strength = strength
+        recommender.watched_data_counters = {"genres": profile_genres}
+        media_cache = Mock()
+        media_cache.cache = {"movies": {str(k): {"genres": v} for k, v in genre_map.items()}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        return recommender
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_disabled_by_default_keeps_pure_score_order(self, mock_remove, mock_add):
+        recommender = _make_recommender()
+        assert recommender.calibration_strength == 0.0
+        candidates = {1: (Mock(ratingKey=1), 0.5), 2: (Mock(ratingKey=2), 0.9)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=2)
+
+        assert [int(i.ratingKey) for i in result] == [2, 1]
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_pulls_overrepresented_genre_back_toward_profile(self, mock_remove, mock_add):
+        """
+        The reported defect, end to end: a thriller-dominated profile
+        whose remaining unwatched pool is mostly family (because the
+        thrillers are already watched) must not yield an all-family
+        collection.
+        """
+        genre_map = {i: ["family"] for i in range(1, 11)}
+        genre_map.update({i: ["thriller"] for i in range(11, 21)})
+        recommender = self._recommender_with_genres(genre_map, {"thriller": 95.0, "family": 5.0}, strength=0.5)
+        # Family scores higher across the board - score order alone would
+        # return nothing but family.
+        candidates = {i: (Mock(ratingKey=i), 0.6 if i <= 10 else 0.5) for i in range(1, 21)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=10)
+
+        family_kept = sum(1 for i in result if genre_map[int(i.ratingKey)] == ["family"])
+        assert family_kept < 10, "calibration failed to pull the overrepresented genre down"
+
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_cold_start_profile_falls_back_to_score_order(self, mock_remove, mock_add):
+        """No watch history means no distribution to calibrate against."""
+        recommender = self._recommender_with_genres({1: ["family"], 2: ["thriller"]}, {}, strength=0.5)
+        candidates = {1: (Mock(ratingKey=1), 0.5), 2: (Mock(ratingKey=2), 0.9)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=2)
+
+        assert [int(i.ratingKey) for i in result] == [2, 1]
+
+
 class TestSyncPlexCollectionEmpty:
     """Tests for BaseRecommender._sync_plex_collection with no items."""
 

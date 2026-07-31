@@ -10,6 +10,40 @@ movies:
   # count (see general.limit_plex_results in config.example.yml for the
   # internal candidate-scoring buffer this feeds).
   limit_results: 50
+
+  # Minimum similarity score (0.0-1.0) an item must reach to enter the
+  # collection. The collection is allowed to come in UNDER limit_results
+  # rather than pad itself with weak matches - if only 31 movies clear
+  # the bar, you get 31 and a warning telling you the library is running
+  # short of unwatched content matching that profile.
+  #
+  # Default 0.0 (disabled) preserves the historical behavior of always
+  # filling to limit_results regardless of score. 0.20 is a reasonable
+  # starting point; raise it until the tail of the collection stops
+  # looking like filler. This is the library-side counterpart to
+  # external_recommendations.min_relevance_score.
+  min_similarity: 0.0
+
+  # Calibrated recommendations (Steck, "Calibrated Recommendations",
+  # RecSys 2018) - see utils/calibration.py.
+  #
+  # Ranking purely by score does not preserve your taste distribution:
+  # whatever is abundant among the remaining unwatched candidates comes
+  # to dominate the collection, however little of your actual viewing it
+  # represents. A profile that is 4% family can easily produce a
+  # collection that is 38% family once you have watched most of the
+  # non-family library.
+  #
+  # Calibration instead matches the collection's genre mix to your watch
+  # history's genre mix. It is NOT a genre exclusion: a genre you
+  # genuinely watch still appears, at the rate you actually watch it and
+  # represented by its highest-scoring titles.
+  #
+  # 0.0 = disabled (plain top-N by score, the historical behavior)
+  # 0.5 = weight relevance and calibration equally (suggested start)
+  # 1.0 = match the distribution as closely as possible, ignoring score
+  calibration_strength: 0.0
+
   randomize_recommendations: false  # Randomize from top pool
 
   # Display options for recommendations output
@@ -54,6 +88,8 @@ movies:
 # =============================================================================
 tv:
   limit_results: 20  # Max recommendations per user
+  min_similarity: 0.0  # See movies.min_similarity above
+  calibration_strength: 0.0  # See movies.calibration_strength above
   randomize_recommendations: false
   normalize_counters: true  # Normalize across different show lengths
 
@@ -188,6 +224,23 @@ negative_signals:
     min_episodes_watched: 2  # Must watch N episodes to count
     max_completion_percent: 25  # Consider dropped if < 25% watched
     penalty_multiplier: -0.4
+
+  # Recommendations that were shown and never watched.
+  #
+  # The strongest signal a recommender gets is not what you watched - it
+  # is what it put in front of you that you declined. A title that sat in
+  # your collection for weeks unplayed is a far more direct "not for me"
+  # than the mere absence of a play, which is ambiguous (never offered?
+  # never noticed?). Without this, an item you keep passing over is
+  # re-recommended with an identical score every single night.
+  #
+  # Penalties are split across an item's genres/keywords and floored, so
+  # one skipped title barely registers but a consistent pattern does, and
+  # no genre can be buried so deep the profile cannot recover from it.
+  ignored_recommendations:
+    enabled: true
+    min_days_shown: 21  # Days on display before it counts as declined
+    penalty: 0.5  # Total negative weight per ignored title
 
 # =============================================================================
 # PROFILE ACCURACY (#273)

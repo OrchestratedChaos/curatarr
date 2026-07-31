@@ -236,6 +236,7 @@ def discover_candidates_by_profile(
     exclude_ids: Optional[Set[int]] = None,
     top_scored_items: Optional[List[Dict]] = None,
     language_filter: Optional[str] = None,
+    priority_genres: Optional[List[str]] = None,
 ) -> Dict[int, Dict]:
     """
     Discover candidates using TMDB Discover API based on user profile.
@@ -277,7 +278,21 @@ def discover_candidates_by_profile(
     genres_counter = user_profile.get("genres")
     if not isinstance(genres_counter, Counter):
         genres_counter = Counter(genres_counter or {})
-    all_genres = list(genres_counter.most_common(20))
+    # Ordering matters more than it looks. Searching a profile's TOP
+    # genres fetches more of whatever the library is already thickest in
+    # - which is precisely the wrong move for the case external
+    # recommendations exist to solve, a user who has exhausted their
+    # library. `priority_genres` (from utils/library_health.py's supply
+    # gap analysis) leads with the genres this profile wants and the
+    # shelf can no longer supply, so acquisition fills the hole instead
+    # of deepening it. Absent that, this is the previous top-genre order.
+    if priority_genres:
+        ranked = [(g, genres_counter.get(g, 0)) for g in priority_genres]
+        seen_genres = {g for g, _ in ranked}
+        ranked += [(g, c) for g, c in genres_counter.most_common(20) if g not in seen_genres]
+        all_genres = ranked[:20]
+    else:
+        all_genres = list(genres_counter.most_common(20))
     top_genres = all_genres[genre_start:genre_end]
     genre_id_map = TMDB_MOVIE_GENRE_IDS if media_type == "movie" else TMDB_TV_GENRE_IDS
 

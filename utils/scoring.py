@@ -9,7 +9,7 @@ import random
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from .config import (
     MAX_REDISTRIBUTION_MULTIPLIER,
@@ -20,6 +20,7 @@ from .config import (
     UNSEEN_GENRE_PENALTY,
     UNSEEN_KEYWORD_PENALTY,
 )
+from .corpus_idf import idf_weight
 
 
 def normalize_user_profile(user_prefs: Dict, tfidf_penalty_threshold: float = 0.15) -> Dict:
@@ -344,6 +345,13 @@ class ScoringOptions:
     tfidf_penalty_threshold: float = 0.15
     use_popularity_dampening: bool = True
     popularity_threshold: int = 50000
+    # Corpus IDF weights (utils/corpus_idf.py), term -> multiplier in
+    # [IDF_MIN_WEIGHT, 1.0]. None/empty means no corpus was supplied and
+    # scoring behaves exactly as it did before this existed - which is
+    # what keeps every pre-existing caller and test bit-for-bit
+    # unchanged, since only the recommenders build and pass a corpus.
+    genre_idf: Optional[Mapping[str, float]] = None
+    keyword_idf: Optional[Mapping[str, float]] = None
 
 
 def _tfidf_threshold(user_profile: Dict, key: str, max_count: float, options: ScoringOptions) -> float:
@@ -432,8 +440,15 @@ def _score_genre_component(
                     normalized_score = math.sqrt(genre_count / max_genre_count)
                 else:
                     normalized_score = min(genre_count / max_genre_count, 1.0)
+                # Discount the match by how ubiquitous the genre is across
+                # the library - matching on something 80% of the library
+                # carries says far less than matching on something 3% does.
+                # 1.0 (no change) whenever no corpus was supplied.
+                idf = idf_weight(norm_genre, options.genre_idf)
+                normalized_score *= idf
                 genre_scores.append(normalized_score)
-                details.append(f"{genre} (count: {genre_count:.1f}, norm: {round(normalized_score, 2)})")
+                idf_note = f", idf: {round(idf, 2)}" if idf != 1.0 else ""
+                details.append(f"{genre} (count: {genre_count:.1f}, norm: {round(normalized_score, 2)}{idf_note})")
         elif genre_count < 0:
             # Explicit negative signal: penalize this genre
             penalty = abs(genre_count) / max_genre_count * 0.5  # Cap penalty contribution
@@ -667,8 +682,15 @@ def _score_keyword_component(
                     normalized_score = math.sqrt(count / max_counts["keywords"])
                 else:
                     normalized_score = min(count / max_counts["keywords"], 1.0)
+                # The dimension this matters most for: "sequel",
+                # "aftercreditsstinger" and friends are frequent in almost
+                # any profile precisely because they are frequent
+                # everywhere, and carry nearly no signal about taste.
+                idf = idf_weight(kw_lower, options.keyword_idf)
+                normalized_score *= idf
                 keyword_scores.append(normalized_score)
-                details.append(f"{kw} (count: {int(count)}, norm: {round(normalized_score, 2)})")
+                idf_note = f", idf: {round(idf, 2)}" if idf != 1.0 else ""
+                details.append(f"{kw} (count: {int(count)}, norm: {round(normalized_score, 2)}{idf_note})")
         elif count < 0:
             penalty = abs(count) / max_counts["keywords"] * 0.5
             keyword_penalty += penalty
@@ -832,6 +854,8 @@ def calculate_similarity_score(
     tfidf_penalty_threshold: float = 0.15,
     use_popularity_dampening: bool = True,
     popularity_threshold: int = 50000,
+    genre_idf: Optional[Mapping[str, float]] = None,
+    keyword_idf: Optional[Mapping[str, float]] = None,
     options: Optional[ScoringOptions] = None,
 ) -> Tuple[float, Dict]:
     """
@@ -873,6 +897,8 @@ def calculate_similarity_score(
             tfidf_penalty_threshold=tfidf_penalty_threshold,
             use_popularity_dampening=use_popularity_dampening,
             popularity_threshold=popularity_threshold,
+            genre_idf=genre_idf,
+            keyword_idf=keyword_idf,
         )
 
     # Default weights (specificity-first approach)
