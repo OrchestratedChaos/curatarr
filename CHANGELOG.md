@@ -2,6 +2,20 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.11.1] - 2026-07-31
+
+### Fixed
+
+- **Progress counters stacked up hundreds of lines deep in the web UI instead of overwriting in place.** A 337-item library scan rendered as 337 consecutive `Processing movie N/337 (P%)` lines, burying everything around it.
+
+  The recommender was doing nothing wrong: it writes these with a bare `\r` and no newline, which is exactly right for a terminal, where each update overwrites the last. The subprocess pipe is opened in **text mode**, and Python's universal-newline translation rewrites every `\r` to `\n` before `for line in job.process.stdout` ever sees it - so one in-place counter arrived as one line per tick.
+
+  Only a counter advancing under an unchanged prefix now collapses. A line carrying genuinely new information is never touched, and the final update of a run (the `100%`) is committed permanently once a different line follows it, so completed steps stay in the log. `Processing movie 5/337` collapses onto `Processing movie 4/337`; it does **not** collapse onto `Processing alice's watched 4/233`, which is a different operation.
+
+  Implemented on both sides on purpose: `web/job_runner.py` collapses so the stored log and SSE backlog replay hold one line per progress run, and `web/static/app.js` collapses independently because live subscribers still receive every individual tick - that is what animates the counter. The client keeps the in-flight line in its own trailing node so committed text can be inserted *before* it without rewriting the whole log, preserving 2.10.90's fix for the browser-side quadratic.
+
+  Covered by 8 Python tests plus a 14-check browser suite (`tests/static/test_progress_collapse.js`) that runs the real `app.js` against a stubbed DOM - under Node on CI, or macOS's bundled JavaScriptCore locally, skipping only if neither exists. Two of those checks pin the ordering and post-trim cases that the first attempt at this got wrong.
+
 ## [2.11.0] - 2026-07-31
 
 ### Added

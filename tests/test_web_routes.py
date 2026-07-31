@@ -12,6 +12,9 @@ from flask.testing import FlaskClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import queue
+import threading
+
 import pytest
 
 import web.app as app_module
@@ -742,3 +745,90 @@ class TestConcurrentRun:
         assert len(launched) == 1
         assert len(busy) == 5
         _wait_until_idle(app)
+
+
+class TestProgressLineCollapsing:
+    """
+    web/job_runner.py's progress_family() / Job._append_line().
+
+    The recommender writes progress with a bare \r and no newline, which
+    a terminal renders in place. The subprocess pipe is opened in text
+    mode, so universal-newline translation turns each \r into its own
+    line - a 337-item scan reached the web UI as 337 stacked lines.
+    """
+
+    def test_identifies_a_progress_line_and_its_family(self):
+        from web.job_runner import progress_family
+
+        assert progress_family("Processing movie 321/337 (95%)") == "Processing movie"
+
+    def test_strips_ansi_before_matching(self):
+        """The recommender wraps these in CYAN/RESET."""
+        from web.job_runner import progress_family
+
+        assert progress_family("\x1b[96mProcessing movie 5/9 (55%)\x1b[0m") == "Processing movie"
+
+    def test_informational_lines_are_not_progress(self):
+        from web.job_runner import progress_family
+
+        assert progress_family("Found 7 new movies to analyze") is None
+        assert progress_family("Adding 1 new high-scoring recommendations") is None
+        assert progress_family("Final collection size: 50 movies") is None
+
+    def test_distinct_prefixes_are_distinct_families(self):
+        from web.job_runner import progress_family
+
+        assert progress_family("Processing movie 4/9 (44%)") != progress_family("Processing alice 4/9 (44%)")
+
+    def test_same_family_updates_collapse_to_one_line(self):
+        from web.job_runner import Job
+
+        job = Job.__new__(Job)
+        job.lines = []
+        job._subscribers = []
+        job._data_lock = threading.Lock()
+        for i in range(1, 338):
+            job._append_line(f"Processing movie {i}/337 ({i * 100 // 337}%)")
+        assert job.lines == ["Processing movie 337/337 (100%)"]
+
+    def test_completed_progress_line_survives_a_following_line(self):
+        from web.job_runner import Job
+
+        job = Job.__new__(Job)
+        job.lines = []
+        job._subscribers = []
+        job._data_lock = threading.Lock()
+        job._append_line("Processing movie 1/2 (50%)")
+        job._append_line("Processing movie 2/2 (100%)")
+        job._append_line("Movies cache updated")
+        assert job.lines == ["Processing movie 2/2 (100%)", "Movies cache updated"]
+
+    def test_different_families_each_keep_a_line(self):
+        from web.job_runner import Job
+
+        job = Job.__new__(Job)
+        job.lines = []
+        job._subscribers = []
+        job._data_lock = threading.Lock()
+        job._append_line("Processing movie 1/2 (50%)")
+        job._append_line("Processing movie 2/2 (100%)")
+        job._append_line("Processing alice 1/2 (50%)")
+        job._append_line("Processing alice 2/2 (100%)")
+        assert job.lines == ["Processing movie 2/2 (100%)", "Processing alice 2/2 (100%)"]
+
+    def test_subscribers_still_receive_every_update(self):
+        """
+        Collapsing is for the stored log. Live subscribers must still get
+        each tick, or the counter would stop animating in the browser -
+        the client does its own collapsing for the DOM.
+        """
+        from web.job_runner import Job
+
+        job = Job.__new__(Job)
+        job.lines = []
+        q: queue.Queue = queue.Queue(maxsize=100)
+        job._subscribers = [q]
+        job._data_lock = threading.Lock()
+        for i in range(1, 6):
+            job._append_line(f"Processing movie {i}/5 ({i * 20}%)")
+        assert q.qsize() == 5

@@ -14,7 +14,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.11.0"
+__version__ = "2.11.1"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 8  # v8: SCORING change - corpus IDF (utils/corpus_idf.py)
