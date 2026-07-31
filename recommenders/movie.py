@@ -100,6 +100,14 @@ class MovieCache(BaseCache):
             "vote_count": tmdb_data["vote_count"],
             "collection_id": tmdb_data.get("collection_id"),
             "collection_name": tmdb_data.get("collection_name"),
+            # Certificate (G/PG/PG-13/R/...). Cached because it is a far
+            # more reliable signal of WHO content is for than the genre
+            # tags are - see CLAUDE.md's measurement notes and
+            # utils/calibration.py. Genre says what a film is about;
+            # `family` is attached to Frequency and Skyscraper on real
+            # libraries, while genuine children's films routinely carry
+            # no kid genre at all.
+            "content_rating": getattr(movie, "contentRating", None),
             "ratings": {"audience_rating": audience_rating} if audience_rating > 0 else {},
         }
 

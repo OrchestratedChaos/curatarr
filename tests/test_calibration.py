@@ -8,7 +8,10 @@ import math
 import pytest
 
 from utils.calibration import (
+    CalibrationDimension,
+    build_certificate_distribution,
     build_target_distribution,
+    calibrate_multi,
     calibrate_recommendations,
     calibration_report,
     item_genre_distribution,
@@ -268,3 +271,120 @@ class TestCalibrationReport:
         """A genre the collection omits entirely is exactly what to surface."""
         rows = calibration_report({"action": 0.5, "drama": 0.5}, [["action"]], top_n=5)
         assert "drama" in {r[0] for r in rows}
+
+
+class TestBuildCertificateDistribution:
+    """build_certificate_distribution() - p(cert|u)."""
+
+    def test_normalizes_counts(self):
+        dist = build_certificate_distribution(["PG", "R", "R", "R"])
+        assert dist["R"] == pytest.approx(0.75)
+        assert dist["PG"] == pytest.approx(0.25)
+
+    def test_missing_certificates_are_skipped_not_bucketed(self):
+        """
+        An unrated film is not evidence about audience. Giving "unknown"
+        its own share would let a library with patchy metadata calibrate
+        toward unknown.
+        """
+        dist = build_certificate_distribution(["PG", None, "", "PG"])
+        assert dist == {"PG": pytest.approx(1.0)}
+
+    def test_all_missing_returns_empty(self):
+        assert build_certificate_distribution([None, "", None]) == {}
+
+    def test_empty_input_returns_empty(self):
+        assert build_certificate_distribution([]) == {}
+
+    def test_whitespace_is_normalized(self):
+        assert build_certificate_distribution([" PG ", "PG"]) == {"PG": pytest.approx(1.0)}
+
+
+class TestCalibrateMulti:
+    """
+    calibrate_multi() - calibration across several attributes.
+
+    Motivating measurement (real library): genre tags are unreliable for
+    audience. `family` is attached to Frequency and Skyscraper; the
+    live-action R.I.P.D. carries `animation`; Invisible Sister and
+    Goosebumps 2 are kid films with no kid genre. The certificate splits
+    the same set cleanly.
+    """
+
+    @staticmethod
+    def _item(title, genres, cert, score):
+        return {"title": title, "genres": genres, "cert": cert, "score": score}
+
+    @staticmethod
+    def _dims(genre_target, cert_target=None, genre_weight=1.0, cert_weight=1.0):
+        dims = [CalibrationDimension("genre", genre_target, lambda i: i["genres"], genre_weight)]
+        if cert_target:
+            dims.append(
+                CalibrationDimension(
+                    "certificate", cert_target, lambda i: [i["cert"]] if i["cert"] else [], cert_weight
+                )
+            )
+        return dims
+
+    def _run(self, items, limit, dims, strength):
+        return calibrate_multi(items, limit, lambda i: i["score"], dims, strength)
+
+    def test_certificate_dimension_suppresses_kid_certificates(self):
+        """The defect: a profile that is mostly PG-13/R, a pool that is
+        mostly G/PG, and genre tags that cannot tell them apart."""
+        # Genre is deliberately IDENTICAL across both groups, so genre
+        # calibration alone is powerless and only the certificate can act.
+        items = [self._item(f"kid{i}", ["adventure"], "PG", 0.60) for i in range(20)]
+        items += [self._item(f"adult{i}", ["adventure"], "R", 0.55) for i in range(20)]
+        genre_target = {"adventure": 1.0}
+        cert_target = {"R": 0.9, "PG": 0.1}
+
+        genre_only = self._run(items, 10, self._dims(genre_target), 0.5)
+        with_cert = self._run(items, 10, self._dims(genre_target, cert_target), 0.5)
+
+        kid = lambda sel: sum(1 for i in sel if i["cert"] == "PG")  # noqa: E731
+        assert kid(genre_only) == 10, "genre alone should be powerless here"
+        assert kid(with_cert) < kid(genre_only), "certificate dimension did not act"
+
+    def test_does_not_eliminate_a_certificate_the_user_watches(self):
+        """Calibration is not exclusion, on this axis either."""
+        items = [self._item(f"pg{i}", ["a"], "PG", 0.3) for i in range(20)]
+        items += [self._item(f"r{i}", ["a"], "R", 0.9) for i in range(20)]
+        sel = self._run(items, 10, self._dims({"a": 1.0}, {"R": 0.7, "PG": 0.3}), 0.5)
+        assert any(i["cert"] == "PG" for i in sel)
+
+    def test_zero_weight_dimension_is_inert(self):
+        items = [self._item(f"pg{i}", ["a"], "PG", 0.6) for i in range(20)]
+        items += [self._item(f"r{i}", ["a"], "R", 0.5) for i in range(20)]
+        dims = self._dims({"a": 1.0}, {"R": 0.99, "PG": 0.01}, cert_weight=0.0)
+        sel = self._run(items, 10, dims, 0.5)
+        assert all(i["cert"] == "PG" for i in sel), "a zero-weighted dimension must not influence selection"
+
+    def test_disabled_strength_preserves_score_order(self):
+        items = [self._item("a", ["x"], "R", 0.9), self._item("b", ["y"], "PG", 0.5)]
+        sel = self._run(items, 2, self._dims({"x": 0.5, "y": 0.5}, {"R": 0.5, "PG": 0.5}), 0.0)
+        assert [i["title"] for i in sel] == ["a", "b"]
+
+    def test_no_active_dimensions_falls_back_to_score_order(self):
+        items = [self._item("a", ["x"], "R", 0.9), self._item("b", ["y"], "PG", 0.5)]
+        sel = self._run(items, 2, [CalibrationDimension("genre", {}, lambda i: i["genres"], 1.0)], 0.5)
+        assert [i["title"] for i in sel] == ["a", "b"]
+
+    def test_candidates_within_limit_untouched(self):
+        items = [self._item("a", ["x"], "R", 0.9), self._item("b", ["y"], "PG", 0.5)]
+        assert len(self._run(items, 5, self._dims({"x": 1.0}, {"R": 1.0}), 1.0)) == 2
+
+    def test_respects_limit_and_no_duplicates(self):
+        items = [self._item(str(i), ["x"], "R", 0.5) for i in range(20)]
+        sel = self._run(items, 7, self._dims({"x": 1.0}, {"R": 1.0}), 0.5)
+        assert len(sel) == 7
+        assert len({id(i) for i in sel}) == 7
+
+    def test_zero_limit_returns_empty(self):
+        assert self._run([self._item("a", ["x"], "R", 0.9)], 0, self._dims({"x": 1.0}), 0.5) == []
+
+    def test_items_with_no_certificate_do_not_crash(self):
+        items = [self._item(f"n{i}", ["x"], None, 0.5) for i in range(10)]
+        items += [self._item(f"r{i}", ["x"], "R", 0.4) for i in range(10)]
+        sel = self._run(items, 5, self._dims({"x": 1.0}, {"R": 1.0}), 0.5)
+        assert len(sel) == 5

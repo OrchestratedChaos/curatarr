@@ -17,7 +17,10 @@ from .cache import (
 
 # Calibrated recommendation re-ranking (Steck, RecSys 2018)
 from .calibration import (
+    CalibrationDimension,
+    build_certificate_distribution,
     build_target_distribution,
+    calibrate_multi,
     calibrate_recommendations,
     calibration_report,
     item_genre_distribution,
@@ -38,7 +41,9 @@ from .cli import (
 )
 from .config import (
     CACHE_VERSION,
+    CALIBRATION_CERTIFICATE_WEIGHT,
     CALIBRATION_DIVERGENCE_SCALE,
+    CALIBRATION_GENRE_WEIGHT,
     CALIBRATION_SMOOTHING_ALPHA,
     CANDIDATE_BUFFER_MULTIPLIER,
     COLLECTION_BONUS_BASE,
@@ -431,7 +436,9 @@ __all__ = [
     "TMDB_RATE_LIMIT_DELAY",
     "DEFAULT_RATING",
     "WEIGHT_SUM_TOLERANCE",
+    "CALIBRATION_CERTIFICATE_WEIGHT",
     "CALIBRATION_DIVERGENCE_SCALE",
+    "CALIBRATION_GENRE_WEIGHT",
     "IDF_MIN_CORPUS_SIZE",
     "IDF_MIN_WEIGHT",
     "IGNORED_REC_MAX_PROFILE_FRACTION",
@@ -596,7 +603,10 @@ __all__ = [
     "gaps_to_dict",
     "prioritize_discovery_genres",
     # Calibration
+    "CalibrationDimension",
+    "build_certificate_distribution",
     "build_target_distribution",
+    "calibrate_multi",
     "calibrate_recommendations",
     "calibration_report",
     "item_genre_distribution",

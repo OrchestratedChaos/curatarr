@@ -98,6 +98,9 @@ class ShowCache(BaseCache):
             "rating": tmdb_data.get("rating"),
             "vote_count": tmdb_data.get("vote_count"),
             "production_company_ids": tmdb_data.get("production_company_ids", []),
+            # Certificate (TV-G/TV-PG/TV-14/TV-MA). See movie.py's
+            # _process_item for why this is cached alongside genres.
+            "content_rating": getattr(show, "contentRating", None),
         }
 
 
