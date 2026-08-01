@@ -1325,6 +1325,129 @@ def get_user_specific_connection(plex: Any, config: Dict, users: Dict) -> Any:
         return plex
 
 
+def resolve_plex_user(account: Any, username: str) -> Optional[Any]:
+    """
+    Find the MyPlexUser matching a configured username.
+
+    config/config.yml lists users by Plex USERNAME (e.g. "homehouse165"),
+    while account.users() surfaces them by friendly TITLE (e.g. "home
+    house") - matching on title alone silently misses every user whose
+    display name differs from their login, which on a real Home is all of
+    them. Username is tried first as the identifier the config actually
+    holds, then email, then title.
+
+    Returns None for the server owner (who is not in account.users() at
+    all) and for anyone unmatched; callers treat that as "use the admin
+    connection", which for the owner is exactly right.
+    """
+    if not username:
+        return None
+    wanted = username.strip().lower()
+    try:
+        users = list(account.users())
+    except (plexapi.exceptions.PlexApiException, requests.RequestException, TypeError, AttributeError) as e:
+        # Deliberately broad: this helper exists to answer an optional
+        # question, and every caller's fallback is "use the admin
+        # connection". Letting an unexpected shape from the Plex API
+        # propagate would fail an entire recommendation run over it.
+        log_warning(f"Could not list Plex users: {e}")
+        return None
+
+    for attr in ("username", "email", "title"):
+        for user in users:
+            value = getattr(user, attr, None)
+            if value and str(value).strip().lower() == wanted:
+                return user
+    return None
+
+
+def get_user_connection(plex: Any, config: Dict, username: Optional[str]) -> Any:
+    """
+    A PlexServer connection that sees the library as `username` does.
+
+    Needed because per-user state - specifically `isPlayed` - is a
+    property of the CONNECTION, not the item. The admin token reports the
+    admin's watched state for every item, so a recommender that reuses one
+    admin connection across a multi-user loop treats everything the ADMIN
+    has watched as watched by everyone. Measured on a real server: of 143
+    titles the admin had seen and a Home user had not, 141 reported
+    isPlayed=True through the admin connection and 0 through that user's
+    own - and that user consequently lost 45% of their candidate pool.
+
+    READ-ONLY. A managed user's connection cannot write labels or
+    collections, so callers must keep every write on the admin
+    connection; this exists to answer "has THIS user played this", nothing
+    more.
+
+    Falls back to the admin connection (with a warning) if the user can't
+    be resolved or switched - degrading to the previous behavior rather
+    than failing a run.
+    """
+    if not username:
+        return plex
+    try:
+        account = plex.myPlexAccount()
+    except (plexapi.exceptions.PlexApiException, requests.RequestException, AttributeError) as e:
+        log_warning(f"Could not reach Plex account to switch user context: {e}")
+        return plex
+
+    # The owner is not listed in account.users(); the admin connection
+    # already IS their connection, so this is a correct no-op for them.
+    if str(getattr(account, "username", "")).strip().lower() == username.strip().lower():
+        return plex
+
+    user = resolve_plex_user(account, username)
+    if user is None:
+        log_warning(
+            f"Could not resolve Plex user '{username}' - falling back to the admin "
+            f"connection, whose watched state is the ADMIN's, not theirs."
+        )
+        return plex
+
+    try:
+        return plex.switchUser(user)
+    except (plexapi.exceptions.PlexApiException, requests.RequestException) as e:
+        log_warning(f"Could not switch to Plex user '{username}': {e} - using admin connection")
+        return plex
+
+
+def fetch_user_played_ids(plex: Any, config: Dict, username: Optional[str], section_title: str) -> Set[int]:
+    """
+    Rating keys `username` has played, as THEY see the library.
+
+    Returned as a set so callers can test membership instead of reading
+    `item.isPlayed` off an admin-connection item - see
+    get_user_connection() for why that read is wrong in a multi-user loop.
+
+    An empty set is returned on any failure. That is the safe direction:
+    an item wrongly believed unwatched is merely a redundant
+    recommendation, whereas one wrongly believed watched is silently
+    removed from consideration, which is the defect being fixed.
+    """
+    try:
+        user_plex = get_user_connection(plex, config, username)
+        section = user_plex.library.section(section_title)
+        try:
+            # Ask the server for watched items only - far cheaper than
+            # pulling the section and filtering client-side.
+            watched = section.search(unwatched=False)
+        except (TypeError, plexapi.exceptions.PlexApiException):
+            watched = [m for m in section.all() if getattr(m, "isPlayed", False)]
+        return {int(m.ratingKey) for m in watched}
+    except (
+        plexapi.exceptions.PlexApiException,
+        requests.RequestException,
+        KeyError,
+        TypeError,
+        AttributeError,
+        ValueError,
+    ) as e:
+        # See the docstring: an empty set degrades to "recommend it
+        # again", which is recoverable. Raising would abort the run.
+        log_warning(f"Could not read watched state for '{username}': {e} - proceeding without it")
+        return set()
+
+
 def find_plex_movie(movies_section: Any, title: str, year: Optional[int] = None) -> Optional[Any]:
     """
     Find a movie in Plex library with fuzzy title matching.

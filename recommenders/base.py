@@ -73,6 +73,7 @@ from utils import (
     enhance_profile_with_trakt,
     extract_ids_from_guids,
     fetch_tmdb_with_retry,
+    fetch_user_played_ids,
     find_ignored_recommendations,
     find_supply_gaps,
     format_health_report,
@@ -501,6 +502,14 @@ class BaseRecommender(ABC):
         self.plex_tmdb_cache: Dict[str, Any] = {}
         self.tmdb_keywords_cache: Dict[str, Any] = {}
         self.label_dates: Dict[str, Any] = {}
+        # Rating keys THIS user has played, read through their own Plex
+        # connection (utils/plex.fetch_user_played_ids). Populated lazily
+        # by _load_user_played_ids() because it needs the library section
+        # name, and deliberately not persisted - it is server state, not
+        # profile state. Empty is the safe default: an item wrongly
+        # thought unwatched is a redundant recommendation, one wrongly
+        # thought watched vanishes from consideration entirely.
+        self.user_played_ids: Set[int] = set()
         self.users = get_configured_users(self.config)
 
         # Set for tracking watched item IDs
@@ -981,6 +990,7 @@ class BaseRecommender(ABC):
             summary = ", ".join(f"{t} ({w:.2f})" for t, w in discounted)
             logger.debug(f"Least informative keywords (discounted by corpus IDF): {summary}")
 
+        self._load_user_played_ids()
         self._report_library_health(unwatched_items)
 
         if not unwatched_items:
@@ -1111,8 +1121,13 @@ class BaseRecommender(ABC):
         print(f"Found {len(currently_labeled)} currently labeled {self.media_key}")
 
         excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
+        # Union so categorize_labeled_items() no longer has to read
+        # isPlayed off admin-connection items - same defect as in
+        # _build_scored_candidates, and it was silently evicting other
+        # users' still-unwatched recommendations as "watched".
+        watched_for_categorize = self.watched_ids | self.user_played_ids
         categories = categorize_labeled_items(
-            currently_labeled, self.watched_ids, excluded_genres, label_name, self.label_dates, stale_days
+            currently_labeled, watched_for_categorize, excluded_genres, label_name, self.label_dates, stale_days
         )
 
         print(f"{GREEN}Keeping {len(categories['fresh'])} unwatched recommendations{RESET}")
@@ -1167,7 +1182,14 @@ class BaseRecommender(ABC):
 
             if plex_item:
                 item_id = int(plex_item.ratingKey)
-                is_watched = item_id in self.watched_ids or getattr(plex_item, "isPlayed", False)
+                # NOT getattr(plex_item, "isPlayed"): plex_item came from
+                # the ADMIN connection, where isPlayed is the admin's
+                # watched state for every user in the loop. Measured on a
+                # real server, that dropped 45% of a Home user's candidate
+                # pool - everything the admin had seen - leaving a
+                # disproportionately children's remainder. user_played_ids
+                # is that user's own state (utils/plex.fetch_user_played_ids).
+                is_watched = item_id in self.watched_ids or item_id in self.user_played_ids
                 if not is_watched:
                     score = rec.get("similarity_score", 0.0)
                     if item_id not in all_candidates or score > all_candidates[item_id][1]:
@@ -1203,6 +1225,23 @@ class BaseRecommender(ABC):
             print(f"{YELLOW}Filtered {filtered_count} {self.media_key} exceeding max rating {max_rating}{RESET}")
 
         return filtered
+
+    def _load_user_played_ids(self) -> None:
+        """
+        Read this user's own watched state from Plex (once per run).
+
+        Skipped when no single_user is set - a combined/multi-user run has
+        no single identity to switch to, and the union semantics there
+        already come from the merged watch history.
+        """
+        if not self.single_user or self.user_played_ids:
+            return
+        try:
+            self.user_played_ids = fetch_user_played_ids(self.plex, self.config, self.single_user, self.library_title)
+            if self.user_played_ids:
+                logger.debug(f"{self.single_user}: {len(self.user_played_ids)} items played per their own Plex view")
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            logger.debug(f"Could not load per-user played ids: {e}")
 
     def _collection_label_name(self) -> str:
         """

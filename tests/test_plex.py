@@ -2849,3 +2849,166 @@ class TestContentRatingFilter:
         assert is_rating_allowed("NR", "PG-13", "movie") is True
         assert is_rating_allowed("Unrated", "PG", "movie") is True
         assert is_rating_allowed("Not Rated", "R", "movie") is True
+
+
+class TestResolvePlexUser:
+    """
+    resolve_plex_user() - config username -> MyPlexUser.
+
+    config lists users by USERNAME ("homehouse165"); account.users()
+    surfaces them by friendly TITLE ("home house"). Matching on title
+    alone misses every user whose display name differs from their login,
+    which on a real Plex Home is all of them.
+    """
+
+    @staticmethod
+    def _user(username=None, email=None, title=None):
+        u = Mock()
+        u.username = username
+        u.email = email
+        u.title = title
+        return u
+
+    def test_matches_on_username_first(self):
+        from utils.plex import resolve_plex_user
+
+        target = self._user(username="homehouse165", title="home house")
+        account = Mock(users=Mock(return_value=[self._user(username="other"), target]))
+        assert resolve_plex_user(account, "homehouse165") is target
+
+    def test_matches_on_email(self):
+        from utils.plex import resolve_plex_user
+
+        target = self._user(username="x", email="house11457@gmail.com", title="home house")
+        account = Mock(users=Mock(return_value=[target]))
+        assert resolve_plex_user(account, "house11457@gmail.com") is target
+
+    def test_falls_back_to_title(self):
+        from utils.plex import resolve_plex_user
+
+        target = self._user(username=None, title="home house")
+        account = Mock(users=Mock(return_value=[target]))
+        assert resolve_plex_user(account, "home house") is target
+
+    def test_username_wins_over_another_users_title(self):
+        """A title collision must not outrank an exact username match."""
+        from utils.plex import resolve_plex_user
+
+        decoy = self._user(username="someoneelse", title="homehouse165")
+        target = self._user(username="homehouse165", title="home house")
+        account = Mock(users=Mock(return_value=[decoy, target]))
+        assert resolve_plex_user(account, "homehouse165") is target
+
+    def test_case_insensitive(self):
+        from utils.plex import resolve_plex_user
+
+        target = self._user(username="HomeHouse165")
+        account = Mock(users=Mock(return_value=[target]))
+        assert resolve_plex_user(account, "homehouse165") is target
+
+    def test_unknown_user_returns_none(self):
+        from utils.plex import resolve_plex_user
+
+        account = Mock(users=Mock(return_value=[self._user(username="other")]))
+        assert resolve_plex_user(account, "nobody") is None
+
+    def test_empty_username_returns_none(self):
+        from utils.plex import resolve_plex_user
+
+        assert resolve_plex_user(Mock(), "") is None
+
+
+class TestGetUserConnection:
+    """get_user_connection() - a connection that sees the library as a given user."""
+
+    def test_owner_gets_the_admin_connection_unchanged(self):
+        """The owner is absent from account.users(); admin IS their connection."""
+        from utils.plex import get_user_connection
+
+        plex = Mock()
+        plex.myPlexAccount.return_value = Mock(username="jasonsmith523")
+        assert get_user_connection(plex, {}, "jasonsmith523") is plex
+        plex.switchUser.assert_not_called()
+
+    def test_switches_for_another_user(self):
+        from utils.plex import get_user_connection
+
+        target = Mock(username="homehouse165", email=None, title="home house")
+        switched = Mock()
+        plex = Mock()
+        plex.myPlexAccount.return_value = Mock(username="jasonsmith523", users=Mock(return_value=[target]))
+        plex.switchUser.return_value = switched
+        assert get_user_connection(plex, {}, "homehouse165") is switched
+
+    def test_no_username_returns_admin(self):
+        from utils.plex import get_user_connection
+
+        plex = Mock()
+        assert get_user_connection(plex, {}, None) is plex
+
+    def test_unresolvable_user_falls_back_to_admin(self):
+        from utils.plex import get_user_connection
+
+        plex = Mock()
+        plex.myPlexAccount.return_value = Mock(username="owner", users=Mock(return_value=[]))
+        assert get_user_connection(plex, {}, "ghost") is plex
+
+    def test_switch_failure_falls_back_to_admin(self):
+        """Degrade to previous behavior rather than failing the run."""
+        from utils.plex import get_user_connection
+
+        target = Mock(username="homehouse165", email=None, title="home house")
+        plex = Mock()
+        plex.myPlexAccount.return_value = Mock(username="owner", users=Mock(return_value=[target]))
+        plex.switchUser.side_effect = plexapi.exceptions.PlexApiException("nope")
+        assert get_user_connection(plex, {}, "homehouse165") is plex
+
+
+class TestFetchUserPlayedIds:
+    """fetch_user_played_ids() - that user's own watched rating keys."""
+
+    @staticmethod
+    def _plex_with(watched_keys):
+        section = Mock()
+        section.search.return_value = [Mock(ratingKey=k) for k in watched_keys]
+        plex = Mock()
+        plex.myPlexAccount.return_value = Mock(username="owner", users=Mock(return_value=[]))
+        plex.library.section.return_value = section
+        return plex, section
+
+    def test_returns_rating_keys_as_ints(self):
+        from utils.plex import fetch_user_played_ids
+
+        plex, _ = self._plex_with(["1", "2"])
+        assert fetch_user_played_ids(plex, {}, None, "Movies") == {1, 2}
+
+    def test_falls_back_to_full_scan_when_filter_unsupported(self):
+        """Older plexapi rejects search(unwatched=...)."""
+        from utils.plex import fetch_user_played_ids
+
+        plex, section = self._plex_with([])
+        section.search.side_effect = TypeError("unexpected kwarg")
+        section.all.return_value = [Mock(ratingKey=7, isPlayed=True), Mock(ratingKey=8, isPlayed=False)]
+        assert fetch_user_played_ids(plex, {}, None, "Movies") == {7}
+
+    def test_failure_returns_empty_set_not_everything(self):
+        """
+        Empty is the SAFE direction. An item wrongly thought unwatched is
+        a redundant recommendation; one wrongly thought watched silently
+        vanishes from consideration - the defect this fixes.
+        """
+        from utils.plex import fetch_user_played_ids
+
+        plex = Mock()
+        plex.myPlexAccount.return_value = Mock(username="owner", users=Mock(return_value=[]))
+        plex.library.section.side_effect = plexapi.exceptions.PlexApiException("down")
+        assert fetch_user_played_ids(plex, {}, "someone", "Movies") == set()
+
+    def test_unexpected_api_shape_does_not_abort_a_run(self):
+        """A Mock/malformed users() once raised TypeError straight through."""
+        from utils.plex import fetch_user_played_ids
+
+        plex = Mock()
+        plex.myPlexAccount.return_value = Mock(username="owner")  # .users() -> non-iterable Mock
+        plex.library.section.return_value = Mock(search=Mock(return_value=[]))
+        assert fetch_user_played_ids(plex, {}, "someone", "Movies") == set()
