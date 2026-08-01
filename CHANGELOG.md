@@ -2,6 +2,37 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.13.0] - 2026-08-01
+
+### Fixed
+
+- **Every non-admin user's recommendations were contaminated by the admin's watch history.** `recommenders/base.py` built one Plex connection from the admin token in `__init__` and reused it for every user in the loop. `isPlayed` is a property of the *connection*, not the item, so it reported the **admin's** watched state no matter whose recommendations were being generated - and `_build_scored_candidates()` dropped any candidate where `getattr(plex_item, "isPlayed", False)` was true.
+
+  Measured on a real server: of **143** titles the admin had watched and a Home user had not, **141** reported `isPlayed=True` through the admin connection and **0** through that user's own. That user lost **45%** of their eligible pool - and because the admin's viewing is overwhelmingly PG-13/R, what survived was disproportionately the children's content the admin had never touched. Their candidate set arrived at selection as **58 items for 50 slots, 51.7% of it G/PG**.
+
+  This also explains why 2.11.0's and 2.12.0's calibration work appeared ineffective for those users. Calibration was behaving optimally the whole time; with 58 candidates for 50 slots it could drop at most 8 of 30 kid titles, so the 44% result was arithmetically forced. The defect was upstream, in what reached it.
+
+  Per-user state is now read through a connection scoped to that user (`get_user_connection`, `fetch_user_played_ids`), resolved from the configured username via `resolve_plex_user` - config lists users by username (`homehouse165`) while `account.users()` exposes them by title (`home house`), so username is matched first, then email, then title. **Writes stay on the admin connection**: a managed user's connection cannot create labels or collections, so this reads watched state and nothing else.
+
+  Verified on the same server, per-certificate, before -> after:
+
+  | user | certificate | profile | before | after |
+  |---|---|---|---|---|
+  | home house | PG | 10.5% | 40.0% | **14.0%** |
+  | home house | PG-13 | 57.9% | 32.0% | **56.0%** |
+  | home house | R | 31.6% | 24.0% | **30.0%** |
+  | Lynn | PG | 8.3% | - | **8.0%** |
+  | Lynn | PG-13 | 41.7% | - | **42.0%** |
+  | Lynn | R | 50.0% | - | **50.0%** |
+
+  All six configured users now sit within 1.6x of their own viewing rate; the two worst were at 4.18x and 2.94x.
+
+- **`categorize_labeled_items()` read the same admin `isPlayed` flag**, evicting other users' still-unwatched recommendations as "watched" on every run. It now relies solely on the watched set its caller passes, which unions that user's own history with their own Plex played state. The test that asserted the old behavior has been replaced with one asserting the flag is ignored.
+
+### Notes
+
+- `get_user_connection`/`fetch_user_played_ids` degrade to the admin connection and an empty set respectively on any failure, and their exception handling is deliberately broad - an optional signal must never abort a run. An empty set is the safe direction: an item wrongly believed unwatched is a redundant recommendation, one wrongly believed watched disappears from consideration entirely, which is the defect being fixed.
+
 ## [2.12.1] - 2026-07-31
 
 ### Fixed

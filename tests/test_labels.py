@@ -158,13 +158,34 @@ class TestCategorizeLabeledItems:
         assert item in result["watched"]
         assert item not in result["fresh"]
 
-    def test_categorizes_watched_via_isPlayed(self):
-        """Test that items with isPlayed=True are categorized as watched even if not in watched_ids."""
-        item = self._create_mock_item(999, is_played=True)
-        watched_ids = set()  # Empty - item not in cache
-        label_dates = {}
+    def test_isPlayed_alone_does_NOT_mark_an_item_watched(self):
+        """
+        isPlayed must be ignored here - it is the ADMIN's watched state.
 
-        result = categorize_labeled_items([item], watched_ids, [], "Recommended", label_dates)
+        These items come from the admin Plex connection, which reports
+        isPlayed for the token's owner regardless of which user is being
+        processed. Trusting it evicted every other user's still-unwatched
+        recommendations as "watched": measured on a real server, 141 of
+        143 titles the admin had seen reported isPlayed=True through the
+        admin connection and 0 through the actual user's own.
+
+        Callers now pass a watched set that already unions the user's own
+        history with their own Plex played state - see
+        utils/plex.fetch_user_played_ids and the caller in
+        recommenders/base.py's _remove_outdated_labels.
+        """
+        item = self._create_mock_item(999, is_played=True)
+
+        result = categorize_labeled_items([item], set(), [], "Recommended", {})
+
+        assert item in result["fresh"], "admin isPlayed leaked into another user's categorization"
+        assert item not in result["watched"]
+
+    def test_watched_set_still_governs(self):
+        """The same item IS watched when the caller's set says so."""
+        item = self._create_mock_item(999, is_played=True)
+
+        result = categorize_labeled_items([item], {999}, [], "Recommended", {})
 
         assert item in result["watched"]
         assert item not in result["fresh"]

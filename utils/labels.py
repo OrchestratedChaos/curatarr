@@ -147,9 +147,14 @@ def categorize_labeled_items(
             result["excluded"].append(item)
             continue
 
-        # Check if watched (by ID cache OR by Plex isPlayed flag)
-        is_played = hasattr(item, "isPlayed") and item.isPlayed
-        if item_id in watched_ids or is_played:
+        # watched_ids only. Reading item.isPlayed here was wrong in any
+        # multi-user install: `item` comes from the ADMIN connection, so
+        # the flag is the ADMIN's watched state, and every other user's
+        # still-unwatched recommendations were being evicted as "watched".
+        # Callers now pass a set that already unions the user's own
+        # history with their own Plex played state (see
+        # utils/plex.fetch_user_played_ids).
+        if item_id in watched_ids:
             result["watched"].append(item)
             continue
 
