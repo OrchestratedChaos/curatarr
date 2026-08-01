@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.12.1] - 2026-07-31
+
+### Fixed
+
+- **Calibration could silently do nothing while reporting that it had run.** Calibration works by *choosing*; handed no more candidates than there are slots, it returns them unchanged. From the outside that is indistinguishable from a calibrated collection - the run still prints its calibration report and its profile-vs-collection table.
+
+  This was not hypothetical. `min_similarity: 0.10` cut a real 125-candidate pool to **48** for a 50-item collection. Every run since produced an entirely uncalibrated collection, came in short at 41 items, and said it had calibrated. Two separate fixes (2.11.0's genre calibration, 2.12.0's certificate dimension) were measured as ineffective on a live library when in fact neither had ever executed there.
+
+  A run whose candidate count does not exceed its slot count now warns, names `min_similarity` as the setting to change, and explains why. Verified on the same library: dropping the floor to 0.0 let calibration actually run, taking the over-represented G/PG share from **34.1% to 18.0%** (against a 13.2% target) and filling the collection to 50.
+
+- **`config/tuning.example.yml` recommended a `min_similarity` that causes the above.** It suggested 0.20 as "a reasonable starting point". On the reference library 0.20 leaves 7 candidates for 50 slots. The guidance now states what the gate is actually for - dropping junk, not sizing the collection - and to raise it only while candidates still comfortably outnumber `limit_results`.
+
 ## [2.12.0] - 2026-07-31
 
 ### Fixed

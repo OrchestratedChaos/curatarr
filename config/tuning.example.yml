@@ -17,11 +17,21 @@ movies:
   # the bar, you get 31 and a warning telling you the library is running
   # short of unwatched content matching that profile.
   #
+  # This gate exists to drop genuine junk, NOT to size the collection -
+  # calibration_strength below does that. KEEP IT LOW, and raise it only
+  # while candidates still comfortably outnumber limit_results.
+  #
+  # Measured failure worth avoiding: on a library with 125 candidates for
+  # a 50-item collection, min_similarity 0.10 cut the pool to 48. That is
+  # fewer candidates than slots, so calibration had nothing to choose
+  # between and silently returned them all - producing an uncalibrated
+  # collection while reporting success, and a collection that came in
+  # short as well. Dropping the floor back to 0.0 on the same library took
+  # the over-represented share from 34% to 18%.
+  #
   # Default 0.0 (disabled) preserves the historical behavior of always
-  # filling to limit_results regardless of score. 0.20 is a reasonable
-  # starting point; raise it until the tail of the collection stops
-  # looking like filler. This is the library-side counterpart to
-  # external_recommendations.min_relevance_score.
+  # filling to limit_results regardless of score. This is the library-side
+  # counterpart to external_recommendations.min_relevance_score.
   min_similarity: 0.0
 
   # Calibrated recommendations (Steck, "Calibrated Recommendations",
