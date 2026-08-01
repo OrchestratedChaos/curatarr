@@ -2624,6 +2624,60 @@ class TestSelectCalibrated:
         assert [int(i.ratingKey) for i in result] == [2, 1]
 
 
+class TestCalibrationCannotActGuard:
+    """
+    Calibration works by CHOOSING. Handed no more candidates than slots
+    it returns them unchanged - indistinguishable from working, from the
+    outside.
+
+    This is not hypothetical: min_similarity 0.10 cut a real 125-candidate
+    pool to 48 for a 50-item collection, so every run silently produced an
+    uncalibrated collection while printing that it had calibrated one.
+    Dropping the floor took the over-represented share from 34% to 18% on
+    the same library.
+    """
+
+    @staticmethod
+    def _recommender(n_candidates, target, strength=0.5):
+        recommender = _make_recommender()
+        recommender.calibration_strength = strength
+        recommender.min_similarity = 0.10
+        recommender.watched_data_counters = {"genres": {"thriller": 50.0}}
+        recommender.watched_ids = set()
+        media_cache = Mock()
+        media_cache.cache = {"movies": {str(i): {"genres": ["thriller"]} for i in range(n_candidates)}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        candidates = [(i, (Mock(ratingKey=i), 0.5)) for i in range(n_candidates)]
+        return recommender, candidates, media_cache.cache["movies"]
+
+    @patch("recommenders.base.log_warning")
+    def test_warns_when_candidates_do_not_exceed_slots(self, mock_warn):
+        recommender, candidates, media_items = self._recommender(40, 50)
+        recommender._select_calibrated(candidates, media_items, 50)
+        assert mock_warn.called, "silent no-op: calibration could not act and said nothing"
+        assert "Calibration cannot act" in mock_warn.call_args[0][0]
+
+    @patch("recommenders.base.log_warning")
+    def test_warning_names_the_setting_to_change(self, mock_warn):
+        recommender, candidates, media_items = self._recommender(40, 50)
+        recommender._select_calibrated(candidates, media_items, 50)
+        assert "min_similarity" in mock_warn.call_args[0][0]
+
+    @patch("recommenders.base.log_warning")
+    def test_no_warning_when_calibration_has_room(self, mock_warn):
+        recommender, candidates, media_items = self._recommender(200, 50)
+        recommender._select_calibrated(candidates, media_items, 50)
+        warned = [c for c in mock_warn.call_args_list if "Calibration cannot act" in str(c)]
+        assert not warned
+
+    @patch("recommenders.base.log_warning")
+    def test_exactly_equal_counts_still_warns(self, mock_warn):
+        """50 candidates for 50 slots is still zero choice."""
+        recommender, candidates, media_items = self._recommender(50, 50)
+        recommender._select_calibrated(candidates, media_items, 50)
+        assert mock_warn.called
+
+
 class TestSyncPlexCollectionEmpty:
     """Tests for BaseRecommender._sync_plex_collection with no items."""
 

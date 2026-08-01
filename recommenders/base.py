@@ -1364,6 +1364,22 @@ class BaseRecommender(ABC):
         else:
             logger.debug("No certificates on watched items - calibrating on genre alone")
 
+        # Calibration works by CHOOSING. Handed no more candidates than
+        # slots it returns them unchanged, which looks identical to
+        # "calibration is enabled and working" from the outside - the
+        # failure that wasted a full debugging cycle: min_similarity 0.10
+        # cut a 125-candidate pool to 48 for a 50-item collection, so
+        # every run silently produced an uncalibrated collection while
+        # reporting that it had calibrated one.
+        if len(sorted_candidates) <= target_count:
+            log_warning(
+                f"Calibration cannot act: only {len(sorted_candidates)} candidates for "
+                f"{target_count} slots, so every candidate is selected regardless of mix. "
+                f"Lower movies/tv min_similarity (currently {self.min_similarity:.2f}) or "
+                f"raise limit_results' candidate supply - calibration needs more candidates "
+                f"than slots to have anything to choose between."
+            )
+
         selected = calibrate_multi(
             sorted_candidates,
             target_count,
