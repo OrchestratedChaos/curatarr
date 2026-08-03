@@ -14,7 +14,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.13.0"
+__version__ = "2.13.1"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 9  # v9: new cache FIELD - `content_rating` per item
@@ -157,6 +157,23 @@ CALIBRATION_DIVERGENCE_SCALE = 100.0
 # Weighted equally: genre still drives what kind of story surfaces, the
 # certificate stops a collection drifting to content aimed at a different
 # audience than the profile watches.
+# Smallest profile a calibration target may be built from.
+#
+# Calibration reproduces whatever distribution it is handed, faithfully.
+# Handed a target derived from two watched titles it will drive a whole
+# collection toward those two. Measured on a real server: four of six
+# users had fewer than seven watched TV shows, one had exactly two (both
+# TV-G) - calibrating that profile would have pushed their collection to
+# ~100% TV-G off a two-item sample. The movie profiles where calibration
+# demonstrably works range from 47 to 239 watched titles.
+#
+# 25 sits above the largest sample we could not read (17) and well below
+# the smallest that works (47). Under-sampled dimensions are skipped, not
+# silently trusted - a wrong target is worse than no target, because
+# ranking by score alone at least degrades to "most similar", whereas a
+# bad target actively pulls the collection somewhere the user never was.
+CALIBRATION_MIN_PROFILE_SAMPLE = 25
+
 CALIBRATION_GENRE_WEIGHT = 1.0
 CALIBRATION_CERTIFICATE_WEIGHT = 1.0
 

@@ -2,6 +2,24 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.13.1] - 2026-08-02
+
+### Fixed
+
+- **Calibration would faithfully obey a target derived from two watched titles.** It reproduces whatever distribution it is handed, so an under-sampled target is not a weak signal - it is a confidently wrong one, and nothing checked.
+
+  Found while measuring whether TV needed the same treatment as movies. Four of six users had fewer than seven watched shows and one had exactly **two**, both TV-G. Enabling calibration for that profile would have driven their entire collection toward ~100% TV-G off a two-item sample. The movie profiles where calibration demonstrably works range from 47 to 239 watched titles.
+
+  `CalibrationDimension` now carries the sample size its target was built from, and a dimension below `CALIBRATION_MIN_PROFILE_SAMPLE` (25) is skipped with an explicit reason. When no dimension qualifies, calibration is skipped entirely and the run says so rather than appearing to calibrate. 25 sits above the largest sample that proved unreadable (17) and well below the smallest that works (47). A dimension that does not state a sample size is assumed fine, so existing callers are unaffected.
+
+  Verified against the real profiles: the two-show user is now skipped with both dimensions named, while a 48-show profile still calibrates normally (TV-MA 33.3% -> 35.0%, TV-14 25.0% -> 30.0%, TV-G 6.2% -> 5.0%).
+
+- **`calibrate_multi()` returned the caller's input order on every early-return path**, as though it were a ranking. Each of those paths means "no calibration, rank by score", so a caller that passed candidates in any other order silently received that order back - a failure indistinguishable from success. All early returns now sort by score explicitly rather than trusting the caller.
+
+### Notes
+
+- TV calibration remains **off** by default and was deliberately left off after measurement. Only one user has enough TV history to judge, and their collection under-represents children's content relative to their own viewing (0.72x) - the opposite of the movie defect. There is nothing there to fix, and enabling it against these profiles would cause the harm the guard above now prevents.
+
 ## [2.13.0] - 2026-08-01
 
 ### Fixed
