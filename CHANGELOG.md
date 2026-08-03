@@ -2,6 +2,14 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.13.1] - 2026-08-03
+
+### Security
+
+- **Bumped `cryptography` 49.0.0 -> 50.0.0 for CVE-2026-69247.** Caught by the `pip-audit` gate in CI, which began failing on an unchanged tree once the advisory was published - the intended behavior of that gate. `cryptography` is a direct dependency (`utils/self_update.py` uses it to verify release signatures), so this is on the trust path for the in-binary self-updater rather than an incidental transitive pin.
+
+  All 46 wheel hashes were refreshed from PyPI; the locks install under `--require-hashes` and `pip-audit` reports no known vulnerabilities across `requirements.lock`, `requirements-ui.lock` and `requirements-docker.lock`. No other lock file pins `cryptography`.
+
 ## [2.13.0] - 2026-08-01
 
 ### Fixed

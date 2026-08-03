@@ -58,4 +58,4 @@ pyyaml==6.0.3
 # (checked pyca/cryptography's GHSA advisories directly) - 48.0.1
 # already carried the fixed OpenSSL build (GHSA-537c-gmf6-5ccf) and
 # 49.0.0 carries it too.
-cryptography==49.0.0
+cryptography==50.0.0
