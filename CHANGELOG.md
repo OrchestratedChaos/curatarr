@@ -2,6 +2,26 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.15.1] - 2026-08-04
+
+### Fixed
+
+- **A user's own collection was being hidden from them (#340).** Regression introduced by 2.14.0's fix for #332, confirmed on a live server: every configured user's exclusion filter contained their OWN `PrivateCollection_*` label, so nobody could see their own recommendations.
+
+  Plex lists each user under up to three names - title, username and email - and the unconfigured-user coverage added in 2.14.0 iterated those name keys directly. Only one of the three matched the config key, so the other two were treated as separate, unconfigured users and had *every* label excluded, including that person's own. Whichever alias was written last won. Targets are now resolved to Plex user IDs first, so each user is exactly one target and their own label is always exempt.
+
+- **The same user was written up to three times per run**, for the same reason. One PUT per user now.
+
+- **Movie and TV labels were merged into both filters.** 2.14.0 fixed #332 by building the union of every library's labels and writing it to both `filterMovies` and `filterTelevision`. That was cruder than needed: Plex applies `filterMovies` to movie libraries and `filterTelevision` to television ones, so a label from the other kind can never match there. The two sets are now kept separate, and `build_all_private_labels()` returns `{user: {"movie": [...], "tv": [...]}}`.
+
+- **Restrictions are only written when they actually change.** Every run re-PUT an identical filter for every user. The current filters are already present in the `/api/users` response used to resolve IDs, so they are compared first and an unchanged user is skipped.
+
+- **A single configured user no longer short-circuits the whole path.** The `len(...) <= 1` guard predated #332's unconfigured-user coverage and silently disabled it for single-user installs - one configured user still has a collection that every other Plex user on the server should not see. The short-circuit now applies only when `restrict_unconfigured_users` is off.
+
+### Notes
+
+- `apply_user_label_restrictions()` still accepts a bare string or a flat sequence per user; neither is media-type aware, so both apply to both filters.
+
 ## [2.15.0] - 2026-08-04
 
 ### Added
