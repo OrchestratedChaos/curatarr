@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.14.1] - 2026-08-03
+
+### Fixed
+
+- **`test_device_code_visible_before_poll_completes_when_not_a_tty` was flaky under full-suite load.** It raced the child process's own interpreter startup: the child must launch Python and import `utils.trakt_auth` (transitively `requests`/`yaml`/`plexapi`/`cryptography`) before it prints anything, while the parent's deadline was a fraction of a fixed 6-second sleep and was checked *before* the first `readline()`. When startup exceeded that deadline the read loop never executed at all, and the test failed with an empty buffer against entirely correct code.
+
+  The fake `poll_for_token` now blocks until the test releases it via a sentinel file rather than sleeping for a fixed period, so "the device code arrived while the process was still blocked" is guaranteed by construction instead of raced for. Reading moved onto a thread so a child that prints nothing - the actual regression this test guards - fails on a backstop rather than blocking forever in `readline()`.
+
+  Confirmed it still catches the bug it exists for: with `sys.stdout.reconfigure(line_buffering=True)` removed from `utils/trakt_auth.py`, the test fails with `device code never appeared on the (non-TTY) pipe`. Confirmed it no longer flakes by running it under deliberate CPU contention, which reproduced the original failure.
+
 ## [2.14.0] - 2026-08-03
 
 ### Fixed
