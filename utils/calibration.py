@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Se
 from utils.config import (
     CALIBRATION_DIVERGENCE_SCALE,
     CALIBRATION_MIN_PROFILE_SAMPLE,
+    CALIBRATION_MIN_TARGET_CATEGORIES,
     CALIBRATION_SMOOTHING_ALPHA,
     DEFAULT_CALIBRATION_STRENGTH,
 )
@@ -336,9 +337,20 @@ def is_sufficiently_sampled(
     of two watched titles yields a target that would drag an entire
     collection onto those two titles' attributes.
 
-    A dimension that does not state its sample size is assumed fine, so
-    that callers predating this check are unaffected.
+    Two independent rejections:
+      - too few samples behind the target, and
+      - a target spanning a single category, which is ruinous at ANY
+        sample count because calibrating to it drives the collection to
+        100% of that one value.
+
+    A dimension that does not state its sample size is assumed
+    sufficiently sampled, so callers predating this check are unaffected -
+    but the degenerate-target check still applies to them, since it does
+    not depend on knowing the sample size.
     """
+    if len(dimension.target) < CALIBRATION_MIN_TARGET_CATEGORIES:
+        # Degenerate: every candidate would be pushed onto one value.
+        return False
     return dimension.sample_size is None or dimension.sample_size >= minimum
 
 

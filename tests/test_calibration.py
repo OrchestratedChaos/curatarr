@@ -405,11 +405,33 @@ class TestMinimumProfileSample:
 
     @staticmethod
     def _dim(sample):
-        return CalibrationDimension("genre", {"a": 1.0}, lambda i: i["genres"], 1.0, sample)
+        # Multi-category on purpose: a single-category target is rejected
+        # independently of sample size (see test_degenerate_target_*).
+        return CalibrationDimension("genre", {"a": 0.6, "b": 0.4}, lambda i: i["genres"], 1.0, sample)
 
     def test_unstated_sample_is_allowed(self):
         """Callers predating the check must be unaffected."""
-        assert is_sufficiently_sampled(CalibrationDimension("g", {"a": 1.0}, lambda i: []))
+        assert is_sufficiently_sampled(CalibrationDimension("g", {"a": 0.5, "b": 0.5}, lambda i: []))
+
+    def test_degenerate_single_category_target_is_rejected(self):
+        """
+        Ruinous at ANY sample count: calibrating to a one-value target
+        drives the whole collection onto that value. The real case was a
+        user whose two watched shows were both TV-G.
+        """
+        assert not is_sufficiently_sampled(CalibrationDimension("c", {"TV-G": 1.0}, lambda i: [], 1.0, 2))
+        assert not is_sufficiently_sampled(CalibrationDimension("c", {"R": 1.0}, lambda i: [], 1.0, 9999))
+
+    def test_real_world_21_sample_certificate_target_is_allowed(self):
+        """
+        Regression: an earlier threshold of 25 blocked a 21-sample
+        certificate profile, and that user's collection went from 14% to
+        22% G/PG against a 9% profile because only genre calibration ran.
+        21 noisy samples beat calibrating on an attribute that does not
+        track audience at all.
+        """
+        target = {"G": 0.05, "PG": 0.05, "PG-13": 0.6, "R": 0.3}
+        assert is_sufficiently_sampled(CalibrationDimension("certificate", target, lambda i: [], 1.0, 21))
 
     def test_tiny_sample_is_rejected(self):
         assert not is_sufficiently_sampled(self._dim(2))
@@ -428,8 +450,8 @@ class TestMinimumProfileSample:
         """
         items = [{"title": f"kid{i}", "genres": ["family"], "score": 0.4} for i in range(20)]
         items += [{"title": f"adult{i}", "genres": ["thriller"], "score": 0.9} for i in range(20)]
-        # A target insisting the collection be all-family, from 2 samples.
-        thin = CalibrationDimension("genre", {"family": 1.0}, lambda i: i["genres"], 1.0, 2)
+        # A target overwhelmingly favouring family, from 2 samples.
+        thin = CalibrationDimension("genre", {"family": 0.95, "thriller": 0.05}, lambda i: i["genres"], 1.0, 2)
         sel = calibrate_multi(items, 10, lambda i: i["score"], [thin], 0.5)
         assert all(i["genres"] == ["thriller"] for i in sel), "an untrustworthy target steered the collection"
 
@@ -445,8 +467,10 @@ class TestMinimumProfileSample:
     def test_mixed_sampling_keeps_only_the_trustworthy_dimension(self):
         items = [{"g": ["family"], "c": "G", "score": 0.5} for _ in range(20)]
         items += [{"g": ["thriller"], "c": "R", "score": 0.5} for _ in range(20)]
-        good = CalibrationDimension("genre", {"thriller": 1.0}, lambda i: i["g"], 1.0, 200)
-        thin = CalibrationDimension("certificate", {"G": 1.0}, lambda i: [i["c"]], 1.0, 2)
+        # Both multi-category, so only the SAMPLE SIZE differs between
+        # them - otherwise the degenerate-target check would reject both.
+        good = CalibrationDimension("genre", {"thriller": 0.9, "family": 0.1}, lambda i: i["g"], 1.0, 200)
+        thin = CalibrationDimension("certificate", {"G": 0.9, "R": 0.1}, lambda i: [i["c"]], 1.0, 2)
         sel = calibrate_multi(items, 10, lambda i: i["score"], [good, thin], 0.5)
         # Genre (trusted, wants thriller) must win; certificate (2 samples,
         # wants G) must be ignored entirely.
