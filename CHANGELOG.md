@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.14.2] - 2026-08-03
+
+### Fixed
+
+- **2.13.2's minimum-sample guard was set too high and regressed a real profile.** The threshold of 25 was derived entirely from TV data (samples of 2 to 17) and never checked against the movie case it would also govern. A user with **21** certificate samples had their certificate dimension silently dropped, leaving only genre calibration - which does not track audience at all - and their collection went from **14% to 22% G/PG against a 9% profile**.
+
+  Lowered to **10**. 21 noisy samples across ~5 certificate buckets is plainly better than calibrating on an attribute that cannot express audience; two samples is not. Re-measured after the change: that user's PG share is **12.0% against a 9.1% profile**, PG-13 62.0% against 63.6%, R 26.0% against 27.3%, with no G at all. All six configured users now sit between 0.95x and 1.32x of their own viewing rate.
+
+- **A degenerate single-category target is now rejected regardless of sample count.** This is the failure the original guard was really aimed at - a user whose two watched shows were both TV-G would have had their entire collection driven to 100% TV-G - and it is ruinous at *any* sample size, so a count threshold was the wrong instrument for it. Checked independently via `CALIBRATION_MIN_TARGET_CATEGORIES`.
+
+- **The calibration report printed dimensions that were never applied.** When the guard dropped the certificate dimension, the run still emitted its profile-vs-collection rows, so a genre-only run was indistinguishable from a genre+certificate one in the logs - the same "looks like success" failure the guard exists to prevent, reintroduced by the guard itself. Only dimensions that actually ran are reported now.
+
 ## [2.14.1] - 2026-08-03
 
 ### Fixed

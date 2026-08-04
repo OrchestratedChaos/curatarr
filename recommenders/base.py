@@ -1452,13 +1452,22 @@ class BaseRecommender(ABC):
             calibration_strength=self.calibration_strength,
         )
 
-        if selected:
-            dims = "+".join(d.name for d in dimensions)
+        # Report ONLY the dimensions that were actually applied. Printing a
+        # dimension that calibrate_multi() dropped made a genre-only run
+        # look like a genre+certificate one - the same "looks like
+        # success" failure this guard exists to prevent, reintroduced by
+        # the guard itself.
+        applied = [d for d in dimensions if is_sufficiently_sampled(d)]
+        applied_names = {d.name for d in applied}
+
+        if selected and applied:
+            dims = "+".join(d.name for d in applied)
             strength = self.calibration_strength
             print(f"{GREEN}Calibrated collection to profile {dims} mix (strength {strength:.2f}){RESET}")
-            for genre, target, actual in calibration_report(target_distribution, [_genres(e) for e in selected]):
-                print(f"  {genre:<20} profile {target * 100:5.1f}%  ->  collection {actual * 100:5.1f}%")
-            if cert_target:
+            if "genre" in applied_names:
+                for genre, target, actual in calibration_report(target_distribution, [_genres(e) for e in selected]):
+                    print(f"  {genre:<20} profile {target * 100:5.1f}%  ->  collection {actual * 100:5.1f}%")
+            if "certificate" in applied_names:
                 for cert, target, actual in calibration_report(cert_target, [_certificate(e) for e in selected]):
                     print(f"  [{cert:<18}] profile {target * 100:5.1f}%  ->  collection {actual * 100:5.1f}%")
 

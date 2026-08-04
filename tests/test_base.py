@@ -2646,9 +2646,11 @@ class TestCalibrationCannotActGuard:
         recommender = _make_recommender()
         recommender.calibration_strength = strength
         recommender.min_similarity = 0.10
-        recommender.watched_data_counters = {"genres": {"thriller": 50.0}}
-        # Well-sampled on purpose: this class tests the candidates-vs-slots
-        # guard, not the profile-sample guard.
+        # Multi-category and well-sampled on purpose: this class tests the
+        # candidates-vs-slots guard, not the profile-sample or
+        # degenerate-target guards, both of which would otherwise skip
+        # calibration before it is reached.
+        recommender.watched_data_counters = {"genres": {"thriller": 50.0, "drama": 30.0}}
         recommender.watched_ids = set(range(9000, 9200))
         media_cache = Mock()
         media_cache.cache = {"movies": {str(i): {"genres": ["thriller"]} for i in range(n_candidates)}}
