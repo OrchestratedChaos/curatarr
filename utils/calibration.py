@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Se
 
 from utils.config import (
     CALIBRATION_DIVERGENCE_SCALE,
+    CALIBRATION_MIN_PROFILE_SAMPLE,
     CALIBRATION_SMOOTHING_ALPHA,
     DEFAULT_CALIBRATION_STRENGTH,
 )
@@ -250,7 +251,8 @@ def calibrate_multi(
     "what it's about" and "who it's for" are both held to the profile.
 
     Args:
-        candidates: Items to select from, best-first.
+        candidates: Items to select from. Ordering is not relied upon -
+            every early-return path re-sorts by score.
         limit: Maximum number of items to return.
         get_score: Extract an item's similarity score.
         dimensions: The attributes to calibrate against.
@@ -263,9 +265,14 @@ def calibrate_multi(
         return []
     ordered = list(candidates)
 
-    active = [d for d in dimensions if d.target and d.weight > 0]
+    active = [d for d in dimensions if d.target and d.weight > 0 and is_sufficiently_sampled(d)]
     if not active or calibration_strength <= 0 or len(ordered) <= limit:
-        return ordered[:limit]
+        # Sort defensively rather than trusting the caller's ordering.
+        # Every fallback here means "no calibration, rank by score", and
+        # a caller that passed candidates in some other order would
+        # otherwise silently get that order back as if it were a ranking -
+        # a failure that looks exactly like success.
+        return sorted(ordered, key=get_score, reverse=True)[:limit]
 
     selected: List[T] = []
     selected_values: List[List[Sequence[str]]] = [[] for _ in active]
@@ -310,6 +317,29 @@ class CalibrationDimension(NamedTuple):
     target: Dict[str, float]
     get_values: Callable[[Any], Sequence[str]]
     weight: float = 1.0
+    # How many profile items this target was derived from. None means
+    # "not stated, do not check" (kept so existing callers and tests are
+    # unaffected); an int is enforced against
+    # CALIBRATION_MIN_PROFILE_SAMPLE. See is_sufficiently_sampled.
+    sample_size: Optional[int] = None
+
+
+def is_sufficiently_sampled(
+    dimension: "CalibrationDimension",
+    minimum: int = CALIBRATION_MIN_PROFILE_SAMPLE,
+) -> bool:
+    """
+    Is this dimension's target built from enough of a profile to trust?
+
+    Calibration reproduces its target faithfully, so an under-sampled
+    target is not a weak signal - it is a confident wrong one. A profile
+    of two watched titles yields a target that would drag an entire
+    collection onto those two titles' attributes.
+
+    A dimension that does not state its sample size is assumed fine, so
+    that callers predating this check are unaffected.
+    """
+    return dimension.sample_size is None or dimension.sample_size >= minimum
 
 
 def build_certificate_distribution(content_ratings: Iterable[Optional[str]]) -> Dict[str, float]:

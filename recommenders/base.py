@@ -26,6 +26,7 @@ from utils import (
     CACHE_VERSION,
     CALIBRATION_CERTIFICATE_WEIGHT,
     CALIBRATION_GENRE_WEIGHT,
+    CALIBRATION_MIN_PROFILE_SAMPLE,
     CANDIDATE_BUFFER_MULTIPLIER,
     CYAN,
     DEFAULT_MOVIE_NAME_TEMPLATE,
@@ -91,6 +92,7 @@ from utils import (
     get_tmdb_keywords,
     init_plex,
     is_rating_allowed,
+    is_sufficiently_sampled,
     load_config,
     load_media_cache,
     log_error,
@@ -1386,22 +1388,44 @@ class BaseRecommender(ABC):
             # build_certificate_distribution.
             return [str(cert).strip()] if cert else []
 
+        # Sample sizes gate each dimension: calibration reproduces its
+        # target faithfully, so a target derived from a handful of titles
+        # is a confidently WRONG target, not a weak one. Measured: a user
+        # with two watched shows (both TV-G) would have had their whole
+        # collection driven to ~100% TV-G.
+        genre_sample = len(self.watched_ids)
         dimensions = [
-            CalibrationDimension("genre", target_distribution, _genres, CALIBRATION_GENRE_WEIGHT),
+            CalibrationDimension("genre", target_distribution, _genres, CALIBRATION_GENRE_WEIGHT, genre_sample),
         ]
 
         # Certificate dimension: what the profile is rated, not just what
         # it is about. Built from the watched items' own certificates
         # rather than a profile counter, since nothing tracks them there.
-        cert_target = build_certificate_distribution(
-            (media_items.get(str(rk)) or {}).get("content_rating") for rk in self.watched_ids
-        )
+        watched_certs = [(media_items.get(str(rk)) or {}).get("content_rating") for rk in self.watched_ids]
+        cert_target = build_certificate_distribution(watched_certs)
+        cert_sample = sum(1 for c in watched_certs if c)
         if cert_target:
             dimensions.append(
-                CalibrationDimension("certificate", cert_target, _certificate, CALIBRATION_CERTIFICATE_WEIGHT)
+                CalibrationDimension(
+                    "certificate", cert_target, _certificate, CALIBRATION_CERTIFICATE_WEIGHT, cert_sample
+                )
             )
         else:
             logger.debug("No certificates on watched items - calibrating on genre alone")
+
+        skipped = [d for d in dimensions if not is_sufficiently_sampled(d)]
+        for d in skipped:
+            log_warning(
+                f"Not calibrating on {d.name}: its target comes from only {d.sample_size} watched "
+                f"{self.media_key} (minimum {CALIBRATION_MIN_PROFILE_SAMPLE}). Calibrating to a target "
+                f"that thin would pull the collection toward a handful of titles rather than a taste."
+            )
+        if len(skipped) == len(dimensions):
+            log_warning(
+                "Skipping calibration entirely for this profile - ranking by similarity instead. "
+                "It needs more watch history before its distribution means anything."
+            )
+            return sorted_candidates[:target_count]
 
         # Calibration works by CHOOSING. Handed no more candidates than
         # slots it returns them unchanged, which looks identical to

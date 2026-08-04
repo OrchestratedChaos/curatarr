@@ -2575,6 +2575,10 @@ class TestSelectCalibrated:
         recommender = _make_recommender()
         recommender.calibration_strength = strength
         recommender.watched_data_counters = {"genres": profile_genres}
+        # Enough watched items for the target to clear
+        # CALIBRATION_MIN_PROFILE_SAMPLE - calibration refuses a target
+        # derived from a handful of titles (see TestMinimumProfileSample).
+        recommender.watched_ids = set(range(9000, 9200))
         media_cache = Mock()
         media_cache.cache = {"movies": {str(k): {"genres": v} for k, v in genre_map.items()}}
         recommender._get_media_cache = Mock(return_value=media_cache)
@@ -2643,7 +2647,9 @@ class TestCalibrationCannotActGuard:
         recommender.calibration_strength = strength
         recommender.min_similarity = 0.10
         recommender.watched_data_counters = {"genres": {"thriller": 50.0}}
-        recommender.watched_ids = set()
+        # Well-sampled on purpose: this class tests the candidates-vs-slots
+        # guard, not the profile-sample guard.
+        recommender.watched_ids = set(range(9000, 9200))
         media_cache = Mock()
         media_cache.cache = {"movies": {str(i): {"genres": ["thriller"]} for i in range(n_candidates)}}
         recommender._get_media_cache = Mock(return_value=media_cache)

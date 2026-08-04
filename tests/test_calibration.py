@@ -14,11 +14,12 @@ from utils.calibration import (
     calibrate_multi,
     calibrate_recommendations,
     calibration_report,
+    is_sufficiently_sampled,
     item_genre_distribution,
     kl_divergence,
     list_distribution,
 )
-from utils.config import CALIBRATION_SMOOTHING_ALPHA
+from utils.config import CALIBRATION_MIN_PROFILE_SAMPLE, CALIBRATION_SMOOTHING_ALPHA
 
 
 def _item(title, genres, score):
@@ -388,3 +389,65 @@ class TestCalibrateMulti:
         items += [self._item(f"r{i}", ["x"], "R", 0.4) for i in range(10)]
         sel = self._run(items, 5, self._dims({"x": 1.0}, {"R": 1.0}), 0.5)
         assert len(sel) == 5
+
+
+class TestMinimumProfileSample:
+    """
+    Calibration must refuse a target it cannot trust.
+
+    It reproduces its target faithfully, so an under-sampled target is a
+    confidently WRONG one, not a weak one. Measured on a real server: one
+    user had two watched shows, both TV-G. Calibrating that profile would
+    have driven their entire collection to ~100% TV-G off a two-item
+    sample. The profiles where calibration demonstrably works range from
+    47 to 239 watched titles.
+    """
+
+    @staticmethod
+    def _dim(sample):
+        return CalibrationDimension("genre", {"a": 1.0}, lambda i: i["genres"], 1.0, sample)
+
+    def test_unstated_sample_is_allowed(self):
+        """Callers predating the check must be unaffected."""
+        assert is_sufficiently_sampled(CalibrationDimension("g", {"a": 1.0}, lambda i: []))
+
+    def test_tiny_sample_is_rejected(self):
+        assert not is_sufficiently_sampled(self._dim(2))
+
+    def test_boundary_is_inclusive(self):
+        assert is_sufficiently_sampled(self._dim(CALIBRATION_MIN_PROFILE_SAMPLE))
+        assert not is_sufficiently_sampled(self._dim(CALIBRATION_MIN_PROFILE_SAMPLE - 1))
+
+    def test_ample_sample_is_allowed(self):
+        assert is_sufficiently_sampled(self._dim(239))
+
+    def test_undersampled_dimension_does_not_steer_selection(self):
+        """
+        The real hazard: a 2-item target that would otherwise be obeyed.
+        With the guard, selection falls back to score order.
+        """
+        items = [{"title": f"kid{i}", "genres": ["family"], "score": 0.4} for i in range(20)]
+        items += [{"title": f"adult{i}", "genres": ["thriller"], "score": 0.9} for i in range(20)]
+        # A target insisting the collection be all-family, from 2 samples.
+        thin = CalibrationDimension("genre", {"family": 1.0}, lambda i: i["genres"], 1.0, 2)
+        sel = calibrate_multi(items, 10, lambda i: i["score"], [thin], 0.5)
+        assert all(i["genres"] == ["thriller"] for i in sel), "an untrustworthy target steered the collection"
+
+    def test_well_sampled_dimension_still_steers(self):
+        """The guard must not disable calibration for real profiles."""
+        items = [{"title": f"kid{i}", "genres": ["family"], "score": 0.9} for i in range(20)]
+        items += [{"title": f"adult{i}", "genres": ["thriller"], "score": 0.4} for i in range(20)]
+        good = CalibrationDimension("genre", {"thriller": 0.95, "family": 0.05}, lambda i: i["genres"], 1.0, 200)
+        sel = calibrate_multi(items, 10, lambda i: i["score"], [good], 0.5)
+        family = sum(1 for i in sel if i["genres"] == ["family"])
+        assert family < 10, "a well-sampled target was ignored"
+
+    def test_mixed_sampling_keeps_only_the_trustworthy_dimension(self):
+        items = [{"g": ["family"], "c": "G", "score": 0.5} for _ in range(20)]
+        items += [{"g": ["thriller"], "c": "R", "score": 0.5} for _ in range(20)]
+        good = CalibrationDimension("genre", {"thriller": 1.0}, lambda i: i["g"], 1.0, 200)
+        thin = CalibrationDimension("certificate", {"G": 1.0}, lambda i: [i["c"]], 1.0, 2)
+        sel = calibrate_multi(items, 10, lambda i: i["score"], [good, thin], 0.5)
+        # Genre (trusted, wants thriller) must win; certificate (2 samples,
+        # wants G) must be ignored entirely.
+        assert sum(1 for i in sel if i["g"] == ["thriller"]) > 5
