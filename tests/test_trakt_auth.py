@@ -1,8 +1,10 @@
 """Tests for utils/trakt_auth.py"""
 
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 from unittest.mock import Mock, patch
 
@@ -494,7 +496,7 @@ class TestTraktAuthStdoutNotBuffered:
     never a pty - while a real child process is still genuinely
     blocked, to mean anything. That distinction is the entire bug."""
 
-    def _write_fake_auth_script(self, tmp_path, poll_sleep_seconds: float) -> str:
+    def _write_fake_auth_script(self, tmp_path, poll_sleep_seconds: float = 0.0, release_file: str = "") -> str:
         """A standalone script (never imports pytest) that runs the
         real utils.trakt_auth.main() against a fake TraktClient - no
         real Trakt device code is ever requested/consumed, no
@@ -537,7 +539,22 @@ class FakeTraktClient:
         }}
 
     def poll_for_token(self, device_code, interval, expires_in, on_wait=None):
-        time.sleep({poll_sleep_seconds!r})
+        release_file = {release_file!r}
+        if not release_file:
+            time.sleep({poll_sleep_seconds!r})
+            return True
+        # Block until the PARENT says so, rather than for a fixed
+        # duration. The assertion this supports is "the device code
+        # reached the pipe while we were still blocked here" - tying that
+        # to a wall clock made it a race against this process's own
+        # interpreter startup and imports (requests/yaml/plexapi/
+        # cryptography), which under full-suite load can exceed any
+        # sleep short enough to keep the test quick.
+        deadline = time.monotonic() + 120
+        while not os.path.exists(release_file):
+            if time.monotonic() > deadline:
+                raise SystemExit("fake poll_for_token was never released by the test")
+            time.sleep(0.02)
         return True
 
     def get_username(self):
@@ -552,13 +569,23 @@ trakt_auth.main([])
         return str(script_path)
 
     def test_device_code_visible_before_poll_completes_when_not_a_tty(self, tmp_path):
-        # Generous relative to interpreter startup/import overhead
-        # (utils.trakt_auth transitively imports requests/yaml/etc) so
-        # this isn't flaky on a slow/cold CI runner - the deadline below
-        # is a fraction of this, still comfortably before the fake
-        # poll's sleep completes.
-        poll_sleep_seconds = 6.0
-        script = self._write_fake_auth_script(tmp_path, poll_sleep_seconds)
+        """
+        The device code must reach a non-TTY pipe WHILE the process is
+        still blocked polling - that is the entire bug.
+
+        Deliberately not timed against a wall clock. The child has to
+        start an interpreter and import utils.trakt_auth (transitively
+        requests/yaml/plexapi/cryptography) before it prints anything,
+        and under full-suite load that startup alone can outlast any
+        sleep short enough to keep this test quick - which made an
+        earlier version of this test fail spuriously while the code under
+        test was fine. The fake poll now blocks until this test releases
+        it, so "still blocked" is guaranteed rather than raced for, and
+        the only timeout left is a generous backstop against a genuine
+        regression (no output at all).
+        """
+        release_file = tmp_path / "release-poll"
+        script = self._write_fake_auth_script(tmp_path, release_file=str(release_file))
 
         # stdout=subprocess.PIPE is a real OS pipe, never a pty/tty -
         # exactly the "no TTY" condition `ssh host "cmd" > log` (no -t)
@@ -570,33 +597,54 @@ trakt_auth.main([])
             text=True,
             bufsize=1,
         )
+
+        # Read on a thread so a child that prints NOTHING (the regression)
+        # fails on the backstop instead of blocking this test forever in
+        # readline().
+        lines: "queue.Queue[str]" = queue.Queue()
+
+        def _pump():
+            try:
+                for line in proc.stdout:
+                    lines.put(line)
+            finally:
+                lines.put("")  # EOF sentinel
+
+        reader = threading.Thread(target=_pump, daemon=True)
+        reader.start()
+
         collected = []
         try:
-            deadline = time.monotonic() + (poll_sleep_seconds * 0.7)
+            deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
-                line = proc.stdout.readline()
-                if line:
-                    collected.append(line)
-                    if "FAKE-CODE" in line:
-                        break
-                else:
-                    time.sleep(0.02)
+                try:
+                    line = lines.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if line == "":
+                    break  # child exited without ever printing the code
+                collected.append(line)
+                if "FAKE-CODE" in line:
+                    break
 
             output_so_far = "".join(collected)
             assert "FAKE-CODE" in output_so_far, (
-                "device code never appeared on the (non-TTY) pipe before the "
-                f"fake poll_for_token wait finished - got: {output_so_far!r}"
+                "device code never appeared on the (non-TTY) pipe while "
+                f"poll_for_token was still blocked - got: {output_so_far!r}"
             )
             assert "https://trakt.tv/activate" in output_so_far
 
-            # The fake poll_for_token is still sleeping at this point
-            # (deadline is 80% of its sleep duration) - the process
-            # must still be alive, i.e. this really was observed WHILE
-            # blocked, not after it already exited.
+            # Guaranteed, not raced: the fake poll cannot return until the
+            # release file below exists, so observing the code above
+            # necessarily happened WHILE the child was blocked.
             assert proc.poll() is None, "process should still be blocked in poll_for_token at this point"
         finally:
-            proc.kill()
-            proc.wait(timeout=10)
+            release_file.write_text("go", encoding="utf-8")
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
 
     def test_tty_path_still_works(self, tmp_path):
         """Sanity check for the other half of the verification ask:
