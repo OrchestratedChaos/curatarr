@@ -25,6 +25,9 @@ from flask import jsonify, redirect, render_template, request, url_for
 from ruamel.yaml.comments import CommentedMap
 
 from .config_io import (
+    MINIMUM_AVAILABILITY_CHOICES,
+    MONITOR_OPTION_CHOICES,
+    SERIES_TYPE_CHOICES,
     USER_MODE_CHOICES,
     commit_modules,
     ensure_section,
@@ -236,6 +239,17 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
             "auto_sync": pick("sonarr", "auto_sync", bool(sonarr.get("auto_sync", False))),
             "user_mode": pick("sonarr", "user_mode", sonarr.get("user_mode", "mapping")),
             "plex_users": pick("sonarr", "plex_users", format_csv_list(sonarr.get("plex_users"))),
+            # Global defaults (#339) - a library's own arr: block overrides
+            # these per field; anything it omits falls back to here.
+            "root_folder": pick("sonarr", "root_folder", sonarr.get("root_folder", "")),
+            "quality_profile": pick("sonarr", "quality_profile", sonarr.get("quality_profile", "")),
+            "tag": pick("sonarr", "tag", sonarr.get("tag", "")),
+            "append_usernames": pick("sonarr", "append_usernames", bool(sonarr.get("append_usernames", False))),
+            "series_type": pick("sonarr", "series_type", sonarr.get("series_type", "standard")),
+            "season_folder": pick("sonarr", "season_folder", bool(sonarr.get("season_folder", True))),
+            "monitor": pick("sonarr", "monitor", bool(sonarr.get("monitor", False))),
+            "monitor_option": pick("sonarr", "monitor_option", sonarr.get("monitor_option", "none")),
+            "search_missing": pick("sonarr", "search_missing", bool(sonarr.get("search_missing", False))),
         },
         "radarr": {
             "enabled": pick("radarr", "enabled", bool(radarr.get("enabled", False))),
@@ -250,6 +264,16 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
             "auto_sync": pick("radarr", "auto_sync", bool(radarr.get("auto_sync", False))),
             "user_mode": pick("radarr", "user_mode", radarr.get("user_mode", "mapping")),
             "plex_users": pick("radarr", "plex_users", format_csv_list(radarr.get("plex_users"))),
+            # Global defaults (#339) - see the sonarr block above.
+            "root_folder": pick("radarr", "root_folder", radarr.get("root_folder", "")),
+            "quality_profile": pick("radarr", "quality_profile", radarr.get("quality_profile", "")),
+            "tag": pick("radarr", "tag", radarr.get("tag", "")),
+            "append_usernames": pick("radarr", "append_usernames", bool(radarr.get("append_usernames", False))),
+            "minimum_availability": pick(
+                "radarr", "minimum_availability", radarr.get("minimum_availability", "released")
+            ),
+            "monitor": pick("radarr", "monitor", bool(radarr.get("monitor", False))),
+            "search_for_movie": pick("radarr", "search_for_movie", bool(radarr.get("search_for_movie", False))),
         },
         "trakt": {
             "enabled": pick("trakt", "enabled", bool(trakt.get("enabled", False))),
@@ -281,6 +305,9 @@ def _connections_view(data: Dict[str, CommentedMap], overrides: Optional[Dict] =
             "frozen": getattr(sys, "frozen", False),
         },
         "user_mode_choices": USER_MODE_CHOICES,
+        "series_type_choices": SERIES_TYPE_CHOICES,
+        "monitor_option_choices": MONITOR_OPTION_CHOICES,
+        "minimum_availability_choices": MINIMUM_AVAILABILITY_CHOICES,
     }
 
 
@@ -314,6 +341,25 @@ def _parse_connections_form(form, errors: Dict[str, str]) -> Dict:
     radarr_user_mode = form.get("radarr_user_mode", "mapping")
     validate_choice(radarr_user_mode, "radarr_user_mode", errors, USER_MODE_CHOICES)
 
+    # Global *arr defaults (#339). Validated as choices rather than free
+    # text so an invalid value is rejected here instead of being written
+    # and then failing mid-sync against a real Sonarr/Radarr.
+    # Presence, not value. A form that never rendered these fields (an
+    # older template, a scripted POST) must not blank a stored
+    # root_folder/quality_profile - writing "" over a real path is silent
+    # data loss, which the round-trip test caught.
+    sonarr_has_defaults = "sonarr_root_folder" in form
+    radarr_has_defaults = "radarr_root_folder" in form
+
+    sonarr_series_type = form.get("sonarr_series_type", "standard")
+    validate_choice(sonarr_series_type, "sonarr_series_type", errors, SERIES_TYPE_CHOICES)
+    sonarr_monitor_option = form.get("sonarr_monitor_option", "none")
+    validate_choice(sonarr_monitor_option, "sonarr_monitor_option", errors, MONITOR_OPTION_CHOICES)
+    radarr_minimum_availability = form.get("radarr_minimum_availability", "released")
+    validate_choice(
+        radarr_minimum_availability, "radarr_minimum_availability", errors, MINIMUM_AVAILABILITY_CHOICES
+    )
+
     trakt_enabled = flag("trakt_enabled")
     trakt_client_id = form.get("trakt_client_id", "").strip()
     if trakt_enabled:
@@ -341,6 +387,16 @@ def _parse_connections_form(form, errors: Dict[str, str]) -> Dict:
             "auto_sync": flag("sonarr_auto_sync"),
             "user_mode": sonarr_user_mode,
             "plex_users": format_csv_list(parse_csv_list(form.get("sonarr_plex_users", ""))),
+            "has_defaults": sonarr_has_defaults,
+            "root_folder": form.get("sonarr_root_folder", "").strip(),
+            "quality_profile": form.get("sonarr_quality_profile", "").strip(),
+            "tag": form.get("sonarr_tag", "").strip(),
+            "append_usernames": flag("sonarr_append_usernames"),
+            "series_type": sonarr_series_type,
+            "season_folder": flag("sonarr_season_folder"),
+            "monitor": flag("sonarr_monitor"),
+            "monitor_option": sonarr_monitor_option,
+            "search_missing": flag("sonarr_search_missing"),
         },
         "radarr": {
             "enabled": radarr_enabled,
@@ -349,6 +405,14 @@ def _parse_connections_form(form, errors: Dict[str, str]) -> Dict:
             "auto_sync": flag("radarr_auto_sync"),
             "user_mode": radarr_user_mode,
             "plex_users": format_csv_list(parse_csv_list(form.get("radarr_plex_users", ""))),
+            "has_defaults": radarr_has_defaults,
+            "root_folder": form.get("radarr_root_folder", "").strip(),
+            "quality_profile": form.get("radarr_quality_profile", "").strip(),
+            "tag": form.get("radarr_tag", "").strip(),
+            "append_usernames": flag("radarr_append_usernames"),
+            "minimum_availability": radarr_minimum_availability,
+            "monitor": flag("radarr_monitor"),
+            "search_for_movie": flag("radarr_search_for_movie"),
         },
         "trakt": {
             "enabled": trakt_enabled,
@@ -389,6 +453,19 @@ def _apply_connections(project_root: str, data: Dict[str, CommentedMap], parsed:
     sonarr["auto_sync"] = parsed["sonarr"]["auto_sync"]
     sonarr["user_mode"] = parsed["sonarr"]["user_mode"]
     sonarr["plex_users"] = parse_csv_list(parsed["sonarr"]["plex_users"])
+    if parsed["sonarr"].get("has_defaults"):
+        for key in (
+            "root_folder",
+            "quality_profile",
+            "tag",
+            "append_usernames",
+            "series_type",
+            "season_folder",
+            "monitor",
+            "monitor_option",
+            "search_missing",
+        ):
+            sonarr[key] = parsed["sonarr"][key]
 
     radarr = data["radarr"]
     radarr["enabled"] = parsed["radarr"]["enabled"]
@@ -397,6 +474,17 @@ def _apply_connections(project_root: str, data: Dict[str, CommentedMap], parsed:
     radarr["auto_sync"] = parsed["radarr"]["auto_sync"]
     radarr["user_mode"] = parsed["radarr"]["user_mode"]
     radarr["plex_users"] = parse_csv_list(parsed["radarr"]["plex_users"])
+    if parsed["radarr"].get("has_defaults"):
+        for key in (
+            "root_folder",
+            "quality_profile",
+            "tag",
+            "append_usernames",
+            "minimum_availability",
+            "monitor",
+            "search_for_movie",
+        ):
+            radarr[key] = parsed["radarr"][key]
 
     trakt = data["trakt"]
     trakt["enabled"] = parsed["trakt"]["enabled"]

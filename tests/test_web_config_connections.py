@@ -443,3 +443,122 @@ class TestConnectionsTestEndpoint:
         # absent (empty) after a failed one.
         sonarr = _read_yaml(root, "sonarr")
         assert sonarr == {}
+
+
+class TestArrGlobalDefaults:
+    """
+    #339: sonarr.yml/radarr.yml global defaults (root_folder,
+    quality_profile, tag, monitor...) were only editable by hand - the
+    Connections screen exposed connection and sync-policy fields only.
+    These are the values every library that does not override them
+    inherits, so being unable to set them made the *arr integration
+    unusable from the UI.
+    """
+
+    def test_saves_sonarr_defaults(self, client):
+        c, _app, root = client
+        form = dict(VALID_FORM)
+        form.update(
+            {
+                "sonarr_root_folder": "/data/tv",
+                "sonarr_quality_profile": "HD-1080p",
+                "sonarr_tag": "Curatarr",
+                "sonarr_series_type": "anime",
+                "sonarr_season_folder": "on",
+                "sonarr_monitor": "on",
+                "sonarr_monitor_option": "future",
+                "sonarr_search_missing": "on",
+            }
+        )
+        assert c.post("/config/connections", data=form).status_code == 303
+
+        sonarr = _read_yaml(root, "sonarr")
+        assert sonarr["root_folder"] == "/data/tv"
+        assert sonarr["quality_profile"] == "HD-1080p"
+        assert sonarr["tag"] == "Curatarr"
+        assert sonarr["series_type"] == "anime"
+        assert sonarr["season_folder"] is True
+        assert sonarr["monitor"] is True
+        assert sonarr["monitor_option"] == "future"
+        assert sonarr["search_missing"] is True
+
+    def test_saves_radarr_defaults(self, client):
+        c, _app, root = client
+        form = dict(VALID_FORM)
+        form.update(
+            {
+                "radarr_root_folder": "/data/movies",
+                "radarr_quality_profile": "Ultra-HD",
+                "radarr_tag": "Curatarr",
+                "radarr_minimum_availability": "inCinemas",
+                "radarr_monitor": "on",
+            }
+        )
+        assert c.post("/config/connections", data=form).status_code == 303
+
+        radarr = _read_yaml(root, "radarr")
+        assert radarr["root_folder"] == "/data/movies"
+        assert radarr["quality_profile"] == "Ultra-HD"
+        assert radarr["minimum_availability"] == "inCinemas"
+        assert radarr["monitor"] is True
+        assert radarr["search_for_movie"] is False  # unchecked box
+
+    def test_a_form_without_these_fields_does_not_blank_stored_values(self, client):
+        """
+        The data-loss case, caught by the round-trip test while building
+        this. An older template or a scripted POST that omits the
+        defaults must leave them alone rather than writing "" over a real
+        root_folder.
+        """
+        c, _app, root = client
+        seeded = dict(VALID_FORM)
+        seeded.update({"sonarr_root_folder": "/data/tv", "sonarr_quality_profile": "HD-1080p"})
+        c.post("/config/connections", data=seeded)
+        assert _read_yaml(root, "sonarr")["root_folder"] == "/data/tv"
+
+        # VALID_FORM carries no *_root_folder key at all.
+        c.post("/config/connections", data=VALID_FORM)
+        assert _read_yaml(root, "sonarr")["root_folder"] == "/data/tv", "stored root_folder was blanked"
+
+    def test_blank_submitted_value_does_clear_it(self, client):
+        """Presence gates the write; an explicitly emptied box still clears."""
+        c, _app, root = client
+        seeded = dict(VALID_FORM)
+        seeded.update({"sonarr_root_folder": "/data/tv"})
+        c.post("/config/connections", data=seeded)
+
+        cleared = dict(VALID_FORM)
+        cleared.update({"sonarr_root_folder": ""})
+        c.post("/config/connections", data=cleared)
+        assert _read_yaml(root, "sonarr")["root_folder"] == ""
+
+    def test_invalid_choice_is_rejected_not_written(self, client):
+        """An invalid series_type would fail mid-sync against a real
+        Sonarr; reject it at the form instead."""
+        c, _app, root = client
+        form = dict(VALID_FORM)
+        form.update({"sonarr_root_folder": "/data/tv", "sonarr_series_type": "not-a-type"})
+        resp = c.post("/config/connections", data=form)
+        # 400 + re-render, matching this screen's existing convention for
+        # an invalid choice (see test_invalid_user_mode_rejected).
+        assert resp.status_code == 400
+        assert _read_yaml(root, "sonarr").get("series_type") != "not-a-type"
+
+    def test_invalid_minimum_availability_is_rejected(self, client):
+        c, _app, root = client
+        form = dict(VALID_FORM)
+        form.update({"radarr_root_folder": "/data/movies", "radarr_minimum_availability": "whenever"})
+        assert c.post("/config/connections", data=form).status_code == 400
+        assert _read_yaml(root, "radarr").get("minimum_availability") != "whenever"
+
+    def test_defaults_are_rendered_on_the_page(self, client):
+        c, _app, _root = client
+        body = c.get("/config/connections").get_data(as_text=True)
+        for field in (
+            "sonarr_root_folder",
+            "sonarr_quality_profile",
+            "sonarr_monitor_option",
+            "radarr_root_folder",
+            "radarr_minimum_availability",
+        ):
+            assert field in body, f"{field} missing from the Connections page"

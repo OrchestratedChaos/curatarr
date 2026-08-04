@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.15.0] - 2026-08-04
+
+### Added
+
+- **Sonarr and Radarr global defaults are now editable in the web UI (#339).** The Connections screen exposed only connection and sync-policy fields (`enabled`/`url`/`api_key`/`auto_sync`/`user_mode`/`plex_users`), so `root_folder`, `quality_profile`, `tag`, `monitor` and the rest could only be set by hand-editing `sonarr.yml`/`radarr.yml`. Those are the values every library inherits unless it overrides them individually - and per-library `arr` overrides were already editable on the Libraries screen - so the global layer was the one piece of the *arr integration with no UI at all.
+
+  Sonarr gains root folder, quality profile, tag, append-usernames, series type, season folders, monitor, monitor option and search-missing. Radarr gains root folder, quality profile, tag, append-usernames, minimum availability, monitor and search-for-movie.
+
+  `series_type`, `monitor_option` and `minimum_availability` are validated as choice sets rather than free text, so an invalid value is rejected at the form instead of being written and then failing mid-sync against a real Sonarr/Radarr.
+
+  **Writes are gated on the field actually being present in the submission.** A form that never rendered these fields - an older template, a scripted POST - leaves the stored values alone rather than writing `""` over a real root folder. An explicitly emptied box still clears the value. This was not hypothetical: the first implementation blanked a stored `root_folder`, which the existing YAML round-trip test caught before it could ship.
+
 ## [2.14.2] - 2026-08-03
 
 ### Fixed
