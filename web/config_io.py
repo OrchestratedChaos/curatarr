@@ -40,6 +40,26 @@ logger = logging.getLogger("curatarr")
 # calls read from.
 USER_MODE_CHOICES = ("mapping", "per_user", "combined")
 
+# Global *arr defaults (#339). These live in sonarr.yml/radarr.yml and are
+# what a library's own `arr:` block overrides field by field - so the
+# global value is what applies to every library that does not override it,
+# which until now could only be edited by hand. Choice sets mirror what
+# Sonarr/Radarr themselves accept; anything outside them is rejected at
+# validation rather than written and later failing mid-sync.
+SERIES_TYPE_CHOICES = ("standard", "daily", "anime")
+MONITOR_OPTION_CHOICES = (
+    "none",
+    "all",
+    "future",
+    "missing",
+    "existing",
+    "pilot",
+    "firstSeason",
+    "lastSeason",
+    "latestSeason",
+)
+MINIMUM_AVAILABILITY_CHOICES = ("announced", "inCinemas", "released", "preDB")
+
 # Matches the plain-yaml.dump() formatting the rest of the codebase
 # already produces (utils/migrate_config.py, config.example.yml, etc.):
 # list items at the same column as their parent key, not indented an

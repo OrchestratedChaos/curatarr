@@ -86,6 +86,42 @@
     <label>Plex users to sync (comma-separated)
       <input type="text" name="sonarr_plex_users" value="{{ sonarr.plex_users }}">
     </label>
+
+    <p class="muted">Defaults for added shows. A library with its own <code>arr</code> block on the
+      Libraries screen overrides these field by field; anything it leaves blank falls back here.</p>
+    <label>Root folder
+      <input type="text" name="sonarr_root_folder" value="{{ sonarr.root_folder }}" placeholder="/path/to/tv">
+    </label>
+    <label>Quality profile
+      <input type="text" name="sonarr_quality_profile" value="{{ sonarr.quality_profile }}" placeholder="HD-1080p">
+    </label>
+    <label>Tag
+      <input type="text" name="sonarr_tag" value="{{ sonarr.tag }}" placeholder="Curatarr">
+    </label>
+    <label><input type="checkbox" name="sonarr_append_usernames" {% if sonarr.append_usernames %}checked{% endif %}>
+      Append username to tag (e.g. Curatarr-Jason)</label>
+    <label>Series type
+      <select name="sonarr_series_type">
+        {% for choice in series_type_choices %}
+        <option value="{{ choice }}" {% if sonarr.series_type == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {{ field_error(errors, 'sonarr_series_type') }}
+    <label><input type="checkbox" name="sonarr_season_folder" {% if sonarr.season_folder %}checked{% endif %}>
+      Use season folders</label>
+    <label><input type="checkbox" name="sonarr_monitor" {% if sonarr.monitor %}checked{% endif %}>
+      Monitor added shows</label>
+    <label>Monitor option
+      <select name="sonarr_monitor_option">
+        {% for choice in monitor_option_choices %}
+        <option value="{{ choice }}" {% if sonarr.monitor_option == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {{ field_error(errors, 'sonarr_monitor_option') }}
+    <label><input type="checkbox" name="sonarr_search_missing" {% if sonarr.search_missing %}checked{% endif %}>
+      Search for missing episodes immediately</label>
   </fieldset>
 
   <fieldset>
@@ -115,6 +151,32 @@
     <label>Plex users to sync (comma-separated)
       <input type="text" name="radarr_plex_users" value="{{ radarr.plex_users }}">
     </label>
+
+    <p class="muted">Defaults for added movies. A library with its own <code>arr</code> block on the
+      Libraries screen overrides these field by field; anything it leaves blank falls back here.</p>
+    <label>Root folder
+      <input type="text" name="radarr_root_folder" value="{{ radarr.root_folder }}" placeholder="/path/to/movies">
+    </label>
+    <label>Quality profile
+      <input type="text" name="radarr_quality_profile" value="{{ radarr.quality_profile }}" placeholder="HD-1080p">
+    </label>
+    <label>Tag
+      <input type="text" name="radarr_tag" value="{{ radarr.tag }}" placeholder="Curatarr">
+    </label>
+    <label><input type="checkbox" name="radarr_append_usernames" {% if radarr.append_usernames %}checked{% endif %}>
+      Append username to tag (e.g. Curatarr-Jason)</label>
+    <label>Minimum availability
+      <select name="radarr_minimum_availability">
+        {% for choice in minimum_availability_choices %}
+        <option value="{{ choice }}" {% if radarr.minimum_availability == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {{ field_error(errors, 'radarr_minimum_availability') }}
+    <label><input type="checkbox" name="radarr_monitor" {% if radarr.monitor %}checked{% endif %}>
+      Monitor added movies</label>
+    <label><input type="checkbox" name="radarr_search_for_movie" {% if radarr.search_for_movie %}checked{% endif %}>
+      Search for movie immediately</label>
   </fieldset>
 
   <fieldset>
