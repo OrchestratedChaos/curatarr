@@ -356,9 +356,7 @@ def _parse_connections_form(form, errors: Dict[str, str]) -> Dict:
     sonarr_monitor_option = form.get("sonarr_monitor_option", "none")
     validate_choice(sonarr_monitor_option, "sonarr_monitor_option", errors, MONITOR_OPTION_CHOICES)
     radarr_minimum_availability = form.get("radarr_minimum_availability", "released")
-    validate_choice(
-        radarr_minimum_availability, "radarr_minimum_availability", errors, MINIMUM_AVAILABILITY_CHOICES
-    )
+    validate_choice(radarr_minimum_availability, "radarr_minimum_availability", errors, MINIMUM_AVAILABILITY_CHOICES)
 
     trakt_enabled = flag("trakt_enabled")
     trakt_client_id = form.get("trakt_client_id", "").strip()
