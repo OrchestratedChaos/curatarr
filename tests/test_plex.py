@@ -2688,19 +2688,33 @@ class TestApplyUserLabelRestrictions:
         assert result is False
 
     @patch("utils.plex_policy.MyPlexAccount")
-    def test_returns_true_for_single_user(self, mock_account_class):
-        """Test that single user returns True (nothing to hide)."""
-
+    def test_single_user_short_circuits_when_not_covering_the_server(self, mock_account_class):
+        """With unconfigured-user coverage off, one user hides from nobody."""
         config = {"plex": {"token": "test_token"}}
-
-        # Only one user - no restrictions needed
         all_user_labels = {"Jason": "Recommended_Jason"}
 
-        result = apply_user_label_restrictions(config, all_user_labels)
+        result = apply_user_label_restrictions(config, all_user_labels, restrict_unconfigured_users=False)
 
         assert result is True
-        # MyPlexAccount should not even be instantiated
+        # No work to do, so no network at all.
         mock_account_class.assert_not_called()
+
+    @patch("utils.plex_policy._capped_get")
+    @patch("utils.plex_policy.MyPlexAccount")
+    def test_single_user_still_proceeds_when_covering_the_server(self, mock_account_class, mock_get):
+        """
+        #332/#340: a lone CONFIGURED user still has a collection that
+        every OTHER Plex user on the server should not see, so the old
+        unconditional single-user short-circuit silently disabled that
+        coverage entirely.
+        """
+        config = {"plex": {"token": "test_token"}}
+        mock_account_class.return_value = Mock(username="admin")
+        mock_get.return_value = Mock(content=b"<MediaContainer/>", raise_for_status=Mock())
+
+        apply_user_label_restrictions(config, {"Jason": "Recommended_Jason"})
+
+        mock_account_class.assert_called()
 
     @patch("utils.plex_policy.MyPlexAccount")
     def test_returns_true_for_empty_labels(self, mock_account_class):
@@ -3038,8 +3052,10 @@ class TestBuildAllPrivateLabels:
 
         cfg = self._config(["movies"], ["tv-shows"])
         labels = build_all_private_labels(cfg, ["alice", "bob"], True)
-        assert labels["alice"] == ["PrivateCollection_alice"]
-        assert labels["bob"] == ["PrivateCollection_bob"]
+        # Per media type (#340) - filterMovies and filterTelevision are
+        # separate filters and must not receive each other's labels.
+        assert labels["alice"] == {"movie": ["PrivateCollection_alice"], "tv": ["PrivateCollection_alice"]}
+        assert labels["bob"]["movie"] == ["PrivateCollection_bob"]
 
     def test_multi_library_yields_a_label_per_library(self):
         """The reported case: movie labels must not be lost."""
@@ -3047,16 +3063,19 @@ class TestBuildAllPrivateLabels:
 
         cfg = self._config(["movies", "movies4k"], ["tv-shows"])
         labels = build_all_private_labels(cfg, ["alice"], True)
-        assert "PrivateCollection_movies_alice" in labels["alice"]
-        assert "PrivateCollection_movies4k_alice" in labels["alice"]
-        assert "PrivateCollection_alice" in labels["alice"], "single-library TV label missing"
+        assert "PrivateCollection_movies_alice" in labels["alice"]["movie"]
+        assert "PrivateCollection_movies4k_alice" in labels["alice"]["movie"]
+        assert labels["alice"]["tv"] == ["PrivateCollection_alice"], "single-library TV label missing"
+        # #340: movie labels must NOT leak into the television filter.
+        assert "PrivateCollection_movies_alice" not in labels["alice"]["tv"]
 
     def test_no_duplicate_labels(self):
         from utils.plex_policy import build_all_private_labels
 
         cfg = self._config(["movies"], ["tv-shows"])
         labels = build_all_private_labels(cfg, ["alice"], True)
-        assert len(labels["alice"]) == len(set(labels["alice"]))
+        for media_labels in labels["alice"].values():
+            assert len(media_labels) == len(set(media_labels))
 
     def test_covers_every_user(self):
         from utils.plex_policy import build_all_private_labels
@@ -3146,3 +3165,108 @@ class TestApplyRestrictionsCoverage:
         _ok, calls = self._run(labels)
         _url, params = calls[0]
         assert params["filterMovies"] == params["filterTelevision"]
+
+
+class TestExclusionLabelRegressions:
+    """
+    #340 - three defects introduced by the #332 fix, all confirmed on a
+    live server before being fixed here.
+    """
+
+    # Deliberately gives one user three aliases, which is what Plex
+    # actually returns and what the #332 fix mishandled.
+    USERS_XML = (
+        b"<MediaContainer>"
+        b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+        b' filterMovies="" filterTelevision=""/>'
+        b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+        b"</MediaContainer>"
+    )
+
+    def _run(self, labels, users_xml=None, **kwargs):
+        from utils import plex_policy
+
+        puts = []
+
+        def fake_put(url, params=None, **kw):
+            puts.append((url, params))
+            return Mock(raise_for_status=Mock())
+
+        with (
+            patch.object(plex_policy, "MyPlexAccount", return_value=Mock(username="admin")),
+            patch.object(
+                plex_policy,
+                "_capped_get",
+                return_value=Mock(content=users_xml or self.USERS_XML, raise_for_status=Mock()),
+            ),
+            patch.object(plex_policy, "_capped_put", side_effect=fake_put),
+        ):
+            ok = plex_policy.apply_user_label_restrictions({"plex": {"token": "t"}}, labels, **kwargs)
+        return ok, puts
+
+    def test_a_users_own_label_is_never_excluded_from_themselves(self):
+        """
+        The regression: Plex lists each user under title AND username AND
+        email. Iterating those name keys treated the aliases of a
+        configured user as separate unconfigured users, so that person's
+        OWN collection was excluded from their own library.
+        """
+        labels = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+        }
+        _ok, puts = self._run(labels)
+        home = [p for url, p in puts if url.endswith("/1")]
+        assert home, "configured user received no restriction"
+        assert "PrivateCollection_homehouse165" not in home[0]["filterMovies"]
+        assert "PrivateCollection_bob" in home[0]["filterMovies"]
+
+    def test_each_user_is_written_once_despite_three_aliases(self):
+        """Same defect, other symptom: one PUT per alias, per run."""
+        labels = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+        }
+        _ok, puts = self._run(labels)
+        assert len([u for u, _ in puts if u.endswith("/1")]) == 1
+
+    def test_movie_and_tv_labels_are_not_merged(self):
+        """
+        filterMovies governs movie libraries and filterTelevision
+        television ones; a label from the other kind can never match
+        there and does not belong in it.
+        """
+        labels = {
+            "homehouse165": {"movie": ["PC_movies_home"], "tv": ["PC_tv_home"]},
+            "bob": {"movie": ["PC_movies_bob"], "tv": ["PC_tv_bob"]},
+        }
+        _ok, puts = self._run(labels)
+        home = next(p for url, p in puts if url.endswith("/1"))
+        assert "PC_movies_bob" in home["filterMovies"]
+        assert "PC_tv_bob" not in home["filterMovies"], "tv labels leaked into filterMovies"
+        assert "PC_tv_bob" in home["filterTelevision"]
+        assert "PC_movies_bob" not in home["filterTelevision"], "movie labels leaked into filterTelevision"
+
+    def test_unchanged_filters_are_not_rewritten(self):
+        """Every run re-PUT an identical filter for every user."""
+        already = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="label!=PrivateCollection_bob" filterTelevision="label!=PrivateCollection_bob"/>'
+            b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        labels = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+        }
+        _ok, puts = self._run(labels, users_xml=already)
+        assert not [u for u, _ in puts if u.endswith("/1")], "rewrote an already-correct filter"
+        assert [u for u, _ in puts if u.endswith("/2")], "bob's filter did need writing"
+
+    def test_unconfigured_user_still_covered_and_gets_everything(self):
+        """#332's second claim must keep working."""
+        labels = {"bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]}}
+        _ok, puts = self._run(labels)
+        home = next(p for url, p in puts if url.endswith("/1"))
+        assert "PrivateCollection_bob" in home["filterMovies"]

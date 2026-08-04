@@ -34,12 +34,12 @@ from this module, or the two would form an import cycle.
 """
 
 import logging
-from typing import Dict, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 import requests
 from plexapi.myplex import MyPlexAccount
 
-from .config import PLEX_REQUEST_TIMEOUT
+from .config import MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV, PLEX_REQUEST_TIMEOUT
 from .display import GREEN, RESET, log_warning
 from .plex import _capped_get, _capped_put
 
@@ -105,14 +105,25 @@ def is_rating_allowed(content_rating: Optional[str], max_rating: Optional[str], 
         return True
 
 
-def _as_label_list(labels: Union[str, Sequence[str]]) -> List[str]:
-    """One label or many - callers predating #332 pass a bare string."""
+def _labels_for(labels: Union[str, Sequence[str], Mapping[str, Sequence[str]]], media_type: str) -> List[str]:
+    """
+    This user's labels for one media type.
+
+    Accepts every shape callers have used: a bare string (pre-#332), a
+    flat sequence (#332), or the per-media-type mapping (#340). The first
+    two are not media-type aware, so they apply to both - that is the
+    only meaning they can have.
+    """
     if isinstance(labels, str):
         return [labels]
+    if isinstance(labels, Mapping):
+        return [str(x) for x in labels.get(media_type, []) if x]
     return [str(x) for x in labels if x]
 
 
-def build_all_private_labels(config: Dict, users: List[str], append_usernames: bool = True) -> Dict[str, List[str]]:
+def build_all_private_labels(
+    config: Dict, users: List[str], append_usernames: bool = True
+) -> Dict[str, Dict[str, List[str]]]:
     """
     Every PrivateCollection_* label a user owns, across every library.
 
@@ -131,36 +142,45 @@ def build_all_private_labels(config: Dict, users: List[str], append_usernames: b
     survived and movie collections stayed visible to everyone (#332).
 
     Enumerating every library here means the value written is complete
-    and identical whichever run performs the write.
+    whichever run performs the write.
+
+    Returns {username: {"movie": [...], "tv": [...]}}. Kept SEPARATE per
+    media type (#340): Plex applies filterMovies to movie libraries and
+    filterTelevision to television ones, so writing the union to both
+    puts labels in a filter that can never match anything there. An
+    earlier fix for #332 merged them, which was cruder than needed.
     """
-    from .config import MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV, get_libraries_for_media_type
+    from .config import get_libraries_for_media_type
     from .labels import build_label_name
 
-    bases: List[str] = []
+    bases: Dict[str, List[str]] = {}
     for media_type in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV):
         libraries = get_libraries_for_media_type(config, media_type)
         if len(libraries) > 1:
             # Mirrors _library_suffix_for_label(): only a genuine
             # multi-library media type gets qualified labels, so
             # single-library installs keep exactly today's names.
-            bases.extend(f"PrivateCollection_{lib['id']}" for lib in libraries)
+            bases[media_type] = [f"PrivateCollection_{lib['id']}" for lib in libraries]
         else:
-            bases.append("PrivateCollection")
+            bases[media_type] = ["PrivateCollection"]
 
-    labels: Dict[str, List[str]] = {}
+    labels: Dict[str, Dict[str, List[str]]] = {}
     for user in users:
-        seen: List[str] = []
-        for base in bases:
-            label = build_label_name(base, users, user, append_usernames)
-            if label not in seen:
-                seen.append(label)
-        labels[user] = seen
+        per_type: Dict[str, List[str]] = {}
+        for media_type, media_bases in bases.items():
+            seen: List[str] = []
+            for base in media_bases:
+                label = build_label_name(base, users, user, append_usernames)
+                if label not in seen:
+                    seen.append(label)
+            per_type[media_type] = seen
+        labels[user] = per_type
     return labels
 
 
 def apply_user_label_restrictions(
     config: Dict,
-    all_user_private_labels: Mapping[str, Union[str, Sequence[str]]],
+    all_user_private_labels: Mapping[str, Union[str, Sequence[str], Mapping[str, Sequence[str]]]],
     restrict_unconfigured_users: bool = True,
 ) -> bool:
     """
@@ -206,11 +226,16 @@ def apply_user_label_restrictions(
     if not all_user_private_labels:
         return True
 
-    # Only one user - nothing to hide from anyone
-    if len(all_user_private_labels) <= 1:
+    # One configured user hides their collection from nobody - UNLESS
+    # unconfigured server users are also covered (#332), in which case
+    # that single user's collection still needs hiding from everyone
+    # else on the server. The old unconditional short-circuit silently
+    # disabled that whole path for single-user installs.
+    if len(all_user_private_labels) <= 1 and not restrict_unconfigured_users:
         return True
 
     plex_token = config["plex"]["token"]
+    all_success = True
 
     try:
         # Get admin username to skip
@@ -227,86 +252,112 @@ def apply_user_label_restrictions(
 
         root = ET.fromstring(response.content)
 
-        # Build user lookup: username -> user_id
-        plex_users = {}
+        # user_id -> {aliases, current filters}. Keyed by ID, never by
+        # name: Plex exposes each user under up to THREE names (title,
+        # username, email), and an earlier version iterated those name
+        # keys directly. That wrote the same person up to three times per
+        # run, and because only one of those names matched the config
+        # key, the other two were treated as unconfigured users - which
+        # excluded that person's OWN collection from their own library
+        # (#340). Resolving to IDs first makes each user exactly one
+        # target.
+        by_id: Dict[str, Dict[str, Any]] = {}
+        alias_to_id: Dict[str, str] = {}
         for user_elem in root.findall(".//User"):
             user_id = user_elem.get("id")
-            title = user_elem.get("title", "")
-            username_attr = user_elem.get("username", "")
-            email = user_elem.get("email", "")
-
-            if title:
-                plex_users[title.lower()] = user_id
-            if username_attr:
-                plex_users[username_attr.lower()] = user_id
-            if email:
-                plex_users[email.lower()] = user_id
-
-        logger.debug(f"Plex users available for restrictions: {list(plex_users.keys())}")
-
-        # #332: restrict every user on the server, not only those listed
-        # in config. A Plex user curatarr does not generate for still sees
-        # everyone else's PrivateCollection_* collections cluttering their
-        # browse - which is the whole condition this feature exists to
-        # prevent, and it is the admin's library either way. They own no
-        # labels themselves, so they simply get all of them excluded.
-        targets = dict(all_user_private_labels)
-        if restrict_unconfigured_users:
-            configured = {u.lower() for u in all_user_private_labels}
-            for name in plex_users:
-                if name and name.lower() not in configured and name.lower() != admin_username:
-                    targets.setdefault(name, [])
-
-        all_success = True
-        for username, _user_private_label in targets.items():
-            # Admin can't have restrictions
-            if username.lower() == admin_username:
-                logger.debug(f"Skipping restrictions for admin user: {username}")
-                continue
-
-            # Find the user ID
-            user_id = plex_users.get(username.lower())
-
-            # Try normalized match if exact match fails
             if not user_id:
-                username_normalized = username.lower().replace(" ", "").replace("-", "").replace("_", "")
-                for key, uid in plex_users.items():
-                    key_normalized = key.replace(" ", "").replace("-", "").replace("_", "")
-                    if username_normalized == key_normalized:
-                        user_id = uid
-                        logger.debug(f"Matched '{username}' to user ID {uid} via normalized match")
-                        break
-
-            if not user_id:
-                log_warning(f"User '{username}' not found for label restrictions. Available: {list(plex_users.keys())}")
-                all_success = False
                 continue
-
-            # Labels to EXCLUDE: every OTHER user's already-built
-            # PrivateCollection_* labels (on collections), never
-            # Recommended_* (on items) - this hides other users'
-            # collections but keeps items visible to everyone. Used as
-            # given, not derived here (#261 - see this function's docstring).
-            # A user owns one label PER LIBRARY, so this flattens
-            # (#332 - see build_all_private_labels).
-            exclude_labels = [
-                label
-                for u, labels in all_user_private_labels.items()
-                if u.lower() != username.lower()
-                for label in _as_label_list(labels)
+            aliases = [
+                user_elem.get("title", ""),
+                user_elem.get("username", ""),
+                user_elem.get("email", ""),
             ]
+            by_id[user_id] = {
+                "aliases": [a for a in aliases if a],
+                "filterMovies": user_elem.get("filterMovies", "") or "",
+                "filterTelevision": user_elem.get("filterTelevision", "") or "",
+            }
+            for alias in aliases:
+                if alias:
+                    alias_to_id[alias.lower()] = user_id
 
-            if not exclude_labels:
-                continue  # Nothing to exclude
+        logger.debug(f"Plex users available for restrictions: {sorted(alias_to_id)}")
 
-            # Build filter string: label!=Label1,Label2,Label3
-            labels_str = ",".join(exclude_labels)
-            filter_value = f"label!={labels_str}"
+        def _resolve(name: str) -> Optional[str]:
+            """A configured username -> Plex user id, tolerating the
+            punctuation/spacing differences between a config key and a
+            Plex display name."""
+            found = alias_to_id.get(name.lower())
+            if found:
+                return found
+            wanted = name.lower().replace(" ", "").replace("-", "").replace("_", "")
+            for alias, uid in alias_to_id.items():
+                if alias.replace(" ", "").replace("-", "").replace("_", "") == wanted:
+                    return uid
+            return None
 
-            # Apply restrictions via direct PUT to Plex API
+        # Map each configured user onto their Plex id, so an id can be
+        # recognized as configured no matter which alias config used.
+        id_to_configured: Dict[str, str] = {}
+        for configured_name in all_user_private_labels:
+            # The admin is the server OWNER and is absent from
+            # /api/users, so resolving them always fails. Plex does not
+            # allow restrictions on them anyway - skip before resolving,
+            # rather than reporting a lookup failure for a user who is
+            # not supposed to be found.
+            if configured_name.lower() == admin_username:
+                logger.debug(f"Skipping restrictions for admin user: {configured_name}")
+                continue
+            resolved = _resolve(configured_name)
+            if resolved:
+                id_to_configured[resolved] = configured_name
+            else:
+                log_warning(
+                    f"User '{configured_name}' not found for label restrictions. Available: {sorted(alias_to_id)}"
+                )
+                all_success = False
+
+        admin_id = alias_to_id.get(admin_username)
+
+        # #332: cover every user on the server, not only configured ones -
+        # an unmanaged user still sees everyone's PrivateCollection_*
+        # collections otherwise, which is the condition this prevents.
+        target_ids = list(id_to_configured) if not restrict_unconfigured_users else list(by_id)
+
+        for user_id in target_ids:
+            if user_id == admin_id:
+                logger.debug("Skipping restrictions for the admin user (Plex does not allow them)")
+                continue
+
+            owner = id_to_configured.get(user_id)  # None => not configured, owns no labels
+            display = owner or (by_id.get(user_id, {}).get("aliases") or [user_id])[0]
+
+            # Per media type (#340): filterMovies governs movie libraries
+            # and filterTelevision television ones, so a label from the
+            # other kind can never match there and does not belong in it.
+            params: Dict[str, str] = {}
+            for field, media_type in (("filterMovies", MEDIA_TYPE_MOVIE), ("filterTelevision", MEDIA_TYPE_TV)):
+                exclude = [
+                    label
+                    for name, labels in all_user_private_labels.items()
+                    if name != owner
+                    for label in _labels_for(labels, media_type)
+                ]
+                params[field] = f"label!={','.join(exclude)}" if exclude else ""
+
+            if not any(params.values()):
+                continue
+
+            # #340: only write when something actually changed. Every run
+            # re-PUT an identical filter for every user, which is pure
+            # noise against plex.tv and made the label state look like it
+            # was churning when it was not.
+            current = by_id.get(user_id, {})
+            if all(current.get(field, "") == value for field, value in params.items()):
+                logger.debug(f"Restrictions for {display} already correct - not rewriting")
+                continue
+
             update_url = f"https://plex.tv/api/users/{user_id}"
-            params = {"filterMovies": filter_value, "filterTelevision": filter_value}
-
             try:
                 put_response = _capped_put(
                     update_url,
@@ -315,9 +366,9 @@ def apply_user_label_restrictions(
                     timeout=PLEX_REQUEST_TIMEOUT,
                 )
                 put_response.raise_for_status()
-                print(f"{GREEN}Applied exclusions for {username}: hiding labels {exclude_labels}{RESET}")
+                print(f"{GREEN}Applied exclusions for {display}{RESET}")
             except requests.RequestException as e:
-                log_warning(f"Failed to apply restrictions for {username}: {e}")
+                log_warning(f"Failed to apply restrictions for {display}: {e}")
                 all_success = False
 
         return all_success
