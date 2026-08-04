@@ -3012,3 +3012,137 @@ class TestFetchUserPlayedIds:
         plex.myPlexAccount.return_value = Mock(username="owner")  # .users() -> non-iterable Mock
         plex.library.section.return_value = Mock(search=Mock(return_value=[]))
         assert fetch_user_played_ids(plex, {}, "someone", "Movies") == set()
+
+
+class TestBuildAllPrivateLabels:
+    """
+    build_all_private_labels() - #332 claim 1.
+
+    A user owns one PrivateCollection_* label PER LIBRARY, because
+    recommenders/base.py roots it at "PrivateCollection" +
+    _library_suffix_for_label(), which qualifies by library id whenever a
+    media type has more than one library. Each media type's run therefore
+    knew only its own labels, and since apply_user_label_restrictions()
+    writes BOTH filterMovies and filterTelevision every time, the later
+    run (TV) overwrote the earlier one's (movies).
+    """
+
+    @staticmethod
+    def _config(movie_libs, tv_libs):
+        libs = [{"id": i, "media_type": "movie", "name": i, "section": i} for i in movie_libs]
+        libs += [{"id": i, "media_type": "tv", "name": i, "section": i} for i in tv_libs]
+        return {"libraries": libs}
+
+    def test_single_library_per_type_keeps_todays_unqualified_names(self):
+        from utils.plex_policy import build_all_private_labels
+
+        cfg = self._config(["movies"], ["tv-shows"])
+        labels = build_all_private_labels(cfg, ["alice", "bob"], True)
+        assert labels["alice"] == ["PrivateCollection_alice"]
+        assert labels["bob"] == ["PrivateCollection_bob"]
+
+    def test_multi_library_yields_a_label_per_library(self):
+        """The reported case: movie labels must not be lost."""
+        from utils.plex_policy import build_all_private_labels
+
+        cfg = self._config(["movies", "movies4k"], ["tv-shows"])
+        labels = build_all_private_labels(cfg, ["alice"], True)
+        assert "PrivateCollection_movies_alice" in labels["alice"]
+        assert "PrivateCollection_movies4k_alice" in labels["alice"]
+        assert "PrivateCollection_alice" in labels["alice"], "single-library TV label missing"
+
+    def test_no_duplicate_labels(self):
+        from utils.plex_policy import build_all_private_labels
+
+        cfg = self._config(["movies"], ["tv-shows"])
+        labels = build_all_private_labels(cfg, ["alice"], True)
+        assert len(labels["alice"]) == len(set(labels["alice"]))
+
+    def test_covers_every_user(self):
+        from utils.plex_policy import build_all_private_labels
+
+        cfg = self._config(["movies"], ["tv"])
+        labels = build_all_private_labels(cfg, ["alice", "bob", "carol"], True)
+        assert set(labels) == {"alice", "bob", "carol"}
+
+
+class TestApplyRestrictionsCoverage:
+    """
+    apply_user_label_restrictions() - #332 claims 1 and 2.
+
+    Claim 1: a user's labels are a list now, and all of them must land in
+    the other users' exclude filters.
+    Claim 2: a Plex user absent from config previously got no filter at
+    all, so they saw everyone's collections.
+    """
+
+    USERS_XML = (
+        b"<MediaContainer>"
+        b'<User id="1" title="alice" username="alice" email="a@x"/>'
+        b'<User id="2" title="bob" username="bob" email="b@x"/>'
+        b'<User id="3" title="carol" username="carol" email="c@x"/>'
+        b"</MediaContainer>"
+    )
+
+    def _run(self, labels, **kwargs):
+        from utils import plex_policy
+
+        put_calls = []
+
+        def fake_put(url, params=None, **kw):
+            put_calls.append((url, params))
+            return Mock(raise_for_status=Mock())
+
+        with (
+            patch.object(plex_policy, "MyPlexAccount", return_value=Mock(username="admin")),
+            patch.object(
+                plex_policy, "_capped_get", return_value=Mock(content=self.USERS_XML, raise_for_status=Mock())
+            ),
+            patch.object(plex_policy, "_capped_put", side_effect=fake_put),
+        ):
+            ok = plex_policy.apply_user_label_restrictions({"plex": {"token": "t"}}, labels, **kwargs)
+        return ok, put_calls
+
+    def test_all_of_a_users_labels_are_excluded_from_others(self):
+        """Claim 1: every library's label, not just one."""
+        labels = {
+            "alice": ["PrivateCollection_movies_alice", "PrivateCollection_tv_alice"],
+            "bob": ["PrivateCollection_movies_bob"],
+        }
+        _ok, calls = self._run(labels)
+        bob_filter = next(p["filterMovies"] for url, p in calls if url.endswith("/2"))
+        assert "PrivateCollection_movies_alice" in bob_filter
+        assert "PrivateCollection_tv_alice" in bob_filter, "a library's labels were dropped"
+
+    def test_a_bare_string_still_works(self):
+        """Callers predating #332 pass one label, not a list."""
+        _ok, calls = self._run({"alice": "PrivateCollection_alice", "bob": "PrivateCollection_bob"})
+        bob_filter = next(p["filterMovies"] for url, p in calls if url.endswith("/2"))
+        assert "PrivateCollection_alice" in bob_filter
+
+    def test_unconfigured_server_user_also_gets_restricted(self):
+        """Claim 2: carol is on the server but not in config."""
+        labels = {"alice": ["PrivateCollection_alice"], "bob": ["PrivateCollection_bob"]}
+        _ok, calls = self._run(labels)
+        carol = [p for url, p in calls if url.endswith("/3")]
+        assert carol, "a Plex user absent from config received no restriction"
+        assert "PrivateCollection_alice" in carol[0]["filterMovies"]
+        assert "PrivateCollection_bob" in carol[0]["filterMovies"]
+
+    def test_unconfigured_coverage_can_be_disabled(self):
+        labels = {"alice": ["PrivateCollection_alice"], "bob": ["PrivateCollection_bob"]}
+        _ok, calls = self._run(labels, restrict_unconfigured_users=False)
+        assert not [p for url, p in calls if url.endswith("/3")]
+
+    def test_a_user_never_has_their_own_label_excluded(self):
+        labels = {"alice": ["PrivateCollection_alice"], "bob": ["PrivateCollection_bob"]}
+        _ok, calls = self._run(labels)
+        alice_filter = next(p["filterMovies"] for url, p in calls if url.endswith("/1"))
+        assert "PrivateCollection_alice" not in alice_filter
+        assert "PrivateCollection_bob" in alice_filter
+
+    def test_both_media_filters_are_written(self):
+        labels = {"alice": ["PrivateCollection_alice"], "bob": ["PrivateCollection_bob"]}
+        _ok, calls = self._run(labels)
+        _url, params = calls[0]
+        assert params["filterMovies"] == params["filterTelevision"]

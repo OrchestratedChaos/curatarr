@@ -2806,9 +2806,11 @@ class TestManagePlexLabelsFullFlow:
 
         mock_apply.assert_called_once()
         all_user_private_labels = mock_apply.call_args[0][1]
+        # A user owns one private label PER LIBRARY (#332), so this is a
+        # list even on a single-library install.
         assert all_user_private_labels == {
-            "alice": "PrivateCollection_alice",
-            "bob": "PrivateCollection_bob",
+            "alice": ["PrivateCollection_alice"],
+            "bob": ["PrivateCollection_bob"],
         }
 
     @patch("recommenders.base.get_max_rating_for_user", return_value="PG-13")
@@ -2894,8 +2896,8 @@ class TestPrivateCollectionsAppendUsernames:
         assert result is True
         mock_apply.assert_called_once()
         assert mock_apply.call_args[0][1] == {
-            "alice": "PrivateCollection_alice",
-            "bob": "PrivateCollection_bob",
+            "alice": ["PrivateCollection_alice"],
+            "bob": ["PrivateCollection_bob"],
         }
 
     @patch("recommenders.base.apply_user_label_restrictions")
@@ -2912,7 +2914,7 @@ class TestPrivateCollectionsAppendUsernames:
 
         assert result is True
         mock_apply.assert_called_once()
-        assert mock_apply.call_args[0][1] == {"alice": "PrivateCollection"}
+        assert mock_apply.call_args[0][1] == {"alice": ["PrivateCollection"]}
 
     @patch("recommenders.base.log_warning")
     @patch("recommenders.base.apply_user_label_restrictions")

@@ -57,6 +57,7 @@ from utils import (
     apply_ignored_penalties,
     apply_user_label_restrictions,
     assess_pool_health,
+    build_all_private_labels,
     build_certificate_distribution,
     build_corpus_idf,
     build_label_name,
@@ -1744,9 +1745,13 @@ class BaseRecommender(ABC):
                     # Build dict of all users' PrivateCollection_* labels for
                     # exclude-based restrictions - each user's own label stays
                     # visible to them, every OTHER user's label is excluded.
-                    all_user_private_labels = {}
-                    for u in users:
-                        all_user_private_labels[u] = build_label_name(private_base_label, users, u, append_usernames)
+                    # Every library's labels, not just this media type's
+                    # (#332). apply_user_label_restrictions() writes both
+                    # filterMovies and filterTelevision on every call, so
+                    # supplying only the running media type's labels meant
+                    # the later run (TV) overwrote the earlier one's
+                    # (movies) in both fields.
+                    all_user_private_labels = build_all_private_labels(self.config, users, append_usernames)
 
                     apply_user_label_restrictions(self.config, all_user_private_labels)
 
