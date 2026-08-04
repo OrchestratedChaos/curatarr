@@ -34,7 +34,7 @@ from this module, or the two would form an import cycle.
 """
 
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Mapping, Optional, Sequence, Union
 
 import requests
 from plexapi.myplex import MyPlexAccount
@@ -105,9 +105,63 @@ def is_rating_allowed(content_rating: Optional[str], max_rating: Optional[str], 
         return True
 
 
+def _as_label_list(labels: Union[str, Sequence[str]]) -> List[str]:
+    """One label or many - callers predating #332 pass a bare string."""
+    if isinstance(labels, str):
+        return [labels]
+    return [str(x) for x in labels if x]
+
+
+def build_all_private_labels(config: Dict, users: List[str], append_usernames: bool = True) -> Dict[str, List[str]]:
+    """
+    Every PrivateCollection_* label a user owns, across every library.
+
+    A user does not have one private label, they have one PER LIBRARY:
+    recommenders/base.py roots the label at
+    "PrivateCollection" + _library_suffix_for_label(), and that suffix is
+    "_<library_id>" on any install with more than one library of a given
+    media type. The movie run therefore knows only the movie labels and
+    the TV run only the TV labels.
+
+    That mattered because apply_user_label_restrictions() writes BOTH
+    filterMovies and filterTelevision on every call. With each media type
+    supplying only its own labels, the later run (TV, which follows
+    movies) overwrote the movie exclusions in both fields - so on a
+    multi-library install only the last-written media type's labels
+    survived and movie collections stayed visible to everyone (#332).
+
+    Enumerating every library here means the value written is complete
+    and identical whichever run performs the write.
+    """
+    from .config import MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV, get_libraries_for_media_type
+    from .labels import build_label_name
+
+    bases: List[str] = []
+    for media_type in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV):
+        libraries = get_libraries_for_media_type(config, media_type)
+        if len(libraries) > 1:
+            # Mirrors _library_suffix_for_label(): only a genuine
+            # multi-library media type gets qualified labels, so
+            # single-library installs keep exactly today's names.
+            bases.extend(f"PrivateCollection_{lib['id']}" for lib in libraries)
+        else:
+            bases.append("PrivateCollection")
+
+    labels: Dict[str, List[str]] = {}
+    for user in users:
+        seen: List[str] = []
+        for base in bases:
+            label = build_label_name(base, users, user, append_usernames)
+            if label not in seen:
+                seen.append(label)
+        labels[user] = seen
+    return labels
+
+
 def apply_user_label_restrictions(
     config: Dict,
-    all_user_private_labels: Dict[str, str],
+    all_user_private_labels: Mapping[str, Union[str, Sequence[str]]],
+    restrict_unconfigured_users: bool = True,
 ) -> bool:
     """
     Apply exclude restrictions so each user's collection is excluded from
@@ -190,8 +244,21 @@ def apply_user_label_restrictions(
 
         logger.debug(f"Plex users available for restrictions: {list(plex_users.keys())}")
 
+        # #332: restrict every user on the server, not only those listed
+        # in config. A Plex user curatarr does not generate for still sees
+        # everyone else's PrivateCollection_* collections cluttering their
+        # browse - which is the whole condition this feature exists to
+        # prevent, and it is the admin's library either way. They own no
+        # labels themselves, so they simply get all of them excluded.
+        targets = dict(all_user_private_labels)
+        if restrict_unconfigured_users:
+            configured = {u.lower() for u in all_user_private_labels}
+            for name in plex_users:
+                if name and name.lower() not in configured and name.lower() != admin_username:
+                    targets.setdefault(name, [])
+
         all_success = True
-        for username, _user_private_label in all_user_private_labels.items():
+        for username, _user_private_label in targets.items():
             # Admin can't have restrictions
             if username.lower() == admin_username:
                 logger.debug(f"Skipping restrictions for admin user: {username}")
@@ -216,12 +283,17 @@ def apply_user_label_restrictions(
                 continue
 
             # Labels to EXCLUDE: every OTHER user's already-built
-            # PrivateCollection_* label (on collections), never
+            # PrivateCollection_* labels (on collections), never
             # Recommended_* (on items) - this hides other users'
             # collections but keeps items visible to everyone. Used as
             # given, not derived here (#261 - see this function's docstring).
+            # A user owns one label PER LIBRARY, so this flattens
+            # (#332 - see build_all_private_labels).
             exclude_labels = [
-                private_label for u, private_label in all_user_private_labels.items() if u.lower() != username.lower()
+                label
+                for u, labels in all_user_private_labels.items()
+                if u.lower() != username.lower()
+                for label in _as_label_list(labels)
             ]
 
             if not exclude_labels:

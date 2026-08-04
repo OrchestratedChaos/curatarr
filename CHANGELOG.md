@@ -2,6 +2,24 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.14.0] - 2026-08-03
+
+### Fixed
+
+- **Exclusion labels from movie libraries were silently overwritten by the TV run (#332).** `apply_user_label_restrictions()` writes BOTH `filterMovies` and `filterTelevision` on every call, but each media type's run supplied only its own labels. A user's `PrivateCollection_*` label is per-library - `recommenders/base.py` roots it at `"PrivateCollection" + _library_suffix_for_label()`, which qualifies by library id whenever a media type has more than one library - so the movie run knew only movie labels and the TV run only TV labels. TV runs after movies, so its write replaced the movie exclusions in both fields and movie collections stayed visible to everyone.
+
+  Single-library installs never saw this: both media types produce the identical unqualified label, so the second write was a no-op. It affects **multi-library** installs only, which is how it was reported.
+
+  New `build_all_private_labels()` enumerates every library of every media type up front, so the value written is complete and identical whichever run performs the write. Single-library installs keep exactly today's unqualified label names.
+
+- **Plex users absent from `config.yml` received no label restrictions at all (#332).** The loop only iterated configured users, so anyone else on the server saw every user's `PrivateCollection_*` collections in browse and search - precisely the condition the feature exists to prevent. Restrictions now cover every non-admin user the server reports. They own no labels themselves, so they simply get all of them excluded. Opt out with `restrict_unconfigured_users=False`.
+
+  This remains **UI-level separation, not an access-control boundary** - see `utils/plex_policy.py`'s module docstring for the enumeration caveat.
+
+### Notes
+
+- `apply_user_label_restrictions()` now accepts either a single label or a sequence per user, so any caller predating this change is unaffected.
+
 ## [2.13.2] - 2026-08-03
 
 ### Fixed

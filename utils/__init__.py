@@ -261,6 +261,7 @@ from .plex_policy import (
     MOVIE_RATING_HIERARCHY,
     TV_RATING_HIERARCHY,
     apply_user_label_restrictions,
+    build_all_private_labels,
     get_max_rating_for_user,
     is_rating_allowed,
 )
@@ -682,6 +683,7 @@ __all__ = [
     "MOVIE_RATING_HIERARCHY",
     "TV_RATING_HIERARCHY",
     "apply_user_label_restrictions",
+    "build_all_private_labels",
     "get_user_specific_connection",
     "find_plex_movie",
     "extract_genres",
