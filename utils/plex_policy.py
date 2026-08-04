@@ -180,7 +180,7 @@ def build_all_private_labels(
 
 def apply_user_label_restrictions(
     config: Dict,
-    all_user_private_labels: Mapping[str, Union[str, Sequence[str]]],
+    all_user_private_labels: Mapping[str, Union[str, Sequence[str], Mapping[str, Sequence[str]]]],
     restrict_unconfigured_users: bool = True,
 ) -> bool:
     """
