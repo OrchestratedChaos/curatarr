@@ -307,12 +307,17 @@ class TestTraktClientDeviceAuth:
         assert result["user_code"] == "USER123"
 
     @patch("utils.trakt.requests.post")
-    def test_get_device_code_failure(self, mock_post):
+    @patch("utils.trakt.requests.get")
+    def test_get_device_code_failure(self, mock_get, mock_post):
         """Test device code request failure."""
         mock_response = Mock()
         mock_response.status_code = 400
         mock_response.text = "Bad Request"
         mock_post.return_value = mock_response
+        # The failure path now also probes whether the APPLICATION is
+        # still registered, to say which of the two remedies applies -
+        # see TestTraktApplicationDiagnostics.
+        mock_get.return_value = Mock(status_code=200)
 
         client = TraktClient("id", "secret")
 
@@ -505,22 +510,26 @@ class TestTraktClientTokenRefresh:
 
     @patch("utils.trakt.log_error")
     @patch("utils.trakt.requests.post")
-    def test_refresh_access_token_failure(self, mock_post, mock_log_error):
+    @patch("utils.trakt.requests.get")
+    def test_refresh_access_token_failure(self, mock_get, mock_post, mock_log_error):
         """Test failed token refresh - status + body are logged (#trakt-
         token-refresh-persistence: this used to fail completely silently)."""
         mock_response = Mock()
         mock_response.status_code = 401
         mock_response.text = '{"error": "invalid_grant"}'
         mock_post.return_value = mock_response
+        mock_get.return_value = Mock(status_code=200)  # application still registered
 
         client = TraktClient("id", "secret", refresh_token="old_refresh")
         result = client._refresh_access_token()
 
         assert result is False
-        mock_log_error.assert_called_once()
-        logged_message = mock_log_error.call_args[0][0]
+        # Two lines now: the raw failure, then which remedy applies.
+        assert mock_log_error.call_count == 2
+        logged_message = mock_log_error.call_args_list[0][0][0]
         assert "401" in logged_message
         assert "invalid_grant" in logged_message
+        assert "--reauth" in mock_log_error.call_args_list[1][0][0]
 
     @patch("utils.trakt.log_error")
     @patch("utils.trakt.requests.post")
@@ -1628,3 +1637,88 @@ class TestSaveTraktEnhanceCache:
 
         # Should not raise exception
         save_trakt_enhance_cache("/nonexistent/path", set(), set())
+
+
+class TestTraktApplicationDiagnostics:
+    """
+    application_is_registered() / describe_auth_failure().
+
+    A deleted Trakt application and an expired token both surface as an
+    auth failure, but only one is fixable by re-authorizing - against a
+    deleted application there is nothing to authorize against. The raw
+    API body for the former is {"error":"invalid_client",
+    "error_description":"client not found"}, which says neither that the
+    application must be recreated nor where. This was a real incident:
+    the cause took an hour to establish from that message.
+    """
+
+    @staticmethod
+    def _client():
+        return TraktClient(client_id="dead-id", client_secret="secret")
+
+    @patch("utils.trakt.requests.get")
+    def test_registered_application_reports_true(self, mock_get):
+        mock_get.return_value = Mock(status_code=200)
+        assert self._client().application_is_registered() is True
+
+    @patch("utils.trakt.requests.get")
+    def test_rejected_key_reports_false(self, mock_get):
+        """403 is what Trakt actually returned for the deleted app."""
+        mock_get.return_value = Mock(status_code=403, text="Forbidden")
+        assert self._client().application_is_registered() is False
+
+    @patch("utils.trakt.requests.get")
+    def test_unauthorized_also_reports_false(self, mock_get):
+        mock_get.return_value = Mock(status_code=401, text="Unauthorized")
+        assert self._client().application_is_registered() is False
+
+    @patch("utils.trakt.requests.get")
+    def test_network_failure_is_unknown_not_a_verdict(self, mock_get):
+        """Never claim the app is dead because we could not ask."""
+        mock_get.side_effect = requests.RequestException("no route to host")
+        assert self._client().application_is_registered() is None
+
+    @patch("utils.trakt.requests.get")
+    def test_unexpected_status_is_unknown(self, mock_get):
+        mock_get.return_value = Mock(status_code=500, text="boom")
+        assert self._client().application_is_registered() is None
+
+    @patch("utils.trakt.requests.get")
+    def test_message_for_a_dead_application_names_the_remedy(self, mock_get):
+        mock_get.return_value = Mock(status_code=403, text="Forbidden")
+        msg = self._client().describe_auth_failure()
+        assert "no longer exists" in msg
+        assert "https://trakt.tv/oauth/applications" in msg
+        assert "urn:ietf:wg:oauth:2.0:oob" in msg
+        assert "Re-authorizing cannot fix this" in msg
+
+    @patch("utils.trakt.requests.get")
+    def test_message_for_a_live_application_says_reauthorize_instead(self, mock_get):
+        """The opposite remedy - must not tell the user to recreate a
+        perfectly good application."""
+        mock_get.return_value = Mock(status_code=200)
+        msg = self._client().describe_auth_failure()
+        assert "--reauth" in msg
+        assert "no longer exists" not in msg
+
+    @patch("utils.trakt.requests.get")
+    def test_message_when_unreachable_claims_neither(self, mock_get):
+        mock_get.side_effect = requests.RequestException("down")
+        msg = self._client().describe_auth_failure()
+        assert "Could not reach Trakt" in msg
+        assert "no longer exists" not in msg
+        assert "--reauth" not in msg
+
+    @patch("utils.trakt.requests.get")
+    @patch("utils.trakt.requests.post")
+    def test_device_code_failure_carries_the_diagnosis(self, mock_post, mock_get):
+        """The path the user actually hit: python -m utils.trakt_auth --reauth."""
+        mock_post.return_value = Mock(
+            status_code=401, text='{"error":"invalid_client","error_description":"client not found"}'
+        )
+        mock_get.return_value = Mock(status_code=403, text="Forbidden")
+
+        with pytest.raises(TraktAuthError) as excinfo:
+            self._client().get_device_code()
+
+        assert "https://trakt.tv/oauth/applications" in str(excinfo.value)
