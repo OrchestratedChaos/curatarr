@@ -24,6 +24,11 @@ logger = logging.getLogger("curatarr")
 
 # Trakt API endpoints
 TRAKT_API_URL = "https://api.trakt.tv"
+# Where a user recreates a deleted/disabled application, and the redirect
+# URI the device (PIN) flow requires - named in the failure message so it
+# is actionable without a search (see describe_auth_failure).
+TRAKT_APPLICATIONS_URL = "https://trakt.tv/oauth/applications"
+TRAKT_DEVICE_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 TRAKT_AUTH_URL = "https://trakt.tv"
 
 # Out-of-band redirect_uri for non-web (device-code/PIN) OAuth flows -
@@ -298,6 +303,79 @@ class TraktClient(BaseAPIClient):
             record_api_call("trakt", outcome, time.time() - request_start)
 
     # =========================================================================
+    # Diagnostics
+    # =========================================================================
+
+    def application_is_registered(self) -> Optional[bool]:
+        """
+        Is this client_id still a usable Trakt application?
+
+        Distinguishes the two failures that look identical from the
+        outside but need opposite remedies:
+
+          - the APPLICATION is gone or disabled -> re-register it at
+            trakt.tv; re-authorizing cannot help, because there is
+            nothing to authorize against.
+          - the application is fine and only the TOKEN died -> re-run
+            the device flow.
+
+        Asks a public endpoint that authenticates on client_id alone,
+        with no token involved, so the answer is about the application
+        and nothing else.
+
+        Returns True/False, or None when the check itself could not run
+        (network failure) - which must not be reported as either verdict.
+        """
+        try:
+            response = requests.get(
+                f"{TRAKT_API_URL}/movies/trending",
+                headers={
+                    "Content-Type": "application/json",
+                    "trakt-api-version": "2",
+                    "trakt-api-key": self.client_id,
+                },
+                params={"limit": 1},
+                timeout=TRAKT_REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            logger.debug(f"Could not check whether the Trakt application is registered: {e}")
+            return None
+        if response.status_code == 200:
+            return True
+        if response.status_code in (401, 403):
+            return False
+        logger.debug(f"Unexpected status probing Trakt application registration: {response.status_code}")
+        return None
+
+    def describe_auth_failure(self) -> str:
+        """
+        A message naming the actual cause and the actual fix.
+
+        The raw API body for a dead application is
+        {"error":"invalid_client","error_description":"client not found"},
+        which does not say that the application must be recreated, or
+        where.
+        """
+        registered = self.application_is_registered()
+        if registered is False:
+            return (
+                "Trakt rejected this client_id: the application no longer exists or has been "
+                "disabled. Re-authorizing cannot fix this - there is nothing to authorize "
+                f"against. Recreate the application at {TRAKT_APPLICATIONS_URL} (redirect URI "
+                f"{TRAKT_DEVICE_REDIRECT_URI}, which the device/PIN flow requires), then put the "
+                "new client_id and client_secret in config/trakt.yml."
+            )
+        if registered is True:
+            return (
+                "The Trakt application is valid, so this is an authorization problem rather than "
+                "a registration one. Re-run: python -m utils.trakt_auth --reauth"
+            )
+        return (
+            "Could not reach Trakt to determine whether the application is still registered - "
+            "check network connectivity, then retry."
+        )
+
+    # =========================================================================
     # Device Authentication Flow
     # =========================================================================
 
@@ -317,7 +395,10 @@ class TraktClient(BaseAPIClient):
         )
 
         if response.status_code != 200:
-            raise TraktAuthError(f"Failed to get device code: {response.text}")
+            # Say WHY, not just what the API returned. "client not found"
+            # gives no indication that the application itself must be
+            # recreated, which is the actual remedy when it is gone.
+            raise TraktAuthError(f"Failed to get device code: {response.text}\n{self.describe_auth_failure()}")
 
         return response.json()
 
@@ -460,6 +541,10 @@ class TraktClient(BaseAPIClient):
             # "Failed to refresh Trakt token" TraktAuthError, which
             # previously carried no detail about WHY.
             log_error(f"Trakt token refresh failed: HTTP {response.status_code}: {response.text}")
+            # An expired token and a deleted application both surface
+            # here as a refresh failure; only one is fixable by
+            # re-authorizing.
+            log_error(self.describe_auth_failure())
             return False
 
         except requests.RequestException as e:

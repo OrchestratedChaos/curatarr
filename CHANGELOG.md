@@ -2,6 +2,23 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.16.0] - 2026-08-04
+
+### Added
+
+- **Trakt auth failures now say which of the two remedies applies.** A deleted Trakt application and an expired token both surface as an authentication failure, but only one is fixable by re-authorizing - against a deleted application there is nothing to authorize against. The raw API body was passed straight through:
+
+  ```
+  Authentication error: Failed to get device code:
+  {"error":"invalid_client","error_description":"client not found"}
+  ```
+
+  which says neither that the application must be recreated, nor where. On a real install that cost an hour to diagnose.
+
+  `TraktClient.application_is_registered()` asks a public endpoint that authenticates on `client_id` alone - no token involved - so the answer is about the application and nothing else. `describe_auth_failure()` turns that into one of three messages: recreate the application (with the URL and the `urn:ietf:wg:oauth:2.0:oob` redirect URI the device flow requires), re-run `--reauth`, or "could not reach Trakt" when the check itself failed. That third case matters: an unreachable network must never be reported as a dead application.
+
+  Appended to both failure paths - the device-code request (`python -m utils.trakt_auth --reauth`) and the token refresh that runs during a normal sync.
+
 ## [2.15.1] - 2026-08-04
 
 ### Fixed
