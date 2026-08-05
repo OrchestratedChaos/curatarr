@@ -2,6 +2,22 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.16.1] - 2026-08-05
+
+### Changed
+
+- **Per-user Plex tokens are cached instead of re-resolved from plex.tv every run.** 2.13.0 began reading each user's watched state through their own connection, and `switchUser()` resolves that user's server token from plex.tv on every call - so a nightly run issued roughly a dozen plex.tv token requests where it had previously issued none. Those tokens are stable for a given (server, user) pair.
+
+  Measured on a real six-user install: **5 token fetches -> 0** on the second run, and the watched-state read dropped from 3.1s to 0.9s.
+
+  Cached in the cache directory at `0600` via the same `harden_file_permissions()` every config write already uses; the directory is already gitignored and gitleaks already watches for Plex tokens. These are lower-privilege than the admin token sitting in `config.yml` in plaintext, and are written no more loosely than it is.
+
+  Invalidate-and-retry rather than trust-forever: a cached token the server rejects is discarded and re-resolved once, so a revoked token or a user removed and re-added cannot wedge that user permanently. A cache that cannot be read or written is a performance problem and never a correctness one - the token is still obtained, and a malformed `cache_dir` is caught rather than taking down a run.
+
+### Notes
+
+- The cache path mirrors `BaseRecommender.__init__`'s resolution exactly (`get_project_root()` joined with `config['cache_dir']`) and `utils/plex.py` binds `get_project_root` at module level, so `tests/conftest.py`'s existing cache-isolation fixture covers it. Written this way after an earlier attempt wrote into the real repo `cache/` during tests, which the suite has a session-level gate against.
+
 ## [2.16.0] - 2026-08-04
 
 ### Added

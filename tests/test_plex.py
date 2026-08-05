@@ -8,6 +8,7 @@ test file, since this suite predates that split and stays organized by
 function now lives in.
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import plexapi.exceptions
@@ -3270,3 +3271,138 @@ class TestExclusionLabelRegressions:
         _ok, puts = self._run(labels)
         home = next(p for url, p in puts if url.endswith("/1"))
         assert "PrivateCollection_bob" in home["filterMovies"]
+
+
+def _root():
+    """Whatever conftest's isolation fixture pointed get_project_root at."""
+    from utils.plex import get_project_root
+
+    return get_project_root()
+
+
+class TestPerUserTokenCache:
+    """
+    Per-user Plex token caching.
+
+    switchUser() resolves a token from plex.tv on every call, so reading
+    per-user watched state for six users across the movie and TV
+    recommenders issued a dozen plex.tv requests per run where there had
+    previously been none. The tokens are stable per (server, user).
+    """
+
+    def _config(self, subdir="cache"):
+        """cache_dir is a NAME joined onto get_project_root(), not an
+        absolute path - see _user_token_cache_path."""
+        return {"plex": {"token": "admin-token"}, "cache_dir": subdir}
+
+    def _admin(self, target_username="alice"):
+        target = Mock(username=target_username, email=None, title=target_username)
+        plex = Mock()
+        plex.machineIdentifier = "machine-1"
+        plex._baseurl = "http://localhost:32400"
+        plex._session = Mock()
+        plex.myPlexAccount.return_value = Mock(username="owner", users=Mock(return_value=[target]))
+        plex.switchUser.return_value = Mock(_token="alice-token")
+        return plex
+
+    def test_first_call_resolves_and_caches(self, tmp_path):
+        from utils.plex import get_user_connection
+
+        plex = self._admin()
+        with patch("utils.plex.plexapi.server.PlexServer") as mock_server:
+            get_user_connection(plex, self._config(), "alice")
+        plex.switchUser.assert_called_once()
+        assert (Path(_root()) / "cache" / "plex_user_tokens.json").exists()
+        mock_server.assert_not_called()  # nothing cached yet on the first call
+
+    def test_second_call_uses_the_cache_and_does_not_hit_plex_tv(self, tmp_path):
+        from utils.plex import get_user_connection
+
+        cfg = self._config()
+        plex = self._admin()
+        with patch("utils.plex.plexapi.server.PlexServer"):
+            get_user_connection(plex, cfg, "alice")
+            plex.switchUser.reset_mock()
+            get_user_connection(plex, cfg, "alice")
+        plex.switchUser.assert_not_called(), "second call re-resolved the token from plex.tv"
+
+    def test_cache_survives_a_new_process(self, tmp_path):
+        """
+        The point of writing it to disk - runs are separate processes.
+
+        There is no in-process memo to clear (see the comment on
+        _USER_TOKEN_CACHE_FILE): the cache is the file, so reading it
+        back IS the cross-process path.
+        """
+        from utils.plex import _load_user_token, get_user_connection
+
+        cfg = self._config()
+        plex = self._admin()
+        with patch("utils.plex.plexapi.server.PlexServer"):
+            get_user_connection(plex, cfg, "alice")
+
+        assert _load_user_token(cfg, "machine-1:alice") == "alice-token"
+
+    def test_a_different_cache_dir_does_not_share_tokens(self, tmp_path):
+        """
+        Keying only by (server, user) let two configs with different
+        cache directories share entries - which leaked between tests when
+        this was first written, and would be wrong on a host running two
+        instances.
+        """
+        from utils.plex import get_user_connection
+
+        plex = self._admin()
+        with patch("utils.plex.plexapi.server.PlexServer"):
+            get_user_connection(plex, self._config("cache-a"), "alice")
+            plex.switchUser.reset_mock()
+            get_user_connection(plex, self._config("cache-b"), "alice")
+        plex.switchUser.assert_called_once(), "a separate cache dir reused another's token"
+
+    def test_token_file_is_owner_only(self, tmp_path):
+        """These are credentials, written no more loosely than config.yml."""
+        import os
+        import stat
+
+        from utils.plex import get_user_connection
+
+        plex = self._admin()
+        with patch("utils.plex.plexapi.server.PlexServer"):
+            get_user_connection(plex, self._config(), "alice")
+        mode = os.stat(Path(_root()) / "cache" / "plex_user_tokens.json").st_mode
+        assert stat.S_IMODE(mode) == 0o600
+
+    def test_rejected_cached_token_is_dropped_and_refetched(self, tmp_path):
+        """
+        A revoked token must not wedge the user permanently - the whole
+        reason this is invalidate-and-retry rather than trust-forever.
+        """
+        from utils.plex import get_user_connection
+
+        cfg = self._config()
+        plex = self._admin()
+        with patch("utils.plex.plexapi.server.PlexServer"):
+            get_user_connection(plex, cfg, "alice")
+
+        plex.switchUser.reset_mock()
+        with patch("utils.plex.plexapi.server.PlexServer", side_effect=plexapi.exceptions.Unauthorized("401")):
+            get_user_connection(plex, cfg, "alice")
+        plex.switchUser.assert_called_once(), "a rejected cached token was not refetched"
+
+    def test_owner_never_consults_the_cache(self, tmp_path):
+        from utils.plex import get_user_connection
+
+        plex = self._admin()
+        plex.myPlexAccount.return_value = Mock(username="alice", users=Mock(return_value=[]))
+        assert get_user_connection(plex, self._config(), "alice") is plex
+        assert not (Path(_root()) / "cache" / "plex_user_tokens.json").exists()
+
+    def test_unwritable_cache_is_not_fatal(self, tmp_path):
+        """A cache that cannot be written is a perf problem, not a correctness one."""
+        from utils.plex import get_user_connection
+
+        cfg = {"plex": {"token": "t"}, "cache_dir": "\x00invalid"}
+        plex = self._admin()
+        with patch("utils.plex.plexapi.server.PlexServer"):
+            result = get_user_connection(plex, cfg, "alice")
+        assert result is plex.switchUser.return_value

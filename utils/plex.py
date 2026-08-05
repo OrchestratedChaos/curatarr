@@ -12,7 +12,9 @@ import of plex_policy (and must never gain one - plex_policy imports
 FROM here, not the other way around, to avoid a cycle).
 """
 
+import json
 import logging
+import os
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -26,7 +28,7 @@ from plexapi.myplex import MyPlexAccount
 
 from .config import PLEX_LONG_REQUEST_TIMEOUT, PLEX_REQUEST_TIMEOUT
 from .display import GREEN, RESET, YELLOW, log_error, log_warning
-from .helpers import normalize_title, read_response_capped
+from .helpers import get_project_root, harden_file_permissions, normalize_title, read_response_capped
 from .labels import remove_labels_from_items
 from .metrics import record_api_call
 
@@ -1361,6 +1363,94 @@ def resolve_plex_user(account: Any, username: str) -> Optional[Any]:
     return None
 
 
+# Per-user server tokens, cached across runs.
+#
+# switchUser() resolves a user's server token from plex.tv on every call.
+# Reading per-user watched state for six users across the movie and TV
+# recommenders therefore issued a dozen plex.tv token requests per run
+# where there had previously been none. These tokens are stable for a
+# given (server, user) pair, so re-fetching them every run is pure waste
+# against a third-party API.
+#
+# Stored 0600 in the cache directory (already gitignored, and the same
+# treatment the watched caches get) - they are lower-privilege than the
+# admin token that already sits in config.yml in plaintext, but they are
+# still credentials and are written no more loosely than it is.
+# Deliberately file-only, with no in-process memo. A module-level dict
+# would be keyed by (server, user) but NOT by cache location, so two
+# configs pointing at different cache directories would share entries -
+# which is exactly how it leaked between tests when first written. The
+# file read it replaces is a few hundred bytes of local JSON against a
+# plex.tv round trip, so there is nothing to win by holding it in memory.
+_USER_TOKEN_CACHE_FILE = "plex_user_tokens.json"
+
+
+def _user_token_cache_path(config: Dict) -> str:
+    """
+    Mirrors BaseRecommender.__init__'s resolution exactly:
+    get_project_root() joined with config['cache_dir'] (a NAME, not an
+    absolute path, defaulting to "cache").
+
+    get_project_root is bound at module level on purpose. tests/conftest.py
+    isolates the cache directory by patching each CONSUMING module's own
+    binding rather than utils.helpers' - a lazily imported name would
+    resolve past that and write into the real repo's cache/, which the
+    suite has a hard session-level gate against for exactly this reason.
+    """
+    return os.path.join(get_project_root(), config.get("cache_dir", "cache"), _USER_TOKEN_CACHE_FILE)
+
+
+def _load_user_token(config: Dict, key: str) -> Optional[str]:
+    try:
+        with open(_user_token_cache_path(config), "r", encoding="utf-8") as fh:
+            stored = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(stored, dict):
+        return None
+    value = stored.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _store_user_token(config: Dict, key: str, token: str) -> None:
+    path = _user_token_cache_path(config)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        existing = {}
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+                if isinstance(loaded, dict):
+                    existing = loaded
+        except (OSError, ValueError):
+            pass
+        existing[key] = token
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(existing, fh)
+        harden_file_permissions(path)
+    except (OSError, ValueError, TypeError) as e:
+        # A cache that cannot be written is a performance problem, never
+        # a correctness one - the token was still obtained. ValueError
+        # covers a malformed cache_dir (an embedded null byte makes
+        # os.makedirs raise it, not OSError), which must not take down a
+        # run over an optional optimization.
+        logger.debug(f"Could not cache Plex user token: {e}")
+
+
+def forget_user_token(config: Dict, key: str) -> None:
+    """Drop a cached token that the server has stopped accepting."""
+    path = _user_token_cache_path(config)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            stored = json.load(fh)
+        if isinstance(stored, dict) and stored.pop(key, None) is not None:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(stored, fh)
+            harden_file_permissions(path)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
 def get_user_connection(plex: Any, config: Dict, username: Optional[str]) -> Any:
     """
     A PlexServer connection that sees the library as `username` does.
@@ -1396,6 +1486,24 @@ def get_user_connection(plex: Any, config: Dict, username: Optional[str]) -> Any
     if str(getattr(account, "username", "")).strip().lower() == username.strip().lower():
         return plex
 
+    machine_id = getattr(plex, "machineIdentifier", "") or ""
+    cache_key = f"{machine_id}:{username.strip().lower()}"
+
+    # Reuse a previously resolved token rather than asking plex.tv again.
+    cached = _load_user_token(config, cache_key)
+    if cached:
+        try:
+            return plexapi.server.PlexServer(plex._baseurl, token=cached, session=plex._session)
+        except (plexapi.exceptions.Unauthorized, plexapi.exceptions.PlexApiException) as e:
+            # A cached token the server no longer accepts (revoked, user
+            # removed and re-added) must not wedge this permanently -
+            # drop it and resolve a fresh one below.
+            logger.debug(f"Cached Plex token for '{username}' rejected ({e}) - refetching")
+            forget_user_token(config, cache_key)
+        except requests.RequestException as e:
+            log_warning(f"Could not reach Plex with the cached token for '{username}': {e}")
+            return plex
+
     user = resolve_plex_user(account, username)
     if user is None:
         log_warning(
@@ -1405,10 +1513,19 @@ def get_user_connection(plex: Any, config: Dict, username: Optional[str]) -> Any
         return plex
 
     try:
-        return plex.switchUser(user)
+        switched = plex.switchUser(user)
     except (plexapi.exceptions.PlexApiException, requests.RequestException) as e:
         log_warning(f"Could not switch to Plex user '{username}': {e} - using admin connection")
         return plex
+
+    # Only a real string is cacheable - plexapi's private attribute is
+    # not part of its public API, so treat anything else as "no token to
+    # cache" rather than writing a value that cannot be serialized (or,
+    # worse, round-tripped into a later connection attempt).
+    token = getattr(switched, "_token", None)
+    if machine_id and isinstance(token, str) and token:
+        _store_user_token(config, cache_key, token)
+    return switched
 
 
 def fetch_user_played_ids(plex: Any, config: Dict, username: Optional[str], section_title: str) -> Set[int]:
