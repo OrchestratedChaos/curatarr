@@ -14,7 +14,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.16.0"
+__version__ = "2.16.1"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 9  # v9: new cache FIELD - `content_rating` per item

@@ -1,5 +1,12 @@
 # Configuration (contains sensitive tokens)
 config/*.yml
+# Backups of the above hold the same secrets but do not end in .yml, so
+# `config/*.yml` never covered them - a pre-push secret scan caught a
+# config.yml.bak.tokenfix carrying a live Plex token and TMDB/Tautulli
+# keys being staged by `git add -A`.
+config/*.bak
+config/*.bak.*
+config/*.yml.*
 config/*.backup.*
 !config/*.example.yml
 

@@ -274,6 +274,10 @@ def _isolated_recommender_cache_dir(tmp_path_factory, monkeypatch):
     monkeypatch.setattr("recommenders.external.get_project_root", _fake_get_project_root)
     monkeypatch.setattr("recommenders.movie.get_project_root", _fake_get_project_root)
     monkeypatch.setattr("recommenders.tv.get_project_root", _fake_get_project_root)
+    # utils/plex.py resolves the per-user Plex token cache the same way
+    # (get_project_root + config['cache_dir']) and holds its own binding,
+    # so it needs the same treatment or it writes into the real cache/.
+    monkeypatch.setattr("utils.plex.get_project_root", _fake_get_project_root)
     monkeypatch.setattr("recommenders.base.migrate_legacy_cache_dir", lambda legacy_dir, new_dir: None)
 
 
