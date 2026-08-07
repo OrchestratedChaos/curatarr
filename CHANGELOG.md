@@ -2,6 +2,20 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.17.0] - 2026-08-06
+
+### Fixed
+
+- **A `CACHE_VERSION` bump silently reset every user's ignored-recommendation clock.** `label_dates` - the record of when each recommendation was first shown - lives inside the watched cache, and `check_cache_version()` deletes that file outright whenever `CACHE_VERSION` moves. But `CACHE_VERSION` exists to invalidate *derived* data (cached scores, metadata shape) and is bumped for scoring changes; `label_dates` is not derived, and it is the only clock the ignored-recommendation signal has.
+
+  Observed directly on a real install: two `CACHE_VERSION` bumps in one week left **every one of 301 labels across six users no older than 6 days**, so a signal needing weeks could never accumulate. It is now salvaged version-blind before the check runs and merged back after a rebuild. Verified against a real cache: all 50 entries survived a simulated bump with their original dates intact.
+
+### Changed
+
+- **`negative_signals.ignored_recommendations.min_days_shown` raised from 21 to 60 days.** A movie collection holds `limit_results` (50 by default) titles at once, and measured churn on a real install is only 2-5 replacements per nightly run - so titles genuinely persist for weeks, and someone working through fifty recommendations has not "declined" the ones they simply have not reached yet. Three weeks was flagging queued titles.
+
+  The asymmetry also favors patience: a title wrongly left un-penalized is merely recommended again, whereas one wrongly penalized drags its whole genre/keyword neighborhood down.
+
 ## [2.16.2] - 2026-08-06
 
 ### Fixed

@@ -3,6 +3,7 @@ Tests for recommenders/base.py - Base cache and recommender classes.
 """
 
 import copy
+import json
 import os
 from collections import Counter
 from unittest.mock import Mock, patch
@@ -3608,3 +3609,60 @@ class TestLoadWatchedCache:
 
         mock_warn.assert_called()
         recommender._refresh_watched_data.assert_called_once()
+
+
+class TestLabelDatesSurviveCacheRebuild:
+    """
+    label_dates must outlive a CACHE_VERSION bump.
+
+    CACHE_VERSION invalidates DERIVED data - cached scores, metadata
+    shape - and is bumped for scoring changes. label_dates is not
+    derived: it records when each recommendation was first shown, and it
+    is the only clock the ignored-recommendation signal has. Because
+    check_cache_version deletes the whole watched cache, a scoring change
+    used to reset that clock for every user. Observed directly: two
+    CACHE_VERSION bumps in one week left every label across six users no
+    older than 6 days, so a 60-day signal could never fire.
+    """
+
+    def test_salvages_label_dates_from_an_outdated_cache(self, tmp_path):
+        recommender = _make_recommender()
+        path = tmp_path / "watched.json"
+        path.write_text(
+            json.dumps({"cache_version": 1, "label_dates": {"1_Recommended_alice": "2026-01-01T00:00:00"}}),
+            encoding="utf-8",
+        )
+        salvaged = recommender._salvage_label_dates(str(path))
+        assert salvaged == {"1_Recommended_alice": "2026-01-01T00:00:00"}
+
+    def test_salvage_ignores_the_version(self, tmp_path):
+        """Version-blind on purpose - that is the whole point."""
+        recommender = _make_recommender()
+        path = tmp_path / "watched.json"
+        path.write_text(
+            json.dumps({"cache_version": 999999, "label_dates": {"7_R_bob": "2026-02-02T00:00:00"}}), encoding="utf-8"
+        )
+        assert recommender._salvage_label_dates(str(path)) == {"7_R_bob": "2026-02-02T00:00:00"}
+
+    def test_missing_file_yields_empty(self, tmp_path):
+        recommender = _make_recommender()
+        assert recommender._salvage_label_dates(str(tmp_path / "nope.json")) == {}
+
+    def test_malformed_file_yields_empty_not_a_crash(self, tmp_path):
+        """A missing clock is recoverable; a crashed run is not."""
+        recommender = _make_recommender()
+        path = tmp_path / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        assert recommender._salvage_label_dates(str(path)) == {}
+
+    def test_non_string_entries_are_dropped(self, tmp_path):
+        recommender = _make_recommender()
+        path = tmp_path / "w.json"
+        path.write_text(json.dumps({"label_dates": {"ok": "2026-01-01T00:00:00", "bad": 12345}}), encoding="utf-8")
+        assert recommender._salvage_label_dates(str(path)) == {"ok": "2026-01-01T00:00:00"}
+
+    def test_label_dates_absent_yields_empty(self, tmp_path):
+        recommender = _make_recommender()
+        path = tmp_path / "w.json"
+        path.write_text(json.dumps({"cache_version": 9}), encoding="utf-8")
+        assert recommender._salvage_label_dates(str(path)) == {}

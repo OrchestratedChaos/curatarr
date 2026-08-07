@@ -14,7 +14,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.16.2"
+__version__ = "2.17.0"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 9  # v9: new cache FIELD - `content_rating` per item
@@ -259,8 +259,21 @@ DEFAULT_NEGATIVE_THRESHOLD = 3  # Ratings 0-3 become negative signals
 # that sat in a user's collection this long without being watched counts
 # as declined - the impression-level feedback every large recommender
 # leans on, which curatarr recorded (label_dates) but never read.
-# Three weeks is long enough to outlast "saving it for the weekend".
-IGNORED_REC_MIN_DAYS_SHOWN = 21
+#
+# 60 days, not the 21 this shipped with. A movie collection holds
+# limit_results (50 by default) titles at once, and measured churn on a
+# real install is only 2-5 replacements per nightly run - so a title
+# genuinely persists for weeks, and someone working through fifty
+# recommendations at any normal viewing rate has not "declined" the ones
+# they have not reached yet. Three weeks flagged titles that were merely
+# queued.
+#
+# The asymmetry also favors patience: a title wrongly left un-penalized
+# just gets recommended again, whereas one wrongly penalized drags its
+# whole genre/keyword neighborhood down. Two months of sitting there,
+# unwatched, while the user demonstrably watched other things, is
+# evidence; three weeks is not.
+IGNORED_REC_MIN_DAYS_SHOWN = 60
 # Total negative weight one ignored title contributes, split across the
 # terms it carries. Small on purpose: one ignored title is weak evidence,
 # twenty sharing a genre is not.

@@ -249,7 +249,13 @@ negative_signals:
   # no genre can be buried so deep the profile cannot recover from it.
   ignored_recommendations:
     enabled: true
-    min_days_shown: 21  # Days on display before it counts as declined
+    # Days on display before a title counts as declined. 60 because a
+    # collection holds limit_results (50) titles at once and churns only
+    # a few per run - someone working through fifty recommendations has
+    # not declined the ones they simply have not reached. A title wrongly
+    # left alone is merely re-recommended; one wrongly penalized drags
+    # its whole neighborhood down, so this errs long.
+    min_days_shown: 60
     penalty: 0.5  # Total negative weight per ignored title
 
 # =============================================================================

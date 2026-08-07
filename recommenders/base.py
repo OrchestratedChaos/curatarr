@@ -843,6 +843,20 @@ class BaseRecommender(ABC):
     def _load_watched_cache(self) -> Dict:
         """Load watched cache from file. Returns the loaded cache dict."""
         watched_cache = {}
+        # Salvage label_dates BEFORE the version check, which deletes the
+        # file outright when CACHE_VERSION has moved.
+        #
+        # CACHE_VERSION exists to invalidate DERIVED data - cached scores,
+        # metadata shape - and is bumped for scoring changes that have
+        # nothing to do with user behavior. label_dates is not derived: it
+        # records when each recommendation was first shown, and it is the
+        # only clock the ignored-recommendation signal has (see
+        # utils/ignored_recs.py, which needs weeks of it). Letting a
+        # scoring change reset that clock meant the signal could never
+        # accumulate on an actively-maintained install - observed
+        # directly: two CACHE_VERSION bumps in one week left every label
+        # across six users no older than 6 days.
+        salvaged_label_dates = self._salvage_label_dates(self.watched_cache_path)
         cache_valid = check_cache_version(self.watched_cache_path, f"{self.media_type.upper()} watched cache")
         if cache_valid and os.path.exists(self.watched_cache_path):
             try:
@@ -876,6 +890,19 @@ class BaseRecommender(ABC):
             except (json.JSONDecodeError, KeyError, IOError) as e:
                 log_warning(f"Error loading watched cache: {e}")
                 self._refresh_watched_data()
+
+        # Carry the pre-rebuild clock forward. Entries already loaded from
+        # a still-valid cache win - they are the same values - so this only
+        # has an effect when the version check just deleted the file.
+        if salvaged_label_dates:
+            merged = dict(salvaged_label_dates)
+            merged.update(getattr(self, "label_dates", {}) or {})
+            if len(merged) > len(getattr(self, "label_dates", {}) or {}):
+                logger.debug(
+                    f"Preserved {len(merged) - len(getattr(self, 'label_dates', {}) or {})} label date(s) "
+                    f"across a watched-cache rebuild"
+                )
+            self.label_dates = merged
         return watched_cache
 
     def _do_save_watched_cache(self):
@@ -1245,6 +1272,28 @@ class BaseRecommender(ABC):
                 logger.debug(f"{self.single_user}: {len(self.user_played_ids)} items played per their own Plex view")
         except (AttributeError, KeyError, TypeError, ValueError) as e:
             logger.debug(f"Could not load per-user played ids: {e}")
+
+    @staticmethod
+    def _salvage_label_dates(cache_path: str) -> Dict[str, Any]:
+        """
+        Read label_dates out of a watched cache without honoring its
+        version.
+
+        Deliberately version-blind: this is the one key in that file that
+        must outlive a CACHE_VERSION bump, because it is an observation
+        log rather than derived data. Returns {} for any unreadable or
+        malformed file - a missing clock is recoverable, a crashed run is
+        not.
+        """
+        try:
+            with open(cache_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return {}
+        dates = data.get("label_dates") if isinstance(data, dict) else None
+        if not isinstance(dates, dict):
+            return {}
+        return {k: v for k, v in dates.items() if isinstance(k, str) and isinstance(v, str)}
 
     def _collection_label_name(self) -> str:
         """
