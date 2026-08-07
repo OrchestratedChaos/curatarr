@@ -51,10 +51,13 @@ class TestFindIgnoredRecommendations:
         assert find_ignored_recommendations(dates, LABEL, set(), now=NOW) == []
 
     def test_sorted_longest_shown_first(self):
+        """All three deliberately clear the threshold - this pins the
+        ORDER, not the cutoff (see the boundary tests above)."""
+        base = IGNORED_REC_MIN_DAYS_SHOWN
         dates = {
-            f"1_{LABEL}": _days_ago(30),
-            f"2_{LABEL}": _days_ago(90),
-            f"3_{LABEL}": _days_ago(60),
+            f"1_{LABEL}": _days_ago(base + 10),
+            f"2_{LABEL}": _days_ago(base + 90),
+            f"3_{LABEL}": _days_ago(base + 40),
         }
         assert [rk for rk, _ in find_ignored_recommendations(dates, LABEL, set(), now=NOW)] == [2, 3, 1]
 
