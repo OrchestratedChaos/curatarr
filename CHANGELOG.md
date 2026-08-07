@@ -2,6 +2,16 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.16.2] - 2026-08-06
+
+### Fixed
+
+- **`sign-release-checksums.sh` could sign a `SHA256SUMS.txt` that the release no longer serves, producing a signature no client can verify.** `release.yml` publishes a source-archive-only `SHA256SUMS.txt` from the `release` job, then `finalize-checksums` re-uploads the full aggregate with `--clobber` once every binary has built. Signing between those two points signs superseded bytes: the `.sig` uploads without complaint and *self-verifies* (it does match what was signed), and is then silently invalid against the file the release actually serves.
+
+  v2.16.1 shipped exactly that. It was caught only because the post-release smoke test's client-real verification failed - `ssh-keygen -Y verify` against the published pair returned `incorrect signature` - and it was fixed by re-signing the final aggregate.
+
+  The script's header already told the operator to wait for `finalize-checksums`; depending on them to remember is what failed. It now lists the release's assets and refuses to sign unless every published binary appears in the checksums file, naming what is missing and pointing at `gh run list --workflow=release.yml`. `RELEASING.md` carries the same warning.
+
 ## [2.16.1] - 2026-08-05
 
 ### Changed

@@ -166,6 +166,16 @@ gh_release_download_to() {
   fi
 }
 
+# $1=tag - prints the release's asset names, one per line.
+gh_release_asset_names() {
+  local tag="$1"
+  if [ "$GH_DELEGATE" -eq 1 ]; then
+    ssh "$CURATARR_GH_SSH_HOST" "gh release view '$tag' -R '$GITHUB_REPO' --json assets -q '.assets[].name'"
+  else
+    gh release view "$tag" -R "$GITHUB_REPO" --json assets -q '.assets[].name'
+  fi
+}
+
 # $1=tag $2=local file path - uploads $2 to the release. When delegated,
 # `gh release upload` has no stdin/stdout form (unlike download), so the
 # file is scp'd to a throwaway remote temp dir, uploaded from there, and
@@ -273,6 +283,42 @@ if ! gh_release_download_to "$TAG" "$SUMS_FILENAME" "$SUMS_FILENAME"; then
 fi
 echo "==> Downloaded (contents):"
 cat "$SUMS_FILENAME"
+
+# Confirm this is the FINAL aggregate, not the source-archive-only file
+# the `release` job publishes first.
+#
+# release.yml's finalize-checksums job re-uploads SHA256SUMS.txt with
+# --clobber once every binary has built. Signing before that produces a
+# signature over superseded bytes: the .sig uploads fine, self-verifies
+# fine (it matches what was signed), and is then silently invalid against
+# the file the release actually serves - which is how v2.16.1 shipped a
+# SHA256SUMS.txt.sig that no client could verify. The header tells the
+# operator to wait for that job; relying on them to remember is what
+# failed, so check it here instead.
+echo "==> Verifying this is the final aggregate (every published binary is listed)"
+MISSING=""
+while IFS= read -r asset; do
+  case "$asset" in
+    "$SUMS_FILENAME"|"$SIG_FILENAME"|*.sha256) continue ;;
+  esac
+  if ! grep -qF "  ${asset}" "$SUMS_FILENAME"; then
+    MISSING="${MISSING}         ${asset}\n"
+  fi
+done <<EOF
+$(gh_release_asset_names "$TAG")
+EOF
+
+if [ -n "$MISSING" ]; then
+  echo "ERROR: ${SUMS_FILENAME} does not cover every published asset - this is the" >&2
+  echo "       pre-finalize file, and signing it would produce a signature that no" >&2
+  echo "       client can verify against what the release serves." >&2
+  echo "       Missing:" >&2
+  printf "%b" "$MISSING" >&2
+  echo "       Wait for release.yml's finalize-checksums job, then re-run:" >&2
+  echo "         gh run list --workflow=release.yml" >&2
+  exit 1
+fi
+echo "==> Aggregate is complete"
 
 echo "==> Signing ${SUMS_FILENAME} (namespace: file)"
 ssh-keygen -Y sign -f "$SIGNING_KEY" -n file "$SUMS_FILENAME"

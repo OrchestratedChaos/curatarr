@@ -177,6 +177,17 @@ works (web UI "Update now" button, or `curatarr --self-update`).
 
 ## Signing a release's checksums (binary self-update trust anchor)
 
+> **Wait for `finalize-checksums` before signing.** `release.yml` publishes a
+> source-archive-only `SHA256SUMS.txt` first, then re-uploads the full
+> aggregate with `--clobber` once every binary has built. Signing in between
+> produces a signature over superseded bytes - it uploads fine and
+> self-verifies fine (it matches what was signed), then is silently invalid
+> against the file the release actually serves, so no client can self-update.
+> This happened on v2.16.1. `sign-release-checksums.sh` now refuses to sign a
+> `SHA256SUMS.txt` that doesn't list every published binary, so the mistake
+> aborts loudly instead of shipping.
+
+
 CI publishes `SHA256SUMS.txt` (step 8 above) but never signs it - the
 release-signing **private** key stays off CI entirely, same as tag
 signing. Signing `SHA256SUMS.txt` is therefore a separate, manual,
