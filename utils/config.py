@@ -1,3 +1,19 @@
+# curatarr
+# Copyright (C) 2026 OrchestratedChaos
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 """
 Configuration utilities for Curatarr.
 Handles config loading, section access, and rating multipliers.
@@ -14,7 +30,7 @@ import yaml
 from .display import log_error, log_info, log_warning
 
 # Project version - single source of truth
-__version__ = "2.17.0"
+__version__ = "2.18.0"
 
 # Cache version - bump this when cache format changes to auto-invalidate old caches
 CACHE_VERSION = 9  # v9: new cache FIELD - `content_rating` per item

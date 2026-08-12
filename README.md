@@ -992,7 +992,18 @@ roadmap. Just a way to say thanks if you feel like it.
 
 ## License
 
-MIT License. Use it, fork it, make it yours.
+Curatarr is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). The source stays open: you can use, study, modify, and
+redistribute it. Any derivative work must also be licensed under the
+AGPL-3.0, and if you run a modified version of Curatarr as a network
+service, you must make the source of your modified version available to
+its users. See [LICENSE](LICENSE) for the full text.
+
+**Version boundary:** all releases up to and including **v2.17.0** remain
+under the original **MIT License** and can continue to be used, forked, and
+modified under those terms. The AGPL-3.0 applies starting with the first
+release after v2.17.0. If you depend on MIT terms, pin to v2.17.0 or
+earlier; anything newer is AGPL-3.0.
 
 ---
 

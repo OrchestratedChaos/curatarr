@@ -61,7 +61,7 @@ FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd
 LABEL org.opencontainers.image.title="Curatarr" \
       org.opencontainers.image.description="Personalized recommendations for your Plex library" \
       org.opencontainers.image.source="https://github.com/OrchestratedChaos/curatarr" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.vendor="OrchestratedChaos"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

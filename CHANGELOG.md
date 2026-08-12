@@ -2,6 +2,17 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.18.0] - 2026-08-12
+
+### Changed
+
+- **Relicensed from MIT to AGPL-3.0.** Curatarr now ships under the GNU
+  Affero General Public License v3.0. All releases up to and including
+  v2.17.0 remain under the original MIT License; the AGPL-3.0 applies
+  starting with this release. See the License section in `README.md` and
+  the full text in `LICENSE`. Every first-party Python source file now
+  carries the standard AGPL notice header.
+
 ## [2.17.0] - 2026-08-06
 
 ### Fixed
