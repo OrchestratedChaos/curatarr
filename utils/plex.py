@@ -1160,20 +1160,36 @@ def get_configured_users(config: dict) -> dict:
         elif user_lower == admin_user.lower():
             processed_managed.append(admin_user)
         elif user_lower in all_usernames_lower:
-            processed_managed.append(all_usernames_lower[user_lower])
+            # #352: keep the admin's OWN config.yml spelling here, not
+            # all_usernames_lower[user_lower] (Plex's live .title this
+            # very moment). That live value only exists to CONFIRM the
+            # configured name still resolves to a real account - once
+            # confirmed, resubstituting it made every downstream
+            # consumer (label construction, collection naming, cache
+            # filenames, preferences lookups) key off whatever Plex
+            # happened to return this particular run instead of a
+            # stable, admin-controlled string. A genuine rename is still
+            # picked up - see utils.user_migration.migrate_renamed_plex_
+            # users, which rewrites this exact config.yml text (now
+            # covering plex.managed_users too) once a new title is
+            # corroborated across two consecutive runs, never on a
+            # single flap.
+            processed_managed.append(user)
         else:
             log_error(f"Error: Managed user '{user}' not found")
             raise ValueError(f"User '{user}' not found in Plex account")
 
-    # Dedup while preserving first-occurrence order. Written as an
-    # explicit loop (rather than the `not (u in seen or seen.add(u))`
-    # one-liner) so the set.add() call isn't used for its return value -
-    # same result, just without relying on set.add() always being None.
+    # Dedup while preserving first-occurrence order, case-insensitively -
+    # config.yml text is now used as-is (see above), so two entries that
+    # only differ by case ("TestUser, testuser") must still collapse to
+    # one the same way they did when both were normalized against the
+    # live title first.
     seen: set = set()
     managed_users = []
     for u in processed_managed:
-        if u not in seen:
-            seen.add(u)
+        key = u.lower()
+        if key not in seen:
+            seen.add(key)
             managed_users.append(u)
 
     return {"managed_users": managed_users, "plex_users": plex_users, "admin_user": admin_user}

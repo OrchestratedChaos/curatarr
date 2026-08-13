@@ -26,11 +26,13 @@ import plexapi.exceptions
 
 from utils.user_migration import (
     cleanup_orphaned_user_collections,
+    compute_rename_transitions,
     detect_renamed_users,
     get_live_plex_user_map,
     load_user_id_map,
     migrate_cache_files,
     migrate_renamed_plex_users,
+    rename_user_in_managed_users,
     rename_user_in_users_list,
     rename_user_preferences_key,
     save_user_id_map,
@@ -81,7 +83,10 @@ class TestLoadSaveUserIdMap:
         assert result == {}
 
     def test_save_then_load_roundtrip(self, tmp_path):
-        id_map = {"1": "testuser_alpha", "2": "testuser_bravo"}
+        id_map = {
+            "1": {"username": "testuser_alpha", "pending": None},
+            "2": {"username": "testuser_bravo", "pending": "testuser_bravo_new"},
+        }
         save_user_id_map(str(tmp_path), id_map)
 
         loaded = load_user_id_map(str(tmp_path))
@@ -107,9 +112,34 @@ class TestLoadSaveUserIdMap:
     def test_save_creates_cache_dir(self, tmp_path):
         cache_dir = tmp_path / "nested" / "cache"
 
-        save_user_id_map(str(cache_dir), {"1": "user"})
+        save_user_id_map(str(cache_dir), {"1": {"username": "user", "pending": None}})
 
         assert (cache_dir / "user_id_map.json").exists()
+
+    def test_legacy_flat_format_upgrades_on_load(self, tmp_path):
+        """#352: a pre-#352 file stored this flat ({id: username}, no
+        debounce state) - loading it must upgrade every entry in place
+        rather than dropping the install's existing rename history."""
+        path = tmp_path / "user_id_map.json"
+        path.write_text('{"1": "testuser_alpha", "2": "testuser_bravo"}', encoding="utf-8")
+
+        result = load_user_id_map(str(tmp_path))
+
+        assert result == {
+            "1": {"username": "testuser_alpha", "pending": None},
+            "2": {"username": "testuser_bravo", "pending": None},
+        }
+
+    def test_malformed_entries_are_dropped_not_fatal(self, tmp_path):
+        path = tmp_path / "user_id_map.json"
+        path.write_text(
+            '{"1": {"username": "alice", "pending": null}, "2": "", "3": {"pending": "x"}, "4": 42}',
+            encoding="utf-8",
+        )
+
+        result = load_user_id_map(str(tmp_path))
+
+        assert result == {"1": {"username": "alice", "pending": None}}
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +225,98 @@ class TestDetectRenamedUsers:
         result = detect_renamed_users(previous, live)
 
         assert result == {"old1": "new1", "old2": "new2"}
+
+
+class TestComputeRenameTransitions:
+    """#352: the debounced rename detector migrate_renamed_plex_users
+    actually calls - a single differing observation is remembered as
+    "pending" but never confirmed until the SAME new value is seen on a
+    second, later run."""
+
+    def test_first_observation_is_not_a_rename(self):
+        previous = {"1": {"username": "alexpigot", "pending": None}}
+        live = {"1": "Alex Pigot"}
+
+        confirmed, updated = compute_rename_transitions(previous, live)
+
+        assert confirmed == {}
+        assert updated == {"1": {"username": "alexpigot", "pending": "Alex Pigot"}}
+
+    def test_second_matching_observation_confirms_the_rename(self):
+        """Simulates two consecutive runs: run 1 sees the flap and
+        records it pending (previous state here already reflects that),
+        run 2 sees the identical new value again."""
+        previous = {"1": {"username": "alexpigot", "pending": "Alex Pigot"}}
+        live = {"1": "Alex Pigot"}
+
+        confirmed, updated = compute_rename_transitions(previous, live)
+
+        assert confirmed == {"alexpigot": "Alex Pigot"}
+        assert updated == {"1": {"username": "Alex Pigot", "pending": None}}
+
+    def test_a_flap_back_to_baseline_clears_pending_without_renaming(self):
+        """alexpigot -> Alex Pigot (pending) -> alexpigot again: back to
+        the original value, never confirmed, and the flap is forgotten
+        rather than lingering to falsely corroborate a later run."""
+        previous = {"1": {"username": "alexpigot", "pending": "Alex Pigot"}}
+        live = {"1": "alexpigot"}
+
+        confirmed, updated = compute_rename_transitions(previous, live)
+
+        assert confirmed == {}
+        assert updated == {"1": {"username": "alexpigot", "pending": None}}
+
+    def test_a_third_different_value_restarts_the_pending_count(self):
+        """A first flap to "Alex Pigot" must not let a later, DIFFERENT
+        flap to "AlexP" get corroborated against the stale pending value
+        - two DIFFERENT wrong guesses must never compound into a
+        confirmed rename."""
+        previous = {"1": {"username": "alexpigot", "pending": "Alex Pigot"}}
+        live = {"1": "AlexP"}
+
+        confirmed, updated = compute_rename_transitions(previous, live)
+
+        assert confirmed == {}
+        assert updated == {"1": {"username": "alexpigot", "pending": "AlexP"}}
+
+    def test_no_op_when_username_unchanged(self):
+        previous = {"1": {"username": "samename", "pending": None}}
+        live = {"1": "samename"}
+
+        confirmed, updated = compute_rename_transitions(previous, live)
+
+        assert confirmed == {}
+        assert updated == {"1": {"username": "samename", "pending": None}}
+
+    def test_id_missing_from_live_map_is_carried_over_unchanged(self):
+        """An id that disappeared from Plex this run (API hiccup, or a
+        genuine departure - #351/#354 handle that separately) must not
+        lose its history, including any not-yet-corroborated pending
+        value."""
+        previous = {"1": {"username": "oldname", "pending": "maybe_new"}}
+
+        confirmed, updated = compute_rename_transitions(previous, {})
+
+        assert confirmed == {}
+        assert updated == previous
+        assert updated is not previous  # never mutates the caller's dict in place
+
+    def test_new_id_with_no_prior_history_seeds_baseline_without_renaming(self):
+        confirmed, updated = compute_rename_transitions({}, {"1": "brand_new_user"})
+
+        assert confirmed == {}
+        assert updated == {"1": {"username": "brand_new_user", "pending": None}}
+
+    def test_legacy_flat_entry_shape_from_load_user_id_map_still_works(self):
+        """previous_map here is exactly what load_user_id_map returns,
+        including its own back-compat upgrade of a pre-#352 flat file -
+        confirms the two functions' shapes actually agree."""
+        previous = {"1": {"username": "alexpigot", "pending": None}}
+
+        confirmed, updated = compute_rename_transitions(previous, {"1": "alexpigot"})
+
+        assert confirmed == {}
+        assert updated == previous
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +419,76 @@ class TestRenameUserInUsersList:
 
         assert changed is False
         assert new_text == SAMPLE_CONFIG_TEXT
+
+
+class TestRenameUserInManagedUsers:
+    """#352: legacy plex.managed_users comma-string counterpart to
+    TestRenameUserInUsersList - needed once get_configured_users() stops
+    re-substituting Plex's live title over the config text every run
+    (see utils.plex.get_configured_users), since config.yml text itself
+    is now the only place that spelling ever gets updated."""
+
+    LEGACY_CONFIG_TEXT = (
+        "plex:\n"
+        "  url: https://example.plex.direct:32400\n"
+        "  token: test-token\n"
+        "  managed_users: alexpigot, testjunk326\n"
+        "  movie_library: Movies\n"
+        "tmdb:\n"
+        "  api_key: test-key\n"
+    )
+
+    def test_renames_entry_in_managed_users(self):
+        new_text, changed = rename_user_in_managed_users(self.LEGACY_CONFIG_TEXT, "alexpigot", "Alex Pigot")
+
+        assert changed is True
+        managed_line = [line for line in new_text.splitlines() if line.strip().startswith("managed_users:")][0]
+        assert "Alex Pigot" in managed_line
+        assert "alexpigot" not in managed_line
+        # Other entry on the same line preserved
+        assert "testjunk326" in managed_line
+
+    def test_other_lines_untouched(self):
+        new_text, changed = rename_user_in_managed_users(self.LEGACY_CONFIG_TEXT, "alexpigot", "Alex Pigot")
+
+        assert changed is True
+        assert "token: test-token" in new_text
+        assert "movie_library: Movies" in new_text
+
+    def test_no_change_when_user_not_in_managed_users(self):
+        new_text, changed = rename_user_in_managed_users(self.LEGACY_CONFIG_TEXT, "nonexistent_user", "somebody_new")
+
+        assert changed is False
+        assert new_text == self.LEGACY_CONFIG_TEXT
+
+    def test_no_change_when_no_plex_section(self):
+        text = "users:\n  list: alice, bob\n"
+
+        new_text, changed = rename_user_in_managed_users(text, "alice", "alicia")
+
+        assert changed is False
+        assert new_text == text
+
+    def test_no_change_when_no_managed_users_key(self):
+        text = "plex:\n  url: http://x\n  token: t\n"
+
+        new_text, changed = rename_user_in_managed_users(text, "alice", "alicia")
+
+        assert changed is False
+        assert new_text == text
+
+    def test_does_not_partial_match_substring_username(self):
+        new_text, changed = rename_user_in_managed_users(self.LEGACY_CONFIG_TEXT, "alex", "renamed")
+
+        assert changed is False
+        assert new_text == self.LEGACY_CONFIG_TEXT
+
+    def test_idempotent_when_already_renamed(self):
+        new_text, changed = rename_user_in_managed_users(self.LEGACY_CONFIG_TEXT, "alexpigot", "Alex Pigot")
+        second_text, second_changed = rename_user_in_managed_users(new_text, "alexpigot", "Alex Pigot")
+
+        assert second_changed is False
+        assert second_text == new_text
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +627,12 @@ class TestMigrateRenamedPlexUsers:
 
         root_config = yaml.safe_load(open(config_path, encoding="utf-8"))
 
+        # #352: a single differing observation only records it pending -
+        # migration requires a second, later run corroborating it.
+        first_renames = migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
+        assert first_renames == {}
+        mock_cleanup.assert_not_called()
+
         renames = migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
 
         assert renames == {"testuser_alpha": "jsmith_new"}
@@ -444,7 +642,7 @@ class TestMigrateRenamedPlexUsers:
         assert "list: jsmith_new, testuser_bravo, testuser_charlie" in new_text
 
         updated_map = load_user_id_map(str(cache_dir))
-        assert updated_map == {"1": "jsmith_new"}
+        assert updated_map == {"1": {"username": "jsmith_new", "pending": None}}
 
         mock_cleanup.assert_called_once()
         call_args = mock_cleanup.call_args[0]
@@ -465,6 +663,9 @@ class TestMigrateRenamedPlexUsers:
         root_config = yaml.safe_load(open(config_path, encoding="utf-8"))
 
         migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
+        assert (cache_dir / "watched_cache_plex_testuser_alpha.json").exists(), "acted on an unconfirmed rename"
+
+        migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
 
         assert not (cache_dir / "watched_cache_plex_testuser_alpha.json").exists()
         assert (cache_dir / "watched_cache_plex_jsmith_new.json").exists()
@@ -483,12 +684,70 @@ class TestMigrateRenamedPlexUsers:
         root_config = yaml.safe_load(open(config_path, encoding="utf-8"))
 
         migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
+        migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
 
         mock_cleanup.assert_called_once()
         args = mock_cleanup.call_args[0]
         # (config, old_username, old_display_name)
         assert args[1] == "testuser_alpha"
         assert args[2] == "Alpha"  # display_name captured before the rewrite
+
+    @patch("utils.user_migration.cleanup_orphaned_user_collections")
+    @patch("utils.user_migration.get_live_plex_user_map")
+    def test_single_flap_never_migrates_anything(self, mock_live_map, mock_cleanup, tmp_path):
+        """#352's core requirement: one differing observation must never
+        touch config.yml, cache files, or Plex - only a corroborated
+        (two-run) rename may."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        save_user_id_map(str(cache_dir), {"1": "alexpigot"})
+        (cache_dir / "watched_cache_plex_alexpigot.json").write_text("{}", encoding="utf-8")
+        mock_live_map.return_value = {"1": "Alex Pigot"}
+
+        config_path = self._write_config(tmp_path)
+        import yaml
+
+        root_config = yaml.safe_load(open(config_path, encoding="utf-8"))
+        original_text = open(config_path, encoding="utf-8").read()
+
+        renames = migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
+
+        assert renames == {}
+        mock_cleanup.assert_not_called()
+        assert open(config_path, encoding="utf-8").read() == original_text
+        assert (cache_dir / "watched_cache_plex_alexpigot.json").exists()
+
+        # The flap is remembered, though - a second run repeating it does
+        # migrate (proven above by test_migrates_preferences_and_list_on_rename).
+        assert load_user_id_map(str(cache_dir)) == {"1": {"username": "alexpigot", "pending": "Alex Pigot"}}
+
+    @patch("utils.user_migration.cleanup_orphaned_user_collections")
+    @patch("utils.user_migration.get_live_plex_user_map")
+    def test_flap_reverting_to_baseline_never_migrates(self, mock_live_map, mock_cleanup, tmp_path):
+        """alexpigot -> Alex Pigot -> alexpigot across three runs must
+        never migrate anything - the third observation matches the
+        ORIGINAL baseline, not the pending value, so it is never
+        corroborated."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        save_user_id_map(str(cache_dir), {"1": "alexpigot"})
+
+        config_path = self._write_config(tmp_path)
+        import yaml
+
+        root_config = yaml.safe_load(open(config_path, encoding="utf-8"))
+        original_text = open(config_path, encoding="utf-8").read()
+
+        mock_live_map.return_value = {"1": "Alex Pigot"}
+        migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
+
+        mock_live_map.return_value = {"1": "alexpigot"}
+        renames = migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
+
+        assert renames == {}
+        mock_cleanup.assert_not_called()
+        assert open(config_path, encoding="utf-8").read() == original_text
+        assert load_user_id_map(str(cache_dir)) == {"1": {"username": "alexpigot", "pending": None}}
 
     @patch("utils.user_migration.cleanup_orphaned_user_collections")
     @patch("utils.user_migration.get_live_plex_user_map")
@@ -545,7 +804,7 @@ class TestMigrateRenamedPlexUsers:
         renames = migrate_renamed_plex_users(root_config, config_path, str(cache_dir))
 
         assert renames == {}
-        assert load_user_id_map(str(cache_dir)) == {"1": "testuser_alpha"}
+        assert load_user_id_map(str(cache_dir)) == {"1": {"username": "testuser_alpha", "pending": None}}
 
     @patch("utils.user_migration.get_live_plex_user_map")
     def test_never_raises_on_unexpected_error(self, mock_live_map, tmp_path):

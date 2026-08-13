@@ -37,7 +37,7 @@ import json
 import logging
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import plexapi.exceptions
 from plexapi.myplex import MyPlexAccount
@@ -65,23 +65,54 @@ CACHE_FILENAME_PATTERNS = [
 # ---------------------------------------------------------------------------
 
 
-def load_user_id_map(cache_dir: str) -> Dict[str, str]:
-    """Load the persisted Plex account id -> last-known-username map."""
+def load_user_id_map(cache_dir: str) -> Dict[str, Dict[str, Optional[str]]]:
+    """
+    Load the persisted Plex account id -> {"username": last-CONFIRMED
+    name, "pending": a differing name observed once but not yet
+    corroborated (or None)} map.
+
+    #352: "pending" is what makes rename detection require corroboration
+    - see compute_rename_transitions. A single flapping observation is
+    recorded here without being treated as a rename; only a SECOND
+    consecutive run observing the SAME new name promotes it to
+    "username".
+
+    Back-compat: a pre-#352 file stored this flat ({id: username}, no
+    debounce state) - each such entry is upgraded to {"username":
+    username, "pending": None} on load, so an existing install's rename
+    history is preserved rather than reset to "never seen before" (which
+    would itself skip one generation of rename detection).
+    """
     path = os.path.join(cache_dir, USER_ID_MAP_FILENAME)
     if not os.path.exists(path):
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
     except (json.JSONDecodeError, IOError, OSError) as e:
         log_warning(f"Could not read user id map ({path}): {e}")
-    return {}
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    result: Dict[str, Dict[str, Optional[str]]] = {}
+    for account_id, entry in data.items():
+        if isinstance(entry, str) and entry:
+            # Legacy flat shape.
+            result[str(account_id)] = {"username": entry, "pending": None}
+        elif isinstance(entry, dict) and isinstance(entry.get("username"), str) and entry["username"]:
+            pending = entry.get("pending")
+            result[str(account_id)] = {
+                "username": entry["username"],
+                "pending": pending if isinstance(pending, str) and pending else None,
+            }
+        # else: malformed entry, dropped rather than failing the whole load.
+    return result
 
 
-def save_user_id_map(cache_dir: str, id_map: Dict[str, str]) -> None:
-    """Persist the Plex account id -> username map."""
+def save_user_id_map(cache_dir: str, id_map: Mapping[str, Dict[str, Optional[str]]]) -> None:
+    """Persist the Plex account id -> {"username", "pending"} map."""
     path = os.path.join(cache_dir, USER_ID_MAP_FILENAME)
     try:
         os.makedirs(cache_dir, exist_ok=True)
@@ -116,6 +147,14 @@ def detect_renamed_users(previous_map: Dict[str, str], live_map: Dict[str, str])
     """
     Return {old_username: new_username} for accounts whose stable id is
     known from a prior run but whose username has since changed.
+
+    A single-observation diff with no debounce - kept as a standalone,
+    still-tested helper for exactly that reason. The actual migration
+    orchestrator (migrate_renamed_plex_users) does NOT call this
+    directly; it calls compute_rename_transitions below, which requires
+    the SAME differing value to be observed on two consecutive runs
+    before treating it as a real rename (#352) rather than a single
+    flapping Plex API response.
     """
     renames = {}
     for account_id, old_username in previous_map.items():
@@ -123,6 +162,77 @@ def detect_renamed_users(previous_map: Dict[str, str], live_map: Dict[str, str])
         if new_username and new_username != old_username:
             renames[old_username] = new_username
     return renames
+
+
+def compute_rename_transitions(
+    previous_map: Dict[str, Dict[str, Optional[str]]], live_map: Dict[str, str]
+) -> Tuple[Dict[str, str], Dict[str, Dict[str, Optional[str]]]]:
+    """
+    #352: debounced rename detection - the corroboration gate in front of
+    every destructive step migrate_renamed_plex_users can take (config.yml
+    rewrite, cache file rename, orphaned-collection cleanup).
+
+    A single run where an account's live title differs from its last
+    CONFIRMED username is recorded as "pending" but is NOT yet a rename.
+    Only once the SAME new title is observed again on a later run - two
+    consecutive differing observations agreeing with each other - is it
+    confirmed. Field evidence for why this matters: the same physical
+    account observed as "alexpigot", then "Alex Pigot", then "Alex Pigot"
+    again, then absent, all within one two-hour window - a single-
+    observation diff (the pre-#352 behavior) would have torn down and
+    recreated that user's real collection on the very first flap.
+
+    Args:
+        previous_map: this run's starting cache/user_id_map.json state
+            (load_user_id_map's return shape).
+        live_map: this run's fresh Plex account id -> title observation
+            (get_live_plex_user_map's return shape).
+
+    Returns:
+        (confirmed_renames, updated_map) -
+        confirmed_renames: {old_username: new_username} - exactly what
+            migrate_renamed_plex_users acts on.
+        updated_map: the new persisted state to save via
+            save_user_id_map. Every id in live_map gets an entry; an id
+            present in previous_map but absent from live_map this run
+            (API hiccup, or a genuine departure - #351/#354 handle that
+            separately) is carried over completely unchanged rather than
+            dropped, since a transient fetch gap must not erase rename-
+            detection history or silently clear a pending observation.
+    """
+    updated: Dict[str, Dict[str, Optional[str]]] = dict(previous_map)
+    confirmed: Dict[str, str] = {}
+
+    for account_id, live_username in live_map.items():
+        prev = previous_map.get(account_id)
+        if prev is None:
+            # First time this account id has ever been observed -
+            # nothing to compare against, so this run's value becomes
+            # the baseline. Never a rename (there is no "old" name yet).
+            updated[account_id] = {"username": live_username, "pending": None}
+            continue
+
+        confirmed_username = prev.get("username") or live_username
+        pending_username = prev.get("pending")
+
+        if live_username == confirmed_username:
+            # Back at (or still at) baseline - clears any stale pending
+            # flap instead of leaving it around to falsely corroborate a
+            # LATER, unrelated observation of that same value.
+            updated[account_id] = {"username": confirmed_username, "pending": None}
+        elif pending_username == live_username:
+            # Second consecutive run observing this exact new value -
+            # corroborated, promote it.
+            confirmed[confirmed_username] = live_username
+            updated[account_id] = {"username": live_username, "pending": None}
+        else:
+            # First observation of this differing value (or it disagrees
+            # with a still-unconfirmed prior flap, which restarts the
+            # count rather than compounding two different wrong guesses)
+            # - remember it, do not act on it yet.
+            updated[account_id] = {"username": confirmed_username, "pending": live_username}
+
+    return confirmed, updated
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +360,47 @@ def rename_user_in_users_list(config_text: str, old_username: str, new_username:
     return config_text, False
 
 
+def rename_user_in_managed_users(config_text: str, old_username: str, new_username: str) -> Tuple[str, bool]:
+    """
+    #352: legacy-format counterpart to rename_user_in_users_list - rename
+    `old_username` to `new_username` inside the `plex.managed_users`
+    comma-separated scalar (e.g. `managed_users: alexpigot, testjunk326`).
+
+    Before #352, get_configured_users() re-resolved every managed_users
+    entry against Plex's live title on every run, so a real rename never
+    needed this - the live substitution masked it. Now that
+    get_configured_users() keeps the config text's own spelling stable
+    (see its own comment), a confirmed rename has to be written back here
+    or a legacy-format install would keep failing "Managed user 'X' not
+    found" forever after a real rename, once the old spelling stops
+    resolving against Plex entirely.
+    """
+    lines = config_text.splitlines(keepends=True)
+
+    plex_line = _find_bare_key_line(lines, "plex", 0, len(lines))
+    if plex_line is None:
+        return config_text, False
+    plex_indent = _line_indent(lines[plex_line])
+    plex_end = _block_end(lines, plex_line, plex_indent)
+
+    token_pattern = re.compile(rf"(?<![\w.-]){re.escape(old_username)}(?![\w.-])")
+    managed_users_pattern = re.compile(r"^(?P<indent>[ \t]*)managed_users\s*:\s*(?P<value>.*)$")
+
+    for i in range(plex_line + 1, plex_end):
+        stripped_line = lines[i].rstrip("\r\n")
+        newline = lines[i][len(stripped_line) :]
+        m = managed_users_pattern.match(stripped_line)
+        if not m:
+            continue
+        if not token_pattern.search(m.group("value")):
+            return config_text, False
+        new_value = token_pattern.sub(new_username, m.group("value"), count=1)
+        lines[i] = f"{m.group('indent')}managed_users: {new_value}{newline}"
+        return "".join(lines), True
+
+    return config_text, False
+
+
 # ---------------------------------------------------------------------------
 # Cache files + orphaned collections
 # ---------------------------------------------------------------------------
@@ -366,10 +517,10 @@ def cleanup_orphaned_user_collections(config: Dict, old_username: str, old_displ
 
 def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: str) -> Dict[str, str]:
     """
-    Detect Plex account renames (by stable id) since the last run and
-    migrate this user's config preferences, users.list entry, cache files,
-    and orphaned Plex collection so a rename doesn't silently reset their
-    settings.
+    Detect Plex account renames (by stable id, debounced - #352) since the
+    last run and migrate this user's config preferences, users.list/
+    managed_users entry, cache files, and orphaned Plex collection so a
+    rename doesn't silently reset their settings.
 
     Args:
         root_config: Raw config.yml dict (as loaded, before per-media adapt)
@@ -378,8 +529,11 @@ def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: s
         cache_dir: Directory containing curatarr's per-user cache files
 
     Returns:
-        {old_username: new_username} for any renames that were detected
-        (whether or not every part of the migration fully succeeded).
+        {old_username: new_username} for any CONFIRMED renames (two
+        consecutive runs observing the same new title - see
+        compute_rename_transitions). A single differing observation is
+        recorded internally as "pending" and returns {} here - nothing
+        in config.yml, cache/, or Plex is touched for it yet.
     """
     try:
         previous_map = load_user_id_map(cache_dir)
@@ -388,7 +542,7 @@ def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: s
             # Can't resolve stable ids this run - leave everything as-is.
             return {}
 
-        renames = detect_renamed_users(previous_map, live_map)
+        renames, updated_map = compute_rename_transitions(previous_map, live_map)
 
         if renames:
             config_text = None
@@ -408,9 +562,12 @@ def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: s
                             config_text, old_username, new_username
                         )
                         config_text, list_changed = rename_user_in_users_list(config_text, old_username, new_username)
-                        if not (prefs_changed or list_changed):
+                        config_text, managed_changed = rename_user_in_managed_users(
+                            config_text, old_username, new_username
+                        )
+                        if not (prefs_changed or list_changed or managed_changed):
                             log_warning(
-                                f"Could not locate '{old_username}' in config.yml users section "
+                                f"Could not locate '{old_username}' in config.yml users/managed_users "
                                 f"(unexpected format) - settings were not migrated automatically."
                             )
                     except Exception as e:
@@ -433,7 +590,7 @@ def migrate_renamed_plex_users(root_config: Dict, config_path: str, cache_dir: s
                 except (IOError, OSError) as e:
                     log_warning(f"Could not write migrated config.yml: {e}")
 
-        save_user_id_map(cache_dir, live_map)
+        save_user_id_map(cache_dir, updated_map)
         return renames
 
     except Exception as e:
