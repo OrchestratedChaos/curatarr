@@ -58,6 +58,12 @@ from plexapi.myplex import MyPlexAccount
 from .config import MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV, PLEX_REQUEST_TIMEOUT
 from .display import GREEN, RESET, log_warning
 from .plex import _capped_get, _capped_put
+from .private_label_cache import (
+    find_orphaned_owners,
+    load_private_label_owners,
+    prune_orphaned_private_collections,
+    save_private_label_owners,
+)
 
 logger = logging.getLogger("curatarr")
 
@@ -194,10 +200,27 @@ def build_all_private_labels(
     return labels
 
 
+# #351: filterMovies/filterTelevision are sent to plex.tv as URL
+# query-string params (see the _capped_put call below), not a request
+# body - there is no documented hard limit, but a query string growing
+# without bound risks silent rejection/truncation somewhere between here
+# and Plex's servers (a proxy, a load balancer, plex.tv itself).
+# Retaining departed owners' labels (see the exclude-list computation
+# below) makes this list monotonically non-shrinking by design, where
+# previously it could only ever be as long as the currently-configured
+# user count. Purely advisory: nothing here ever truncates the value
+# being sent - silently dropping a label to fit under a made-up limit
+# would just reintroduce this same bug for whichever label got cut - it
+# only logs loudly so an install accumulating many never-pruned departed
+# owners finds out from a warning, not from a quietly-broken exclusion.
+MAX_EXCLUDE_FILTER_LENGTH = 4000
+
+
 def apply_user_label_restrictions(
     config: Dict,
     all_user_private_labels: Mapping[str, Union[str, Sequence[str], Mapping[str, Sequence[str]]]],
     restrict_unconfigured_users: bool = True,
+    cache_dir: Optional[str] = None,
 ) -> bool:
     """
     Apply exclude restrictions so each user's collection is excluded from
@@ -235,6 +258,22 @@ def apply_user_label_restrictions(
                          "PrivateCollection" instead of the configured
                          label_name)
                          e.g., {'Jason': 'PrivateCollection_Jason', 'Sarah': 'PrivateCollection_Sarah'}
+        restrict_unconfigured_users: Cover every user on the server
+                         (#332), not only configured ones - see the
+                         comment on the short-circuit below.
+        cache_dir: Directory holding cache/private_label_owners.json
+                         (#351) - typically BaseRecommender.cache_dir.
+                         When given, this run (a) retains any previously
+                         -persisted owner's label in the exclude
+                         computation even after they leave config, (b)
+                         warns once if any such departed owners are
+                         found, (c) tears their collection down if
+                         collections.prune_orphaned_private_labels is
+                         enabled, and (d) persists this run's owners for
+                         next time. None (the default) skips all of
+                         that and behaves exactly as before #351 -
+                         existing callers/tests that never pass it are
+                         unaffected.
 
     Returns:
         True if all restrictions applied successfully, False if any failed
@@ -242,12 +281,23 @@ def apply_user_label_restrictions(
     if not all_user_private_labels:
         return True
 
+    # #351: loaded up front (cheap, local disk) so the short-circuit
+    # below can account for departed owners this run might still need to
+    # retain - a non-empty persisted cache means there is potentially
+    # something to do even when today's config has only one owner.
+    persisted_owners: Dict[str, Dict] = {}
+    if cache_dir:
+        persisted_owners = load_private_label_owners(cache_dir)
+
     # One configured user hides their collection from nobody - UNLESS
     # unconfigured server users are also covered (#332), in which case
     # that single user's collection still needs hiding from everyone
     # else on the server. The old unconditional short-circuit silently
-    # disabled that whole path for single-user installs.
-    if len(all_user_private_labels) <= 1 and not restrict_unconfigured_users:
+    # disabled that whole path for single-user installs. #351: also
+    # skipped only when nothing is persisted either - a departed owner's
+    # retained label still needs excluding from this one remaining user
+    # even though today's config has only them.
+    if len(all_user_private_labels) <= 1 and not restrict_unconfigured_users and not persisted_owners:
         return True
 
     plex_token = config["plex"]["token"]
@@ -335,6 +385,50 @@ def apply_user_label_restrictions(
 
         admin_id = alias_to_id.get(admin_username)
 
+        # #351: a user removed from config must not have their label
+        # silently un-hidden from everyone else - union in any persisted
+        # owner whose account id is no longer among this run's resolved
+        # id_to_configured. Keyed by their last-known username, which can
+        # never collide with a real id_to_configured VALUE for someone
+        # else (those all come from all_user_private_labels' own keys,
+        # checked first) unless a live config user happens to reuse that
+        # exact name, in which case the live entry wins and the stale one
+        # is skipped.
+        orphaned_owners = find_orphaned_owners(persisted_owners, id_to_configured.keys())
+
+        # Defense in depth: a username that is still a key in
+        # all_user_private_labels is, by definition, still configured
+        # this run - never treat it as orphaned just because id
+        # resolution happened to miss it this run (a transient Plex API
+        # hiccup, a one-off alias mismatch, etc). Without this, a
+        # resolution failure for an otherwise-still-configured user could
+        # both misreport them as departed AND - with
+        # prune_orphaned_private_labels enabled - actually delete their
+        # real collection, which must never happen to a configured user.
+        orphaned_owners = {
+            account_id: entry
+            for account_id, entry in orphaned_owners.items()
+            if entry["username"] not in all_user_private_labels
+        }
+
+        effective_labels: Dict[str, Any] = dict(all_user_private_labels)
+        for entry in orphaned_owners.values():
+            key = entry["username"]
+            if key in effective_labels:
+                continue
+            effective_labels[key] = entry["labels"]
+
+        if orphaned_owners:
+            orphan_names = sorted(entry["username"] for entry in orphaned_owners.values())
+            log_warning(
+                f"{len(orphan_names)} user(s) no longer configured still have a "
+                f"PrivateCollection_* label excluded from every other user's filters, "
+                f"so their collection stays hidden rather than unexpectedly exposed: "
+                f"{', '.join(orphan_names)}. Set collections.prune_orphaned_private_labels: "
+                "true in config/tuning.yml to delete their orphaned collection(s) and "
+                "stop tracking them."
+            )
+
         # #332: cover every user on the server, not only configured ones -
         # an unmanaged user still sees everyone's PrivateCollection_*
         # collections otherwise, which is the condition this prevents.
@@ -346,6 +440,17 @@ def apply_user_label_restrictions(
                 continue
 
             owner = id_to_configured.get(user_id)  # None => not configured, owns no labels
+            if owner is None:
+                # #351: a departed-but-still-present-on-the-server owner
+                # (restrict_unconfigured_users still recomputes their
+                # filter too, per #332) must keep seeing their OWN old
+                # collection - only every OTHER user's exclude filter is
+                # supposed to retain their label. Without this fallback,
+                # their retained label would never match `owner` below
+                # (which is None for them) and would wrongly get
+                # excluded from their own filter too.
+                orphan_entry = orphaned_owners.get(user_id)
+                owner = orphan_entry["username"] if orphan_entry else None
             display = owner or (by_id.get(user_id, {}).get("aliases") or [user_id])[0]
 
             # Per media type (#340): filterMovies governs movie libraries
@@ -353,13 +458,30 @@ def apply_user_label_restrictions(
             # other kind can never match there and does not belong in it.
             params: Dict[str, str] = {}
             for field, media_type in (("filterMovies", MEDIA_TYPE_MOVIE), ("filterTelevision", MEDIA_TYPE_TV)):
-                exclude = [
-                    label
-                    for name, labels in all_user_private_labels.items()
-                    if name != owner
-                    for label in _labels_for(labels, media_type)
-                ]
-                params[field] = f"label!={','.join(exclude)}" if exclude else ""
+                # #351: effective_labels (computed above), not
+                # all_user_private_labels directly - the union of
+                # currently configured owners and any still-retained
+                # departed owners. De-duped (explicit loop, not a list
+                # comprehension, to preserve order while doing it) in
+                # case a departed owner's persisted labels ever overlap
+                # a live one's.
+                exclude: List[str] = []
+                for name, labels in effective_labels.items():
+                    if name == owner:
+                        continue
+                    for label in _labels_for(labels, media_type):
+                        if label not in exclude:
+                            exclude.append(label)
+                value = f"label!={','.join(exclude)}" if exclude else ""
+                if len(value) > MAX_EXCLUDE_FILTER_LENGTH:
+                    log_warning(
+                        f"{field} for {display} is {len(value)} characters across "
+                        f"{len(exclude)} excluded labels - this may exceed what Plex's "
+                        "API can reliably accept. Consider enabling "
+                        "collections.prune_orphaned_private_labels (config/tuning.yml) "
+                        "to remove labels for users no longer configured."
+                    )
+                params[field] = value
 
             if not any(params.values()):
                 continue
@@ -386,6 +508,30 @@ def apply_user_label_restrictions(
             except requests.RequestException as e:
                 log_warning(f"Failed to apply restrictions for {display}: {e}")
                 all_success = False
+
+        # #351: persist this run's owners so a FUTURE run - even after
+        # some of today's owners are gone from config - still knows
+        # their label needs excluding. Starts from whatever was already
+        # persisted (so an orphan not pruned this run stays remembered),
+        # then overlays every currently-configured owner resolved above.
+        if cache_dir:
+            updated_owners = dict(persisted_owners)
+            for account_id, name in id_to_configured.items():
+                updated_owners[account_id] = {
+                    "username": name,
+                    "labels": {
+                        media_type: _labels_for(all_user_private_labels.get(name, {}), media_type)
+                        for media_type in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV)
+                    },
+                }
+
+            prune_orphaned = bool(config.get("collections", {}).get("prune_orphaned_private_labels", False))
+            if orphaned_owners and prune_orphaned:
+                prune_orphaned_private_collections(config, orphaned_owners)
+                for account_id in orphaned_owners:
+                    updated_owners.pop(account_id, None)
+
+            save_private_label_owners(cache_dir, updated_owners)
 
         return all_success
 

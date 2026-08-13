@@ -2,6 +2,21 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.18.1] - 2026-08-13
+
+### Fixed
+
+- **A user removed from config had their private collection silently un-hidden from everyone else.** `collections.private_collections` excludes each user's `PrivateCollection_*` label from every OTHER user's `filterMovies`/`filterTelevision` so recommendation collections stay isolated per user - but `apply_user_label_restrictions()` only ever built that exclude list from the CURRENTLY configured user set. The moment a user left `users.list`, their label dropped out of everyone else's exclude filter on the very next run, exposing a collection that was never meant to be shared.
+
+  `utils/plex_policy.py` now persists every owner it has applied a `PrivateCollection_*` label for to `cache/private_label_owners.json` (new `utils/private_label_cache.py`, keyed by the same stable Plex account id `utils/user_migration.py` already trusts for rename detection - not username, so a rename is never mistaken for a departure). The exclude computation is now the union of currently-configured owners and any persisted owner no longer in config, minus the target user's own label - so a departed owner's collection stays hidden from everyone else indefinitely, and a warning names them each run. Self-exclusion (a user's own label is never in their own filter) and #340's one-PUT-per-physical-account alias collapsing are both unaffected.
+
+  Missing/corrupt `cache/private_label_owners.json` degrades to "no known owners" - never crashes a run, same convention as `utils/user_migration.py`'s own id map.
+
+### Added
+
+- **New opt-in `collections.prune_orphaned_private_labels` (default `false`).** Retaining a departed owner's label forever is the safe default, but some installs want the orphaned collection actually gone. Enabling this deletes it (ownership confirmed solely via its own `PrivateCollection_*` label - the same rule `utils.plex.remove_owned_collection`'s #291 no-history removal path already uses, never title/emoji guessing), strips the label, and drops the owner from the persisted cache. Off by default because it's destructive; never touches a currently-configured user's collection either way.
+- Retaining departed owners' labels makes `filterMovies`/`filterTelevision` monotonically non-shrinking where it previously could only ever be as long as the configured user count. `apply_user_label_restrictions()` now logs loudly (never truncates) if a built filter value grows past a generous length, pointing at the new prune option.
+
 ## [2.18.0] - 2026-08-12
 
 ### Changed

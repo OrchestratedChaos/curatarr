@@ -174,6 +174,22 @@ collections:
   # Note: Server admin always sees all collections (Plex limitation)
   private_collections: true
 
+  # #351: a user removed from users.list still had a PrivateCollection_*
+  # collection sitting in Plex, and once they were gone from config,
+  # private_collections above stopped excluding their label from
+  # everyone else's filterMovies/filterTelevision - silently un-hiding
+  # it. curatarr now remembers every owner it has ever created a private
+  # collection for (cache/private_label_owners.json, keyed by their
+  # stable Plex account id) and keeps retaining/excluding a departed
+  # owner's label indefinitely, logging a warning naming them each run.
+  # Set this to true to instead actually delete a departed owner's
+  # orphaned collection (ownership confirmed via their own
+  # PrivateCollection_* label, never by title guessing) and stop
+  # tracking them. Off by default: this is destructive (it deletes a
+  # real Plex collection), and never touches a currently-configured
+  # user's collection either way.
+  prune_orphaned_private_labels: false
+
 # =============================================================================
 # EXTERNAL RECOMMENDATIONS
 # =============================================================================
