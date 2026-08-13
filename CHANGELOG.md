@@ -2,6 +2,24 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.19.0] - 2026-08-13
+
+### Fixed
+
+- **`PrivateCollection_*` labels could render two different strings for the same account, silently un-hiding a private collection.** `build_label_name()` turned a username into a label suffix with no case/whitespace normalization, so the same physical Plex account observed as `alexpigot` on one run and `Alex Pigot` on another (Plex exposes both a `username` and a mutable, admin-chosen `title` for the same account) produced two different labels - `PrivateCollection_alexpigot` vs `PrivateCollection_Alex_Pigot`. An exclude filter written under one form never matched a collection labeled with the other.
+
+  `build_label_name()` now accepts `normalize_case` (opt-in, private-label callers only - `Recommended_*` item labels are unaffected) which folds case and whitespace before the existing punctuation substitution, so `alexpigot` and `Alex Pigot` always produce the identical label.
+
+- **The legacy `plex.managed_users` comma-string format re-resolved every entry against Plex's live `.title` on every run**, discarding the admin's own config.yml spelling. Combined with the label bug above, this was the actual field mechanism: the same account's live title flapping between runs flowed straight into label construction. `get_configured_users()` now keeps the config text's own spelling (existence is still confirmed against the live account list) - matching how the modern `users.list` format already behaved.
+
+- **A single differing Plex title observation was treated as a confirmed rename**, rewriting `config.yml`, renaming cache files, and deleting the "old" collection via `cleanup_orphaned_user_collections` - on one flaky API response. `utils/user_migration.py` now requires corroboration: a differing title is recorded as `pending` in `cache/user_id_map.json` and only promoted to a confirmed rename once the *same* new title is observed again on a later run. `cache/user_id_map.json`'s schema gained a `pending` field per account id; a pre-#352 flat file (`{id: username}`) is upgraded to the new shape on load, not reset.
+
+  Rename migration's config.yml rewrite now also covers the legacy `plex.managed_users` string (`rename_user_in_managed_users`, new) - previously only `users.list` was rewritten, so a real rename on a legacy-format install would have started failing "Managed user not found" once the live-title fallback above was removed.
+
+### Added
+
+- **Legacy label migration.** An install upgrading across this fix may already have a real, still-existing collection labeled with the old, un-normalized form for an account that's still fully configured (not a departure - `#351`'s orphan handling doesn't apply to this). `apply_user_label_restrictions()` now unions any such legacy form recorded in `cache/private_label_owners.json` into that account's effective labels - excluded from every other user's filter and kept in the persisted cache indefinitely alongside the newly-computed form, never silently dropped. This does not relabel the live Plex collection itself (the physical label is left as-is); a future run's create/update path may end up managing a second collection under the new label - a known, disclosed limitation, tracked separately from the privacy-relevant exclude-filter gap this closes.
+
 ## [2.18.1] - 2026-08-13
 
 ### Fixed

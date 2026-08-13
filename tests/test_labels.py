@@ -147,6 +147,54 @@ class TestBuildLabelName:
 
         assert result == "ToWatch_User1"
 
+    def test_normalize_case_defaults_off_preserves_todays_behavior(self):
+        """The default must stay byte-for-byte what every existing
+        Recommended_* item-label caller already produces - normalize_case
+        is opt-in, private-label callers only (#352)."""
+        result = build_label_name(base_label="Recommended", users=[], single_user="Alex Pigot", append_usernames=True)
+
+        assert result == "Recommended_Alex_Pigot"
+
+
+class TestBuildLabelNameNormalizeCase:
+    """#352: build_label_name(normalize_case=True) - what
+    build_all_private_labels and every PrivateCollection_* call site use.
+    The field bug: "Alex Pigot" and "alexpigot" are the same physical
+    Plex account observed via two different mutable fields (title vs
+    username) on different runs, and must produce the identical label."""
+
+    def test_case_and_space_variants_of_the_same_name_collapse_to_one_label(self):
+        with_space = build_label_name("PrivateCollection", [], "Alex Pigot", True, normalize_case=True)
+        no_space_lower = build_label_name("PrivateCollection", [], "alexpigot", True, normalize_case=True)
+
+        assert with_space == no_space_lower
+        assert with_space == "PrivateCollection_alexpigot"
+
+    def test_stable_across_a_simulated_title_flap(self):
+        """The exact field sequence from the #352 report: alexpigot ->
+        Alex Pigot -> alexpigot. Every one of these must build the
+        identical label string."""
+        observations = ["alexpigot", "Alex Pigot", "alexpigot"]
+        labels = [build_label_name("PrivateCollection", [], obs, True, normalize_case=True) for obs in observations]
+
+        assert len(set(labels)) == 1
+        assert labels[0] == "PrivateCollection_alexpigot"
+
+    def test_punctuation_still_sanitized_after_case_folding(self):
+        result = build_label_name("PrivateCollection", [], "O'Brien-Smith", True, normalize_case=True)
+
+        assert result == "PrivateCollection_o_brien_smith"
+
+    def test_multi_user_branch_also_normalizes_each_token(self):
+        result = build_label_name("PrivateCollection", ["Alex Pigot", "BOB"], None, True, normalize_case=True)
+
+        assert result == "PrivateCollection_alexpigot_bob"
+
+    def test_does_not_affect_append_usernames_false(self):
+        result = build_label_name("PrivateCollection", [], "Alex Pigot", False, normalize_case=True)
+
+        assert result == "PrivateCollection"
+
 
 class TestCategorizeLabeledItems:
     """Tests for categorize_labeled_items() function."""

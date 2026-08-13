@@ -192,7 +192,11 @@ def build_all_private_labels(
         for media_type, media_bases in bases.items():
             seen: List[str] = []
             for base in media_bases:
-                label = build_label_name(base, users, user, append_usernames)
+                # #352: normalize_case - a PrivateCollection_* label must
+                # never depend on which of Plex's mutable name fields
+                # (title vs username) this particular run happened to
+                # resolve `user` from.
+                label = build_label_name(base, users, user, append_usernames, normalize_case=True)
                 if label not in seen:
                     seen.append(label)
             per_type[media_type] = seen
@@ -418,6 +422,34 @@ def apply_user_label_restrictions(
                 continue
             effective_labels[key] = entry["labels"]
 
+        # #352: a still-CONFIGURED owner (present in id_to_configured,
+        # never orphaned) can also carry a legacy PrivateCollection_*
+        # form in the persisted cache - e.g. an install upgrading across
+        # the #352 fix, where build_label_name() started case/whitespace
+        # -normalizing private labels (utils.labels._sanitize_user_
+        # token). The same account id's real, already-existing
+        # collection may still be labeled "PrivateCollection_Alex_Pigot"
+        # while this run computes the normalized
+        # "PrivateCollection_alexpigot" for it. Union the legacy form
+        # in here too - keyed on account id (never on username, which is
+        # exactly what may have changed shape) - or it silently drops
+        # out of every other user's exclude filter the moment upgrade
+        # recomputes a differently-shaped label for someone who never
+        # actually left config: the same class of leak #351 closed for
+        # departures, just triggered by a label-shape change instead.
+        for account_id, name in id_to_configured.items():
+            legacy_entry = persisted_owners.get(account_id)
+            if not legacy_entry:
+                continue
+            merged: Dict[str, List[str]] = {}
+            for media_type in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV):
+                merged_labels = list(_labels_for(effective_labels.get(name, {}), media_type))
+                for label in _labels_for(legacy_entry.get("labels", {}), media_type):
+                    if label not in merged_labels:
+                        merged_labels.append(label)
+                merged[media_type] = merged_labels
+            effective_labels[name] = merged
+
         if orphaned_owners:
             orphan_names = sorted(entry["username"] for entry in orphaned_owners.values())
             log_warning(
@@ -514,13 +546,21 @@ def apply_user_label_restrictions(
         # their label needs excluding. Starts from whatever was already
         # persisted (so an orphan not pruned this run stays remembered),
         # then overlays every currently-configured owner resolved above.
+        #
+        # #352: writes effective_labels (already the union of this run's
+        # freshly-computed labels and any legacy form carried over from
+        # persisted_owners above), not all_user_private_labels alone -
+        # otherwise the very act of persisting here would immediately
+        # discard the legacy form the union above just went to the
+        # trouble of retaining, and the next run would start from a
+        # cache that already forgot it.
         if cache_dir:
             updated_owners = dict(persisted_owners)
             for account_id, name in id_to_configured.items():
                 updated_owners[account_id] = {
                     "username": name,
                     "labels": {
-                        media_type: _labels_for(all_user_private_labels.get(name, {}), media_type)
+                        media_type: _labels_for(effective_labels.get(name, {}), media_type)
                         for media_type in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV)
                     },
                 }

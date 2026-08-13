@@ -1741,7 +1741,15 @@ class BaseRecommender(ABC):
             # rewriting label_name's prefix (#261 - see
             # utils/plex_policy.apply_user_label_restrictions's docstring).
             private_base_label = f"PrivateCollection{self._library_suffix_for_label()}"
-            private_label_name = build_label_name(private_base_label, users, self.single_user, append_usernames)
+            # #352: normalize_case - see build_label_name/_sanitize_user_
+            # token's docstrings. This is the label actually attached to
+            # the live collection; keeping it case/whitespace-stable is
+            # what stops a title flap from making update_plex_collection
+            # fail to recognize this run's own collection as the same
+            # one it created last run.
+            private_label_name = build_label_name(
+                private_base_label, users, self.single_user, append_usernames, normalize_case=True
+            )
 
             # Find items in Plex
             items_found, skipped = self._find_plex_items_for_recs(section, selected_items)
@@ -1857,7 +1865,12 @@ class BaseRecommender(ABC):
         users = self.users["plex_users"] or self.users["managed_users"]
         append_usernames = self.config.get("collections", {}).get("append_usernames", True)
         private_base_label = f"PrivateCollection{self._library_suffix_for_label()}"
-        return build_label_name(private_base_label, users, username or self.single_user, append_usernames)
+        # #352: normalize_case - must match manage_plex_labels' own
+        # private_label_name computation above exactly, or this stops
+        # correctly identifying a user's own existing collection.
+        return build_label_name(
+            private_base_label, users, username or self.single_user, append_usernames, normalize_case=True
+        )
 
     def _remove_collection_for_no_history(self, who: str) -> None:
         """#291 recommend_for_no_history: false path - remove any

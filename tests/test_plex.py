@@ -1730,6 +1730,55 @@ class TestGetConfiguredUsers:
         # Should deduplicate
         assert len(result["managed_users"]) == 1
 
+    @patch("utils.plex.MyPlexAccount")
+    def test_managed_users_keeps_config_spelling_not_live_title(self, mock_account_class):
+        """#352: the legacy plex.managed_users path used to substitute
+        whatever Plex's live .title happened to be this run, so the same
+        physical account could resolve to a different string on every
+        run (the actual field bug). Existence is still confirmed against
+        the live account list (case-insensitively - the only tolerance
+        get_configured_users' own matching rule has ever offered; a
+        space/punctuation difference is a separate, pre-existing gap
+        this fix doesn't touch), but the value used downstream must be
+        exactly what's in config.yml."""
+        from utils.plex import get_configured_users
+
+        mock_user = Mock()
+        mock_user.title = "ALEXPIGOT"  # what Plex resolves it to THIS run
+
+        mock_account = Mock()
+        mock_account.username = "Admin"
+        mock_account.users.return_value = [mock_user]
+        mock_account_class.return_value = mock_account
+
+        config = {"plex": {"token": "test", "managed_users": "alexpigot"}, "plex_users": {"users": None}}
+
+        result = get_configured_users(config)
+
+        assert result["managed_users"] == ["alexpigot"]
+
+    @patch("utils.plex.MyPlexAccount")
+    def test_managed_users_stable_across_a_simulated_title_flap(self, mock_account_class):
+        """The same config.yml, run three times while Plex's live title
+        for the same account flaps alexpigot -> ALEXPIGOT -> alexpigot,
+        must resolve to the identical managed_users value every time."""
+        from utils.plex import get_configured_users
+
+        mock_account = Mock()
+        mock_account.username = "Admin"
+        mock_account_class.return_value = mock_account
+
+        config = {"plex": {"token": "test", "managed_users": "alexpigot"}, "plex_users": {"users": None}}
+
+        results = []
+        for live_title in ("alexpigot", "ALEXPIGOT", "alexpigot"):
+            live_user = Mock()
+            live_user.title = live_title
+            mock_account.users.return_value = [live_user]
+            results.append(get_configured_users(config)["managed_users"])
+
+        assert results == [["alexpigot"], ["alexpigot"], ["alexpigot"]]
+
 
 class TestFetchPlexUsers:
     """Tests for fetch_plex_users() - #266 (web UI 'Fetch from Plex')."""
@@ -3698,6 +3747,83 @@ class TestPrivateLabelOwnerRetention:
         # dropped/truncated to fit under the length.
         assert all(f"PrivateCollection_user_{i}" in home_put["filterMovies"] for i in range(30))
         assert any("may exceed what Plex" in str(call) for call in mock_warn.call_args_list)
+
+    def test_legacy_label_form_stays_excluded_and_is_not_orphaned_after_upgrade(self, tmp_path):
+        """#352: an install upgrading across the private-label case/space
+        normalization fix (utils.labels._sanitize_user_token) may already
+        have a REAL, still-existing collection labeled with the old,
+        un-normalized form (e.g. "PrivateCollection_Bob_Smith") for an
+        account that is still fully configured today - this is NOT a
+        departure (#351's orphan handling doesn't apply), just a label
+        SHAPE change. That legacy form must stay excluded from every
+        other user's filter, and must stay in the persisted cache -
+        never silently dropped the moment this run computes the new,
+        normalized form instead.
+        """
+        from utils.private_label_cache import load_private_label_owners, save_private_label_owners
+
+        # Simulates a pre-#352 run having already persisted the
+        # un-normalized label for bob's account id.
+        save_private_label_owners(
+            str(tmp_path),
+            {
+                "2": {
+                    "username": "bob",
+                    "labels": {
+                        "movie": ["PrivateCollection_Bob_Smith"],
+                        "tv": ["PrivateCollection_Bob_Smith"],
+                    },
+                }
+            },
+        )
+
+        # This run computes the new, normalized form for the SAME
+        # still-configured bob (build_all_private_labels post-#352).
+        config = {"plex": {"token": "t"}}
+        labels = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bobsmith"], "tv": ["PrivateCollection_bobsmith"]},
+        }
+        _ok, puts = self._run(config, labels, tmp_path)
+
+        home_put = next(p for url, p in puts if url.endswith("/1"))
+        assert "PrivateCollection_Bob_Smith" in home_put["filterMovies"], "legacy label form was orphaned"
+        assert "PrivateCollection_bobsmith" in home_put["filterMovies"], "freshly computed label form missing"
+        assert "PrivateCollection_Bob_Smith" in home_put["filterTelevision"], "legacy label form was orphaned"
+        assert "PrivateCollection_bobsmith" in home_put["filterTelevision"], "freshly computed label form missing"
+
+        owners = load_private_label_owners(str(tmp_path))
+        assert set(owners["2"]["labels"]["movie"]) == {"PrivateCollection_Bob_Smith", "PrivateCollection_bobsmith"}
+        assert set(owners["2"]["labels"]["tv"]) == {"PrivateCollection_Bob_Smith", "PrivateCollection_bobsmith"}
+
+        # Self-exclusion invariant: neither form of bob's OWN label may
+        # ever show up in his own exclude filter.
+        bob_put = next(p for url, p in puts if url.endswith("/2"))
+        assert "PrivateCollection_Bob_Smith" not in bob_put["filterMovies"]
+        assert "PrivateCollection_bobsmith" not in bob_put["filterMovies"]
+
+        # And the union persists going forward - a second run starting
+        # from the merged cache must not lose either form again.
+        _ok2, puts2 = self._run(config, labels, tmp_path)
+        home_put2 = next(p for url, p in puts2 if url.endswith("/1"))
+        assert "PrivateCollection_Bob_Smith" in home_put2["filterMovies"]
+        assert "PrivateCollection_bobsmith" in home_put2["filterMovies"]
+
+    def test_legacy_label_migration_never_applies_to_an_orphaned_owner(self, tmp_path):
+        """The #352 legacy-form union is keyed off id_to_configured - an
+        owner who has genuinely departed (#351's orphan path) must keep
+        going through find_orphaned_owners/prune exactly as before, not
+        get a second, parallel "still configured" code path just because
+        their persisted entry also exists."""
+        config = {"plex": {"token": "t"}}
+        self._run(config, self.BOTH_CONFIGURED, tmp_path)
+
+        _ok, puts = self._run(config, self.ONLY_HOME_CONFIGURED, tmp_path)
+
+        home_put = next(p for url, p in puts if url.endswith("/1"))
+        # Still retained via the #351 orphan path, exactly once - not
+        # duplicated by also matching the #352 still-configured merge.
+        assert home_put["filterMovies"].count("PrivateCollection_bob") == 1
 
 
 def _root():

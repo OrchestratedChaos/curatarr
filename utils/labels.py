@@ -89,8 +89,36 @@ def render_collection_name(template: str, user: str, media_type: str) -> str:
         return fallback.format(user=user, media_type=media_type_label)
 
 
+def _sanitize_user_token(user: str, normalize_case: bool) -> str:
+    """
+    Turn a single username/display-name into the token build_label_name
+    appends to a base label.
+
+    normalize_case (#352) folds away case AND whitespace before the
+    existing punctuation substitution - "Alex Pigot" and "alexpigot" are
+    the same physical account observed via two different mutable Plex
+    fields (title vs username), and without this they produce two
+    different PrivateCollection_* label strings for one person. Only
+    private-label callers opt into this (see build_all_private_labels
+    and recommenders/base.py's private label call sites) - the
+    general-purpose Recommended_* item label keeps today's exact
+    behavior, since existing installs already have real items labeled
+    under the un-normalized form and this isn't a matching-correctness
+    problem for those (categorize_labeled_items reads labels already on
+    the item, it doesn't need the string to survive a Plex title flap).
+    """
+    user = user.strip()
+    if normalize_case:
+        user = re.sub(r"\s+", "", user).lower()
+    return re.sub(r"\W+", "_", user)
+
+
 def build_label_name(
-    base_label: str, users: List[str], single_user: Optional[str] = None, append_usernames: bool = True
+    base_label: str,
+    users: List[str],
+    single_user: Optional[str] = None,
+    append_usernames: bool = True,
+    normalize_case: bool = False,
 ) -> str:
     """
     Build a label name with optional username suffix.
@@ -100,6 +128,11 @@ def build_label_name(
         users: List of usernames
         single_user: Optional single user override
         append_usernames: Whether to append usernames to label
+        normalize_case: #352 - fold case/whitespace in the username
+            token so the same account never produces two different
+            label strings depending on which Plex field (title vs
+            username) happened to be read this run. Private-label
+            callers only - see _sanitize_user_token's docstring.
 
     Returns:
         Final label name
@@ -108,10 +141,10 @@ def build_label_name(
         return base_label
 
     if single_user:
-        user_suffix = re.sub(r"\W+", "_", single_user.strip())
+        user_suffix = _sanitize_user_token(single_user, normalize_case)
         return f"{base_label}_{user_suffix}"
     elif users:
-        sanitized_users = [re.sub(r"\W+", "_", user.strip()) for user in users]
+        sanitized_users = [_sanitize_user_token(user, normalize_case) for user in users]
         user_suffix = "_".join(sanitized_users)
         return f"{base_label}_{user_suffix}"
     return base_label
