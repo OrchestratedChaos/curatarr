@@ -3289,6 +3289,417 @@ class TestExclusionLabelRegressions:
         assert "PrivateCollection_bob" in home["filterMovies"]
 
 
+class TestPrivateLabelOwnerRetention:
+    """
+    #351: a user removed from config must not have their PrivateCollection_*
+    label silently un-hidden from everyone else's filterMovies/
+    filterTelevision. utils.plex_policy persists every owner it has
+    applied that label for (cache/private_label_owners.json - see
+    utils/private_label_cache.py) and retains a departed owner's label in
+    the exclude computation until collections.prune_orphaned_private_labels
+    explicitly tears it down.
+    """
+
+    USERS_XML = (
+        b"<MediaContainer>"
+        b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+        b' filterMovies="" filterTelevision=""/>'
+        b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+        b"</MediaContainer>"
+    )
+
+    BOTH_CONFIGURED = {
+        "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+        "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+    }
+    ONLY_HOME_CONFIGURED = {
+        "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+    }
+
+    def _run(self, config, labels, cache_dir, users_xml=None, puts=None):
+        from utils import plex_policy
+
+        puts = puts if puts is not None else []
+
+        def fake_put(url, params=None, **kw):
+            puts.append((url, params))
+            return Mock(raise_for_status=Mock())
+
+        with (
+            patch.object(plex_policy, "MyPlexAccount", return_value=Mock(username="admin")),
+            patch.object(
+                plex_policy,
+                "_capped_get",
+                return_value=Mock(content=users_xml or self.USERS_XML, raise_for_status=Mock()),
+            ),
+            patch.object(plex_policy, "_capped_put", side_effect=fake_put),
+        ):
+            ok = plex_policy.apply_user_label_restrictions(config, labels, cache_dir=str(cache_dir))
+        return ok, puts
+
+    def test_departed_owner_label_is_retained_across_a_subsequent_run(self, tmp_path):
+        """Required regression #1: bob leaves config, but his label must
+        still show up in home's exclude filter on the very next run."""
+        config = {"plex": {"token": "t"}}
+        self._run(config, self.BOTH_CONFIGURED, tmp_path)
+
+        _ok, puts = self._run(config, self.ONLY_HOME_CONFIGURED, tmp_path)
+
+        home_put = next(p for url, p in puts if url.endswith("/1"))
+        assert "PrivateCollection_bob" in home_put["filterMovies"], "departed owner's label was dropped"
+        assert "PrivateCollection_bob" in home_put["filterTelevision"], "departed owner's label was dropped"
+
+    def test_self_exclusion_invariant_holds_with_departed_owners_present(self, tmp_path):
+        """Required regression #2: retaining bob's label must never leak
+        into home's OWN exclude filter."""
+        config = {"plex": {"token": "t"}}
+        self._run(config, self.BOTH_CONFIGURED, tmp_path)
+
+        _ok, puts = self._run(config, self.ONLY_HOME_CONFIGURED, tmp_path)
+
+        home_put = next(p for url, p in puts if url.endswith("/1"))
+        assert "PrivateCollection_homehouse165" not in home_put["filterMovies"]
+        assert "PrivateCollection_homehouse165" not in home_put["filterTelevision"]
+
+    def test_prune_disabled_by_default_warns_but_never_deletes(self, tmp_path):
+        """Required regression #3: prune is off by default - an orphan
+        is detected and warned about, but nothing in Plex is touched and
+        the owner stays tracked (i.e. their collection is left alone)."""
+        from utils import plex_policy
+        from utils.private_label_cache import load_private_label_owners
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, self.BOTH_CONFIGURED, tmp_path)
+
+        with (
+            patch.object(plex_policy, "prune_orphaned_private_collections") as mock_prune,
+            patch.object(plex_policy, "log_warning") as mock_warn,
+        ):
+            self._run(config, self.ONLY_HOME_CONFIGURED, tmp_path)
+
+        mock_prune.assert_not_called()
+        assert any("bob" in str(call) for call in mock_warn.call_args_list), "no warning named the departed owner"
+
+        owners = load_private_label_owners(str(tmp_path))
+        assert "2" in owners, "orphaned owner must stay tracked while prune is disabled"
+
+    def test_prune_enabled_deletes_collection_updates_cache_and_stops_excluding(self, tmp_path):
+        """Required regression #4: opting in tears the orphan down -
+        collection deleted, cache entry dropped, and (once that takes
+        effect) remaining users' filters stop carrying the label.
+
+        Uses a THIRD always-configured user (carol) alongside home/bob so
+        home's exclude list never drops to empty when bob departs - an
+        exclude list going empty hits a separate, pre-existing "value
+        unchanged from a caller's point of view" early-continue in
+        apply_user_label_restrictions that skips the PUT needed to CLEAR
+        an existing filter back down to nothing. That gap predates #351
+        and isn't part of what this fix touches; carol keeps this test
+        isolated to what #351 actually changed.
+        """
+        from utils.private_label_cache import load_private_label_owners
+
+        users_xml = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+            b'<User id="3" title="Carol" username="carol" email="c@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        all_three = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+        home_and_carol = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, all_three, tmp_path, users_xml=users_xml)
+
+        prune_config = {"plex": {"token": "t"}, "collections": {"prune_orphaned_private_labels": True}}
+
+        mock_collection = Mock()
+        mock_collection.title = "Bob's Collection"
+        mock_collection.labels = [Mock(tag="PrivateCollection_bob")]
+        mock_section = Mock()
+        mock_section.collections.return_value = [mock_collection]
+        mock_plex = Mock()
+        mock_plex.library.section.return_value = mock_section
+
+        puts_run2 = []
+        with patch("utils.plex.init_plex", return_value=mock_plex):
+            self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml, puts=puts_run2)
+
+        assert mock_collection.delete.called, "orphaned collection was never deleted"
+
+        owners_after = load_private_label_owners(str(tmp_path))
+        assert "2" not in owners_after, "departed owner was not dropped from the cache"
+        assert "1" in owners_after and "3" in owners_after, "still-configured owners must stay tracked"
+
+        # Run 3 reflects what run 2 actually applied to home's filter
+        # (the #340 no-op gate only PUTs a genuinely changed value), so
+        # this proves pruning actually changes future behavior rather
+        # than just a dict key disappearing.
+        home_put_run2 = next(p for url, p in puts_run2 if url.endswith("/1"))
+        xml_after_run2 = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="' + home_put_run2["filterMovies"].encode() + b'"'
+            b' filterTelevision="' + home_put_run2["filterTelevision"].encode() + b'"/>'
+            b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+            b'<User id="3" title="Carol" username="carol" email="c@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        _ok, puts_run3 = self._run(prune_config, home_and_carol, tmp_path, users_xml=xml_after_run2)
+
+        home_put_run3 = next(p for url, p in puts_run3 if url.endswith("/1"))
+        assert "PrivateCollection_bob" not in home_put_run3["filterMovies"], "pruned owner's label still excluded"
+        assert "PrivateCollection_carol" in home_put_run3["filterMovies"], "still-configured owner wrongly dropped"
+
+    def test_prune_enabled_but_plex_unreachable_orphan_stays_tracked_and_excluded(self, tmp_path):
+        """Regression for the #351 follow-up: prune_orphaned_private_collections
+        returning cleanly with nothing deleted (Plex unreachable) must not
+        be read by the caller as "go ahead and forget this owner". bob's
+        entry has to survive in the persisted cache AND keep showing up
+        in everyone else's exclude filter on the run after this one -
+        exactly the gap test_connect_failure_returns_empty_list, checked
+        only at the low-level prune function in isolation, could not
+        catch.
+        """
+        from utils.private_label_cache import load_private_label_owners
+
+        users_xml = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+            b'<User id="3" title="Carol" username="carol" email="c@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        all_three = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+        home_and_carol = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, all_three, tmp_path, users_xml=users_xml)
+
+        prune_config = {"plex": {"token": "t"}, "collections": {"prune_orphaned_private_labels": True}}
+
+        with patch("utils.plex.init_plex", side_effect=Exception("connection refused")):
+            self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+
+        owners_after = load_private_label_owners(str(tmp_path))
+        assert "2" in owners_after, "orphan was forgotten despite prune never reaching Plex"
+
+        _ok, puts_run3 = self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+        home_put_run3 = next(p for url, p in puts_run3 if url.endswith("/1"))
+        assert "PrivateCollection_bob" in home_put_run3["filterMovies"], "un-hid a collection that was never deleted"
+
+    def test_prune_enabled_but_section_raises_orphan_stays_tracked_and_excluded(self, tmp_path):
+        """Same gap as above, but the failure mode is a single library
+        section raising PlexApiException mid-scan rather than Plex being
+        fully unreachable - bob's collection is never located, so bob
+        must stay tracked and excluded exactly as if prune had never run.
+        """
+        from utils.private_label_cache import load_private_label_owners
+
+        users_xml = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+            b'<User id="3" title="Carol" username="carol" email="c@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        all_three = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+        home_and_carol = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, all_three, tmp_path, users_xml=users_xml)
+
+        prune_config = {"plex": {"token": "t"}, "collections": {"prune_orphaned_private_labels": True}}
+
+        mock_plex = Mock()
+        mock_plex.library.section.side_effect = plexapi.exceptions.PlexApiException("section unavailable")
+
+        with patch("utils.plex.init_plex", return_value=mock_plex):
+            self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+
+        owners_after = load_private_label_owners(str(tmp_path))
+        assert "2" in owners_after, "orphan was forgotten despite its section never being reachable"
+
+        _ok, puts_run3 = self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+        home_put_run3 = next(p for url, p in puts_run3 if url.endswith("/1"))
+        assert "PrivateCollection_bob" in home_put_run3["filterMovies"], "un-hid a collection that was never deleted"
+
+    def test_corrupt_cache_file_degrades_safely(self, tmp_path):
+        """Required regression #5: a corrupt/unreadable cache file must
+        never crash a run - just behave as if nothing was persisted."""
+        (tmp_path / "private_label_owners.json").write_text("not valid json", encoding="utf-8")
+
+        config = {"plex": {"token": "t"}}
+        ok, puts = self._run(config, self.ONLY_HOME_CONFIGURED, tmp_path)
+
+        assert ok is True
+        assert puts  # a normal run still proceeds and applies restrictions
+
+    def test_live_owner_wins_over_a_stale_persisted_entry_with_the_same_name(self, tmp_path):
+        """A departed owner's persisted username can never shadow a
+        currently-configured user who happens to share that exact name -
+        the live entry (from all_user_private_labels) is authoritative,
+        the stale persisted one is skipped.
+
+        The original Plex account (id 2) is gone entirely by run 2 - a
+        DIFFERENT Plex account (id 5) now resolves to the literal
+        username "bob", the same way a server could hand that username
+        to a new person after the old account was removed. This is the
+        only way persisted-id "2" actually ends up orphaned (find_orphaned_owners
+        works on ids, never on username text) - a fixture that reuses
+        the same id across both runs never produces an orphan at all and
+        would pass even if the shadowing guard were deleted.
+        """
+        from utils.private_label_cache import load_private_label_owners
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, self.BOTH_CONFIGURED, tmp_path)
+
+        new_bob_xml = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b'<User id="5" title="Bob" username="bob" email="newbob@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        replaced = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_2_bob"], "tv": ["PrivateCollection_2_bob"]},
+        }
+        _ok, puts = self._run(config, replaced, tmp_path, users_xml=new_bob_xml)
+
+        home_put = next(p for url, p in puts if url.endswith("/1"))
+        assert "PrivateCollection_2_bob" in home_put["filterMovies"], "live entry was not used"
+        assert home_put["filterMovies"].count("bob") == 1, "stale persisted label leaked in alongside the live one"
+
+        owners = load_private_label_owners(str(tmp_path))
+        assert owners["5"]["labels"]["movie"] == ["PrivateCollection_2_bob"], "live account id must hold the live label"
+
+    def test_self_exclusion_invariant_holds_for_the_departed_owner_too(self, tmp_path):
+        """bob leaves config but is still an actual user on the Plex
+        server (#332 covers every server user, not only configured
+        ones), so his own filter still gets recomputed on this run. His
+        own retained label must never end up excluding his own
+        collection from himself - the same self-exclusion invariant that
+        already holds for a still-configured user must hold for him
+        too."""
+        config = {"plex": {"token": "t"}}
+        self._run(config, self.BOTH_CONFIGURED, tmp_path)
+
+        _ok, puts = self._run(config, self.ONLY_HOME_CONFIGURED, tmp_path)
+
+        bob_put = next(p for url, p in puts if url.endswith("/2"))
+        assert "PrivateCollection_bob" not in bob_put["filterMovies"]
+        assert "PrivateCollection_bob" not in bob_put["filterTelevision"]
+
+    def test_resolution_failure_never_makes_prune_delete_a_configured_user(self, tmp_path):
+        """A currently-configured user whose name fails to resolve
+        against this run's live Plex user list (e.g. a transient lookup
+        glitch) must never be treated as orphaned - a resolution miss is
+        not the same thing as a departure, and
+        collections.prune_orphaned_private_labels must never delete a
+        real, still-configured user's collection over a single bad
+        run."""
+        from utils import plex_policy
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, self.BOTH_CONFIGURED, tmp_path)
+
+        # bob is still configured (still a key in all_user_private_labels)
+        # but this run's Plex user list no longer contains anyone
+        # resolving to him, simulating a transient lookup failure rather
+        # than an actual departure.
+        users_xml_without_bob = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        prune_config = {"plex": {"token": "t"}, "collections": {"prune_orphaned_private_labels": True}}
+
+        with patch.object(plex_policy, "prune_orphaned_private_collections") as mock_prune:
+            self._run(prune_config, self.BOTH_CONFIGURED, tmp_path, users_xml=users_xml_without_bob)
+
+        mock_prune.assert_not_called()
+
+    def test_long_exclude_filter_logs_a_loud_warning_instead_of_truncating(self, tmp_path):
+        """#351 point 5: retention makes filterMovies/filterTelevision
+        monotonically non-shrinking, where it previously could only ever
+        be as long as the configured user count. Once retaining many
+        departed owners grows the built filter value past
+        MAX_EXCLUDE_FILTER_LENGTH, this must log loudly - never silently
+        truncate what actually gets sent to Plex."""
+        from utils import plex_policy
+
+        home_label = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]}
+        }
+        many_configured = dict(home_label)
+        many_configured.update(
+            {f"user_{i}": {"movie": [f"PrivateCollection_user_{i}" * 20], "tv": []} for i in range(30)}
+        )
+        # Every one of the 31 users must actually resolve to a Plex id in
+        # run 1 for their label to be persisted at all.
+        run1_xml_users = [
+            '<User id="1" title="home house" username="homehouse165" email="h@x" filterMovies="" filterTelevision=""/>'
+        ]
+        run1_xml_users += [
+            f'<User id="{i + 2}" title="user_{i}" username="user_{i}" email="u{i}@x" '
+            f'filterMovies="" filterTelevision=""/>'
+            for i in range(30)
+        ]
+        run1_xml = ("<MediaContainer>" + "".join(run1_xml_users) + "</MediaContainer>").encode()
+
+        # Run 2: home is the only user left configured - all 30 others
+        # have left config (whether or not they're still live Plex
+        # users is irrelevant to "departed"; a minimal XML is enough).
+        run2_xml = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, many_configured, tmp_path, users_xml=run1_xml)
+
+        with patch.object(plex_policy, "log_warning") as mock_warn:
+            ok, puts = self._run(config, home_label, tmp_path, users_xml=run2_xml)
+
+        assert ok is True
+        home_put = next(p for url, p in puts if url.endswith("/1"))
+        assert len(home_put["filterMovies"]) > plex_policy.MAX_EXCLUDE_FILTER_LENGTH
+        # Every one of the 30 retained labels is present - nothing was
+        # dropped/truncated to fit under the length.
+        assert all(f"PrivateCollection_user_{i}" in home_put["filterMovies"] for i in range(30))
+        assert any("may exceed what Plex" in str(call) for call in mock_warn.call_args_list)
+
+
 def _root():
     """Whatever conftest's isolation fixture pointed get_project_root at."""
     from utils.plex import get_project_root

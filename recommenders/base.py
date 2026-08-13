@@ -1827,7 +1827,11 @@ class BaseRecommender(ABC):
                     # (movies) in both fields.
                     all_user_private_labels = build_all_private_labels(self.config, users, append_usernames)
 
-                    apply_user_label_restrictions(self.config, all_user_private_labels)
+                    # #351: cache_dir so departed owners' labels are
+                    # retained/warned-about/prunable - see
+                    # utils.plex_policy.apply_user_label_restrictions's
+                    # own docstring for what passing this actually does.
+                    apply_user_label_restrictions(self.config, all_user_private_labels, cache_dir=self.cache_dir)
 
             return success
 
