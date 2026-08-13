@@ -3460,6 +3460,95 @@ class TestPrivateLabelOwnerRetention:
         assert "PrivateCollection_bob" not in home_put_run3["filterMovies"], "pruned owner's label still excluded"
         assert "PrivateCollection_carol" in home_put_run3["filterMovies"], "still-configured owner wrongly dropped"
 
+    def test_prune_enabled_but_plex_unreachable_orphan_stays_tracked_and_excluded(self, tmp_path):
+        """Regression for the #351 follow-up: prune_orphaned_private_collections
+        returning cleanly with nothing deleted (Plex unreachable) must not
+        be read by the caller as "go ahead and forget this owner". bob's
+        entry has to survive in the persisted cache AND keep showing up
+        in everyone else's exclude filter on the run after this one -
+        exactly the gap test_connect_failure_returns_empty_list, checked
+        only at the low-level prune function in isolation, could not
+        catch.
+        """
+        from utils.private_label_cache import load_private_label_owners
+
+        users_xml = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+            b'<User id="3" title="Carol" username="carol" email="c@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        all_three = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+        home_and_carol = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, all_three, tmp_path, users_xml=users_xml)
+
+        prune_config = {"plex": {"token": "t"}, "collections": {"prune_orphaned_private_labels": True}}
+
+        with patch("utils.plex.init_plex", side_effect=Exception("connection refused")):
+            self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+
+        owners_after = load_private_label_owners(str(tmp_path))
+        assert "2" in owners_after, "orphan was forgotten despite prune never reaching Plex"
+
+        _ok, puts_run3 = self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+        home_put_run3 = next(p for url, p in puts_run3 if url.endswith("/1"))
+        assert "PrivateCollection_bob" in home_put_run3["filterMovies"], "un-hid a collection that was never deleted"
+
+    def test_prune_enabled_but_section_raises_orphan_stays_tracked_and_excluded(self, tmp_path):
+        """Same gap as above, but the failure mode is a single library
+        section raising PlexApiException mid-scan rather than Plex being
+        fully unreachable - bob's collection is never located, so bob
+        must stay tracked and excluded exactly as if prune had never run.
+        """
+        from utils.private_label_cache import load_private_label_owners
+
+        users_xml = (
+            b"<MediaContainer>"
+            b'<User id="1" title="home house" username="homehouse165" email="h@x"'
+            b' filterMovies="" filterTelevision=""/>'
+            b'<User id="2" title="Bob" username="bob" email="b@x" filterMovies="" filterTelevision=""/>'
+            b'<User id="3" title="Carol" username="carol" email="c@x" filterMovies="" filterTelevision=""/>'
+            b"</MediaContainer>"
+        )
+        all_three = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+        home_and_carol = {
+            "homehouse165": {"movie": ["PrivateCollection_homehouse165"], "tv": ["PrivateCollection_homehouse165"]},
+            "carol": {"movie": ["PrivateCollection_carol"], "tv": ["PrivateCollection_carol"]},
+        }
+
+        config = {"plex": {"token": "t"}}
+        self._run(config, all_three, tmp_path, users_xml=users_xml)
+
+        prune_config = {"plex": {"token": "t"}, "collections": {"prune_orphaned_private_labels": True}}
+
+        mock_plex = Mock()
+        mock_plex.library.section.side_effect = plexapi.exceptions.PlexApiException("section unavailable")
+
+        with patch("utils.plex.init_plex", return_value=mock_plex):
+            self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+
+        owners_after = load_private_label_owners(str(tmp_path))
+        assert "2" in owners_after, "orphan was forgotten despite its section never being reachable"
+
+        _ok, puts_run3 = self._run(prune_config, home_and_carol, tmp_path, users_xml=users_xml)
+        home_put_run3 = next(p for url, p in puts_run3 if url.endswith("/1"))
+        assert "PrivateCollection_bob" in home_put_run3["filterMovies"], "un-hid a collection that was never deleted"
+
     def test_corrupt_cache_file_degrades_safely(self, tmp_path):
         """Required regression #5: a corrupt/unreadable cache file must
         never crash a run - just behave as if nothing was persisted."""

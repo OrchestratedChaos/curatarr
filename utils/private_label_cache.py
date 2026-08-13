@@ -168,10 +168,15 @@ def prune_orphaned_private_collections(config: Dict, orphaned_owners: Mapping[st
     load-merge-save lifecycle for that file and decides what "pruned"
     means for its own already-loaded copy.
 
-    Returns the usernames this attempted to prune (whether or not a
-    matching collection actually existed to delete - a missing
-    collection is not a reason for the caller to keep tracking that
-    owner forever).
+    Returns only the usernames whose collection was actually located and
+    deleted. An owner is NEVER included just because a delete was
+    attempted - if Plex couldn't be reached, a library section couldn't
+    be resolved, or no matching collection was found in any library
+    that could be checked, that owner is left out so the caller keeps
+    tracking them rather than assuming (possibly wrongly) that nothing
+    is left to hide. This is what lets the caller safely pop an owner
+    out of cache/private_label_owners.json only once their collection
+    is confirmed gone.
     """
     if not orphaned_owners:
         return []
@@ -190,6 +195,7 @@ def prune_orphaned_private_collections(config: Dict, orphaned_owners: Mapping[st
         labels = entry.get("labels") or {}
         reason = "owner no longer configured (collections.prune_orphaned_private_labels)"
 
+        deleted = False
         for media_type in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV):
             for label in labels.get(media_type) or []:
                 for library in get_libraries_for_media_type(config, media_type):
@@ -201,8 +207,10 @@ def prune_orphaned_private_collections(config: Dict, orphaned_owners: Mapping[st
                     except plexapi.exceptions.PlexApiException as e:
                         logger.debug(f"Library '{section_name}' not available while pruning {username}: {e}")
                         continue
-                    remove_owned_collection(section, label, username, reason, logger)
+                    if remove_owned_collection(section, label, username, reason, logger):
+                        deleted = True
 
-        pruned.append(username)
+        if deleted:
+            pruned.append(username)
 
     return pruned

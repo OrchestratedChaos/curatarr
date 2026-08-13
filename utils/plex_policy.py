@@ -527,9 +527,18 @@ def apply_user_label_restrictions(
 
             prune_orphaned = bool(config.get("collections", {}).get("prune_orphaned_private_labels", False))
             if orphaned_owners and prune_orphaned:
-                prune_orphaned_private_collections(config, orphaned_owners)
-                for account_id in orphaned_owners:
-                    updated_owners.pop(account_id, None)
+                # #351 follow-up: only forget an orphan whose collection
+                # was actually located and deleted this run - never on
+                # the strength of "we tried". A discarded return value
+                # here previously popped every orphan regardless of
+                # outcome, which meant a Plex-unreachable run or a single
+                # library section raising mid-scan silently un-hid a
+                # still-existing departed user's collection from every
+                # other user's exclude filter on the very next run.
+                pruned_usernames = set(prune_orphaned_private_collections(config, orphaned_owners))
+                for account_id, entry in orphaned_owners.items():
+                    if entry.get("username") in pruned_usernames:
+                        updated_owners.pop(account_id, None)
 
             save_private_label_owners(cache_dir, updated_owners)
 

@@ -191,6 +191,53 @@ class TestPruneOrphanedPrivateCollections:
         with patch("utils.plex.init_plex", return_value=mock_plex):
             result = prune_orphaned_private_collections(self._config(), orphaned)
 
-        # Still reports the owner as attempted - nothing left to keep
-        # retrying for indefinitely once every library has been tried.
+        # The only library that could have held bob's collection could
+        # not even be checked, so nothing was confirmed deleted - bob
+        # must NOT be reported as pruned, or the caller would stop
+        # tracking a collection that, for all this run knows, still
+        # exists.
+        assert result == []
+
+    def test_section_exception_does_not_mask_a_deletion_found_elsewhere(self):
+        """One library section raising must not stop a later library in
+        the same run from being checked and, if found there, deleted -
+        and the owner MUST be reported pruned in that case."""
+        orphaned = {"2": {"username": "bob", "labels": {"movie": ["PrivateCollection_bob"], "tv": []}}}
+
+        mock_collection = Mock()
+        mock_collection.title = "Bob's Collection"
+        mock_collection.labels = [Mock(tag="PrivateCollection_bob")]
+        good_section = Mock()
+        good_section.collections.return_value = [mock_collection]
+
+        mock_plex = Mock()
+        mock_plex.library.section.side_effect = [
+            plexapi.exceptions.NotFound("no such library"),
+            good_section,
+        ]
+
+        with patch("utils.plex.init_plex", return_value=mock_plex):
+            with patch(
+                "utils.private_label_cache.get_libraries_for_media_type",
+                return_value=[{"section": "Movies1"}, {"section": "Movies2"}],
+            ):
+                result = prune_orphaned_private_collections(self._config(), orphaned)
+
+        assert mock_collection.delete.called
         assert result == ["bob"]
+
+    def test_nothing_found_anywhere_is_not_reported_pruned(self):
+        """A label with no matching collection in any checkable library
+        (already removed by hand, never created, etc) is left untouched
+        in the cache - nothing to forget, since nothing was deleted."""
+        orphaned = {"2": {"username": "bob", "labels": {"movie": ["PrivateCollection_bob"], "tv": []}}}
+
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+        mock_plex = Mock()
+        mock_plex.library.section.return_value = mock_section
+
+        with patch("utils.plex.init_plex", return_value=mock_plex):
+            result = prune_orphaned_private_collections(self._config(), orphaned)
+
+        assert result == []
