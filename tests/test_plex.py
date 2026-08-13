@@ -2180,6 +2180,65 @@ class TestUpdatePlexCollectionRenameOnTemplateChange:
         bob_stale.editTitle.assert_not_called()
 
 
+class TestUpdatePlexCollectionOldLabelUpgrade:
+    """Pins down the fix/352 upgrade property: the existing_collection
+    lookup above (line ~873) matches purely on collection.title ==
+    collection_name - never on label - so a user whose collection already
+    has the right title but still carries only the pre-#352 old-form
+    label (e.g. "PrivateCollection_Alex_Pigot", built from raw config
+    text) is found and updated in place on the first post-upgrade run.
+    The new, normalized label (e.g. "PrivateCollection_alexpigot") is
+    then added additively (line ~980-984) - the old form is never
+    stripped here.
+
+    If existing_collection lookup were ever changed to match by label
+    instead of by title, this collection - whose only label is the OLD
+    form - would not be found (private_label passed in is the NEW form),
+    and _find_stale_owned_collections wouldn't match it either (its
+    title already equals collection_name, so it isn't "stale-titled").
+    With no match either way, update_plex_collection falls through to
+    section.createCollection(...), producing a second collection with
+    the IDENTICAL title - the exact duplicate this test guards against.
+    """
+
+    @staticmethod
+    def _make_collection(title, labels=()):
+        collection = Mock()
+        collection.title = title
+        collection.items.return_value = [Mock()]
+        collection.labels = [Mock(tag=t) for t in labels]
+        return collection
+
+    def test_post_upgrade_run_updates_in_place_no_duplicate_collection(self):
+        from utils.plex import update_plex_collection
+
+        existing = self._make_collection("Recommended movies - Alex Pigot", labels=["PrivateCollection_Alex_Pigot"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [existing]
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alex Pigot",
+            [Mock()],
+            label_name="Recommended_alexpigot",
+            private_label="PrivateCollection_alexpigot",
+        )
+
+        assert result is True
+
+        # Exactly one collection exists afterward - found by title and
+        # updated in place, never duplicated.
+        mock_section.createCollection.assert_not_called()
+        existing.addItems.assert_called_once()
+
+        # New, normalized label form was added additively...
+        existing.addLabel.assert_called_once_with("PrivateCollection_alexpigot")
+        # ...while the old form is still present (never stripped here).
+        old_form_labels = [label.tag for label in existing.labels]
+        assert "PrivateCollection_Alex_Pigot" in old_form_labels
+        existing.removeLabel.assert_not_called()
+
+
 class TestRemoveOwnedCollection:
     """Tests for utils.plex.remove_owned_collection (#291
     recommend_for_no_history: false path) - the removal path's actual
