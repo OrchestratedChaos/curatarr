@@ -2834,6 +2834,62 @@ class TestManagePlexLabelsFullFlow:
             "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
         }
 
+    @patch("recommenders.base.apply_user_label_restrictions")
+    def test_applies_restrictions_only_once_across_a_shared_run_state(self, mock_apply):
+        """#360: a real run invokes manage_plex_labels() once per
+        (library x user) pair, all sharing the SAME
+        label_restrictions_state dict (utils.cli.run_recommender_main
+        creates it once and threads it through every process_func call -
+        see tests/test_cli.py::
+        test_label_restrictions_state_is_the_same_object_across_every_call).
+        Simulate two such calls here with two recommender instances (one
+        per user, standing in for two iterations of that loop) sharing
+        one dict. apply_user_label_restrictions must fire exactly once,
+        on the first call, and still receive the correct FULL cross-user
+        label set built from the full configured user list - never
+        scoped down to whichever single instance happened to trigger it,
+        which is what makes calling it only once still correct."""
+        shared_state = {}
+
+        users = {"plex_users": ["alice", "bob"], "managed_users": [], "admin_user": "admin"}
+        first = self._base_recommender(users=users)
+        first.single_user = "alice"
+        first.config["collections"]["private_collections"] = True
+        first._label_restrictions_state = shared_state
+
+        second = self._base_recommender(users=users)
+        second.single_user = "bob"
+        second.config["collections"]["private_collections"] = True
+        second._label_restrictions_state = shared_state
+
+        first.manage_plex_labels([{"title": "Movie", "year": 2020}])
+        second.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        mock_apply.assert_called_once()
+        all_user_private_labels = mock_apply.call_args[0][1]
+        assert all_user_private_labels == {
+            "alice": {"movie": ["PrivateCollection_alice"], "tv": ["PrivateCollection_alice"]},
+            "bob": {"movie": ["PrivateCollection_bob"], "tv": ["PrivateCollection_bob"]},
+        }
+
+    @patch("recommenders.base.apply_user_label_restrictions")
+    def test_a_fresh_instance_with_no_shared_state_still_applies_every_time(self, mock_apply):
+        """Direct/test instantiation (or any caller that never threads
+        label_restrictions_state through - e.g. every pre-#360 call site)
+        must see zero behavior change: each instance gets its own fresh
+        {} (see BaseRecommender.__init__), so restrictions are still
+        applied on every single call, exactly as before #360."""
+        users = {"plex_users": ["alice"], "managed_users": [], "admin_user": "admin"}
+        first = self._base_recommender(users=users)
+        first.config["collections"]["private_collections"] = True
+        second = self._base_recommender(users=users)
+        second.config["collections"]["private_collections"] = True
+
+        first.manage_plex_labels([{"title": "Movie", "year": 2020}])
+        second.manage_plex_labels([{"title": "Movie", "year": 2020}])
+
+        assert mock_apply.call_count == 2
+
     @patch("recommenders.base.get_max_rating_for_user", return_value="PG-13")
     @patch("recommenders.base.build_label_name", return_value="Recommended_alice")
     def test_max_rating_filters_candidates(self, mock_build_label, mock_max_rating):
@@ -3510,7 +3566,11 @@ class TestRemoveCollectionForNoHistory:
         mock_remove.assert_called_once()
         args, _kwargs = mock_remove.call_args
         assert args[0] is section
-        assert args[1] == "PrivateCollection_alice"
+        # #357: a list of candidate label forms, not a bare string - here
+        # just the current (normalized) form since "alice" has nothing to
+        # normalize away, so the legacy form is identical and omitted
+        # (see _compute_legacy_private_label_names).
+        assert args[1] == ["PrivateCollection_alice"]
         assert args[2] == "alice"
         assert "no watch history" in args[3]
 
@@ -3540,6 +3600,25 @@ class TestRemoveCollectionForNoHistory:
 
         mock_remove.assert_not_called()
         mock_warn.assert_called_once()
+
+    @patch("recommenders.base.remove_owned_collection")
+    def test_also_passes_the_legacy_label_form_for_a_name_that_normalizes(self, mock_remove):
+        """#357: for a username whose #352 normalized form actually
+        differs from its pre-#352 form (case/whitespace present), both
+        forms must be passed through - a collection created before #352
+        and never refreshed since (recommend_for_no_history: false skips
+        manage_plex_labels entirely) can only be found by its legacy
+        form."""
+        recommender = _make_recommender()
+        recommender.single_user = "Alex Pigot"
+        section = Mock()
+        recommender.plex.library.section.return_value = section
+
+        recommender._remove_collection_for_no_history("Alex Pigot")
+
+        mock_remove.assert_called_once()
+        args, _kwargs = mock_remove.call_args
+        assert args[1] == ["PrivateCollection_alexpigot", "PrivateCollection_Alex_Pigot"]
 
 
 class TestLoadWatchedCache:

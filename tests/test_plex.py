@@ -1779,6 +1779,62 @@ class TestGetConfiguredUsers:
 
         assert results == [["alexpigot"], ["alexpigot"], ["alexpigot"]]
 
+    @patch("utils.plex.MyPlexAccount")
+    def test_tolerates_a_pending_not_yet_confirmed_rename(self, mock_account_class, tmp_path):
+        """#356: on the first run after a genuine (more-than-case) Plex
+        rename, config.yml's managed_users still holds the OLD spelling
+        (the #352 debounce delays the rewrite until a second consecutive
+        run corroborates it), but this run's live account list already
+        reflects the NEW title. cache/user_id_map.json already recorded
+        that new title as "pending" (not yet confirmed) against this
+        exact account earlier in the same run (utils.user_migration.
+        migrate_renamed_plex_users) - that must be enough to resolve the
+        old spelling here too, rather than raising."""
+        from utils.plex import get_configured_users
+        from utils.user_migration import save_user_id_map
+
+        save_user_id_map(str(tmp_path), {"1": {"username": "AlexPigot", "pending": "Alex Pigot"}})
+
+        live_user = Mock()
+        live_user.title = "Alex Pigot"  # the new, not-yet-confirmed title
+
+        mock_account = Mock()
+        mock_account.username = "Admin"
+        mock_account.users.return_value = [live_user]
+        mock_account_class.return_value = mock_account
+
+        config = {"plex": {"token": "test", "managed_users": "AlexPigot"}, "plex_users": {"users": None}}
+
+        result = get_configured_users(config, cache_dir=str(tmp_path))
+
+        assert result["managed_users"] == ["AlexPigot"], "config.yml's own (old, still-configured) spelling was kept"
+
+    @patch("utils.plex.MyPlexAccount")
+    @patch("utils.plex.log_error")
+    def test_pending_rename_tolerance_never_masks_a_genuine_departure(self, mock_log, mock_account_class, tmp_path):
+        """The pending-rename tolerance is scoped to the exact old
+        spelling recorded as a pending observation's prior confirmed
+        name - an unrelated user who is genuinely gone must still raise,
+        never silently pass just because *some* account somewhere has a
+        pending rename this run."""
+        from utils.plex import get_configured_users
+        from utils.user_migration import save_user_id_map
+
+        save_user_id_map(str(tmp_path), {"1": {"username": "AlexPigot", "pending": "Alex Pigot"}})
+
+        live_user = Mock()
+        live_user.title = "Alex Pigot"
+
+        mock_account = Mock()
+        mock_account.username = "Admin"
+        mock_account.users.return_value = [live_user]
+        mock_account_class.return_value = mock_account
+
+        config = {"plex": {"token": "test", "managed_users": "TotallyUnrelatedUser"}, "plex_users": {"users": None}}
+
+        with pytest.raises(ValueError):
+            get_configured_users(config, cache_dir=str(tmp_path))
+
 
 class TestFetchPlexUsers:
     """Tests for fetch_plex_users() - #266 (web UI 'Fetch from Plex')."""
@@ -2179,6 +2235,36 @@ class TestUpdatePlexCollectionRenameOnTemplateChange:
         alice_stale.editTitle.assert_called_once_with("Recommended movies - Alice")
         bob_stale.editTitle.assert_not_called()
 
+    def test_legacy_private_labels_extends_the_stale_search(self):
+        """#357 compound case: rename_on_template_change fires on the
+        very first run since a movie_name_template/tv_name_template edit,
+        for a user whose existing collection still carries only the
+        pre-#352 legacy label (never refreshed - e.g. it predates #352,
+        or recommend_for_no_history was toggled off immediately after
+        upgrading). private_label alone (the current, normalized form)
+        cannot find it - only legacy_private_labels lets the search
+        recognize it as the SAME collection to rename, rather than
+        leaving it an orphan while a second, new-named duplicate gets
+        created."""
+        from utils.plex import update_plex_collection
+
+        stale = self._make_collection("🎬 Alex Pigot - Recommendation", labels=["PrivateCollection_Alex_Pigot"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [stale]
+
+        result = update_plex_collection(
+            mock_section,
+            "Recommended movies - Alex Pigot",
+            [Mock()],
+            label_name="Recommended_alexpigot",
+            private_label="PrivateCollection_alexpigot",
+            legacy_private_labels=["PrivateCollection_Alex_Pigot"],
+        )
+
+        assert result is True
+        stale.editTitle.assert_called_once_with("Recommended movies - Alex Pigot")
+        mock_section.createCollection.assert_not_called()
+
 
 class TestUpdatePlexCollectionOldLabelUpgrade:
     """Pins down the fix/352 upgrade property: the existing_collection
@@ -2382,6 +2468,44 @@ class TestRemoveOwnedCollection:
 
         assert result is False
         mock_logger.warning.assert_called_once()
+
+    def test_matches_legacy_label_form_when_given_a_list_of_forms(self):
+        """#357: a recommend_for_no_history: false user's collection may
+        still carry only the pre-#352 legacy label form (never refreshed,
+        since this path never goes through manage_plex_labels). Passing
+        both the current and legacy forms as a list must still find and
+        remove it - matching by ANY form, not just the first."""
+        from utils.plex import remove_owned_collection
+
+        owned = self._make_collection("🎬 Alex Pigot - Recommendation", labels=["PrivateCollection_Alex_Pigot"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [owned]
+
+        result = remove_owned_collection(
+            mock_section,
+            ["PrivateCollection_alexpigot", "PrivateCollection_Alex_Pigot"],
+            "alexpigot",
+            "no watch history",
+        )
+
+        assert result is True
+        owned.delete.assert_called_once()
+
+    def test_a_bare_string_is_never_iterated_character_by_character(self):
+        """Guards _as_label_forms' str-vs-iterable branch: passing a bare
+        string must behave exactly as it always has, never get split into
+        individual characters as bare `for label in private_label` would
+        do."""
+        from utils.plex import remove_owned_collection
+
+        collection_named_after_one_letter = self._make_collection("Stray", labels=["P"])
+        mock_section = Mock()
+        mock_section.collections.return_value = [collection_named_after_one_letter]
+
+        result = remove_owned_collection(mock_section, "PrivateCollection_alice", "alice", "no watch history")
+
+        assert result is False
+        collection_named_after_one_letter.delete.assert_not_called()
 
 
 class TestCleanupOldCollectionsAdvanced:
@@ -2725,6 +2849,47 @@ class TestApplyUserLabelRestrictions:
         assert result is True
         # Should be called twice (once for each non-admin user)
         assert mock_put.call_count == 2
+
+    @patch("utils.plex_policy.requests.put")
+    @patch("utils.plex_policy.requests.get")
+    @patch("utils.plex_policy.MyPlexAccount")
+    def test_applied_exclusions_log_line_includes_the_account_id(self, mock_account_class, mock_get, mock_put, capsys):
+        """#359: the account id must be in the "Applied exclusions"
+        line, not just the display name - two distinct Plex accounts
+        that happen to share a name/email (e.g. Plex Home profiles) are
+        otherwise indistinguishable from a single account being written
+        to redundantly, purely from the log."""
+        mock_account = Mock()
+        mock_account.username = "adminuser"
+        mock_account_class.return_value = mock_account
+
+        mock_get_response = Mock()
+        mock_get_response.headers = {}
+        mock_get_response.iter_content = Mock(return_value=[])
+        mock_get_response.content = b"""<MediaContainer>
+            <User id="123" title="Jason" username="jason"/>
+            <User id="456" title="Sarah" username="sarah"/>
+        </MediaContainer>"""
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
+
+        mock_put_response = Mock()
+        mock_put_response.headers = {}
+        mock_put_response.iter_content = Mock(return_value=[])
+        mock_put_response.raise_for_status = Mock()
+        mock_put.return_value = mock_put_response
+
+        config = {"plex": {"token": "test_token"}}
+        all_user_labels = {"Jason": "PrivateCollection_Jason", "Sarah": "PrivateCollection_Sarah"}
+
+        result = apply_user_label_restrictions(config, all_user_labels)
+
+        assert result is True
+        out = capsys.readouterr().out
+        assert "Applied exclusions for Jason" in out
+        assert "123" in out, "account id missing from the applied-exclusions log line"
+        assert "Applied exclusions for Sarah" in out
+        assert "456" in out, "account id missing from the applied-exclusions log line"
 
     @patch("utils.plex_policy.requests.put")
     @patch("utils.plex_policy.requests.get")
@@ -3669,10 +3834,15 @@ class TestPrivateLabelOwnerRetention:
         assert puts  # a normal run still proceeds and applies restrictions
 
     def test_live_owner_wins_over_a_stale_persisted_entry_with_the_same_name(self, tmp_path):
-        """A departed owner's persisted username can never shadow a
-        currently-configured user who happens to share that exact name -
-        the live entry (from all_user_private_labels) is authoritative,
-        the stale persisted one is skipped.
+        """A departed owner's persisted account id and a currently-live
+        account that happens to share its exact old username (#354 -
+        realistic for Plex Home profiles, where title is admin-chosen and
+        not unique) are never conflated: the live account's own
+        effective_labels/cache entry holds ONLY its own freshly computed
+        label, but the departed account's OLD collection - a physically
+        different object still sitting in the library - must stay
+        excluded from every other user's filter too, merged in rather
+        than dropped.
 
         The original Plex account (id 2) is gone entirely by run 2 - a
         DIFFERENT Plex account (id 5) now resolves to the literal
@@ -3681,7 +3851,7 @@ class TestPrivateLabelOwnerRetention:
         only way persisted-id "2" actually ends up orphaned (find_orphaned_owners
         works on ids, never on username text) - a fixture that reuses
         the same id across both runs never produces an orphan at all and
-        would pass even if the shadowing guard were deleted.
+        would pass even if the privacy guard were deleted.
         """
         from utils.private_label_cache import load_private_label_owners
 
@@ -3703,10 +3873,16 @@ class TestPrivateLabelOwnerRetention:
 
         home_put = next(p for url, p in puts if url.endswith("/1"))
         assert "PrivateCollection_2_bob" in home_put["filterMovies"], "live entry was not used"
-        assert home_put["filterMovies"].count("bob") == 1, "stale persisted label leaked in alongside the live one"
+        assert "PrivateCollection_bob" in home_put["filterMovies"], (
+            "departed account's still-live collection stopped being excluded once a "
+            "different live account reused its old alias - the privacy leak #354 fixes"
+        )
 
         owners = load_private_label_owners(str(tmp_path))
         assert owners["5"]["labels"]["movie"] == ["PrivateCollection_2_bob"], "live account id must hold the live label"
+        assert owners["2"]["labels"]["movie"] == ["PrivateCollection_bob"], (
+            "departed account id must stay tracked separately from the live account that reused its alias"
+        )
 
     def test_self_exclusion_invariant_holds_for_the_departed_owner_too(self, tmp_path):
         """bob leaves config but is still an actual user on the Plex

@@ -697,11 +697,39 @@ def fetch_watch_history_with_tmdb(
     return watched_items
 
 
-def _find_stale_owned_collections(all_collections: List[Any], collection_name: str, private_label: str) -> List[Any]:
-    """Every OTHER collection in this library carrying private_label whose
-    title isn't already collection_name - i.e. every rename_on_template_
-    change candidate this run's freshly-rendered collection_name could
-    apply to (see update_plex_collection's own docstring).
+def _as_label_forms(private_label: Union[str, Iterable[str]]) -> List[str]:
+    """Normalize a private-label argument that may be a single label
+    string or several candidate forms of it into a deduped list of
+    strings.
+
+    #357: a collection can carry an OLDER form of a user's
+    PrivateCollection_<user> label than the one this run computes - e.g.
+    the pre-#352 non-case/whitespace-normalized form, still attached to a
+    collection created before that fix and never refreshed since (a
+    recommend_for_no_history: false user never goes through
+    manage_plex_labels at all). Callers that know about such legacy
+    forms pass every candidate here; callers that only ever pass a bare
+    string (every call site that predates #357) get identical,
+    single-form behavior - a bare string is deliberately NOT iterated
+    character-by-character.
+    """
+    if isinstance(private_label, str):
+        return [private_label] if private_label else []
+    forms: List[str] = []
+    for label in private_label:
+        if label and label not in forms:
+            forms.append(label)
+    return forms
+
+
+def _find_stale_owned_collections(
+    all_collections: List[Any], collection_name: str, private_label: Union[str, Iterable[str]]
+) -> List[Any]:
+    """Every OTHER collection in this library carrying private_label (or
+    any of its legacy forms - see _as_label_forms) whose title isn't
+    already collection_name - i.e. every rename_on_template_change
+    candidate this run's freshly-rendered collection_name could apply to
+    (see update_plex_collection's own docstring).
 
     Trusts ONLY the PrivateCollection_<user> label already applied to the
     collection object by this same function on every prior run (never
@@ -716,12 +744,17 @@ def _find_stale_owned_collections(all_collections: List[Any], collection_name: s
     run's rendered name, about to be renamed). More than one means
     ownership is ambiguous - see the caller for how that's handled.
     """
+    forms = _as_label_forms(private_label)
     return [
-        c for c in all_collections if c.title != collection_name and private_label in [label.tag for label in c.labels]
+        c
+        for c in all_collections
+        if c.title != collection_name and any(label in [tag.tag for tag in c.labels] for label in forms)
     ]
 
 
-def remove_owned_collection(section: Any, private_label: str, username: str, reason: str, logger: Any = None) -> bool:
+def remove_owned_collection(
+    section: Any, private_label: Union[str, Iterable[str]], username: str, reason: str, logger: Any = None
+) -> bool:
     """Remove a user's own curatarr-created collection (#291
     recommend_for_no_history: false path) - fires ONLY when a user has
     zero watch history AND that config is explicitly disabled, never on
@@ -748,7 +781,14 @@ def remove_owned_collection(section: Any, private_label: str, username: str, rea
 
     Args:
         section: PlexAPI library section (movies or shows)
-        private_label: This user's PrivateCollection_<user> label
+        private_label: This user's PrivateCollection_<user> label. Also
+            accepts an iterable of candidate label forms (#357) - e.g.
+            the current normalized form plus the pre-#352 legacy form -
+            so a collection last labeled before this user's label was
+            ever refreshed (recommend_for_no_history: false skips
+            manage_plex_labels entirely) is still found. A bare string
+            is treated as a single form, never iterated character by
+            character.
         username: Real username, for the log message only
         reason: Human-readable reason this run wants the collection gone
             (e.g. "no watch history and movies.recommend_for_no_history
@@ -771,19 +811,21 @@ def remove_owned_collection(section: Any, private_label: str, username: str, rea
             print(f"WARNING: {msg}")
         return False
 
-    owned = [c for c in all_collections if private_label in [label.tag for label in c.labels]]
+    forms = _as_label_forms(private_label)
+    owned = [c for c in all_collections if any(label in [tag.tag for tag in c.labels] for label in forms)]
 
     if not owned:
-        # Nothing carries this user's label - either they never had a
-        # collection, or add_label/private-label application was off
-        # when it was created. Nothing safe to remove either way.
+        # Nothing carries this user's label (in any known form) - either
+        # they never had a collection, or add_label/private-label
+        # application was off when it was created. Nothing safe to
+        # remove either way.
         return False
 
     if len(owned) > 1:
         titles = [c.title for c in owned]
         msg = (
             f"{username} has no watch history ({reason}), but {len(owned)} collections carry "
-            f"label {private_label!r} ({titles}) - ownership is ambiguous, leaving all of them "
+            f"label {forms!r} ({titles}) - ownership is ambiguous, leaving all of them "
             "alone rather than guessing which one to remove"
         )
         if logger:
@@ -804,7 +846,7 @@ def remove_owned_collection(section: Any, private_label: str, username: str, rea
             print(f"WARNING: {msg}")
         return False
 
-    msg = f"Removed collection {title!r} for {username}: {reason} (ownership confirmed via label {private_label!r})"
+    msg = f"Removed collection {title!r} for {username}: {reason} (ownership confirmed via label {forms!r})"
     if logger:
         logger.warning(msg)
     else:
@@ -820,6 +862,7 @@ def update_plex_collection(
     label_name: Optional[str] = None,
     private_label: Optional[str] = None,
     rename_on_template_change: bool = True,
+    legacy_private_labels: Optional[Iterable[str]] = None,
 ) -> bool:
     """
     Create or update a Plex collection with items in the specified order.
@@ -844,6 +887,9 @@ def update_plex_collection(
             which silently produced the wrong (unprefixed) label whenever
             label_name wasn't literally "Recommended_<user>" - e.g. every
             install running with collections.append_usernames: false.
+            This is also the ONLY form ever newly attached to a
+            collection (see the addLabel call below) - legacy_private_labels
+            is search-only, never applied.
         rename_on_template_change: When True (default -
             collections.rename_on_template_change in config/tuning.yml)
             and private_label is given, a collections.movie_name_template/
@@ -858,6 +904,15 @@ def update_plex_collection(
             _find_stale_owned_collections and the "both old- and
             new-named collections already exist" branch below for the
             conservative, no-guessing edge-case handling.
+        legacy_private_labels: #357 compound case - older label form(s)
+            (e.g. the pre-#352 non-normalized form) the caller's own
+            collection may still carry if this run is the first to
+            render a new collections.movie_name_template/tv_name_template
+            since upgrading and this user's label was never otherwise
+            refreshed. Included alongside private_label when searching
+            for a stale, differently-titled collection to rename, so
+            that search cannot miss it and produce an orphan-plus-
+            duplicate. Never used for anything but that search.
 
     Returns:
         True if successful, False otherwise
@@ -877,7 +932,9 @@ def update_plex_collection(
 
         stale_owned_collections: List[Any] = []
         if rename_on_template_change and private_label:
-            stale_owned_collections = _find_stale_owned_collections(all_collections, collection_name, private_label)
+            stale_owned_collections = _find_stale_owned_collections(
+                all_collections, collection_name, [private_label, *(legacy_private_labels or [])]
+            )
 
         target_collection = None
 
@@ -1122,12 +1179,19 @@ def cleanup_legacy_unnamed_collection(
             print(f"WARNING: {error_msg}")
 
 
-def get_configured_users(config: dict) -> dict:
+def get_configured_users(config: dict, cache_dir: Optional[str] = None) -> dict:
     """
     Get and validate configured Plex users.
 
     Args:
         config: Configuration dictionary
+        cache_dir: Optional directory holding cache/user_id_map.json
+            (#352/#356). When given, a legacy plex.managed_users entry
+            that no longer matches any live account title is also
+            checked against a not-yet-confirmed ("pending") rename
+            recorded there this same run before being treated as not
+            found - see the comment below for why. None (the default)
+            skips that check and behaves exactly as before #356.
 
     Returns:
         Dictionary with 'managed_users', 'plex_users', and 'admin_user'
@@ -1152,6 +1216,33 @@ def get_configured_users(config: dict) -> dict:
     all_users = account.users()
     all_usernames_lower = {u.title.lower(): u.title for u in all_users}
 
+    # #356: a genuine rename is only picked up in config.yml text after
+    # utils.user_migration.migrate_renamed_plex_users corroborates it
+    # across two consecutive runs (#352 debounce) - on the FIRST
+    # post-rename run, managed_users above still holds the OLD spelling
+    # while all_usernames_lower (fetched fresh above) already reflects
+    # the NEW one. If the change is more than pure case, the direct
+    # match below fails even though this SAME run's earlier
+    # migrate_renamed_plex_users call already recorded the new title as
+    # a "pending" (not yet confirmed) observation against the very
+    # account this old spelling belongs to - a genuine, non-transient
+    # rename, not a departure. Deferred import: utils.user_migration
+    # imports from this module, so importing it back at module level
+    # would form a cycle.
+    pending_old_names_lower: set = set()
+    if cache_dir:
+        from .user_migration import load_user_id_map
+
+        try:
+            id_map = load_user_id_map(cache_dir)
+        except Exception as e:
+            logger.debug(f"Could not read user id map for pending-rename tolerance: {e}")
+            id_map = {}
+        for entry in id_map.values():
+            username = entry.get("username")
+            if entry.get("pending") and username:
+                pending_old_names_lower.add(username.lower())
+
     processed_managed = []
     for user in managed_users:
         user_lower = user.lower()
@@ -1174,6 +1265,13 @@ def get_configured_users(config: dict) -> dict:
             # covering plex.managed_users too) once a new title is
             # corroborated across two consecutive runs, never on a
             # single flap.
+            processed_managed.append(user)
+        elif user_lower in pending_old_names_lower:
+            # #356: the live account list no longer matches, but a
+            # pending (not yet confirmed) rename for this exact old
+            # spelling was recorded earlier this same run - tolerate it
+            # rather than raising. It resolves normally once the rename
+            # is corroborated next run and config.yml is rewritten.
             processed_managed.append(user)
         else:
             log_error(f"Error: Managed user '{user}' not found")

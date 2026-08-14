@@ -1276,7 +1276,11 @@ class TestProcessRecommendationsLibraryParam:
         process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice", library=library)
 
         mock_recommender_cls.assert_called_once_with(
-            "/path/to/config.yml", "alice", library=library, library_items_cache=None
+            "/path/to/config.yml",
+            "alice",
+            library=library,
+            library_items_cache=None,
+            label_restrictions_state=None,
         )
 
     @patch("recommenders.tv.record_run_status")
@@ -1293,7 +1297,11 @@ class TestProcessRecommendationsLibraryParam:
         process_recommendations({"general": {}}, "/path/to/config.yml", 0, single_user="alice")
 
         mock_recommender_cls.assert_called_once_with(
-            "/path/to/config.yml", "alice", library=None, library_items_cache=None
+            "/path/to/config.yml",
+            "alice",
+            library=None,
+            library_items_cache=None,
+            label_restrictions_state=None,
         )
 
 
