@@ -897,6 +897,7 @@ python -c "import yaml; print(yaml.safe_load(open('config/config.yml')))"
 **Common issues:**
 - TMDB API key invalid → Get free key from themoviedb.org
 - Plex connection failed → Check URL and token
+- A user can see another user's private collection, or their own is hidden from them → likely a `PrivateCollection_*` label / exclude-filter mismatch; run `python scripts/diagnose_private_labels.py` (read-only) from the project root to compare labels actually on collections against the exclude filters actually stored on each account
 - No recommendations → User needs more watch history
 - "Cache outdated" message → Normal after updates, rebuilds automatically
 - Want to stop `run.sh`/`run.ps1`'s interactive "Update now? [y/N]" prompt on launch → Set `general.update_mode: off` in config/config.yml (the dismissible CLI/web notices still appear either way - see `general.update_mode` above)

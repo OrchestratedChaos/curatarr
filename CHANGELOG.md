@@ -2,6 +2,12 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.19.3] - 2026-08-13
+
+### Added
+
+- **`scripts/diagnose_private_labels.py`**, a read-only diagnostic for `PrivateCollection_*` label / exclude-filter mismatches. Prints every `PrivateCollection_*` label actually present on Plex collections (movie and TV libraries) next to the live `filterMovies`/`filterTelevision` exclude strings actually stored on each shared account (via `plex.tv/api/users`), so a mismatch between what `utils/plex_policy.py` computed on some past run and what's currently on the account is visible at a glance instead of requiring manual cross-referencing. Touches nothing on Plex or in config; fails with a clear one-line message (missing `config/config.yml`, missing `plex.url`/`plex.token`, an unknown library name, a non-200 from `plex.tv/api/users`) instead of a raw traceback.
+
 ## [2.19.2] - 2026-08-13
 
 ### Fixed
