@@ -467,6 +467,7 @@ class BaseRecommender(ABC):
         single_user: Optional[str] = None,
         library: Optional[Dict] = None,
         library_items_cache: Optional[Dict[str, List]] = None,
+        label_restrictions_state: Optional[Dict[str, bool]] = None,
     ):
         """
         Initialize the recommender.
@@ -489,8 +490,24 @@ class BaseRecommender(ABC):
                 this still dedupes the up-to-6x-per-user Plex fetches within
                 one instantiation (#233 audit remediation batch D / PR1(a)),
                 it just doesn't share across users/instances.
+            label_restrictions_state: Optional dict shared across EVERY
+                recommender instance for the WHOLE run - every (user,
+                library) pair, not just one library's (#360 - contrast
+                with library_items_cache above). manage_plex_labels()
+                uses this to apply the cross-user Plex exclude-filter
+                restrictions exactly once per run instead of once per
+                (library x user) pair - see its own comment there for why
+                that's safe. When None (direct/test instantiation, or a
+                caller that never threads this through), a fresh
+                per-instance dict is used instead, so restrictions are
+                still applied on every call exactly as before #360 - no
+                cross-instance dedup, but never a behavior change for a
+                caller that doesn't opt in.
         """
         self.single_user = single_user
+        self._label_restrictions_state: Dict[str, bool] = (
+            label_restrictions_state if label_restrictions_state is not None else {}
+        )
         # load_config() (modular merge + auto-migration + env-var
         # overrides) followed by resolve_media_type_overrides() (the
         # movies:/tv: per-media-type resolution - see its docstring in
@@ -529,7 +546,16 @@ class BaseRecommender(ABC):
         # thought unwatched is a redundant recommendation, one wrongly
         # thought watched vanishes from consideration entirely.
         self.user_played_ids: Set[int] = set()
-        self.users = get_configured_users(self.config)
+        # #356: cache_dir computed here with the exact same formula
+        # self.cache_dir uses further below (not yet set at this point in
+        # __init__) - passed through so a not-yet-confirmed rename
+        # recorded this same run by utils.user_migration.
+        # migrate_renamed_plex_users can be tolerated instead of raising.
+        # A missing/not-yet-created directory is fine - get_configured_users
+        # only ever reads from it.
+        self.users = get_configured_users(
+            self.config, cache_dir=os.path.join(get_project_root(), self.config.get("cache_dir", "cache"))
+        )
 
         # Set for tracking watched item IDs
         self.watched_ids: Set[int] = set()
@@ -1607,6 +1633,7 @@ class BaseRecommender(ABC):
         final_items: List,
         username: Optional[str] = None,
         private_label: Optional[str] = None,
+        legacy_private_labels: Optional[List[str]] = None,
     ) -> bool:
         """Create/update Plex collection with final recommendations.
 
@@ -1618,6 +1645,13 @@ class BaseRecommender(ABC):
         collections.append_usernames was false, since label_name was then
         just the bare base label with nothing to strip - every user's
         collection/label ended up named the literal string "Recommended").
+
+        legacy_private_labels: #357 - older label form(s) this user's
+        collection may still carry (see
+        _compute_legacy_private_label_names), passed through to
+        update_plex_collection so a rename_on_template_change search
+        cannot miss a collection labeled before this run's private_label
+        was ever refreshed.
 
         Returns:
             True if collection was created/updated, False otherwise.
@@ -1686,6 +1720,7 @@ class BaseRecommender(ABC):
             label_name=label_name,
             private_label=private_label,
             rename_on_template_change=rename_on_template_change,
+            legacy_private_labels=legacy_private_labels,
         )
         if success:
             cleanup_old_collections(section, collection_name, username, emoji, logger)
@@ -1799,12 +1834,41 @@ class BaseRecommender(ABC):
             print(f"{GREEN}Successfully updated labels incrementally{RESET}")
 
             # Sync to Plex collection
-            success = self._sync_plex_collection(section, label_name, final_items, self.single_user, private_label_name)
+            # #357: legacy_private_labels - the compound case from a
+            # rename_on_template_change search that would otherwise miss
+            # a collection labeled before #352 (or before this user's
+            # very first manage_plex_labels run since upgrading) once a
+            # new movie_name_template/tv_name_template renders a
+            # different collection_name than that old collection's own
+            # title.
+            legacy_private_labels = self._compute_legacy_private_label_names(self.single_user)
+            success = self._sync_plex_collection(
+                section, label_name, final_items, self.single_user, private_label_name, legacy_private_labels
+            )
 
             # Apply user label restrictions if private_collections is enabled (default: true)
             # Note: Only works for shared friends, not Plex Home managed users
             if success and self.config.get("collections", {}).get("private_collections", True):
-                if not append_usernames and len(users) > 1:
+                if self._label_restrictions_state.get("applied"):
+                    # #360: this whole block (both the warning and the
+                    # actual apply_user_label_restrictions call below) is
+                    # a pure function of self.config and the full
+                    # configured user list - identical on every one of
+                    # the (library x user) calls this run reaches this
+                    # point from, never scoped to self.single_user or
+                    # self.library (build_all_private_labels always reads
+                    # every library of every media type from the full,
+                    # unscoped config - see its own docstring). Once
+                    # applied by the first such call this run, every
+                    # later call would just recompute and re-send the
+                    # IDENTICAL result - skip it rather than doing that
+                    # redundant work (and redundant Plex API calls) N x L
+                    # times per run.
+                    logger.debug(
+                        "Label restrictions already applied earlier this run (#360) - "
+                        "skipping the redundant per-(user, library) recomputation"
+                    )
+                elif not append_usernames and len(users) > 1:
                     # #261: with more than one user configured, a false
                     # append_usernames means every user's label above is
                     # identical - private_collections has no way to tell
@@ -1823,6 +1887,12 @@ class BaseRecommender(ABC):
                         "per-user private collections, or private_collections: false "
                         "if a single shared collection is what you actually want."
                     )
+                    # #360: this diagnosis is also a pure function of
+                    # self.config (append_usernames, user count) - true or
+                    # false for the whole run, not just this one call.
+                    # Marking it applied here too stops the identical
+                    # warning from repeating N x L times.
+                    self._label_restrictions_state["applied"] = True
                 else:
                     # Build dict of all users' PrivateCollection_* labels for
                     # exclude-based restrictions - each user's own label stays
@@ -1840,6 +1910,11 @@ class BaseRecommender(ABC):
                     # utils.plex_policy.apply_user_label_restrictions's
                     # own docstring for what passing this actually does.
                     apply_user_label_restrictions(self.config, all_user_private_labels, cache_dir=self.cache_dir)
+                    # #360: mark done for the rest of this run - see the
+                    # already-applied branch above for why every later
+                    # (library x user) call would just repeat this exact
+                    # computation.
+                    self._label_restrictions_state["applied"] = True
 
             return success
 
@@ -1872,6 +1947,34 @@ class BaseRecommender(ABC):
             private_base_label, users, username or self.single_user, append_usernames, normalize_case=True
         )
 
+    def _compute_legacy_private_label_names(self, username: Optional[str] = None) -> List[str]:
+        """#357: legacy (pre-#352, not case/whitespace-normalized) form of
+        this run's PrivateCollection_<user> label - identical inputs to
+        _compute_private_label_name, just normalize_case=False.
+
+        A collection can still carry only this older form if it was
+        created before #352 and this user's label was never refreshed
+        since - e.g. movies.recommend_for_no_history: false, which skips
+        manage_plex_labels() (the only place the label ever gets
+        refreshed) entirely. Callers that need to FIND such a collection
+        (never to apply a fresh label - only
+        _compute_private_label_name's current form is ever newly
+        attached, see update_plex_collection's private_label docstring)
+        pass this alongside the current form.
+
+        Returns a list (possibly empty, never containing the current
+        form itself) so callers can splice it directly alongside
+        [private_label, ...] without a separate equality check.
+        """
+        current = self._compute_private_label_name(username)
+        users = self.users["plex_users"] or self.users["managed_users"]
+        append_usernames = self.config.get("collections", {}).get("append_usernames", True)
+        private_base_label = f"PrivateCollection{self._library_suffix_for_label()}"
+        legacy = build_label_name(
+            private_base_label, users, username or self.single_user, append_usernames, normalize_case=False
+        )
+        return [legacy] if legacy != current else []
+
     def _remove_collection_for_no_history(self, who: str) -> None:
         """#291 recommend_for_no_history: false path - remove any
         collection curatarr already created for a user who now has zero
@@ -1902,10 +2005,17 @@ class BaseRecommender(ABC):
             )
             return
 
-        private_label = self._compute_private_label_name(who if who != "the configured user(s)" else None)
+        resolved_who = who if who != "the configured user(s)" else None
+        private_label = self._compute_private_label_name(resolved_who)
+        # #357: also match the pre-#352 legacy label form - this path is
+        # exactly the one that never goes through manage_plex_labels (the
+        # only place a label gets refreshed to the current form), so a
+        # collection created before that upgrade can still carry only
+        # the old one.
+        legacy_labels = self._compute_legacy_private_label_names(resolved_who)
         media_section = "movies" if self.media_type == "movie" else "tv"
         reason = f"no watch history and {media_section}.recommend_for_no_history is disabled"
-        remove_owned_collection(section, private_label, who, reason, logger)
+        remove_owned_collection(section, [private_label, *legacy_labels], who, reason, logger)
 
     def _user_select_recommendations(self, recommended_items: List[Dict], operation_label: str) -> List[Dict]:
         """Prompt user to select recommendations - delegates to utility."""

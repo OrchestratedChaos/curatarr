@@ -274,7 +274,7 @@ def print_runtime(start_time: datetime):
 def run_recommender_main(
     media_type: str,
     description: str,
-    process_func: Callable[[Dict, str, int, Optional[str], Optional[Dict], Optional[Dict]], None],
+    process_func: Callable[[Dict, str, int, Optional[str], Optional[Dict], Optional[Dict], Optional[Dict]], None],
     media_type_key: str = "movie",
 ):
     """
@@ -301,7 +301,7 @@ def run_recommender_main(
         description: argparse description
         process_func: Function to process recommendations for a user. Receives
             (user_config, config_path, log_retention_days, resolved_user,
-            library, library_items_cache)
+            library, library_items_cache, label_restrictions_state)
         media_type_key: 'movie' or 'tv' - selects which libraries to loop over
             (see utils.config.get_libraries_for_media_type)
     """
@@ -432,6 +432,22 @@ def run_recommender_main(
         # utils.cache_prune.prune_orphaned_cache_files.
         resolved_usernames = set()
 
+        # #360: shared across the WHOLE library x user loop below (unlike
+        # library_items_cache, deliberately created before that loop, not
+        # inside it) - lets BaseRecommender.manage_plex_labels() apply the
+        # cross-user Plex exclude-filter restrictions exactly once per
+        # run instead of once per (library x user) pair. Safe because
+        # utils.plex_policy.build_all_private_labels always computes from
+        # the full, unscoped root_config and the full configured user
+        # list regardless of which single (user, library) call triggers
+        # it (see its own docstring: "Enumerating every library here
+        # means the value written is complete whichever run performs the
+        # write") - every one of the N x L calls was already computing
+        # and PUTting the IDENTICAL result; this only stops it from doing
+        # that redundantly. See recommenders/base.py's own use of this
+        # for the skip logic.
+        label_restrictions_state: Dict[str, bool] = {}
+
         # Process each library x user
         plex_token = root_config.get("plex", {}).get("token", "")
         for library in libraries:
@@ -459,7 +475,15 @@ def run_recommender_main(
                 user_config = update_config_for_user(root_config, resolved_user)
                 resolved_usernames.add(resolved_user)
 
-                process_func(user_config, config_path, log_retention_days, resolved_user, library, library_items_cache)
+                process_func(
+                    user_config,
+                    config_path,
+                    log_retention_days,
+                    resolved_user,
+                    library,
+                    library_items_cache,
+                    label_restrictions_state,
+                )
 
                 print(f"\n{GREEN}Completed processing for user: {resolved_user}{RESET}")
                 print("-" * 50)

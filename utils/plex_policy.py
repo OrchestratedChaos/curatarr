@@ -392,35 +392,63 @@ def apply_user_label_restrictions(
         # #351: a user removed from config must not have their label
         # silently un-hidden from everyone else - union in any persisted
         # owner whose account id is no longer among this run's resolved
-        # id_to_configured. Keyed by their last-known username, which can
-        # never collide with a real id_to_configured VALUE for someone
-        # else (those all come from all_user_private_labels' own keys,
-        # checked first) unless a live config user happens to reuse that
-        # exact name, in which case the live entry wins and the stale one
-        # is skipped.
+        # id_to_configured.
         orphaned_owners = find_orphaned_owners(persisted_owners, id_to_configured.keys())
 
-        # Defense in depth: a username that is still a key in
-        # all_user_private_labels is, by definition, still configured
-        # this run - never treat it as orphaned just because id
-        # resolution happened to miss it this run (a transient Plex API
-        # hiccup, a one-off alias mismatch, etc). Without this, a
-        # resolution failure for an otherwise-still-configured user could
-        # both misreport them as departed AND - with
-        # prune_orphaned_private_labels enabled - actually delete their
-        # real collection, which must never happen to a configured user.
+        # #354: a persisted username string can be reused by a completely
+        # different, currently-live account (Plex Home profiles: title is
+        # admin-chosen, not unique) - so "this username is still a
+        # configured key" alone no longer means "this persisted entry's
+        # account is still configured". The only trustworthy signal is
+        # whether a LIVE account resolved to that exact name THIS run
+        # (claimed_this_run, built from id_to_configured's values): if
+        # nobody did, the config key is unclaimed and this is the
+        # defense-in-depth case below (a resolution hiccup for the SAME
+        # still-configured account, never a departure). If somebody DID
+        # claim it, that live account's own id is already excluded from
+        # orphaned_owners above (find_orphaned_owners works on ids only) -
+        # so a persisted entry that still appears here under that same
+        # name is, by elimination, a DIFFERENT departed account and must
+        # stay orphaned rather than being dropped as if it were the live
+        # one.
+        claimed_this_run = set(id_to_configured.values())
+
+        # Defense in depth: a configured username that no live account
+        # claimed this run (a transient Plex API hiccup, a one-off alias
+        # mismatch, etc) must never be treated as orphaned just because id
+        # resolution happened to miss it - see claimed_this_run above.
+        # Without this, a resolution failure for an otherwise-still-
+        # configured user could both misreport them as departed AND -
+        # with prune_orphaned_private_labels enabled - actually delete
+        # their real collection, which must never happen to a configured
+        # user.
         orphaned_owners = {
             account_id: entry
             for account_id, entry in orphaned_owners.items()
-            if entry["username"] not in all_user_private_labels
+            if entry["username"] not in all_user_private_labels or entry["username"] in claimed_this_run
         }
 
         effective_labels: Dict[str, Any] = dict(all_user_private_labels)
+
+        # #354: an orphaned owner whose persisted username collides with a
+        # DIFFERENT live account's name this run is tracked separately
+        # here, never merged into that live account's own effective_labels
+        # entry - that entry is also what gets persisted back into
+        # cache/private_label_owners.json for the live account's id
+        # further down, and the departed account's collection is a
+        # physically different object nobody live has a legitimate claim
+        # to see, including whoever now holds that same alias.
+        colliding_orphan_labels: Dict[str, Dict[str, List[str]]] = {}
         for entry in orphaned_owners.values():
             key = entry["username"]
-            if key in effective_labels:
+            if key not in effective_labels:
+                effective_labels[key] = entry["labels"]
                 continue
-            effective_labels[key] = entry["labels"]
+            bucket = colliding_orphan_labels.setdefault(key, {mt: [] for mt in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV)})
+            for media_type in (MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV):
+                for label in _labels_for(entry["labels"], media_type):
+                    if label not in bucket[media_type]:
+                        bucket[media_type].append(label)
 
         # #352: a still-CONFIGURED owner (present in id_to_configured,
         # never orphaned) can also carry a legacy PrivateCollection_*
@@ -504,6 +532,15 @@ def apply_user_label_restrictions(
                     for label in _labels_for(labels, media_type):
                         if label not in exclude:
                             exclude.append(label)
+                # #354: a departed account whose alias was reused by a
+                # different live account has no legitimate "self" among
+                # this run's users at all - its labels are excluded from
+                # every current user unconditionally, including whoever
+                # now holds that same alias.
+                for extra in colliding_orphan_labels.values():
+                    for label in _labels_for(extra, media_type):
+                        if label not in exclude:
+                            exclude.append(label)
                 value = f"label!={','.join(exclude)}" if exclude else ""
                 if len(value) > MAX_EXCLUDE_FILTER_LENGTH:
                     log_warning(
@@ -536,9 +573,15 @@ def apply_user_label_restrictions(
                     timeout=PLEX_REQUEST_TIMEOUT,
                 )
                 put_response.raise_for_status()
-                print(f"{GREEN}Applied exclusions for {display}{RESET}")
+                # #359: include the account id - display alone can't
+                # distinguish a redundant write to the same id from
+                # writes to several distinct accounts that happen to
+                # share a name/email (Plex Home profiles again), so an
+                # operator seeing more lines than expected in a log has
+                # no way to tell which case it is.
+                print(f"{GREEN}Applied exclusions for {display} (id {user_id}){RESET}")
             except requests.RequestException as e:
-                log_warning(f"Failed to apply restrictions for {display}: {e}")
+                log_warning(f"Failed to apply restrictions for {display} (id {user_id}): {e}")
                 all_success = False
 
         # #351: persist this run's owners so a FUTURE run - even after

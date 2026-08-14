@@ -834,6 +834,50 @@ class TestRunRecommenderMainLibraryMatrixLoop:
     @patch("builtins.open", create=True)
     @patch("utils.cli.get_project_root")
     @patch("utils.cli.argparse.ArgumentParser.parse_args")
+    def test_label_restrictions_state_is_the_same_object_across_every_call(
+        self, mock_parse_args, mock_root, mock_open, mock_yaml, mock_setup_log, mock_resolve, mock_print, mock_migrate
+    ):
+        """#360: every process_func call this run receives - as its 7th
+        positional arg - the SAME shared dict object, across every
+        library AND every user, not a fresh one per library (contrast
+        with library_items_cache, the 6th arg, which the multi-library
+        test above shows is fresh per library). This is what lets
+        BaseRecommender.manage_plex_labels() apply the cross-user label
+        restrictions exactly once for the whole run instead of once per
+        (library x user) pair."""
+        mock_parse_args.return_value = Mock(username=None, debug=False, library_id=None)
+        mock_root.return_value = "/fake/root"
+        root_cfg = {
+            "plex": {"token": "abc"},
+            "users": {"list": "alice, bob"},
+            "libraries": [
+                {"id": "movies", "name": "Movies", "section": "Movies", "media_type": "movie"},
+                {"id": "movies-4k", "name": "Movies 4K", "section": "Movies 4K", "media_type": "movie"},
+            ],
+        }
+        mock_yaml.return_value = root_cfg
+        mock_migrate.return_value = {}
+
+        mock_process = Mock()
+        mock_setup_log.return_value = Mock()
+        mock_resolve.side_effect = lambda u, t: u
+
+        run_recommender_main("Movie", "Test", mock_process, media_type_key="movie")
+
+        assert mock_process.call_count == 4
+        states = [call[0][6] for call in mock_process.call_args_list]
+        assert all(state is states[0] for state in states), "label_restrictions_state was not shared across calls"
+        library_caches = [call[0][5] for call in mock_process.call_args_list]
+        assert len(set(id(c) for c in library_caches)) == 2, "library_items_cache should still be fresh per library"
+
+    @patch("utils.cli.migrate_renamed_plex_users")
+    @patch("utils.cli.print_runtime")
+    @patch("utils.cli.resolve_admin_username")
+    @patch("utils.cli.setup_logging")
+    @patch("utils.cli.yaml.safe_load")
+    @patch("builtins.open", create=True)
+    @patch("utils.cli.get_project_root")
+    @patch("utils.cli.argparse.ArgumentParser.parse_args")
     def test_media_type_key_selects_tv_libraries(
         self, mock_parse_args, mock_root, mock_open, mock_yaml, mock_setup_log, mock_resolve, mock_print, mock_migrate
     ):

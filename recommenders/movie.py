@@ -158,6 +158,7 @@ class PlexMovieRecommender(BaseRecommender):
         single_user: Optional[str] = None,
         library: Optional[Dict] = None,
         library_items_cache: Optional[Dict] = None,
+        label_restrictions_state: Optional[Dict] = None,
     ):
         """Initialize the movie recommender.
 
@@ -169,9 +170,19 @@ class PlexMovieRecommender(BaseRecommender):
                 recommender instance for this library in one run (see
                 BaseRecommender.__init__ / _get_all_library_items - #233
                 audit remediation batch D / PR1(a))
+            label_restrictions_state: Optional dict shared across EVERY
+                user/library recommender instance for the whole run (#360
+                - see utils.cli.run_recommender_main and
+                BaseRecommender.manage_plex_labels)
         """
         # Initialize base class (config, plex, display options, weights, etc.)
-        super().__init__(config_path, single_user, library=library, library_items_cache=library_items_cache)
+        super().__init__(
+            config_path,
+            single_user,
+            library=library,
+            library_items_cache=library_items_cache,
+            label_restrictions_state=label_restrictions_state,
+        )
 
         # Movie-specific initialization
         self.cached_unwatched_count = 0
@@ -637,7 +648,13 @@ def format_movie_output(
 # MAIN
 # ------------------------------------------------------------------------
 def process_recommendations(
-    config, config_path, log_retention_days, single_user=None, library=None, library_items_cache=None
+    config,
+    config_path,
+    log_retention_days,
+    single_user=None,
+    library=None,
+    library_items_cache=None,
+    label_restrictions_state=None,
 ):
     original_stdout = sys.stdout
     log_dir = os.path.join(get_project_root(), "logs")
@@ -661,7 +678,11 @@ def process_recommendations(
     try:
         # Create recommender with single user context
         recommender = PlexMovieRecommender(
-            config_path, single_user=single_user, library=library, library_items_cache=library_items_cache
+            config_path,
+            single_user=single_user,
+            library=library,
+            library_items_cache=library_items_cache,
+            label_restrictions_state=label_restrictions_state,
         )
 
         # Check for debug mode
