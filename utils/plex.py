@@ -1238,9 +1238,10 @@ def get_configured_users(config: dict, cache_dir: Optional[str] = None) -> dict:
         except Exception as e:
             logger.debug(f"Could not read user id map for pending-rename tolerance: {e}")
             id_map = {}
-        pending_old_names_lower = {
-            entry["username"].lower() for entry in id_map.values() if entry.get("pending") and entry.get("username")
-        }
+        for entry in id_map.values():
+            username = entry.get("username")
+            if entry.get("pending") and username:
+                pending_old_names_lower.add(username.lower())
 
     processed_managed = []
     for user in managed_users:
