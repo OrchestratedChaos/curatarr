@@ -9,16 +9,20 @@
 # The version-bump PR is a separate, prior step (see RELEASING.md): merge it
 # first, THEN run this script to tag the commit it produced.
 #
-# Two-hop push: if `origin` here is not github.com/OrchestratedChaos/curatarr
-# (e.g. a Windows checkout whose `origin` is actually another machine that
-# itself pushes on to GitHub), set:
-#   CURATARR_GH_SSH_HOST     - SSH alias/host of a machine whose own `origin`
-#                               IS github.com/OrchestratedChaos/curatarr
+# Two-hop push: if `origin` isn't directly reachable/credentialed from this
+# machine (probed with `git ls-remote`, not guessed from the URL - two
+# machines can share one .git dir, e.g. mounted over SMB, with `origin`
+# genuinely pointing at github.com on both, yet only one of them holding
+# working credentials for it), set:
+#   CURATARR_GH_SSH_HOST     - SSH alias/host of a machine that CAN reach
+#                               `origin` (a checkout of this same repo)
 #   CURATARR_GH_SSH_REPO_DIR - absolute path to the curatarr checkout there
-# This script pushes to `origin` first, then (only if `origin` isn't GitHub)
-# pushes onward from that host, then confirms the ref actually landed on
-# GitHub via `git ls-remote` before declaring success. No default host is
-# hardcoded here - both vars are required whenever `origin` isn't GitHub.
+# This script probes `origin` first; if it's unreachable from here, every
+# `origin`-touching read/write (the tag-existence check and the tag push)
+# is delegated over SSH to that host instead, then confirms the ref actually
+# landed on GitHub via a direct, credential-independent `git ls-remote`
+# before declaring success. No default host is hardcoded here - both vars
+# are required whenever `origin` isn't reachable from here.
 #
 # Run this from a machine that has:
 #   - the release-signing key configured for git (see RELEASING.md):
@@ -108,31 +112,31 @@ echo "==> Releasing ${TAG} from $(pwd)$([ "$DRY_RUN" -eq 1 ] && echo ' [dry-run]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-# True if $1 is a remote name whose URL points at github.com. Covers
-# git@github.com:owner/repo.git, https://github.com/owner/repo.git, and
-# ssh://git@github.com/owner/repo.git forms.
-remote_is_github() {
-  local url
-  url="$(git remote get-url "$1" 2>/dev/null)" || return 1
-  case "$url" in
-    *github.com*) return 0 ;;
-    *) return 1 ;;
-  esac
+# Lists $REMOTE's tags, either directly or - if $ORIGIN_USABLE_LOCALLY is 0 -
+# delegated over SSH to a checkout of the SAME repo on CURATARR_GH_SSH_HOST
+# (see the reachability probe below for why this is keyed on credentials,
+# not on what URL $REMOTE happens to be).
+remote_tags() {
+  if [ "$ORIGIN_USABLE_LOCALLY" -eq 1 ]; then
+    git ls-remote --tags "$REMOTE"
+  else
+    ssh "$CURATARR_GH_SSH_HOST" "cd '${CURATARR_GH_SSH_REPO_DIR}' && git ls-remote --tags origin"
+  fi
 }
 
-# Pushes ref $2 (kind $1: "tags" or "heads") to $REMOTE, pushes it onward to
-# GitHub via CURATARR_GH_SSH_HOST/CURATARR_GH_SSH_REPO_DIR if $REMOTE itself
-# isn't GitHub, then confirms - via a direct, host-independent `git
-# ls-remote` against github.com - that the ref actually landed there.
-# Fails loudly (not silently) if it never does.
+# Pushes ref $2 (kind $1: "tags" or "heads") to $REMOTE - directly if
+# $ORIGIN_USABLE_LOCALLY is 1, otherwise delegated over SSH to a checkout of
+# the SAME repo on CURATARR_GH_SSH_HOST - then confirms, via a direct,
+# host-independent `git ls-remote` against github.com, that the ref actually
+# landed there. Fails loudly (not silently) if it never does.
 push_ref_and_confirm_on_github() {
   local ref_kind="$1" ref_name="$2"
 
-  echo "==> Pushing ${ref_name} to ${REMOTE}"
-  git push "$REMOTE" "$ref_name"
-
-  if [ "$IS_GITHUB_REMOTE" -eq 0 ]; then
-    echo "==> ${REMOTE} is not GitHub - pushing ${ref_name} onward from ${CURATARR_GH_SSH_HOST}"
+  if [ "$ORIGIN_USABLE_LOCALLY" -eq 1 ]; then
+    echo "==> Pushing ${ref_name} to ${REMOTE}"
+    git push "$REMOTE" "$ref_name"
+  else
+    echo "==> ${REMOTE} isn't directly reachable from here - pushing ${ref_name} via ${CURATARR_GH_SSH_HOST}"
     ssh "$CURATARR_GH_SSH_HOST" "cd '${CURATARR_GH_SSH_REPO_DIR}' && git push origin '${ref_name}'"
   fi
 
@@ -160,9 +164,17 @@ if [ "$CURRENT_BRANCH" != "$MAIN_BRANCH" ]; then
   exit 1
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
+# Content-aware: this repo's .git is shared (SMB-mounted) between machines
+# with different filemode semantics, so a raw `git status --porcelain` here
+# can false-positive on pure exec-bit mode deltas with zero content
+# difference (e.g. Windows Git Bash misreading the bit over SMB) while the
+# tree is otherwise clean. `-c core.fileMode=false` is scoped to these two
+# invocations only - it is never written to .git/config, so no other git
+# command anywhere in this repo (or run by anyone else against it) treats
+# the mode bit any differently.
+if [ -n "$(git -c core.fileMode=false status --porcelain)" ]; then
   echo "ERROR: working tree is not clean" >&2
-  git status --short
+  git -c core.fileMode=false status --short
   exit 1
 fi
 
@@ -171,9 +183,43 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Determine how to reach $REMOTE: directly, or delegated over SSH to a
+# checkout of the SAME repo on CURATARR_GH_SSH_HOST. Two-hop used to be
+# gated on "$REMOTE's URL isn't github.com", but that's the wrong test: two
+# machines can share one .git directory (e.g. mounted over SMB) and both
+# have `origin` genuinely pointing at github.com, yet only one of them has
+# working credentials for it. What actually matters is whether $REMOTE is
+# usable from HERE, so probe that directly instead of pattern-matching the
+# URL.
+# ---------------------------------------------------------------------------
+echo "==> Checking whether $REMOTE is directly reachable from here"
+ORIGIN_USABLE_LOCALLY=1
+if ! git ls-remote --exit-code "$REMOTE" >/dev/null 2>&1; then
+  ORIGIN_USABLE_LOCALLY=0
+  echo "==> $REMOTE is not directly reachable from here (missing/invalid credentials) - will delegate"
+  if [ -z "${CURATARR_GH_SSH_HOST:-}" ]; then
+    echo "ERROR: cannot reach $REMOTE directly, and CURATARR_GH_SSH_HOST is unset. Set it to the SSH" >&2
+    echo "       alias of a machine whose checkout of this repo CAN reach $REMOTE (see RELEASING.md)." >&2
+    exit 1
+  fi
+  if [ -z "${CURATARR_GH_SSH_REPO_DIR:-}" ]; then
+    echo "ERROR: cannot reach $REMOTE directly, and CURATARR_GH_SSH_REPO_DIR is unset. Set it to the" >&2
+    echo "       absolute path of the curatarr checkout on \$CURATARR_GH_SSH_HOST ($CURATARR_GH_SSH_HOST)." >&2
+    exit 1
+  fi
+  if ! ssh "$CURATARR_GH_SSH_HOST" "cd '${CURATARR_GH_SSH_REPO_DIR}' && git ls-remote --exit-code origin" >/dev/null 2>&1; then
+    echo "ERROR: \$CURATARR_GH_SSH_HOST ($CURATARR_GH_SSH_HOST) can't reach its own origin either - check its credentials." >&2
+    exit 1
+  fi
+  echo "==> Confirmed $CURATARR_GH_SSH_HOST can reach $REMOTE - delegating $REMOTE operations there"
+else
+  echo "==> $REMOTE is directly reachable from here - no delegation needed"
+fi
+
 echo "==> Checking $TAG doesn't already exist on $REMOTE or GitHub"
-if ! REMOTE_TAGS="$(git ls-remote --tags "$REMOTE")"; then
-  echo "ERROR: could not reach $REMOTE to check existing tags" >&2
+if ! REMOTE_TAGS="$(remote_tags)"; then
+  echo "ERROR: could not reach $REMOTE (or its delegate on \$CURATARR_GH_SSH_HOST) to check existing tags" >&2
   exit 1
 fi
 if printf '%s\n' "$REMOTE_TAGS" | grep -qF "refs/tags/${TAG}"; then
@@ -220,25 +266,6 @@ if [ "$LOCAL_MAIN_SHA" != "$GITHUB_MAIN_SHA" ]; then
   exit 1
 fi
 
-IS_GITHUB_REMOTE=0
-if remote_is_github "$REMOTE"; then
-  IS_GITHUB_REMOTE=1
-  echo "==> $REMOTE points directly at GitHub - no two-hop push needed"
-else
-  echo "==> $REMOTE ($(git remote get-url "$REMOTE")) is not GitHub - two-hop push required"
-  if [ -z "${CURATARR_GH_SSH_HOST:-}" ]; then
-    echo "ERROR: CURATARR_GH_SSH_HOST is unset. Set it to the SSH alias of a machine whose own" >&2
-    echo "       'origin' remote IS github.com/${GITHUB_REPO} (see RELEASING.md)." >&2
-    exit 1
-  fi
-  if [ -z "${CURATARR_GH_SSH_REPO_DIR:-}" ]; then
-    echo "ERROR: CURATARR_GH_SSH_REPO_DIR is unset. Set it to the absolute path of the curatarr" >&2
-    echo "       checkout on \$CURATARR_GH_SSH_HOST ($CURATARR_GH_SSH_HOST)." >&2
-    exit 1
-  fi
-  echo "==> Will push onward via CURATARR_GH_SSH_HOST=$CURATARR_GH_SSH_HOST CURATARR_GH_SSH_REPO_DIR=$CURATARR_GH_SSH_REPO_DIR"
-fi
-
 # ---------------------------------------------------------------------------
 # Dry run: stop here, print the plan
 # ---------------------------------------------------------------------------
@@ -248,9 +275,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "  git -c user.email=\"$RELEASE_TAG_EMAIL\" tag -s \"$TAG\" -m \"$TAG\""
   echo "  git config gpg.ssh.allowedSignersFile \"$ALLOWED_SIGNERS_FILE\""
   echo "  git verify-tag \"$TAG\"   # must verify against pinned fingerprint $RELEASE_SIGNER_FINGERPRINT, else abort"
-  echo "  git push \"$REMOTE\" \"$TAG\""
-  if [ "$IS_GITHUB_REMOTE" -eq 0 ]; then
-    echo "  ssh \"$CURATARR_GH_SSH_HOST\" \"cd '$CURATARR_GH_SSH_REPO_DIR' && git push origin '$TAG'\"   # two-hop"
+  if [ "$ORIGIN_USABLE_LOCALLY" -eq 1 ]; then
+    echo "  git push \"$REMOTE\" \"$TAG\""
+  else
+    echo "  ssh \"$CURATARR_GH_SSH_HOST\" \"cd '$CURATARR_GH_SSH_REPO_DIR' && git push origin '$TAG'\"   # delegated - $REMOTE unreachable from here"
   fi
   echo "  git ls-remote \"$GITHUB_REMOTE_URL\" \"refs/tags/$TAG\"   # confirm it landed on GitHub"
   echo "[dry-run] No tag was created; nothing was pushed, signed, or uploaded."

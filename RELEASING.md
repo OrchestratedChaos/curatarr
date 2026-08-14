@@ -64,23 +64,27 @@ script can assume by default (no personal hostnames or paths are
 hardcoded into either - both fail with a clear message instead of
 guessing):
 
-- **Two-hop push.** If the `origin` remote on the machine you run
-  `scripts/release.sh` from does **not** point at
-  `github.com/OrchestratedChaos/curatarr` (e.g. it points at another one
-  of your own machines, which in turn has a GitHub-connected `origin`),
-  set:
+- **Two-hop push.** If `origin` isn't directly reachable/credentialed from
+  the machine you run `scripts/release.sh` from, set:
   ```
-  export CURATARR_GH_SSH_HOST=<ssh-alias-of-the-github-connected-machine>
+  export CURATARR_GH_SSH_HOST=<ssh-alias-of-a-machine-that-can-reach-origin>
   export CURATARR_GH_SSH_REPO_DIR=<absolute-path-to-its-curatarr-checkout>
   ```
-  `scripts/release.sh` pushes the tag to `origin` first, then - only if
-  `origin` isn't GitHub - SSHes to `$CURATARR_GH_SSH_HOST`, `cd`s to
-  `$CURATARR_GH_SSH_REPO_DIR`, and runs `git push origin <tag>` there,
-  then confirms (via a direct `git ls-remote` against
-  `https://github.com/OrchestratedChaos/curatarr.git`, independent of
-  either host) that the tag actually landed before declaring success. If
-  it never lands, the script fails loudly rather than silently leaving
-  `.github/workflows/release.yml` un-triggered.
+  `scripts/release.sh` probes `origin` directly with `git ls-remote` -
+  **not** by inspecting `origin`'s URL - because two machines can share
+  one `.git` directory (e.g. one mounted over SMB from the other) and
+  both see `origin` as genuinely pointing at `github.com`, yet only one
+  of them actually has working credentials for it. Whenever that probe
+  fails, every `origin`-touching operation (the pre-push "does this tag
+  already exist" check, and the tag push itself) is delegated over SSH
+  to `$CURATARR_GH_SSH_HOST`, `cd`'d to `$CURATARR_GH_SSH_REPO_DIR` -
+  the signed tag itself is still created locally (that's the whole point:
+  the signing key never has to move), only the network calls to `origin`
+  do. Either way, the script then confirms (via a direct `git ls-remote`
+  against `https://github.com/OrchestratedChaos/curatarr.git`,
+  independent of either host) that the tag actually landed before
+  declaring success. If it never lands, the script fails loudly rather
+  than silently leaving `.github/workflows/release.yml` un-triggered.
 - **gh delegation.** `scripts/sign-release-checksums.sh` must run on the
   machine holding the signing **private** key, which isn't necessarily
   the machine where `gh` is authenticated. It checks `gh auth status`
