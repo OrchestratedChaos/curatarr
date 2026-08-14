@@ -2,6 +2,15 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.19.1] - 2026-08-13
+
+### Fixed
+
+- **`scripts/release.sh` couldn't cut a release from a machine that shares its `.git` directory with another machine over a network mount.** Its two-hop push (`CURATARR_GH_SSH_HOST`/`CURATARR_GH_SSH_REPO_DIR`) only engaged when `origin`'s URL wasn't `github.com`, but a shared `.git` dir means `origin` genuinely IS `github.com` on every machine that mounts it, even ones with no working GitHub credentials of their own - so the fallback it was built for never triggered, and the script just failed with a raw "could not reach origin" error instead. `origin` reachability is now probed directly (`git ls-remote`) rather than pattern-matched from the URL: every `origin`-touching step (the pre-push "does this tag already exist" check, and the tag push itself) delegates over SSH to `CURATARR_GH_SSH_HOST` whenever that probe fails, independent of what `origin`'s URL looks like. Signed tag creation still happens locally - only the network calls move.
+- **The same script's clean-working-tree precondition false-positived on a shared `.git` dir mounted from Windows**, where Git Bash's `core.filemode=true` misreads the executable bit of shell scripts written from the Unix side over SMB, reporting nine files as modified (`old mode 100755` / `new mode 100644`) with zero content difference. The check now runs `git status` with `-c core.fileMode=false` scoped to just that invocation, so pure mode-only deltas no longer block a release; this is not written to `.git/config`, so no other command's filemode handling changes.
+
+No functional/product changes in this release - see `2.19.0` for the actual fix (`#352`, private-collection label identity and rename detection), which this release also carries.
+
 ## [2.19.0] - 2026-08-13
 
 ### Fixed
