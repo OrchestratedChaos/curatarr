@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.21.2] - 2026-08-17
+
+### Added
+
+- **`.claude/skills/verify-recommendations/`** - a read-only audit of what is actually in each user's Plex recommendation collection, plus the machine-access knowledge needed to run it. `CLAUDE.md` already warned that the collection is the artifact and the run log is not (the log prints `plex_recs`, up to 2x the target; the collection holds the smaller `final_items`), but nothing in the repo made measuring the real thing straightforward from a machine that isn't the Plex host - which is the normal case when the checkout is a network mount of the Plex machine's own directory.
+
+  `run_remote.sh` probes whether Plex is reachable and either runs locally or delegates over SSH via `CURATARR_PLEX_SSH_HOST` / `CURATARR_PLEX_SSH_REPO_DIR` (same convention as `CURATARR_GH_SSH_HOST` in `RELEASING.md`, and probe-then-delegate for the same reason `scripts/release.sh` was rewritten that way in `2.19.1` - `plex.url` is typically a `127-0-0-1.<hash>.plex.direct` hostname that resolves to `127.0.0.1` everywhere and so says nothing about where Plex is). `verify_collections.py` then checks, per user: collection size against `limit_results`, watched items still labeled, excluded genres, `max_rating`, and the franchise invariant - that every collection item belonging to a multi-entry TMDB collection IS the canonical earliest-eligible-unwatched entry for that user, which covers both halves of franchise ordering in one assertion.
+
+  Two distinctions the tool would be useless without, both found by running it: an item the last run *already knew* was watched is a real failure, while one watched *since* that run is lag `_remove_outdated_labels()` clears tonight - conflating them makes it cry wolf every time somebody watches a film; and an unknown username or an empty collection is now a failure rather than a silent pass.
+
+  `.gitignore` narrows `.claude/` to `.claude/*` with a `!.claude/skills/` negation, so shared skills are versioned while machine-local `settings.local.json` stays ignored (git cannot re-include a path inside an excluded *directory*, only inside an excluded set of paths).
+
 ## [2.21.1] - 2026-08-17
 
 ### Fixed
