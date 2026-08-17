@@ -58,7 +58,7 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 - **Per-user recommendations** — Each user gets their own curated collection
 - **Per-user by default** — Each user's library Browse/Search only shows their own recommendation collection, not others' (UI-level separation, not access control — see FAQ)
 - **Smart scoring** — Weights keywords, genres, cast, and directors
-- **Franchise order** — Recommends the first movie of a series you haven't seen, not whichever sequel happened to score highest: nothing watched gets you *Rocky*, *Rocky* watched gets you *Rocky II* (`movies.franchise_order` in tuning.yml)
+- **Franchise order** — Started a series? You get your next unwatched entry: *Rocky* watched gets you *Rocky II*. Never touched it? The mid-series entry is dropped rather than promoted, so the collection never fills with originals for series you've shown no interest in (`movies.franchise_order`, overridable per user)
 - **Recency bias** — Recent watches influence recommendations more
 - **Rewatch detection** — Content you love gets weighted higher
 - **Genre exclusions** — Skip horror for the kids, documentaries for movie night
@@ -355,11 +355,14 @@ users:
     sarah:
       display_name: Sarah
       exclude_genres: [horror]
+      franchise_order: false  # Overrides movies.franchise_order for Sarah only
     kids:
       display_name: Kids
       exclude_genres: [horror, thriller, war]
       max_rating: PG  # Only G and PG content (movies: G < PG < PG-13 < R < NC-17)
 ```
+
+**Franchise Order:** `franchise_order` is per-person because the setting describes a *person*, not a library — a completionist who wants walking through Rocky I–VI and a housemate who just wants tonight's best match are both right, and they share one server. Unset means follow `movies.franchise_order` in tuning.yml.
 
 **Content Rating Filter:**
 - Movies: `G`, `PG`, `PG-13`, `R`, `NC-17` (from least to most restrictive)

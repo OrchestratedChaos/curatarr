@@ -2,6 +2,20 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.21.0] - 2026-08-16
+
+### Changed
+
+- **Franchise ordering now distinguishes a series you have STARTED from one you have never touched**, and only promotes on the former. `2.20.0` treated both alike: any mid-series candidate handed its slot *and its score* to the earliest unwatched entry. On a started series that is right — the slot belongs to the franchise. On an unstarted one it let `utils/franchise.py` manufacture a ranking it never earned: *Rocky IV* matching a profile is not evidence that a 1976 boxing drama deserves a top-50 place, and treating it as such displaced better-matched titles wholesale. Measured on the reference library before the fix: a user with 32 watched movies had **68 of 73** multi-entry series pinned to their oldest member, every one of them a series she had never started.
+
+  Now: a **started** series moves to the next unwatched entry and inherits the slot (watched *Rocky*, get *Rocky II*) — the "continue watching" case every major service gives a dedicated shelf, and rare enough that it can never crowd a collection (0–13 series per user across the six real profiles measured). An **unstarted** series has its mid-series entries dropped instead, with the earliest entry left to stand or fall on its **own** score. On an unstarted series this can therefore only ever *remove* a wrong recommendation, never invent a highly-ranked one. The ranker decides which franchise; franchise ordering decides which entry, and it can no longer do the ranker's job.
+
+  `manage_plex_labels()`'s collection-side suppression mirrors the same split, or the two halves would contradict each other on one series: on an unstarted series a mid-series entry still carrying a label from a previous run is now dropped whether or not the earliest entry is a candidate, and the survivor keeps its own score rather than inheriting the best in the series — otherwise a stale label would reintroduce exactly the inheritance this removes.
+
+### Added
+
+- **`users.preferences.<user>.franchise_order`** (`config.yml`) — per-user override of `movies.franchise_order`, resolving narrowest-first: per-user, then `movies.franchise_order` in `tuning.yml`, then `FRANCHISE_ORDER_DEFAULT`. Per-user because the setting describes a *person*, not a library: a completionist who wants walking through Rocky I–VI and a housemate who just wants tonight's best match are both right and they share one server. Mirrors the existing `max_rating`/`exclude_genres` preference shape (`utils.plex_policy.get_franchise_order_for_user`); a non-boolean value is ignored rather than coerced, since `franchise_order: "no"` is truthy in Python.
+
 ## [2.20.0] - 2026-08-16
 
 ### Added

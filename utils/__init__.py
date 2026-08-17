@@ -175,17 +175,20 @@ from .display import (
 
 # Franchise ordering - start people at the beginning of a series
 from .franchise import (
+    DECISION_PROMOTED,
+    DECISION_SUPPRESSED,
+    FranchiseDecision,
     FranchiseEntry,
-    FranchiseSubstitution,
     apply_franchise_ordering,
     build_franchise_index,
     coerce_year,
     collect_library_tmdb_ids,
+    decisions_of_kind,
     find_library_gaps,
     find_next_unwatched,
     load_collection_details,
     normalize_collection_id,
-    summarize_substitutions,
+    summarize_decisions,
 )
 
 # Helper utilities
@@ -297,6 +300,7 @@ from .plex_policy import (
     TV_RATING_HIERARCHY,
     apply_user_label_restrictions,
     build_all_private_labels,
+    get_franchise_order_for_user,
     get_max_rating_for_user,
     is_rating_allowed,
 )
@@ -642,17 +646,20 @@ __all__ = [
     "apply_ignored_penalties",
     "find_ignored_recommendations",
     # Franchise ordering
+    "DECISION_PROMOTED",
+    "DECISION_SUPPRESSED",
+    "FranchiseDecision",
     "FranchiseEntry",
-    "FranchiseSubstitution",
     "apply_franchise_ordering",
     "build_franchise_index",
     "coerce_year",
     "collect_library_tmdb_ids",
+    "decisions_of_kind",
     "find_library_gaps",
     "find_next_unwatched",
     "load_collection_details",
     "normalize_collection_id",
-    "summarize_substitutions",
+    "summarize_decisions",
     # Library supply health
     "PoolHealth",
     "SupplyGap",
@@ -731,6 +738,7 @@ __all__ = [
     "fetch_user_played_ids",
     "resolve_plex_user",
     "get_streaming_services_for_user",
+    "get_franchise_order_for_user",
     "get_max_rating_for_user",
     "is_rating_allowed",
     "MOVIE_RATING_HIERARCHY",

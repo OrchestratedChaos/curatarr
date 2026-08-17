@@ -32,6 +32,13 @@ users:
     user2:
       display_name: User Two
       max_rating: PG-13  # Filter out R and NC-17 movies
+      # Optional: overrides movies.franchise_order (tuning.yml) for this
+      # person only. Franchise ordering walks you through a series in
+      # release order instead of handing you whichever entry scored
+      # highest - some people want that, some want tonight's best match
+      # regardless of where it falls in a series. Unset = follow
+      # tuning.yml.
+      franchise_order: false
     kids:
       display_name: Kids
       exclude_genres:

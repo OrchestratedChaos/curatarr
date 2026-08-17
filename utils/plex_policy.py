@@ -93,6 +93,32 @@ def get_max_rating_for_user(user_preferences: dict, username: Optional[str] = No
     return user_prefs.get("max_rating")
 
 
+def get_franchise_order_for_user(user_preferences: dict, username: Optional[str] = None, default: bool = True) -> bool:
+    """
+    Whether franchise ordering (utils/franchise.py) applies to this user.
+
+    Resolution order, narrowest first:
+      1. users.preferences.<user>.franchise_order (config.yml)
+      2. movies.franchise_order (tuning.yml)          <- passed in as `default`
+      3. FRANCHISE_ORDER_DEFAULT
+
+    Per-user because the setting is a statement about a PERSON, not about
+    a library: a completionist who wants to be walked through Rocky I-VI
+    and a housemate who just wants the best match tonight are both right,
+    and they share one Plex server. This mirrors max_rating/exclude_genres
+    above - same `preferences` block, same "unset means fall back" rule.
+
+    A non-boolean value is ignored rather than coerced: `franchise_order:
+    "no"` is truthy in Python and silently turning that into True would
+    be the opposite of what was written.
+    """
+    if not username or not user_preferences or username not in user_preferences:
+        return default
+
+    value = (user_preferences[username] or {}).get("franchise_order")
+    return value if isinstance(value, bool) else default
+
+
 def is_rating_allowed(content_rating: Optional[str], max_rating: Optional[str], media_type: str = "movie") -> bool:
     """
     Check if a content rating is allowed given the user's max_rating.

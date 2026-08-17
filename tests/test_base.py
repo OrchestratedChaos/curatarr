@@ -3776,6 +3776,12 @@ ROCKY_CACHE = {
         "collection_id": ROCKY_COLLECTION_ID,
         "collection_name": "Rocky Collection",
     },
+    "3": {
+        "title": "Rocky III",
+        "year": 1982,
+        "collection_id": ROCKY_COLLECTION_ID,
+        "collection_name": "Rocky Collection",
+    },
     "4": {
         "title": "Rocky IV",
         "year": 1985,
@@ -3804,10 +3810,24 @@ def _scored_from(recommender, rating_key, score):
 class TestApplyFranchiseOrderingIntegration:
     """BaseRecommender._apply_franchise_ordering - the get_recommendations() hook."""
 
-    def test_sequel_recommendation_becomes_the_first_entry(self):
+    def test_started_series_advances_to_the_next_entry(self):
+        recommender = _franchise_recommender()
+        recommender.watched_ids = {1}
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
+        assert [i["title"] for i in ordered] == ["Rocky II"]
+
+    def test_unstarted_series_drops_the_sequel_rather_than_promoting(self):
+        """The measured fix: a series the user never touched must not have
+        its original promoted into the sequel's slot."""
         recommender = _franchise_recommender()
         ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
-        assert [i["title"] for i in ordered] == ["Rocky"]
+        assert ordered == []
+
+    def test_unstarted_first_entry_keeps_its_own_rank(self):
+        recommender = _franchise_recommender()
+        scored = [_scored_from(recommender, 4, 0.9), _scored_from(recommender, 1, 0.2)]
+        ordered = recommender._apply_franchise_ordering(scored, [])
+        assert [(i["title"], i["similarity_score"]) for i in ordered] == [("Rocky", 0.2)]
 
     def test_disabled_flag_leaves_recommendations_untouched(self):
         recommender = _franchise_recommender()
@@ -3815,40 +3835,37 @@ class TestApplyFranchiseOrderingIntegration:
         scored = [_scored_from(recommender, 4, 0.8)]
         assert recommender._apply_franchise_ordering(scored, []) is scored
 
-    def test_watched_first_entry_promotes_the_next(self):
-        recommender = _franchise_recommender()
-        recommender.watched_ids = {1}
-        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
-        assert [i["title"] for i in ordered] == ["Rocky II"]
-
     def test_the_users_own_plex_view_counts_as_watched(self):
-        """user_played_ids is that user's own state; a part wrongly
-        believed unwatched sends the whole series back to the start."""
+        """user_played_ids is that user's own state, and it decides both
+        how far along the series is AND whether it counts as started."""
         recommender = _franchise_recommender()
         recommender.user_played_ids = {1, 2}
         ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
-        assert [i["title"] for i in ordered] == ["Rocky IV"]
+        assert [i["title"] for i in ordered] == ["Rocky III"]
 
     def test_declined_entry_is_not_promoted(self):
         recommender = _franchise_recommender()
-        recommender.declined_rating_keys = {1}
+        recommender.watched_ids = {1}
+        recommender.declined_rating_keys = {2}
         ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
-        assert [i["title"] for i in ordered] == ["Rocky II"]
+        assert [i["title"] for i in ordered] == ["Rocky III"]
 
     def test_excluded_genre_entry_is_not_promoted(self):
         recommender = _franchise_recommender()
-        recommender._get_media_cache().cache["movies"]["1"]["genres"] = ["horror"]
+        recommender.watched_ids = {1}
+        recommender._get_media_cache().cache["movies"]["2"]["genres"] = ["horror"]
         ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], ["horror"])
-        assert [i["title"] for i in ordered] == ["Rocky II"]
+        assert [i["title"] for i in ordered] == ["Rocky III"]
 
     def test_max_rating_preference_is_honored(self):
         recommender = _franchise_recommender()
         recommender.single_user = "kid"
         recommender.user_preferences = {"kid": {"max_rating": "PG"}}
-        recommender._get_media_cache().cache["movies"]["1"]["content_rating"] = "R"
-        recommender._get_media_cache().cache["movies"]["2"]["content_rating"] = "PG"
+        recommender.watched_ids = {1}
+        recommender._get_media_cache().cache["movies"]["2"]["content_rating"] = "R"
+        recommender._get_media_cache().cache["movies"]["3"]["content_rating"] = "PG"
         ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
-        assert [i["title"] for i in ordered] == ["Rocky II"]
+        assert [i["title"] for i in ordered] == ["Rocky III"]
 
     def test_empty_input_is_a_no_op(self):
         recommender = _franchise_recommender()
@@ -3859,20 +3876,53 @@ class TestApplyFranchiseOrderingIntegration:
         scored = [_scored_from(recommender, 1, 0.8)]
         assert recommender._apply_franchise_ordering(scored, []) is scored
 
+    def test_per_user_preference_can_disable_it(self):
+        recommender = _franchise_recommender()
+        recommender.single_user = "sarah"
+        recommender.user_preferences = {"sarah": {"franchise_order": False}}
+        recommender.watched_ids = {1}
+        scored = [_scored_from(recommender, 4, 0.8)]
+        assert recommender._apply_franchise_ordering(scored, []) is scored
+
+    def test_per_user_preference_can_enable_it_against_the_media_default(self):
+        recommender = _franchise_recommender()
+        recommender.franchise_order = False
+        recommender.single_user = "sarah"
+        recommender.user_preferences = {"sarah": {"franchise_order": True}}
+        recommender.watched_ids = {1}
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
+        assert [i["title"] for i in ordered] == ["Rocky II"]
+
+    def test_per_user_preference_also_reaches_the_collection_side(self):
+        recommender = _franchise_recommender()
+        recommender.single_user = "sarah"
+        recommender.user_preferences = {"sarah": {"franchise_order": False}}
+        candidates = {4: (Mock(title="Rocky IV"), 0.9), 1: (Mock(title="Rocky"), 0.3)}
+        assert recommender._suppress_superseded_franchise_candidates(candidates) is candidates
+
     def test_a_broken_cache_never_costs_the_user_their_recommendations(self):
         recommender = _franchise_recommender()
         scored = [_scored_from(recommender, 4, 0.8)]
         recommender._get_media_cache = Mock(side_effect=AttributeError("boom"))
         assert recommender._apply_franchise_ordering(scored, []) is scored
 
-    def test_collapsing_a_series_is_reported(self, capsys):
+    def test_promotions_and_suppressions_are_reported_separately(self, capsys):
+        recommender = _franchise_recommender()
+        recommender.watched_ids = {1}
+        scored = [_scored_from(recommender, 4, 0.9), _scored_from(recommender, 3, 0.8)]
+        capsys.readouterr()  # drop construction chatter
+        recommender._apply_franchise_ordering(scored, [])
+        out = capsys.readouterr().out
+        assert "series you've started moved to your next entry" in out
+        assert "collapsed 1 duplicate entries" in out
+
+    def test_suppressions_are_reported_with_the_series_count(self, capsys):
         recommender = _franchise_recommender()
         scored = [_scored_from(recommender, 4, 0.9), _scored_from(recommender, 2, 0.8)]
         capsys.readouterr()  # drop construction chatter
         recommender._apply_franchise_ordering(scored, [])
         out = capsys.readouterr().out
-        assert "moved to an earlier unwatched entry" in out
-        assert "collapsed 1 later entries" in out
+        assert "held back 2 mid-series movies across 1 series you haven't started" in out
 
 
 class TestSuppressSupersededFranchiseCandidates:
@@ -3888,26 +3938,35 @@ class TestSuppressSupersededFranchiseCandidates:
         result = recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9), (1, 0.3)))
         assert set(result) == {1}
 
-    def test_survivor_keeps_the_best_score_in_the_series(self):
-        """Franchise ordering changes WHICH entry is recommended, not how
-        highly the series ranks."""
-        recommender = _franchise_recommender()
-        result = recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9), (1, 0.3)))
-        assert result[1][1] == 0.9
-
-    def test_sequel_survives_when_the_first_entry_is_not_a_candidate(self):
-        """Otherwise the series vanishes from the collection rather than
-        moving to its start - e.g. when max_rating just removed the
-        first entry."""
-        recommender = _franchise_recommender()
-        candidates = self._candidates((4, 0.9))
-        assert recommender._suppress_superseded_franchise_candidates(candidates) == candidates
-
-    def test_watched_first_entry_hands_the_slot_to_the_next(self):
+    def test_started_series_survivor_keeps_the_best_score(self):
+        """On a series being worked through, franchise ordering changes
+        WHICH entry is recommended, not how highly the series ranks."""
         recommender = _franchise_recommender()
         recommender.watched_ids = {1}
         result = recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9), (2, 0.3)))
         assert set(result) == {2}
+        assert result[2][1] == 0.9
+
+    def test_unstarted_survivor_keeps_its_own_score(self):
+        """Transferring here would reintroduce, via a stale label, exactly
+        the inheritance the started/unstarted split removed."""
+        recommender = _franchise_recommender()
+        result = recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9), (1, 0.3)))
+        assert result[1][1] == 0.3
+
+    def test_started_series_survives_when_its_next_entry_is_not_a_candidate(self):
+        """Otherwise the series vanishes from the collection rather than
+        advancing - e.g. when max_rating just removed that next entry."""
+        recommender = _franchise_recommender()
+        recommender.watched_ids = {1}
+        candidates = self._candidates((4, 0.9))
+        assert recommender._suppress_superseded_franchise_candidates(candidates) == candidates
+
+    def test_unstarted_series_is_dropped_even_with_no_replacement(self):
+        """The fresh pool already refuses to offer this; a label left over
+        from a previous run must not keep it alive."""
+        recommender = _franchise_recommender()
+        assert recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9))) == {}
 
     def test_unrelated_candidates_are_untouched(self):
         recommender = _franchise_recommender()
