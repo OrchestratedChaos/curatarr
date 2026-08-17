@@ -24,17 +24,20 @@ import os
 import tempfile
 
 from utils.franchise import (
+    DECISION_PROMOTED,
+    DECISION_SUPPRESSED,
     UNKNOWN_YEAR_SORT,
     apply_franchise_ordering,
     build_franchise_index,
     coerce_year,
     collect_library_tmdb_ids,
+    decisions_of_kind,
     find_library_gaps,
     find_next_unwatched,
     is_promotable,
     load_collection_details,
     normalize_collection_id,
-    summarize_substitutions,
+    summarize_decisions,
 )
 
 ROCKY = 1575
@@ -256,141 +259,192 @@ class TestFindNextUnwatched:
 
 
 class TestApplyFranchiseOrdering:
+    """The started/unstarted split is the heart of this module - see
+    apply_franchise_ordering's docstring for why the two cases are not
+    the same recommendation."""
+
     def _order(self, library, scored, watched=frozenset(), **kwargs):
         return apply_franchise_ordering(scored, build_franchise_index(library), set(watched), **kwargs)
 
-    def test_sequel_is_replaced_by_the_first_entry(self):
-        library = dict(ROCKY_LIBRARY)
-        ordered, subs = self._order(library, [_scored(library, 4, 0.7)])
-        assert [i["title"] for i in ordered] == ["Rocky"]
-        assert len(subs) == 1
-        assert subs[0].original_title == "Rocky IV"
-        assert subs[0].promoted_title == "Rocky"
+    # -- Started series: promote and inherit the slot -------------------
 
-    def test_watched_first_entry_promotes_the_next_one(self):
+    def test_started_series_promotes_to_the_next_unwatched_entry(self):
         library = dict(ROCKY_LIBRARY)
-        ordered, _subs = self._order(library, [_scored(library, 4, 0.7)], watched={1})
+        ordered, decisions = self._order(library, [_scored(library, 4, 0.7)], watched={1})
         assert [i["title"] for i in ordered] == ["Rocky II"]
+        assert [d.kind for d in decisions] == [DECISION_PROMOTED]
 
-    def test_first_entry_is_left_alone(self):
+    def test_started_series_walks_forward_as_entries_are_watched(self):
         library = dict(ROCKY_LIBRARY)
-        ordered, subs = self._order(library, [_scored(library, 1, 0.7)])
-        assert [i["title"] for i in ordered] == ["Rocky"]
-        assert subs == []
+        ordered, _d = self._order(library, [_scored(library, 4, 0.7)], watched={1, 2})
+        assert [i["title"] for i in ordered] == ["Rocky III"]
 
     def test_promoted_entry_inherits_the_score_and_the_rank(self):
-        """The slot is the sequel's; the title in it is the original's."""
+        """The slot is the sequel's; the title in it is the earlier one's."""
         library = dict(ROCKY_LIBRARY)
-        ordered, _subs = self._order(library, [_scored(library, 4, 0.73)])
+        ordered, _d = self._order(library, [_scored(library, 4, 0.73)], watched={1})
         assert ordered[0]["similarity_score"] == 0.73
-        assert ordered[0]["plex_rating_key"] == 1
+        assert ordered[0]["plex_rating_key"] == 2
 
-    def test_whole_franchise_collapses_to_one_slot(self):
-        """Rocky III and Rocky IV both resolving to Rocky is one
-        recommendation, not three."""
+    def test_promotion_target_need_not_be_in_the_scored_pool(self):
+        """The point of running after the quality/score gates: on a series
+        being worked through, an entry those gates dropped is still owed."""
         library = dict(ROCKY_LIBRARY)
-        scored = [_scored(library, 4, 0.9), _scored(library, 3, 0.8), _scored(library, 2, 0.7)]
-        ordered, subs = self._order(library, scored)
-        assert [i["title"] for i in ordered] == ["Rocky"]
-        assert len(subs) == 3
+        library["2"]["rating"], library["2"]["vote_count"] = 1.0, 0
+        ordered, _d = self._order(library, [_scored(library, 4, 0.5)], watched={1})
+        assert ordered[0]["title"] == "Rocky II"
 
-    def test_franchise_keeps_the_best_rank_any_member_earned(self):
+    def test_started_franchise_collapses_to_one_slot(self):
+        library = dict(ROCKY_LIBRARY)
+        scored = [_scored(library, 4, 0.9), _scored(library, 3, 0.8)]
+        ordered, decisions = self._order(library, scored, watched={1})
+        assert [i["title"] for i in ordered] == ["Rocky II"]
+        assert len(decisions) == 2
+
+    def test_started_franchise_keeps_the_best_rank_any_member_earned(self):
         library = dict(ROCKY_LIBRARY)
         other = {"title": "Heat", "year": 1995, "collection_id": None, "plex_rating_key": 99, "similarity_score": 0.85}
         scored = [_scored(library, 4, 0.9), other, _scored(library, 3, 0.8)]
-        ordered, _subs = self._order(library, scored)
-        assert [i["title"] for i in ordered] == ["Rocky", "Heat"]
+        ordered, _d = self._order(library, scored, watched={1})
+        assert [i["title"] for i in ordered] == ["Rocky II", "Heat"]
 
-    def test_first_entry_already_in_the_pool_is_not_duplicated(self):
-        """Rocky IV at rank 1 promoting to Rocky, and Rocky itself at
-        rank 2, must yield one Rocky."""
+    def test_target_already_in_the_pool_is_not_duplicated(self):
         library = dict(ROCKY_LIBRARY)
-        scored = [_scored(library, 4, 0.9), _scored(library, 1, 0.2)]
-        ordered, _subs = self._order(library, scored)
-        assert [i["plex_rating_key"] for i in ordered] == [1]
+        scored = [_scored(library, 4, 0.9), _scored(library, 2, 0.2)]
+        ordered, _d = self._order(library, scored, watched={1})
+        assert [i["plex_rating_key"] for i in ordered] == [2]
         assert ordered[0]["similarity_score"] == 0.9
 
-    def test_promotion_target_need_not_be_in_the_scored_pool(self):
-        """The whole point of running after the quality/score gates: an
-        original those gates dropped is still promotable."""
+    # -- Unstarted series: suppress, never promote ----------------------
+
+    def test_unstarted_series_drops_the_sequel_instead_of_promoting(self):
+        """Rocky IV matching the profile is not evidence that a 1976
+        boxing drama deserves its top-50 slot."""
         library = dict(ROCKY_LIBRARY)
-        ordered, _subs = self._order(library, [_scored(library, 2, 0.5)])
-        assert ordered[0]["title"] == "Rocky"
+        ordered, decisions = self._order(library, [_scored(library, 4, 0.7)])
+        assert ordered == []
+        assert [d.kind for d in decisions] == [DECISION_SUPPRESSED]
+        assert decisions[0].target_title == "Rocky"
+
+    def test_unstarted_first_entry_keeps_its_own_rank_and_score(self):
+        library = dict(ROCKY_LIBRARY)
+        scored = [_scored(library, 4, 0.9), _scored(library, 1, 0.2)]
+        ordered, _d = self._order(library, scored)
+        assert [i["plex_rating_key"] for i in ordered] == [1]
+        assert ordered[0]["similarity_score"] == 0.2, "no inheritance on an unstarted series"
+
+    def test_unstarted_series_absent_from_the_pool_disappears_entirely(self):
+        library = dict(ROCKY_LIBRARY)
+        scored = [_scored(library, 4, 0.9), _scored(library, 3, 0.8)]
+        ordered, decisions = self._order(library, scored)
+        assert ordered == []
+        assert all(d.kind == DECISION_SUPPRESSED for d in decisions)
+
+    def test_unstarted_first_entry_alone_is_left_alone(self):
+        library = dict(ROCKY_LIBRARY)
+        ordered, decisions = self._order(library, [_scored(library, 1, 0.7)])
+        assert [i["title"] for i in ordered] == ["Rocky"]
+        assert decisions == []
+
+    def test_suppression_never_removes_a_standalone_film(self):
+        heat = {"title": "Heat", "year": 1995, "collection_id": None, "plex_rating_key": 99, "similarity_score": 0.8}
+        ordered, decisions = self._order(ROCKY_LIBRARY, [heat])
+        assert ordered == [heat]
+        assert decisions == []
+
+    # -- Eligibility rules, shared by both cases ------------------------
 
     def test_never_moves_to_a_later_entry(self):
-        """With the first entry declined, the second must stay put rather
-        than be displaced by a third."""
+        """With the first entry declined, the second stays put rather than
+        being displaced by a third."""
         library = dict(ROCKY_LIBRARY)
-        ordered, subs = self._order(library, [_scored(library, 2, 0.5)], declined_ids={1})
+        ordered, decisions = self._order(library, [_scored(library, 2, 0.5)], declined_ids={1})
         assert ordered[0]["title"] == "Rocky II"
-        assert subs == []
+        assert decisions == []
 
-    def test_declined_first_entry_is_skipped_for_a_sequel(self):
+    def test_declined_first_entry_is_skipped(self):
         library = dict(ROCKY_LIBRARY)
-        ordered, _subs = self._order(library, [_scored(library, 4, 0.5)], declined_ids={1})
-        assert ordered[0]["title"] == "Rocky II"
+        ordered, _d = self._order(library, [_scored(library, 4, 0.5)], watched={2}, declined_ids={1})
+        assert ordered[0]["title"] == "Rocky III"
 
     def test_max_rating_blocks_the_original(self):
+        """The R-rated first entry is skipped for a PG-capped user; the
+        series still advances to the earliest entry they may watch."""
         library = _library(
             _movie(1, "Rocky", 1976, content_rating="R"),
             _movie(2, "Rocky II", 1979, content_rating="PG"),
             _movie(3, "Rocky III", 1982, content_rating="PG"),
+            _movie(4, "Rocky IV", 1985, content_rating="PG"),
         )
-        ordered, _subs = self._order(library, [_scored(library, 3, 0.5)], max_rating="PG")
-        assert ordered[0]["title"] == "Rocky II"
-
-    def test_standalone_movies_pass_through_untouched(self):
-        heat = {"title": "Heat", "year": 1995, "collection_id": None, "plex_rating_key": 99, "similarity_score": 0.8}
-        ordered, subs = self._order(ROCKY_LIBRARY, [heat])
-        assert ordered == [heat]
-        assert subs == []
+        ordered, _d = self._order(library, [_scored(library, 4, 0.5)], watched={2}, max_rating="PG")
+        assert [i["title"] for i in ordered] == ["Rocky III"]
 
     def test_single_entry_collection_is_a_no_op(self):
         library = _library(_movie(7, "Highlander", 1986, collection_id=999))
-        ordered, subs = self._order(library, [_scored(library, 7, 0.8)])
+        ordered, decisions = self._order(library, [_scored(library, 7, 0.8)])
         assert [i["title"] for i in ordered] == ["Highlander"]
-        assert subs == []
+        assert decisions == []
 
     def test_fully_watched_franchise_leaves_the_candidate_alone(self):
         library = dict(ROCKY_LIBRARY)
-        scored = [_scored(library, 4, 0.7)]
-        ordered, subs = self._order(library, scored, watched={1, 2, 3, 4})
+        ordered, decisions = self._order(library, [_scored(library, 4, 0.7)], watched={1, 2, 3, 4})
         assert [i["title"] for i in ordered] == ["Rocky IV"]
-        assert subs == []
+        assert decisions == []
+
+    # -- Cache hygiene --------------------------------------------------
 
     def test_cached_dict_is_never_mutated(self):
         """The media cache's own dicts are what get_recommendations()
         persists - writing a borrowed score onto one would poison the
         score cache for every later run."""
         library = dict(ROCKY_LIBRARY)
-        library["1"]["cached_score"] = 0.11
-        library["1"]["profile_hash"] = "old-profile"
-        ordered, _subs = self._order(library, [_scored(library, 4, 0.9)])
-        assert library["1"]["cached_score"] == 0.11
-        assert "similarity_score" not in library["1"] or library["1"]["similarity_score"] != 0.9
+        library["2"]["cached_score"] = 0.11
+        library["2"]["profile_hash"] = "old-profile"
+        self._order(library, [_scored(library, 4, 0.9)], watched={1})
+        assert library["2"]["cached_score"] == 0.11
+        assert library["2"].get("similarity_score") != 0.9
 
     def test_promoted_copy_drops_stale_score_cache_keys(self):
         library = dict(ROCKY_LIBRARY)
-        library["1"]["cached_score"] = 0.11
-        library["1"]["profile_hash"] = "old-profile"
-        ordered, _subs = self._order(library, [_scored(library, 4, 0.9)])
+        library["2"]["cached_score"] = 0.11
+        library["2"]["profile_hash"] = "old-profile"
+        ordered, _d = self._order(library, [_scored(library, 4, 0.9)], watched={1})
         assert "cached_score" not in ordered[0]
         assert "profile_hash" not in ordered[0]
 
     def test_promoted_copy_records_where_the_slot_came_from(self):
         library = dict(ROCKY_LIBRARY)
-        ordered, _subs = self._order(library, [_scored(library, 4, 0.9)])
+        ordered, _d = self._order(library, [_scored(library, 4, 0.9)], watched={1})
         assert ordered[0]["franchise_promoted_from"]["title"] == "Rocky IV"
         assert "franchise" in ordered[0]["score_breakdown"]["details"]
 
     def test_missing_rating_key_is_left_alone(self):
         item = {"title": "Rocky IV", "year": 1985, "collection_id": ROCKY, "similarity_score": 0.5}
-        ordered, subs = self._order(ROCKY_LIBRARY, [item])
+        ordered, decisions = self._order(ROCKY_LIBRARY, [item])
         assert ordered == [item]
-        assert subs == []
+        assert decisions == []
 
     def test_empty_input(self):
         assert self._order(ROCKY_LIBRARY, []) == ([], [])
+
+
+class TestDecisionsOfKind:
+    def test_splits_by_kind(self):
+        library = _library(
+            _movie(1, "Rocky", 1976),
+            _movie(2, "Rocky II", 1979),
+            _movie(3, "Rocky III", 1982),
+            _movie(5, "Jaws", 1975, collection_id=999, collection_name="Jaws Collection"),
+            _movie(6, "Jaws 2", 1978, collection_id=999, collection_name="Jaws Collection"),
+        )
+        # Rocky started (part 1 watched) -> promote; Jaws untouched -> suppress.
+        scored = [_scored(library, 3, 0.9), _scored(library, 6, 0.8)]
+        _ordered, decisions = apply_franchise_ordering(scored, build_franchise_index(library), {1})
+        assert [d.collection_name for d in decisions_of_kind(decisions, DECISION_PROMOTED)] == ["Rocky Collection"]
+        assert [d.collection_name for d in decisions_of_kind(decisions, DECISION_SUPPRESSED)] == ["Jaws Collection"]
+
+    def test_empty(self):
+        assert decisions_of_kind([], DECISION_PROMOTED) == []
 
 
 class TestFindLibraryGaps:
@@ -482,22 +536,40 @@ class TestCollectLibraryTmdbIds:
         assert collect_library_tmdb_ids({}) == set()
 
 
-class TestSummarizeSubstitutions:
-    def _subs(self, n):
-        library = _library(*[_movie(i, f"Part {i}", 1970 + i) for i in range(1, n + 2)])
-        scored = [_scored(library, i, 0.5) for i in range(2, n + 2)]
-        _ordered, subs = apply_franchise_ordering(scored, build_franchise_index(library), set())
-        return subs
+class TestSummarizeDecisions:
+    def _decisions(self, n):
+        """n sequels of one series the user HAS started (Part 1 watched),
+        so every decision is a promotion."""
+        library = _library(*[_movie(i, f"Part {i}", 1970 + i) for i in range(1, n + 3)])
+        scored = [_scored(library, i, 0.5) for i in range(3, n + 3)]
+        _ordered, decisions = apply_franchise_ordering(scored, build_franchise_index(library), {1})
+        return decisions
 
-    def test_describes_each_substitution(self):
-        lines = summarize_substitutions(self._subs(1))
-        assert "Part 2 (1972) -> Part 1 (1971)" in lines[0]
+    def test_describes_a_promotion(self):
+        lines = summarize_decisions(self._decisions(1))
+        assert "Part 3 (1973) -> Part 2 (1972)" in lines[0]
+
+    def test_describes_a_suppression(self):
+        library = dict(ROCKY_LIBRARY)
+        _ordered, decisions = apply_franchise_ordering(
+            [_scored(library, 4, 0.5)], build_franchise_index(library), set()
+        )
+        line = summarize_decisions(decisions)[0]
+        assert "Rocky IV (1985) held back" in line
+        assert "begins at Rocky (1976)" in line
 
     def test_truncation_is_explicit(self):
-        lines = summarize_substitutions(self._subs(12), limit=10)
+        lines = summarize_decisions(self._decisions(12), limit=10)
         assert len(lines) == 11
         assert lines[-1] == "... and 2 more"
 
     def test_no_truncation_marker_when_under_limit(self):
-        lines = summarize_substitutions(self._subs(3), limit=10)
+        lines = summarize_decisions(self._decisions(3), limit=10)
         assert len(lines) == 3
+
+    def test_unknown_years_render_as_na(self):
+        library = _library(_movie(1, "Part 1", None), _movie(2, "Part 2", None))
+        _ordered, decisions = apply_franchise_ordering(
+            [_scored(library, 2, 0.5)], build_franchise_index(library), set()
+        )
+        assert "(N/A)" in summarize_decisions(decisions)[0]

@@ -3055,6 +3055,50 @@ class TestApplyUserLabelRestrictions:
         mock_put.assert_called_once()
 
 
+class TestFranchiseOrderPreference:
+    """Tests for get_franchise_order_for_user - the per-user override of
+    movies.franchise_order (see utils/franchise.py)."""
+
+    @staticmethod
+    def _resolve(prefs, username, default=True):
+        from utils.plex_policy import get_franchise_order_for_user
+
+        return get_franchise_order_for_user(prefs, username, default)
+
+    def test_user_preference_wins_over_the_media_default(self):
+        prefs = {"sarah": {"franchise_order": False}}
+        assert self._resolve(prefs, "sarah", default=True) is False
+
+    def test_user_preference_can_enable_against_a_disabled_default(self):
+        prefs = {"john": {"franchise_order": True}}
+        assert self._resolve(prefs, "john", default=False) is True
+
+    def test_unset_falls_back_to_the_media_default(self):
+        prefs = {"john": {"display_name": "John"}}
+        assert self._resolve(prefs, "john", default=True) is True
+        assert self._resolve(prefs, "john", default=False) is False
+
+    def test_unknown_user_falls_back(self):
+        assert self._resolve({"sarah": {"franchise_order": False}}, "nobody", default=True) is True
+
+    def test_no_username_falls_back(self):
+        assert self._resolve({"sarah": {"franchise_order": False}}, None, default=True) is True
+
+    def test_empty_preferences_fall_back(self):
+        assert self._resolve({}, "sarah", default=True) is True
+        assert self._resolve(None, "sarah", default=False) is False
+
+    def test_null_user_entry_falls_back(self):
+        """A `sarah:` key with nothing under it parses as None."""
+        assert self._resolve({"sarah": None}, "sarah", default=True) is True
+
+    def test_non_boolean_value_is_ignored_not_coerced(self):
+        """`franchise_order: "no"` is truthy in Python; silently turning
+        that into True would be the opposite of what was written."""
+        assert self._resolve({"sarah": {"franchise_order": "no"}}, "sarah", default=False) is False
+        assert self._resolve({"sarah": {"franchise_order": 1}}, "sarah", default=False) is False
+
+
 class TestContentRatingFilter:
     """Tests for content rating filter functions."""
 

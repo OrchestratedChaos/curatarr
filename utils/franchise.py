@@ -28,14 +28,22 @@ others in its collection, which is right in principle but says nothing
 about which entry to serve next.
 
 This module supplies that missing half. When a candidate belongs to a TMDB
-collection, the recommendation slot goes to the earliest entry of that
-collection the user has not already watched:
+collection, the entry offered is the earliest one the user has not watched:
 
-    watched nothing        -> Rocky (1976)
     watched Rocky          -> Rocky II (1979)
     watched Rocky I and II -> Rocky III (1982)
+    watched none of them   -> Rocky IV is dropped; Rocky (1976) stands or
+                              falls on its own score
 
-Four things are deliberate, and each one is a decision that could
+That last line is the important one, and it is the one thing this module
+learned the hard way. Started and unstarted series are not the same
+recommendation (see apply_franchise_ordering): on a started series the
+slot belongs to the franchise and moves with it, but on an unstarted one
+promoting the original would let this module manufacture a ranking it
+never earned. The ranker decides WHICH franchise; this decides WHICH
+ENTRY, and it must not be able to do the ranker's job.
+
+Five things are deliberate, and each one is a decision that could
 reasonably have gone the other way:
 
 1. **Library-only.** A promoted entry must already be in the Plex library,
@@ -68,6 +76,15 @@ reasonably have gone the other way:
    earned. Because this runs before the candidate buffer is truncated,
    the freed slots refill from the tail rather than shrinking the
    collection.
+
+5. **Promotion only on a series the user has started.** The industry
+   pattern this borrows from is the split every major service makes
+   between a dedicated continuation surface (Netflix "Continue
+   Watching", Apple TV "Up Next", Hulu "Keep Watching") and the
+   recommendation rails proper - two mechanisms, two questions. On an
+   unstarted series this module answers only the second question, by
+   removal, and leaves the ranking alone. See apply_franchise_ordering
+   for the measurement that forced this.
 """
 
 import json
@@ -115,26 +132,40 @@ class FranchiseEntry:
         return f"{self.title} ({self.year if self.year is not None else 'N/A'})"
 
 
-@dataclass(frozen=True, eq=False)
-class FranchiseSubstitution:
-    """A recommendation slot handed from a later entry to an earlier one."""
+# A series the user has already started: the slot belongs to the
+# franchise, so it moves to their next unwatched entry and keeps the
+# score. "Continue watching" semantics.
+DECISION_PROMOTED = "promoted"
 
+# A series the user has never touched: the later entry is dropped and
+# nothing is promoted in its place. See apply_franchise_ordering.
+DECISION_SUPPRESSED = "suppressed"
+
+
+@dataclass(frozen=True, eq=False)
+class FranchiseDecision:
+    """What franchise ordering did to one candidate, and why."""
+
+    kind: str
     collection_id: Any
     collection_name: str
     original_title: str
     original_year: Optional[int]
     original_rating_key: Optional[int]
-    promoted_title: str
-    promoted_year: Optional[int]
-    promoted_rating_key: int
+    target_title: str
+    target_year: Optional[int]
+    target_rating_key: int
+
+    @staticmethod
+    def _year(value: Optional[int]) -> str:
+        return str(value) if value is not None else "N/A"
 
     def describe(self) -> str:
-        original_year = self.original_year if self.original_year is not None else "N/A"
-        promoted_year = self.promoted_year if self.promoted_year is not None else "N/A"
-        return (
-            f"{self.original_title} ({original_year}) -> "
-            f"{self.promoted_title} ({promoted_year})  [{self.collection_name}]"
-        )
+        original = f"{self.original_title} ({self._year(self.original_year)})"
+        target = f"{self.target_title} ({self._year(self.target_year)})"
+        if self.kind == DECISION_PROMOTED:
+            return f"{original} -> {target}  [{self.collection_name}]"
+        return f"{original} held back; series unstarted, begins at {target}  [{self.collection_name}]"
 
 
 def coerce_year(value: Any) -> Optional[int]:
@@ -347,9 +378,36 @@ def apply_franchise_ordering(
     excluded_genres: AbstractSet[str] = frozenset(),
     max_rating: Optional[str] = None,
     media_type: str = "movie",
-) -> Tuple[List[Dict], List[FranchiseSubstitution]]:
+) -> Tuple[List[Dict], List[FranchiseDecision]]:
     """
-    Re-point every franchise recommendation at its earliest unwatched entry.
+    Point every franchise recommendation at the entry the user should
+    actually watch next - promoting on a started series, suppressing on
+    an unstarted one.
+
+    The two cases are NOT the same recommendation, and treating them
+    alike is what made the first cut of this feature bury light-history
+    users in 1980s originals (measured: one user with 32 watched movies
+    had 68 of 73 multi-entry series pinned to their oldest member, all
+    of them series she had never touched):
+
+    - **Started the series** (any entry already watched) -> the slot
+      belongs to the franchise, so it moves to the next unwatched entry
+      and INHERITS the score. Watched Rocky, get Rocky II. This is
+      "continue watching", it is high-confidence, and it is rare enough
+      (0-9 series per user on the reference library) that it can never
+      flood a collection.
+
+    - **Never touched the series** -> the later entry is DROPPED and
+      nothing takes its slot. The earliest entry still stands, at its
+      OWN rank, if it earned one in scored_items. Inheriting here would
+      let franchise ordering manufacture a ranking it did not earn:
+      Rocky IV matched the profile, Rocky (1976) is a different film,
+      and handing it a top slot displaces better-matched titles. The
+      ranker decides WHICH franchise; this decides WHICH ENTRY, and it
+      must not be able to do the ranker's job.
+
+    Net effect: on an unstarted series this can only ever REMOVE a
+    mid-franchise recommendation, never invent a top-ranked one.
 
     Args:
         scored_items: Scored candidates in rank order (highest first).
@@ -358,19 +416,20 @@ def apply_franchise_ordering(
             `watched_ids` and `user_played_ids` - the per-user Plex view
             knows about plays the shared admin history does not, and a
             part wrongly believed unwatched sends the whole franchise
-            back to the start.
+            back to the start. This is also what decides started vs
+            unstarted, so its accuracy matters twice.
         declined_ids / excluded_genres / max_rating / media_type: the
             promotion eligibility rules - see is_promotable().
 
     Returns:
-        (reordered items, substitutions made). The reordered list holds
-        the same ranks as the input with promoted entries swapped in, and
-        with any franchise appearing exactly once - so it can be SHORTER
+        (reordered items, decisions made). The reordered list holds the
+        same ranks as the input with promoted entries swapped in, and
+        with any franchise appearing at most once - so it can be SHORTER
         than the input. Call this before truncating to the candidate
         buffer, so the freed slots refill from the tail.
     """
     ordered: List[Dict] = []
-    substitutions: List[FranchiseSubstitution] = []
+    decisions: List[FranchiseDecision] = []
     seen: Set[int] = set()
 
     for item in scored_items:
@@ -397,19 +456,31 @@ def apply_franchise_ordering(
                 and nxt.rating_key != rating_key
                 and (current is None or nxt.sort_key < current.sort_key)
             ):
-                target = _promote(nxt, item)
-                substitutions.append(
-                    FranchiseSubstitution(
+                # Derived from the entries themselves rather than from
+                # watched_data["collections"] (the collection bonus's own
+                # signal): both are built from the same library cache, but
+                # that Counter round-trips through JSON, which turns its
+                # int collection-id keys into strings on reload. Same
+                # answer, no key-type hazard.
+                started = any(e.rating_key in watched_ids for e in entries)
+                decisions.append(
+                    FranchiseDecision(
+                        kind=DECISION_PROMOTED if started else DECISION_SUPPRESSED,
                         collection_id=collection_id,
                         collection_name=nxt.collection_name,
                         original_title=item.get("title", "unknown"),
                         original_year=item.get("year"),
                         original_rating_key=rating_key,
-                        promoted_title=nxt.title,
-                        promoted_year=nxt.year,
-                        promoted_rating_key=nxt.rating_key,
+                        target_title=nxt.title,
+                        target_year=nxt.year,
+                        target_rating_key=nxt.rating_key,
                     )
                 )
+                if not started:
+                    # Dropped outright. The earliest entry keeps whatever
+                    # rank it earned on its own elsewhere in this list.
+                    continue
+                target = _promote(nxt, item)
 
         target_key = target.get("plex_rating_key")
         if target_key is not None:
@@ -419,7 +490,7 @@ def apply_franchise_ordering(
             seen.add(target_key)
         ordered.append(target)
 
-    return ordered, substitutions
+    return ordered, decisions
 
 
 def load_collection_details(cache_dir: str) -> Dict[Any, Dict]:
@@ -494,10 +565,16 @@ def collect_library_tmdb_ids(all_items: Mapping[str, Mapping]) -> Set[int]:
     return ids
 
 
-def summarize_substitutions(substitutions: Iterable[FranchiseSubstitution], limit: int = 10) -> List[str]:
+def decisions_of_kind(decisions: Iterable[FranchiseDecision], kind: str) -> List[FranchiseDecision]:
+    """The promoted-only or suppressed-only slice - the two get reported
+    separately, because they are different statements about the user."""
+    return [d for d in decisions if d.kind == kind]
+
+
+def summarize_decisions(decisions: Iterable[FranchiseDecision], limit: int = 10) -> List[str]:
     """Human-readable lines for the run log, capped, with an explicit
     "... and N more" rather than a silent truncation."""
-    lines = [s.describe() for s in substitutions]
+    lines = [d.describe() for d in decisions]
     if len(lines) > limit:
         remaining = len(lines) - limit
         lines = lines[:limit] + [f"... and {remaining} more"]

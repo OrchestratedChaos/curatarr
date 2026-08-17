@@ -45,6 +45,8 @@ from utils import (
     CALIBRATION_MIN_PROFILE_SAMPLE,
     CANDIDATE_BUFFER_MULTIPLIER,
     CYAN,
+    DECISION_PROMOTED,
+    DECISION_SUPPRESSED,
     DEFAULT_MOVIE_NAME_TEMPLATE,
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_TV_NAME_TEMPLATE,
@@ -94,6 +96,7 @@ from utils import (
     coerce_year,
     collect_library_tmdb_ids,
     create_empty_counters,
+    decisions_of_kind,
     describe_least_informative,
     enhance_profile_with_trakt,
     extract_ids_from_guids,
@@ -106,6 +109,7 @@ from utils import (
     format_health_report,
     get_configured_users,
     get_excluded_genres_for_user,
+    get_franchise_order_for_user,
     get_full_language_name,
     get_libraries_for_media_type,
     get_library_imdb_ids_from_items,
@@ -136,7 +140,7 @@ from utils import (
     save_watched_cache,
     select_tiered_recommendations,
     show_progress,
-    summarize_substitutions,
+    summarize_decisions,
     update_plex_collection,
     user_select_recommendations,
 )
@@ -1214,6 +1218,19 @@ class BaseRecommender(ABC):
         users = self.users["plex_users"] or self.users["managed_users"]
         return self.single_user or (users[0] if users else None)
 
+    def _franchise_ordering_enabled(self) -> bool:
+        """
+        Does franchise ordering apply to the user this run is for?
+
+        Narrowest wins: users.preferences.<user>.franchise_order overrides
+        movies.franchise_order, which overrides FRANCHISE_ORDER_DEFAULT.
+        The setting describes a PERSON, not a library - a completionist
+        who wants walking through Rocky I-VI and a housemate who just
+        wants tonight's best match are both right, and they share a
+        server. See utils.plex_policy.get_franchise_order_for_user.
+        """
+        return get_franchise_order_for_user(self.user_preferences, self._primary_username(), self.franchise_order)
+
     def _franchise_watched_ids(self) -> Set[int]:
         """
         Rating keys to treat as already seen when walking a series.
@@ -1239,13 +1256,13 @@ class BaseRecommender(ABC):
 
     def _apply_franchise_ordering(self, scored_items: List[Dict], excluded_genres: Iterable[str]) -> List[Dict]:
         """
-        Re-point franchise recommendations at their earliest unwatched entry.
+        Point franchise recommendations at the entry to watch next.
 
         A no-op for TV (no `collection_id` is ever cached for shows, so
         the index comes back empty) and for any library whose movies have
         no TMDB collection data yet.
         """
-        if not scored_items or not self.franchise_order:
+        if not scored_items or not self._franchise_ordering_enabled():
             return scored_items
 
         try:
@@ -1254,7 +1271,7 @@ class BaseRecommender(ABC):
             if not franchise_index:
                 return scored_items
 
-            ordered, substitutions = apply_franchise_ordering(
+            ordered, decisions = apply_franchise_ordering(
                 scored_items,
                 franchise_index,
                 self._franchise_watched_ids(),
@@ -1268,17 +1285,28 @@ class BaseRecommender(ABC):
             logger.debug(f"Franchise ordering skipped: {e}")
             return scored_items
 
-        if substitutions:
-            print(
-                f"{CYAN}Franchise order: {len(substitutions)} recommendation(s) moved to an "
-                f"earlier unwatched entry{RESET}"
-            )
-            for line in summarize_substitutions(substitutions):
+        # Reported separately because they are different statements: one
+        # says "you started this, here's what's next", the other says
+        # "this isn't where that series begins".
+        promoted = decisions_of_kind(decisions, DECISION_PROMOTED)
+        if promoted:
+            print(f"{CYAN}Franchise order: {len(promoted)} series you've started moved to your next entry{RESET}")
+            for line in summarize_decisions(promoted):
                 print(f"  - {line}")
 
-        collapsed = len(scored_items) - len(ordered)
+        suppressed = decisions_of_kind(decisions, DECISION_SUPPRESSED)
+        if suppressed:
+            unstarted = len({d.collection_id for d in suppressed})
+            print(
+                f"{CYAN}Franchise order: held back {len(suppressed)} mid-series {self.media_key} "
+                f"across {unstarted} series you haven't started{RESET}"
+            )
+            for line in summarize_decisions(suppressed, limit=FRANCHISE_GAP_REPORT_LIMIT):
+                print(f"  - {line}")
+
+        collapsed = len(scored_items) - len(ordered) - len(suppressed)
         if collapsed > 0:
-            print(f"{CYAN}Franchise order: collapsed {collapsed} later entries into the series they belong to{RESET}")
+            print(f"{CYAN}Franchise order: collapsed {collapsed} duplicate entries of the same series{RESET}")
 
         return ordered
 
@@ -1351,17 +1379,25 @@ class BaseRecommender(ABC):
         labeled last week would sit in the collection indefinitely
         alongside the Rocky this run just promoted.
 
-        Only ever fires when the earliest unwatched entry is ALSO in the
-        pool. Otherwise a franchise would vanish from the collection
-        entirely rather than move to its start - which is exactly what
-        would happen when that earliest entry was just removed by the
-        max_rating filter, or was never found in Plex.
+        Mirrors apply_franchise_ordering()'s started/unstarted split, or
+        the two halves of the feature would contradict each other on the
+        same series:
 
-        The survivor keeps the best score any member of its series
-        earned, so franchise ordering changes WHICH entry is recommended
-        without changing how highly the series ranks.
+        - **Started series**: only fires when the earliest unwatched
+          entry is ALSO in the pool, and the survivor inherits the best
+          score any member earned. Without that guard the franchise would
+          vanish from the collection rather than move to its start -
+          exactly what would happen when the earliest entry was just
+          removed by the max_rating filter, or was never found in Plex.
+        - **Unstarted series**: every non-earliest member is dropped
+          whether or not the earliest one is a candidate, and the
+          survivor keeps its OWN score. The fresh pool already refuses to
+          offer a mid-series entry here; letting a label from last week
+          keep one alive - or letting it hand over its score - would
+          reintroduce through the back door precisely the inheritance
+          that flooded light-history users with 1980s originals.
         """
-        if not all_candidates or not self.franchise_order:
+        if not all_candidates or not self._franchise_ordering_enabled():
             return all_candidates
 
         try:
@@ -1384,18 +1420,24 @@ class BaseRecommender(ABC):
             suppressed: List[str] = []
 
             for collection_id, item_ids in by_collection.items():
-                if len(item_ids) < 2:
+                entries = franchise_index.get(collection_id) or []
+                if len(entries) < 2:
                     continue
-                canonical = find_next_unwatched(franchise_index.get(collection_id) or [], watched_ids, **rules)
-                if canonical is None or canonical.rating_key not in remaining:
+                canonical = find_next_unwatched(entries, watched_ids, **rules)
+                if canonical is None:
                     continue
 
-                # Non-empty by construction: item_ids holds at least two
-                # distinct candidate ids (dict keys) and at most one of
-                # them is the canonical entry.
+                started = any(e.rating_key in watched_ids for e in entries)
+                if started and canonical.rating_key not in remaining:
+                    continue
+
                 losers = [item_id for item_id in item_ids if item_id != canonical.rating_key]
-                best_score = max(remaining[item_id][1] for item_id in item_ids)
-                remaining[canonical.rating_key] = (remaining[canonical.rating_key][0], best_score)
+                if not losers:
+                    continue
+
+                if started:
+                    best_score = max(remaining[item_id][1] for item_id in item_ids)
+                    remaining[canonical.rating_key] = (remaining[canonical.rating_key][0], best_score)
                 for item_id in losers:
                     plex_item, _score = remaining.pop(item_id)
                     suppressed.append(f"{getattr(plex_item, 'title', item_id)} -> {canonical.label()}")

@@ -94,12 +94,24 @@ movies:
   # bonus makes that MORE likely, because it boosts a film for belonging
   # to a series you have started without saying which entry comes next.
   #
-  # With this on, a recommendation that belongs to a TMDB collection is
-  # replaced by the earliest entry of that collection you have not
-  # watched: nothing watched gets you Rocky, Rocky watched gets you
-  # Rocky II, and so on. Each series then takes ONE slot rather than
-  # several, and the slots this frees refill with other films rather
-  # than shrinking the collection.
+  # A series you HAVE started moves to your next unwatched entry and
+  # keeps the slot the series earned - watched Rocky, get Rocky II. This
+  # is the "continue watching" case every streaming service has a
+  # dedicated shelf for, and it is rare enough that it can never crowd
+  # out the rest of your collection.
+  #
+  # A series you have NEVER touched works the other way round: the
+  # mid-series entry is simply dropped, and the first film stands or
+  # falls on its OWN score. It is deliberately not promoted into the
+  # sequel's slot - Rocky IV matching your taste is not evidence that a
+  # 1976 boxing drama deserves a top-50 place, and treating it as such
+  # buried light-history users under 1980s originals (measured: 68 of 73
+  # series, for a user who had started none of them).
+  #
+  # So on an unstarted series this can only ever REMOVE a wrong
+  # recommendation, never invent a highly-ranked one. Each series still
+  # takes at most ONE slot, and the slots this frees refill with other
+  # films rather than shrinking the collection.
   #
   # What it will not do:
   #   - recommend a film you don't own (the promoted entry always comes
@@ -109,15 +121,16 @@ movies:
   #   - override an excluded genre, a user's max_rating, or a
   #     recommendation you were shown and visibly ignored
   #
-  # It DOES override quality_filters and min_similarity above - those
-  # size the collection rather than state a preference, and a 1976
-  # original with a thin TMDB vote count should not be withheld while
-  # its own sequel is recommended.
+  # For a series you have started it DOES override quality_filters and
+  # min_similarity above - those size the collection rather than state a
+  # preference, and the next film in a series you're working through
+  # should not be withheld over a thin TMDB vote count.
   #
-  # Set to false to rank franchise entries purely by score (what every
-  # release before this setting existed did). Movies only - TMDB
-  # collections are a movie-side concept and no collection data is
-  # cached for TV.
+  # Per-user override: users.preferences.<user>.franchise_order in
+  # config.yml wins over this. Set false to rank franchise entries purely
+  # by score (what every release before this setting existed did).
+  # Movies only - TMDB collections are a movie-side concept and no
+  # collection data is cached for TV.
   franchise_order: true
 
   # Scoring weights - must sum to 1.0
