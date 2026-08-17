@@ -327,6 +327,36 @@ IGNORED_REC_MAX_PROFILE_FRACTION = 0.25
 # code default).
 RECOMMEND_FOR_NO_HISTORY_DEFAULT = True
 
+# Whether a recommendation belonging to a TMDB collection is replaced by
+# the earliest entry of that collection the user has not watched (see
+# utils/franchise.py). Default True: scoring alone routinely surfaces
+# Rocky IV or The Godfather Part III as somebody's first contact with a
+# series, and the existing collection bonus (COLLECTION_BONUS_* below)
+# actively makes that MORE likely - it boosts a title for belonging to a
+# collection the user has started without saying which entry comes next.
+#
+# Set to False (movies.franchise_order in tuning.yml) to rank franchise
+# entries purely by score, which is what every release before this flag
+# existed did.
+#
+# Documented in config/tuning.example.yml's movies.franchise_order -
+# tests/test_config.py's guardrail class enforces the two stay identical
+# (#261 precedent: a documented example silently drifting from the real
+# code default).
+FRANCHISE_ORDER_DEFAULT = True
+
+# How many franchise lines a run prints before collapsing the rest into
+# an explicit "... and N more". A library with 73 multi-entry collections
+# (measured on the reference library) would otherwise bury the rest of
+# the run's output; the count is always reported, so nothing is silently
+# truncated.
+FRANCHISE_GAP_REPORT_LIMIT = 5
+
+# How many missing titles are named per series inside one of those lines
+# before the rest become "+N more". Naming the first few is what makes
+# the report actionable; naming all seven Amityville films is not.
+FRANCHISE_GAP_TITLES_PER_SERIES = 3
+
 # Rating tier thresholds (Plex uses 0-10 scale, Plex UI shows 0-5 stars)
 RATING_TIER_5_STAR = 9.0  # 5 stars: ratings 9-10
 RATING_TIER_4_STAR = 7.0  # 4 stars: ratings 7-8
@@ -666,10 +696,11 @@ KNOWN_ROOT_CONFIG_KEYS = frozenset(
 )
 
 # Keys meaningful inside a `movies:`/`tv:` section of tuning.yml. Split
-# because `show_director` is movies-only: TV has no director-equivalent
-# display option, so resolve_media_type_overrides() never reads it for
-# TV and setting it there is silently inert - precisely the shape of bug
-# this whole section exists to surface.
+# because `show_director` and `franchise_order` are movies-only: TV has
+# no director-equivalent display option, and TMDB collections are a
+# movie-side concept with no collection data cached for shows at all, so
+# neither is ever read for TV and setting either there is silently inert
+# - precisely the shape of bug this whole section exists to surface.
 KNOWN_MEDIA_SECTION_KEYS = frozenset(
     {
         "limit_results",
@@ -688,7 +719,7 @@ KNOWN_MEDIA_SECTION_KEYS = frozenset(
         "recommend_for_no_history",
     }
 )
-MOVIES_ONLY_MEDIA_SECTION_KEYS = frozenset({"show_director"})
+MOVIES_ONLY_MEDIA_SECTION_KEYS = frozenset({"show_director", "franchise_order"})
 
 
 def _suggest_similar_key(unknown: str, known) -> str:

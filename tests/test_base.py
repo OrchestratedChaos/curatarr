@@ -3761,3 +3761,340 @@ class TestLabelDatesSurviveCacheRebuild:
         path = tmp_path / "w.json"
         path.write_text(json.dumps({"cache_version": 9}), encoding="utf-8")
         assert recommender._salvage_label_dates(str(path)) == {}
+
+
+# ---------------------------------------------------------------------------
+# Franchise ordering (utils/franchise.py) - see its module docstring
+# ---------------------------------------------------------------------------
+ROCKY_COLLECTION_ID = 1575
+
+ROCKY_CACHE = {
+    "1": {"title": "Rocky", "year": 1976, "collection_id": ROCKY_COLLECTION_ID, "collection_name": "Rocky Collection"},
+    "2": {
+        "title": "Rocky II",
+        "year": 1979,
+        "collection_id": ROCKY_COLLECTION_ID,
+        "collection_name": "Rocky Collection",
+    },
+    "4": {
+        "title": "Rocky IV",
+        "year": 1985,
+        "collection_id": ROCKY_COLLECTION_ID,
+        "collection_name": "Rocky Collection",
+    },
+}
+
+
+def _franchise_recommender(cache=None):
+    """A recommender whose media cache holds a real multi-entry series."""
+    recommender = _make_recommender()
+    media_cache = Mock()
+    media_cache.cache = {"movies": copy.deepcopy(ROCKY_CACHE if cache is None else cache)}
+    recommender._get_media_cache = Mock(return_value=media_cache)
+    return recommender
+
+
+def _scored_from(recommender, rating_key, score):
+    info = recommender._get_media_cache().cache["movies"][str(rating_key)]
+    info["plex_rating_key"] = int(rating_key)
+    info["similarity_score"] = score
+    return info
+
+
+class TestApplyFranchiseOrderingIntegration:
+    """BaseRecommender._apply_franchise_ordering - the get_recommendations() hook."""
+
+    def test_sequel_recommendation_becomes_the_first_entry(self):
+        recommender = _franchise_recommender()
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
+        assert [i["title"] for i in ordered] == ["Rocky"]
+
+    def test_disabled_flag_leaves_recommendations_untouched(self):
+        recommender = _franchise_recommender()
+        recommender.franchise_order = False
+        scored = [_scored_from(recommender, 4, 0.8)]
+        assert recommender._apply_franchise_ordering(scored, []) is scored
+
+    def test_watched_first_entry_promotes_the_next(self):
+        recommender = _franchise_recommender()
+        recommender.watched_ids = {1}
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
+        assert [i["title"] for i in ordered] == ["Rocky II"]
+
+    def test_the_users_own_plex_view_counts_as_watched(self):
+        """user_played_ids is that user's own state; a part wrongly
+        believed unwatched sends the whole series back to the start."""
+        recommender = _franchise_recommender()
+        recommender.user_played_ids = {1, 2}
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
+        assert [i["title"] for i in ordered] == ["Rocky IV"]
+
+    def test_declined_entry_is_not_promoted(self):
+        recommender = _franchise_recommender()
+        recommender.declined_rating_keys = {1}
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
+        assert [i["title"] for i in ordered] == ["Rocky II"]
+
+    def test_excluded_genre_entry_is_not_promoted(self):
+        recommender = _franchise_recommender()
+        recommender._get_media_cache().cache["movies"]["1"]["genres"] = ["horror"]
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], ["horror"])
+        assert [i["title"] for i in ordered] == ["Rocky II"]
+
+    def test_max_rating_preference_is_honored(self):
+        recommender = _franchise_recommender()
+        recommender.single_user = "kid"
+        recommender.user_preferences = {"kid": {"max_rating": "PG"}}
+        recommender._get_media_cache().cache["movies"]["1"]["content_rating"] = "R"
+        recommender._get_media_cache().cache["movies"]["2"]["content_rating"] = "PG"
+        ordered = recommender._apply_franchise_ordering([_scored_from(recommender, 4, 0.8)], [])
+        assert [i["title"] for i in ordered] == ["Rocky II"]
+
+    def test_empty_input_is_a_no_op(self):
+        recommender = _franchise_recommender()
+        assert recommender._apply_franchise_ordering([], []) == []
+
+    def test_library_without_collection_data_is_a_no_op(self):
+        recommender = _franchise_recommender(cache={"1": {"title": "Heat", "year": 1995}})
+        scored = [_scored_from(recommender, 1, 0.8)]
+        assert recommender._apply_franchise_ordering(scored, []) is scored
+
+    def test_a_broken_cache_never_costs_the_user_their_recommendations(self):
+        recommender = _franchise_recommender()
+        scored = [_scored_from(recommender, 4, 0.8)]
+        recommender._get_media_cache = Mock(side_effect=AttributeError("boom"))
+        assert recommender._apply_franchise_ordering(scored, []) is scored
+
+    def test_collapsing_a_series_is_reported(self, capsys):
+        recommender = _franchise_recommender()
+        scored = [_scored_from(recommender, 4, 0.9), _scored_from(recommender, 2, 0.8)]
+        capsys.readouterr()  # drop construction chatter
+        recommender._apply_franchise_ordering(scored, [])
+        out = capsys.readouterr().out
+        assert "moved to an earlier unwatched entry" in out
+        assert "collapsed 1 later entries" in out
+
+
+class TestSuppressSupersededFranchiseCandidates:
+    """BaseRecommender._suppress_superseded_franchise_candidates - the
+    manage_plex_labels() hook that stops a previously-labeled sequel
+    outliving the promotion."""
+
+    def _candidates(self, *pairs):
+        return {rating_key: (Mock(title=f"item-{rating_key}"), score) for rating_key, score in pairs}
+
+    def test_labeled_sequel_is_dropped_when_the_first_entry_is_a_candidate(self):
+        recommender = _franchise_recommender()
+        result = recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9), (1, 0.3)))
+        assert set(result) == {1}
+
+    def test_survivor_keeps_the_best_score_in_the_series(self):
+        """Franchise ordering changes WHICH entry is recommended, not how
+        highly the series ranks."""
+        recommender = _franchise_recommender()
+        result = recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9), (1, 0.3)))
+        assert result[1][1] == 0.9
+
+    def test_sequel_survives_when_the_first_entry_is_not_a_candidate(self):
+        """Otherwise the series vanishes from the collection rather than
+        moving to its start - e.g. when max_rating just removed the
+        first entry."""
+        recommender = _franchise_recommender()
+        candidates = self._candidates((4, 0.9))
+        assert recommender._suppress_superseded_franchise_candidates(candidates) == candidates
+
+    def test_watched_first_entry_hands_the_slot_to_the_next(self):
+        recommender = _franchise_recommender()
+        recommender.watched_ids = {1}
+        result = recommender._suppress_superseded_franchise_candidates(self._candidates((4, 0.9), (2, 0.3)))
+        assert set(result) == {2}
+
+    def test_unrelated_candidates_are_untouched(self):
+        recommender = _franchise_recommender()
+        candidates = self._candidates((4, 0.9), (1, 0.3), (99, 0.5))
+        result = recommender._suppress_superseded_franchise_candidates(candidates)
+        assert set(result) == {1, 99}
+
+    def test_disabled_flag_is_a_no_op(self):
+        recommender = _franchise_recommender()
+        recommender.franchise_order = False
+        candidates = self._candidates((4, 0.9), (1, 0.3))
+        assert recommender._suppress_superseded_franchise_candidates(candidates) is candidates
+
+    def test_empty_pool(self):
+        recommender = _franchise_recommender()
+        assert recommender._suppress_superseded_franchise_candidates({}) == {}
+
+    def test_a_broken_cache_never_costs_the_user_their_collection(self):
+        recommender = _franchise_recommender()
+        candidates = self._candidates((4, 0.9), (1, 0.3))
+        recommender._get_media_cache = Mock(side_effect=AttributeError("boom"))
+        assert recommender._suppress_superseded_franchise_candidates(candidates) is candidates
+
+    def test_library_without_collection_data_is_a_no_op(self):
+        recommender = _franchise_recommender(cache={"1": {"title": "Heat", "year": 1995}})
+        candidates = self._candidates((1, 0.3))
+        assert recommender._suppress_superseded_franchise_candidates(candidates) is candidates
+
+    def test_fully_watched_series_suppresses_nothing(self):
+        """find_next_unwatched() returning None must leave the pool
+        alone, not empty the series out of it."""
+        recommender = _franchise_recommender()
+        recommender.watched_ids = {1, 2, 4}
+        candidates = self._candidates((4, 0.9), (1, 0.3))
+        assert recommender._suppress_superseded_franchise_candidates(candidates) == candidates
+
+    def test_suppression_is_reported_with_explicit_truncation(self, capsys):
+        cache = {
+            str(i): {
+                "title": f"Part {i}",
+                "year": 1970 + i,
+                "collection_id": ROCKY_COLLECTION_ID,
+                "collection_name": "Rocky Collection",
+            }
+            for i in range(1, 10)
+        }
+        recommender = _franchise_recommender(cache=cache)
+        candidates = self._candidates(*[(i, 0.5) for i in range(1, 10)])
+        capsys.readouterr()  # drop construction chatter
+        result = recommender._suppress_superseded_franchise_candidates(candidates)
+        out = capsys.readouterr().out
+        assert set(result) == {1}
+        assert "holding back 8 later movies" in out
+        assert "... and 3 more" in out
+
+
+class TestReportFranchiseGaps:
+    """BaseRecommender._report_franchise_gaps - "you got Rocky II because
+    you don't own Rocky"."""
+
+    HUNTARR = {
+        "collection_details": {
+            str(ROCKY_COLLECTION_ID): {
+                "collection_id": ROCKY_COLLECTION_ID,
+                "collection_name": "Rocky Collection",
+                "movies": [
+                    {"tmdb_id": 1366, "title": "Rocky", "year": "1976"},
+                    {"tmdb_id": 1367, "title": "Rocky II", "year": "1979"},
+                ],
+            }
+        }
+    }
+
+    def _recommender_with_huntarr_cache(self, tmp_path, payload=None):
+        recommender = _franchise_recommender()
+        recommender.cache_dir = str(tmp_path)
+        if payload is not None:
+            (tmp_path / "huntarr_cache.json").write_text(json.dumps(payload), encoding="utf-8")
+        return recommender
+
+    def test_missing_earlier_entry_is_reported(self, tmp_path, capsys):
+        recommender = self._recommender_with_huntarr_cache(tmp_path, self.HUNTARR)
+        recs = [{"title": "Rocky II", "year": 1979, "collection_id": ROCKY_COLLECTION_ID}]
+        recommender._report_franchise_gaps(recs, {"2": {"tmdb_id": 1367}})
+        out = capsys.readouterr().out
+        assert "Franchise gaps" in out
+        assert "Rocky (1976)" in out
+
+    def test_owned_earlier_entry_is_not_reported(self, tmp_path, capsys):
+        recommender = self._recommender_with_huntarr_cache(tmp_path, self.HUNTARR)
+        recs = [{"title": "Rocky II", "year": 1979, "collection_id": ROCKY_COLLECTION_ID}]
+        recommender._report_franchise_gaps(recs, {"1": {"tmdb_id": 1366}, "2": {"tmdb_id": 1367}})
+        assert "Franchise gaps" not in capsys.readouterr().out
+
+    def test_silent_without_a_huntarr_cache(self, tmp_path, capsys):
+        recommender = self._recommender_with_huntarr_cache(tmp_path)
+        recs = [{"title": "Rocky II", "year": 1979, "collection_id": ROCKY_COLLECTION_ID}]
+        capsys.readouterr()  # drop construction chatter
+        recommender._report_franchise_gaps(recs, {})
+        assert capsys.readouterr().out == ""
+
+    def test_disabled_flag_is_silent(self, tmp_path, capsys):
+        recommender = self._recommender_with_huntarr_cache(tmp_path, self.HUNTARR)
+        recommender.franchise_order = False
+        recs = [{"title": "Rocky II", "year": 1979, "collection_id": ROCKY_COLLECTION_ID}]
+        capsys.readouterr()  # drop construction chatter
+        recommender._report_franchise_gaps(recs, {})
+        assert capsys.readouterr().out == ""
+
+    def test_no_recommendations_is_silent(self, tmp_path, capsys):
+        recommender = self._recommender_with_huntarr_cache(tmp_path, self.HUNTARR)
+        capsys.readouterr()  # drop construction chatter
+        recommender._report_franchise_gaps([], {})
+        assert capsys.readouterr().out == ""
+
+    def test_a_broken_cache_is_never_fatal(self, tmp_path, capsys):
+        recommender = self._recommender_with_huntarr_cache(tmp_path, self.HUNTARR)
+        recs = [{"title": "Rocky II", "year": 1979, "collection_id": ROCKY_COLLECTION_ID}]
+        capsys.readouterr()  # drop construction chatter
+        with patch("recommenders.base.load_collection_details", side_effect=OSError("boom")):
+            recommender._report_franchise_gaps(recs, {})
+        assert capsys.readouterr().out == ""
+
+    def test_standalone_and_unknown_collections_are_skipped(self, tmp_path, capsys):
+        recommender = self._recommender_with_huntarr_cache(tmp_path, self.HUNTARR)
+        recs = [
+            {"title": "Heat", "year": 1995, "collection_id": None},
+            {"title": "Some Sequel", "year": 2000, "collection_id": 999999},
+        ]
+        capsys.readouterr()  # drop construction chatter
+        recommender._report_franchise_gaps(recs, {})
+        assert capsys.readouterr().out == ""
+
+    def test_each_series_is_reported_once(self, tmp_path, capsys):
+        """Three Rocky candidates are one gap report, not three."""
+        recommender = self._recommender_with_huntarr_cache(tmp_path, self.HUNTARR)
+        recs = [{"title": "Rocky II", "year": 1979, "collection_id": ROCKY_COLLECTION_ID}] * 3
+        capsys.readouterr()  # drop construction chatter
+        recommender._report_franchise_gaps(recs, {})
+        assert capsys.readouterr().out.count("earliest owned entry") == 1
+
+    def test_long_gap_lists_are_truncated_explicitly(self, tmp_path, capsys):
+        payload = {
+            "collection_details": {
+                str(cid): {
+                    "collection_id": cid,
+                    "collection_name": f"Series {cid}",
+                    "movies": [
+                        {"tmdb_id": cid * 100 + n, "title": f"Series {cid} Part {n}", "year": str(1960 + n)}
+                        for n in range(5)
+                    ],
+                }
+                for cid in range(1, 8)
+            }
+        }
+        recommender = self._recommender_with_huntarr_cache(tmp_path, payload)
+        recs = [{"title": f"Series {cid} Part 5", "year": 1990, "collection_id": cid} for cid in range(1, 8)]
+        capsys.readouterr()  # drop construction chatter
+        recommender._report_franchise_gaps(recs, {})
+        out = capsys.readouterr().out
+        assert "across 7 series" in out
+        assert "+2 more" in out  # per-series gap list
+        assert "... and 2 more series" in out  # series list itself
+
+
+class TestDeclinedRatingKeys:
+    """The declined set franchise ordering refuses to promote into."""
+
+    def test_starts_empty(self):
+        assert _make_recommender().declined_rating_keys == set()
+
+    def test_populated_from_ignored_recommendations(self):
+        recommender = _make_recommender()
+        recommender.label_dates = {"7_Recommended": "2020-01-01T00:00:00"}
+        recommender.watched_data_counters = {"genres": Counter()}
+        media_cache = Mock()
+        media_cache.cache = {"movies": {"7": {"title": "Rocky", "genres": ["drama"], "tmdb_keywords": []}}}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+        recommender._collection_label_name = Mock(return_value="Recommended")
+
+        recommender._apply_ignored_recommendation_feedback()
+
+        assert recommender.declined_rating_keys == {7}
+
+    def test_stays_empty_when_negative_signals_are_off(self):
+        recommender = _make_recommender()
+        recommender.config["negative_signals"] = {"enabled": False}
+        recommender.label_dates = {"7_Recommended": "2020-01-01T00:00:00"}
+        recommender._apply_ignored_recommendation_feedback()
+        assert recommender.declined_rating_keys == set()

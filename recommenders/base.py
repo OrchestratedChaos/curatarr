@@ -32,7 +32,7 @@ import time
 import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import plexapi.exceptions
 import requests
@@ -48,6 +48,9 @@ from utils import (
     DEFAULT_MOVIE_NAME_TEMPLATE,
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_TV_NAME_TEMPLATE,
+    FRANCHISE_GAP_REPORT_LIMIT,
+    FRANCHISE_GAP_TITLES_PER_SERIES,
+    FRANCHISE_ORDER_DEFAULT,
     GREEN,
     IGNORED_REC_MIN_DAYS_SHOWN,
     IGNORED_REC_PENALTY,
@@ -70,12 +73,14 @@ from utils import (
     YELLOW,
     CalibrationDimension,
     add_labels_to_items,
+    apply_franchise_ordering,
     apply_ignored_penalties,
     apply_user_label_restrictions,
     assess_pool_health,
     build_all_private_labels,
     build_certificate_distribution,
     build_corpus_idf,
+    build_franchise_index,
     build_label_name,
     build_target_distribution,
     calculate_recency_multiplier,
@@ -86,6 +91,8 @@ from utils import (
     check_cache_version,
     cleanup_legacy_unnamed_collection,
     cleanup_old_collections,
+    coerce_year,
+    collect_library_tmdb_ids,
     create_empty_counters,
     describe_least_informative,
     enhance_profile_with_trakt,
@@ -93,6 +100,8 @@ from utils import (
     fetch_tmdb_with_retry,
     fetch_user_played_ids,
     find_ignored_recommendations,
+    find_library_gaps,
+    find_next_unwatched,
     find_supply_gaps,
     format_health_report,
     get_configured_users,
@@ -110,11 +119,13 @@ from utils import (
     init_plex,
     is_rating_allowed,
     is_sufficiently_sampled,
+    load_collection_details,
     load_config,
     load_media_cache,
     log_error,
     log_warning,
     migrate_legacy_cache_dir,
+    normalize_collection_id,
     print_similarity_breakdown,
     process_counters_from_cache,
     remove_labels_from_items,
@@ -125,6 +136,7 @@ from utils import (
     save_watched_cache,
     select_tiered_recommendations,
     show_progress,
+    summarize_substitutions,
     update_plex_collection,
     user_select_recommendations,
 )
@@ -560,6 +572,17 @@ class BaseRecommender(ABC):
         # Set for tracking watched item IDs
         self.watched_ids: Set[int] = set()
 
+        # Rating keys this user was shown and visibly declined - populated
+        # by _apply_ignored_recommendation_feedback() from the same
+        # find_ignored_recommendations() call that computes the profile
+        # penalties. Kept as an explicit set (rather than re-derived
+        # later) because franchise ordering must not promote a title the
+        # user has already left sitting in their collection unwatched -
+        # see utils/franchise.is_promotable. Stays empty whenever the
+        # negative-signals feature is off, which correctly means "no
+        # declines are being tracked", not "nothing was declined".
+        self.declined_rating_keys: Set[int] = set()
+
         print("Initializing recommendation system...")
         print("Connecting to Plex server...")
         self.plex = init_plex(self.config)
@@ -640,6 +663,15 @@ class BaseRecommender(ABC):
         # unchanged. See utils/calibration.py for what calibration does.
         self.min_similarity = self.config["min_similarity"]
         self.calibration_strength = self.config["calibration_strength"]
+
+        # Franchise ordering (config/tuning.yml movies.franchise_order) -
+        # hand out the earliest UNWATCHED entry of a series rather than
+        # whichever entry happened to score highest. Read straight off
+        # self.media_config (like recommend_for_no_history and
+        # quality_filters, and unlike the keys resolve_media_type_overrides()
+        # promotes to the root) because it is consumed only here, by name,
+        # and never through self.config. See utils/franchise.py.
+        self.franchise_order = bool(self.media_config.get("franchise_order", FRANCHISE_ORDER_DEFAULT))
 
         self.randomize_recommendations = self.config["randomize_recommendations"]
         self.normalize_counters = self.config["normalize_counters"]
@@ -1134,6 +1166,16 @@ class BaseRecommender(ABC):
                     )
                 scored_items = above_floor
 
+            # Franchise ordering, deliberately AFTER the score floor and
+            # the quality filters above: a promoted first entry inherits
+            # the slot (and the score) its own sequel earned, so those
+            # collection-sizing gates must not be able to withhold it.
+            # Also deliberately BEFORE the buffer truncation below - one
+            # slot per franchise means duplicates collapse, and doing it
+            # here lets the freed slots refill from the tail instead of
+            # shrinking the collection.
+            scored_items = self._apply_franchise_ordering(scored_items, excluded_genres)
+
             if self.randomize_recommendations:
                 plex_recs = select_tiered_recommendations(
                     scored_items,
@@ -1145,6 +1187,10 @@ class BaseRecommender(ABC):
             else:
                 plex_recs = scored_items[: self.limit_plex_results]
 
+            # Reported on the truncated buffer, not the whole pool: this
+            # is about the titles actually being recommended.
+            self._report_franchise_gaps(plex_recs, all_items)
+
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("=== Similarity Score Breakdowns for Recommendations ===")
                 for item in plex_recs:
@@ -1152,6 +1198,222 @@ class BaseRecommender(ABC):
 
         print("\nRecommendation process completed!")
         return {"plex_recommendations": plex_recs}
+
+    # ------------------------------------------------------------------------
+    # FRANCHISE ORDERING (utils/franchise.py)
+    # ------------------------------------------------------------------------
+    def _primary_username(self) -> Optional[str]:
+        """
+        The user whose per-user preferences apply to this run.
+
+        Same derivation manage_plex_labels() has always used to look up
+        max_rating - factored out so franchise ordering applies the
+        identical content-rating ceiling when choosing what to promote,
+        instead of the two drifting apart.
+        """
+        users = self.users["plex_users"] or self.users["managed_users"]
+        return self.single_user or (users[0] if users else None)
+
+    def _franchise_watched_ids(self) -> Set[int]:
+        """
+        Rating keys to treat as already seen when walking a series.
+
+        The union, not self.watched_ids alone: user_played_ids is that
+        user's OWN Plex view (utils.plex.fetch_user_played_ids), and a
+        part wrongly believed unwatched doesn't just add one redundant
+        recommendation here - it sends the entire franchise back to an
+        entry the user already finished.
+        """
+        return self.watched_ids | self.user_played_ids
+
+    def _franchise_rules(self, excluded_genres: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+        """Eligibility inputs for utils/franchise.py (see is_promotable)."""
+        if excluded_genres is None:
+            excluded_genres = get_excluded_genres_for_user(self.exclude_genres, self.user_preferences, self.single_user)
+        return {
+            "declined_ids": set(self.declined_rating_keys),
+            "excluded_genres": {g.lower() for g in (excluded_genres or ()) if isinstance(g, str)},
+            "max_rating": get_max_rating_for_user(self.user_preferences, self._primary_username()),
+            "media_type": self.media_type,
+        }
+
+    def _apply_franchise_ordering(self, scored_items: List[Dict], excluded_genres: Iterable[str]) -> List[Dict]:
+        """
+        Re-point franchise recommendations at their earliest unwatched entry.
+
+        A no-op for TV (no `collection_id` is ever cached for shows, so
+        the index comes back empty) and for any library whose movies have
+        no TMDB collection data yet.
+        """
+        if not scored_items or not self.franchise_order:
+            return scored_items
+
+        try:
+            all_items = self._get_media_cache().cache.get(self.media_key, {})
+            franchise_index = build_franchise_index(all_items)
+            if not franchise_index:
+                return scored_items
+
+            ordered, substitutions = apply_franchise_ordering(
+                scored_items,
+                franchise_index,
+                self._franchise_watched_ids(),
+                **self._franchise_rules(excluded_genres),
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            # Ordering is an improvement on top of a complete
+            # recommendation list, never a precondition for one - a
+            # malformed cache entry must not cost the user their
+            # collection.
+            logger.debug(f"Franchise ordering skipped: {e}")
+            return scored_items
+
+        if substitutions:
+            print(
+                f"{CYAN}Franchise order: {len(substitutions)} recommendation(s) moved to an "
+                f"earlier unwatched entry{RESET}"
+            )
+            for line in summarize_substitutions(substitutions):
+                print(f"  - {line}")
+
+        collapsed = len(scored_items) - len(ordered)
+        if collapsed > 0:
+            print(f"{CYAN}Franchise order: collapsed {collapsed} later entries into the series they belong to{RESET}")
+
+        return ordered
+
+    def _report_franchise_gaps(self, recommendations: List[Dict], all_items: Dict) -> None:
+        """
+        Report series whose earlier entries this library doesn't hold.
+
+        Free when Sequel Huntarr has run (it already caches the full TMDB
+        member list of every collection in the library - see
+        utils.franchise.load_collection_details), silent when it hasn't.
+        Purely informational: the recommendation itself is already the
+        earliest entry the user can actually play, and Sequel Huntarr is
+        what turns these into Radarr requests.
+        """
+        if not recommendations or not self.franchise_order:
+            return
+
+        try:
+            collection_details = load_collection_details(self.cache_dir)
+            if not collection_details:
+                return
+
+            library_tmdb_ids = collect_library_tmdb_ids(all_items)
+            gapped: Dict[Any, Tuple[Dict, Dict, List[Dict]]] = {}
+
+            for rec in recommendations:
+                collection_id = normalize_collection_id(rec.get("collection_id"))
+                if collection_id is None or collection_id in gapped:
+                    continue
+                detail = collection_details.get(collection_id)
+                if not detail:
+                    continue
+                gaps = find_library_gaps(detail, coerce_year(rec.get("year")), library_tmdb_ids)
+                if gaps:
+                    gapped[collection_id] = (rec, detail, gaps)
+        except (AttributeError, KeyError, OSError, TypeError, ValueError) as e:
+            logger.debug(f"Franchise gap reporting skipped: {e}")
+            return
+
+        if not gapped:
+            return
+
+        total = sum(len(gaps) for _rec, _detail, gaps in gapped.values())
+        noun = "entry" if total == 1 else "entries"
+        print(
+            f"{YELLOW}Franchise gaps: {total} earlier {noun} across {len(gapped)} series "
+            f"missing from this library - Sequel Huntarr can request them{RESET}"
+        )
+        for rec, detail, gaps in list(gapped.values())[:FRANCHISE_GAP_REPORT_LIMIT]:
+            shown = gaps[:FRANCHISE_GAP_TITLES_PER_SERIES]
+            missing = ", ".join(f"{g['title']} ({g['year']})" for g in shown)
+            if len(gaps) > len(shown):
+                missing += f", +{len(gaps) - len(shown)} more"
+            print(
+                f"  - {rec.get('title')} is the earliest owned entry of "
+                f"{detail.get('collection_name', 'this series')}; missing: {missing}"
+            )
+        if len(gapped) > FRANCHISE_GAP_REPORT_LIMIT:
+            print(f"  ... and {len(gapped) - FRANCHISE_GAP_REPORT_LIMIT} more series")
+
+    def _suppress_superseded_franchise_candidates(self, all_candidates: Dict) -> Dict:
+        """
+        Drop already-labeled later entries once their series' earliest
+        unwatched entry is a candidate too.
+
+        get_recommendations()'s ordering alone does not reach the
+        collection: every item still carrying this user's label from a
+        previous run is re-added to the pool by
+        _build_scored_candidates() at its own raw score, so a Rocky IV
+        labeled last week would sit in the collection indefinitely
+        alongside the Rocky this run just promoted.
+
+        Only ever fires when the earliest unwatched entry is ALSO in the
+        pool. Otherwise a franchise would vanish from the collection
+        entirely rather than move to its start - which is exactly what
+        would happen when that earliest entry was just removed by the
+        max_rating filter, or was never found in Plex.
+
+        The survivor keeps the best score any member of its series
+        earned, so franchise ordering changes WHICH entry is recommended
+        without changing how highly the series ranks.
+        """
+        if not all_candidates or not self.franchise_order:
+            return all_candidates
+
+        try:
+            media_items = self._get_media_cache().cache.get(self.media_key, {})
+            franchise_index = build_franchise_index(media_items)
+            if not franchise_index:
+                return all_candidates
+
+            rules = self._franchise_rules()
+            watched_ids = self._franchise_watched_ids()
+
+            by_collection: Dict[Any, List[int]] = {}
+            for item_id in all_candidates:
+                info = media_items.get(str(item_id)) or {}
+                collection_id = normalize_collection_id(info.get("collection_id"))
+                if collection_id is not None:
+                    by_collection.setdefault(collection_id, []).append(item_id)
+
+            remaining = dict(all_candidates)
+            suppressed: List[str] = []
+
+            for collection_id, item_ids in by_collection.items():
+                if len(item_ids) < 2:
+                    continue
+                canonical = find_next_unwatched(franchise_index.get(collection_id) or [], watched_ids, **rules)
+                if canonical is None or canonical.rating_key not in remaining:
+                    continue
+
+                # Non-empty by construction: item_ids holds at least two
+                # distinct candidate ids (dict keys) and at most one of
+                # them is the canonical entry.
+                losers = [item_id for item_id in item_ids if item_id != canonical.rating_key]
+                best_score = max(remaining[item_id][1] for item_id in item_ids)
+                remaining[canonical.rating_key] = (remaining[canonical.rating_key][0], best_score)
+                for item_id in losers:
+                    plex_item, _score = remaining.pop(item_id)
+                    suppressed.append(f"{getattr(plex_item, 'title', item_id)} -> {canonical.label()}")
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            logger.debug(f"Franchise candidate suppression skipped: {e}")
+            return all_candidates
+
+        if suppressed:
+            print(
+                f"{YELLOW}Franchise order: holding back {len(suppressed)} later "
+                f"{self.media_key} until earlier entries are watched{RESET}"
+            )
+            for line in suppressed[:FRANCHISE_GAP_REPORT_LIMIT]:
+                print(f"  - {line}")
+            if len(suppressed) > FRANCHISE_GAP_REPORT_LIMIT:
+                print(f"  ... and {len(suppressed) - FRANCHISE_GAP_REPORT_LIMIT} more")
+
+        return remaining
 
     def _find_plex_items_for_recs(self, section, selected_items: List[Dict]) -> Tuple[List, List[str]]:
         """Find Plex items matching recommendations."""
@@ -1385,6 +1647,11 @@ class BaseRecommender(ABC):
             )
             if not ignored:
                 return
+
+            # Recorded before the early-return below: an item can be a
+            # declined recommendation whether or not it is still in the
+            # media cache, and franchise ordering needs the full set.
+            self.declined_rating_keys = {rating_key for rating_key, _days in ignored}
 
             media_items = self._get_media_cache().cache.get(self.media_key, {})
             ignored_items = [media_items[str(rk)] for rk, _days in ignored if str(rk) in media_items]
@@ -1824,6 +2091,11 @@ class BaseRecommender(ABC):
             max_rating = get_max_rating_for_user(self.user_preferences, username)
             if max_rating:
                 all_candidates = self._filter_candidates_by_rating(all_candidates, max_rating)
+
+            # Franchise ordering, applied AFTER the rating filter so a
+            # series whose first entry this user may not watch keeps the
+            # entry they may - see the method's own docstring.
+            all_candidates = self._suppress_superseded_franchise_candidates(all_candidates)
 
             # Update labels to keep top items
             final_items = self._update_labels_by_rank(all_candidates, unwatched_labeled, label_name, target_count)
