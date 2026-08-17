@@ -33,7 +33,12 @@ __pycache__/
 # IDE
 .idea/
 .vscode/
-.claude/
+# .claude/* (not .claude/) so the negation below can take effect - git
+# cannot re-include anything inside an excluded DIRECTORY, only inside an
+# excluded set of paths. Keeps settings.local.json (machine-local
+# permissions) ignored while letting shared skills be committed.
+.claude/*
+!.claude/skills/
 *.xml
 CLAUDE.md
 TODO.md
