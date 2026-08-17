@@ -74,6 +74,9 @@ from .config import (
     DEFAULT_NEGATIVE_THRESHOLD,
     DEFAULT_RATING,
     DEFAULT_RATING_MULTIPLIERS,
+    FRANCHISE_GAP_REPORT_LIMIT,
+    FRANCHISE_GAP_TITLES_PER_SERIES,
+    FRANCHISE_ORDER_DEFAULT,
     IDF_MIN_CORPUS_SIZE,
     IDF_MIN_WEIGHT,
     IGNORED_REC_MAX_PROFILE_FRACTION,
@@ -168,6 +171,21 @@ from .display import (
     show_progress,
     smart_open_html,
     user_select_recommendations,
+)
+
+# Franchise ordering - start people at the beginning of a series
+from .franchise import (
+    FranchiseEntry,
+    FranchiseSubstitution,
+    apply_franchise_ordering,
+    build_franchise_index,
+    coerce_year,
+    collect_library_tmdb_ids,
+    find_library_gaps,
+    find_next_unwatched,
+    load_collection_details,
+    normalize_collection_id,
+    summarize_substitutions,
 )
 
 # Helper utilities
@@ -510,6 +528,9 @@ __all__ = [
     "DEFAULT_NEGATIVE_MULTIPLIERS",
     "DEFAULT_NEGATIVE_THRESHOLD",
     "RECOMMEND_FOR_NO_HISTORY_DEFAULT",
+    "FRANCHISE_ORDER_DEFAULT",
+    "FRANCHISE_GAP_REPORT_LIMIT",
+    "FRANCHISE_GAP_TITLES_PER_SERIES",
     "COLLECTION_BONUS_BASE",
     "COLLECTION_BONUS_CAP",
     "COLLECTION_BONUS_LOG_FACTOR",
@@ -620,6 +641,18 @@ __all__ = [
     # Ignored-recommendation negative feedback
     "apply_ignored_penalties",
     "find_ignored_recommendations",
+    # Franchise ordering
+    "FranchiseEntry",
+    "FranchiseSubstitution",
+    "apply_franchise_ordering",
+    "build_franchise_index",
+    "coerce_year",
+    "collect_library_tmdb_ids",
+    "find_library_gaps",
+    "find_next_unwatched",
+    "load_collection_details",
+    "normalize_collection_id",
+    "summarize_substitutions",
     # Library supply health
     "PoolHealth",
     "SupplyGap",

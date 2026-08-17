@@ -58,6 +58,7 @@ Binaries self-update: the app notifies you (CLI and web UI banner) when a newer 
 - **Per-user recommendations** — Each user gets their own curated collection
 - **Per-user by default** — Each user's library Browse/Search only shows their own recommendation collection, not others' (UI-level separation, not access control — see FAQ)
 - **Smart scoring** — Weights keywords, genres, cast, and directors
+- **Franchise order** — Recommends the first movie of a series you haven't seen, not whichever sequel happened to score highest: nothing watched gets you *Rocky*, *Rocky* watched gets you *Rocky II* (`movies.franchise_order` in tuning.yml)
 - **Recency bias** — Recent watches influence recommendations more
 - **Rewatch detection** — Content you love gets weighted higher
 - **Genre exclusions** — Skip horror for the kids, documentaries for movie night
@@ -495,6 +496,9 @@ movies:
   limit_results: 50           # Recommendations per user (the final
                               # collection count - see general.limit_plex_results
                               # below for the internal scoring buffer)
+  franchise_order: true       # Recommend the earliest UNWATCHED entry of a
+                              # series instead of whichever sequel scored
+                              # highest; each series takes one slot
   quality_filters:
     min_rating: 5.0           # TMDB rating threshold
     min_vote_count: 50        # Minimum votes

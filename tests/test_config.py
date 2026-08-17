@@ -497,6 +497,10 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
         # directly (as get_recommendations() does) sees it.
         assert result["movies"]["quality_filters"] == movies["quality_filters"]
         assert result["movies"]["recommend_for_no_history"] == movies["recommend_for_no_history"]
+        # franchise_order is read the same way (straight off
+        # self.media_config in BaseRecommender.__init__), not promoted to
+        # the root by this function - see utils/franchise.py.
+        assert result["movies"]["franchise_order"] == movies["franchise_order"]
 
     def test_every_documented_tv_key_resolves(self):
         tuning = self._load_example_tuning()
@@ -537,6 +541,7 @@ class TestResolveMediaTypeOverridesKeyEnumeration:
             "show_imdb_link",
             "quality_filters",
             "recommend_for_no_history",
+            "franchise_order",
             "weights",
         }
         covered_tv_keys = {
@@ -698,6 +703,20 @@ class TestTuningExampleTopLevelSectionsMatchCodeDefaults:
         tuning = self._load_example_tuning()
         assert tuning["movies"]["recommend_for_no_history"] == RECOMMEND_FOR_NO_HISTORY_DEFAULT
         assert tuning["tv"]["recommend_for_no_history"] == RECOMMEND_FOR_NO_HISTORY_DEFAULT
+
+    def test_franchise_order_default_matches(self):
+        """BaseRecommender.__init__ reads movies.franchise_order with this
+        exact fallback default when the key is absent (see
+        utils/franchise.py) - same #261-class drift guard as
+        recommend_for_no_history above."""
+        from recommenders.base import FRANCHISE_ORDER_DEFAULT
+
+        tuning = self._load_example_tuning()
+        assert tuning["movies"]["franchise_order"] == FRANCHISE_ORDER_DEFAULT
+        # Movies only: TMDB collections are a movie-side concept and no
+        # collection_id is ever cached for shows, so documenting the key
+        # under tv: would advertise a setting that cannot do anything.
+        assert "franchise_order" not in tuning["tv"]
 
     def test_top_level_sections_are_all_covered_by_this_class(self):
         """Belt-and-braces, mirroring

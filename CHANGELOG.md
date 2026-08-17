@@ -2,6 +2,18 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.20.0] - 2026-08-16
+
+### Added
+
+- **Franchise-ordered recommendations** (`movies.franchise_order`, default `true` — see `utils/franchise.py`). A recommendation belonging to a TMDB collection is now replaced by the earliest entry of that collection the user has not watched: nothing watched gets you *Rocky*, *Rocky* watched gets you *Rocky II*. Ranking purely by similarity treats every candidate as independently watchable, so it routinely surfaced *Rocky IV*, *The Godfather Part III* or *Cult of Chucky* as somebody's first contact with a series — and the existing collection bonus (`COLLECTION_BONUS_*`) made that *more* likely rather than less, because it boosts a title for belonging to a collection the user has started without ever saying which entry comes next. Costs no additional TMDB calls: `collection_id`/`collection_name`/`year` are already cached per movie by `MovieCache`/`_backfill_collection_data`.
+
+  Four behaviors are deliberate. **Promotion is library-only** — the artifact is a Plex collection, so a promoted entry must be playable; when the true first entry is missing from the library entirely, the earliest *owned* entry is promoted instead and the gap is reported from Sequel Huntarr's already-cached TMDB member lists (read-only, version-blind, silent when that cache is absent), which is exactly the input Sequel Huntarr already turns into a Radarr request. **Hard filters are respected, sizing filters are not** — an entry is never promoted past an excluded genre, a per-user `max_rating`, or a recommendation the user was shown and visibly declined (`utils/ignored_recs.py`), but it *is* promoted past `quality_filters` and `min_similarity`, which size the collection rather than state a preference (a 1976 original with a thin TMDB vote count should not be withheld while its own sequel is recommended). **Order comes from the library's own `year`**, with unknown years sorted last so a missing year can never take position one. **Each series takes one collection slot** rather than several; because the collapse runs before the candidate buffer is truncated, the freed slots refill from the tail instead of shrinking the collection.
+
+  Applied at two points, because one is not enough: `get_recommendations()` re-points the freshly scored pool, and `manage_plex_labels()` additionally suppresses already-labeled later entries once their series' earliest unwatched entry is a candidate — without that second hook a sequel labeled on a previous run would outlive the promotion indefinitely, sitting in the collection beside the original. The suppression only fires when that earliest entry is itself in the pool, so a series whose first entry the `max_rating` filter just removed keeps the entry the user *may* watch rather than vanishing from the collection.
+
+  Movies only — TMDB collections are a movie-side concept and no collection data is cached for shows, so the index is empty for TV and the whole path is inert there. Set `movies.franchise_order: false` in `tuning.yml` to rank franchise entries purely by score, exactly as before.
+
 ## [2.19.3] - 2026-08-13
 
 ### Added
