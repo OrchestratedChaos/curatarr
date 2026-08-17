@@ -1417,7 +1417,17 @@ class BaseRecommender(ABC):
                     by_collection.setdefault(collection_id, []).append(item_id)
 
             remaining = dict(all_candidates)
-            suppressed: List[str] = []
+            # Tracked apart, and worded apart below. Reporting both as one
+            # "holding back N until earlier entries are watched" list (as
+            # 2.20.0 did, before the started/unstarted split existed) made
+            # the log actively misleading: on an unstarted series nothing
+            # is waiting on a future watch, and nothing takes the dropped
+            # item's place - so a shared `A -> B` line read as a
+            # substitution that never happened. Observed on a real run: a
+            # user with ZERO promotions had five lines that looked exactly
+            # like promotions.
+            advanced: List[str] = []
+            dropped: List[str] = []
 
             for collection_id, item_ids in by_collection.items():
                 entries = franchise_index.get(collection_id) or []
@@ -1440,22 +1450,43 @@ class BaseRecommender(ABC):
                     remaining[canonical.rating_key] = (remaining[canonical.rating_key][0], best_score)
                 for item_id in losers:
                     plex_item, _score = remaining.pop(item_id)
-                    suppressed.append(f"{getattr(plex_item, 'title', item_id)} -> {canonical.label()}")
+                    title = getattr(plex_item, "title", item_id)
+                    if started:
+                        # A real substitution: the collection slot moves.
+                        advanced.append(f"{title} -> {canonical.label()}")
+                    else:
+                        # No arrow. Nothing takes this item's place; the
+                        # earliest entry is only mentioned to say where
+                        # the series actually begins.
+                        dropped.append(f"{title} (series unstarted, begins at {canonical.label()})")
         except (AttributeError, KeyError, TypeError, ValueError) as e:
             logger.debug(f"Franchise candidate suppression skipped: {e}")
             return all_candidates
 
-        if suppressed:
-            print(
-                f"{YELLOW}Franchise order: holding back {len(suppressed)} later "
-                f"{self.media_key} until earlier entries are watched{RESET}"
-            )
-            for line in suppressed[:FRANCHISE_GAP_REPORT_LIMIT]:
-                print(f"  - {line}")
-            if len(suppressed) > FRANCHISE_GAP_REPORT_LIMIT:
-                print(f"  ... and {len(suppressed) - FRANCHISE_GAP_REPORT_LIMIT} more")
-
+        self._print_franchise_label_changes(advanced, dropped)
         return remaining
+
+    def _print_franchise_label_changes(self, advanced: List[str], dropped: List[str]) -> None:
+        """Report the two collection-side outcomes in their own words."""
+        if advanced:
+            print(
+                f"{CYAN}Franchise order: moved {len(advanced)} already-labeled "
+                f"{self.media_key} forward to your next entry in the series{RESET}"
+            )
+            for line in advanced[:FRANCHISE_GAP_REPORT_LIMIT]:
+                print(f"  - {line}")
+            if len(advanced) > FRANCHISE_GAP_REPORT_LIMIT:
+                print(f"  ... and {len(advanced) - FRANCHISE_GAP_REPORT_LIMIT} more")
+
+        if dropped:
+            print(
+                f"{YELLOW}Franchise order: removed {len(dropped)} already-labeled mid-series "
+                f"{self.media_key} from series you haven't started{RESET}"
+            )
+            for line in dropped[:FRANCHISE_GAP_REPORT_LIMIT]:
+                print(f"  - {line}")
+            if len(dropped) > FRANCHISE_GAP_REPORT_LIMIT:
+                print(f"  ... and {len(dropped) - FRANCHISE_GAP_REPORT_LIMIT} more")
 
     def _find_plex_items_for_recs(self, section, selected_items: List[Dict]) -> Tuple[List, List[str]]:
         """Find Plex items matching recommendations."""

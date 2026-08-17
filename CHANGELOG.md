@@ -2,6 +2,14 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.21.1] - 2026-08-17
+
+### Fixed
+
+- **The collection-side franchise log described a substitution that never happened.** `manage_plex_labels()`'s suppressor kept `2.20.0`'s wording after `2.21.0` split started from unstarted series, so both outcomes were reported as one `holding back N later movies until earlier entries are watched` list with a shared `A -> B` detail line. On an unstarted series neither half is true: nothing is waiting on a future watch, and nothing takes the dropped item's place. Observed on the first real multi-user run - a user with **zero** promotions had five lines that read exactly like promotions, which is the opposite of what the log is for when you are trying to audit the feature.
+
+  The two outcomes are now tracked and worded apart: `moved N already-labeled movies forward to your next entry in the series` (keeping the arrow, where a slot genuinely moves) and `removed N already-labeled mid-series movies from series you haven't started`, whose detail lines carry no arrow at all - `Barbershop 2: Back in Business (series unstarted, begins at Barbershop (2002))`. Log output only; no change to which items are recommended.
+
 ## [2.21.0] - 2026-08-16
 
 ### Changed

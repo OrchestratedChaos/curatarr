@@ -4003,24 +4003,44 @@ class TestSuppressSupersededFranchiseCandidates:
         candidates = self._candidates((4, 0.9), (1, 0.3))
         assert recommender._suppress_superseded_franchise_candidates(candidates) == candidates
 
-    def test_suppression_is_reported_with_explicit_truncation(self, capsys):
-        cache = {
+    def _long_series_cache(self, n=10):
+        return {
             str(i): {
                 "title": f"Part {i}",
                 "year": 1970 + i,
                 "collection_id": ROCKY_COLLECTION_ID,
                 "collection_name": "Rocky Collection",
             }
-            for i in range(1, 10)
+            for i in range(1, n)
         }
-        recommender = _franchise_recommender(cache=cache)
+
+    def test_unstarted_removals_are_worded_as_removals(self, capsys):
+        """The 2.20.0 wording ("holding back N until earlier entries are
+        watched", plus an `A -> B` line) described a substitution that
+        never happens on an unstarted series - a user with ZERO promotions
+        saw five lines that read exactly like promotions."""
+        recommender = _franchise_recommender(cache=self._long_series_cache())
         candidates = self._candidates(*[(i, 0.5) for i in range(1, 10)])
         capsys.readouterr()  # drop construction chatter
         result = recommender._suppress_superseded_franchise_candidates(candidates)
         out = capsys.readouterr().out
         assert set(result) == {1}
-        assert "holding back 8 later movies" in out
+        assert "removed 8 already-labeled mid-series movies from series you haven't started" in out
+        assert "(series unstarted, begins at Part 1 (1971))" in out
+        assert "->" not in out, "an arrow implies a substitution that did not happen"
         assert "... and 3 more" in out
+
+    def test_started_advances_are_worded_as_a_move(self, capsys):
+        recommender = _franchise_recommender(cache=self._long_series_cache())
+        recommender.watched_ids = {1}
+        candidates = self._candidates(*[(i, 0.5) for i in range(2, 10)])
+        capsys.readouterr()  # drop construction chatter
+        result = recommender._suppress_superseded_franchise_candidates(candidates)
+        out = capsys.readouterr().out
+        assert set(result) == {2}
+        assert "moved 7 already-labeled movies forward to your next entry" in out
+        assert "-> Part 2 (1972)" in out
+        assert "series unstarted" not in out
 
 
 class TestReportFranchiseGaps:
