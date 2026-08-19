@@ -326,7 +326,7 @@ class TestRemoveLabelsFromItems:
 
         remove_labels_from_items([item], "Recommended", label_dates, "test reason")
 
-        item.removeLabel.assert_called_once_with("Recommended")
+        item.removeLabel.assert_called_once_with("Recommended", locked=False)
         assert "123_Recommended" not in label_dates
 
     @patch("utils.labels.log_info")
@@ -361,7 +361,7 @@ class TestRemoveLabelsFromItems:
         remove_labels_from_items(items, "Recommended", label_dates, "cleanup")
 
         for item in items:
-            item.removeLabel.assert_called_once_with("Recommended")
+            item.removeLabel.assert_called_once_with("Recommended", locked=False)
         assert len(label_dates) == 0
 
 
@@ -378,7 +378,7 @@ class TestAddLabelsToItems:
 
         count = add_labels_to_items([item], "Recommended", label_dates)
 
-        item.addLabel.assert_called_once_with("Recommended")
+        item.addLabel.assert_called_once_with("Recommended", locked=False)
         assert count == 1
         assert "123_Recommended" in label_dates
 
@@ -411,7 +411,7 @@ class TestAddLabelsToItems:
 
         assert count == 3
         for item in items:
-            item.addLabel.assert_called_once_with("Recommended")
+            item.addLabel.assert_called_once_with("Recommended", locked=False)
 
     def test_mixed_existing_and_new_labels(self):
         """Test with mix of items with and without label."""

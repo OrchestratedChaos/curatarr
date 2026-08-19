@@ -229,7 +229,7 @@ def remove_labels_from_items(items: List, label_name: str, label_dates: Dict, re
         reason: Reason for removal (for logging)
     """
     for item in items:
-        item.removeLabel(label_name)
+        item.removeLabel(label_name, locked=False)
         label_key = f"{int(item.ratingKey)}_{label_name}"
         if label_key in label_dates:
             del label_dates[label_key]
@@ -253,7 +253,7 @@ def add_labels_to_items(items: List, label_name: str, label_dates: Dict) -> int:
     for item in items:
         current_labels = [label.tag for label in item.labels]
         if label_name not in current_labels:
-            item.addLabel(label_name)
+            item.addLabel(label_name, locked=False)
             label_key = f"{int(item.ratingKey)}_{label_name}"
             label_dates[label_key] = datetime.now().isoformat()
             print(f"{GREEN}Added: {item.title}{RESET}")

@@ -854,6 +854,39 @@ def remove_owned_collection(
     return True
 
 
+def _clear_collection_lock(section: Any, items: List[Any], context: str, logger: Any = None) -> None:
+    """Clear the server-side 'collection' field lock PMS sets whenever
+    Collection.addItems/removeItems/LibrarySection.createCollection
+    touches an item - plexapi sends no lock param on those calls, so
+    Plex locks the field itself (verified live on PMS 1.43.3.10861).
+    Once locked, Plex's own agent can never write that item's collection
+    membership again, so items rotated OUT of a collection need this
+    exactly as much as items rotated in - see the removed-set call site
+    below.
+
+    Batches to a single PUT for the whole list via
+    LibrarySection.multiEdit (id=<comma-joined ratingKeys>) instead of
+    one item.edit() call per item, to avoid inflating a 50-item x
+    6-collection nightly run into hundreds of individual requests
+    against a live, resource-constrained Plex server.
+
+    Best-effort only: never allowed to raise. A failed unlock is a
+    missed cleanup of a side effect, not the collection write curatarr
+    actually cares about, so it's logged and swallowed rather than
+    aborting the rest of update_plex_collection.
+    """
+    if not items:
+        return
+    try:
+        section.multiEdit(items, **{"collection.locked": 0})
+    except (plexapi.exceptions.PlexApiException, requests.RequestException) as e:
+        msg = f"Could not clear collection lock on {len(items)} item(s) ({context}): {e}"
+        if logger:
+            logger.warning(msg)
+        else:
+            print(f"WARNING: {msg}")
+
+
 def update_plex_collection(
     section: Any,
     collection_name: str,
@@ -999,13 +1032,16 @@ def update_plex_collection(
             current_items = target_collection.items()
             if current_items:
                 target_collection.removeItems(current_items)
+                _clear_collection_lock(section, current_items, f"removed from {collection_name}", logger)
             target_collection.addItems(items)
+            _clear_collection_lock(section, items, f"added to {collection_name}", logger)
             if logger:
                 logger.info(f"Updated collection: {collection_name} ({len(items)} items)")
             else:
                 print(f"Updated collection: {collection_name} ({len(items)} items)")
         else:
             target_collection = section.createCollection(title=collection_name, items=items)
+            _clear_collection_lock(section, items, f"created in {collection_name}", logger)
             if logger:
                 logger.info(f"Created collection: {collection_name} ({len(items)} items)")
             else:
@@ -1038,7 +1074,7 @@ def update_plex_collection(
             try:
                 current_labels = [label.tag for label in target_collection.labels]
                 if private_label not in current_labels:
-                    target_collection.addLabel(private_label)
+                    target_collection.addLabel(private_label, locked=False)
             except plexapi.exceptions.PlexApiException as e:
                 if logger:
                     logger.warning(f"Could not add label to collection: {e}")
