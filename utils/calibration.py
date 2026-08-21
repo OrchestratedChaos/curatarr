@@ -152,6 +152,50 @@ def kl_divergence(
     return divergence
 
 
+def projected_distribution(
+    actual: Dict[str, float],
+    target: Dict[str, float],
+    filled: int,
+    total: int,
+) -> Dict[str, float]:
+    """
+    The distribution the list would have if its remaining slots were
+    filled exactly on target.
+
+    Greedy selection compares candidates by the divergence of the list
+    SO FAR, which conflates two different things: how far the committed
+    picks have drifted, and how little of the target a short list can
+    cover at all. The second dominates early - one item cannot reproduce
+    a twenty-genre profile, so at pick 1 the objective degenerates into
+    "whichever candidate covers the most target mass by itself", which on
+    real metadata means whichever candidate carries the most genre tags.
+
+    That is a systematic bias toward kid films, for the reason CLAUDE.md
+    already records about genre tags: measured on this library's own
+    candidate pool, G/PG titles average 4.69 genre tags against 3.25 for
+    PG-13/R. The pre-fix greedy filled its first ten slots with 5.00-tag
+    items while its last ten averaged 3.40, and put Brave (similarity
+    7.3%, 93rd of 100 candidates) in the collection at all.
+
+    Projecting the unfilled slots onto the target removes that term, so
+    only the deviation the committed picks actually introduce is
+    measured, scaled by the share of the list they occupy. Early picks
+    are no longer asked to carry the whole distribution alone and the
+    similarity axis survives the top of the list. The last step is
+    unchanged - at filled == total the projection IS the list - so this
+    changes the path greedy takes, not the target it converges on.
+    Measured on the same 100-candidate pool: final genre KL 0.1090 vs
+    0.1103 before, mean similarity 15.29% vs 15.03%, G/PG count 8 vs 7,
+    three titles of fifty changed.
+    """
+    if total <= 0 or filled >= total:
+        return actual
+    weight = filled / total
+    return {
+        key: weight * actual.get(key, 0.0) + (1 - weight) * target.get(key, 0.0) for key in set(actual) | set(target)
+    }
+
+
 def calibrate_recommendations(
     candidates: Sequence[T],
     limit: int,
@@ -205,7 +249,12 @@ def calibrate_recommendations(
         calibration_strength: lambda in [0, 1). 0 disables calibration.
 
     Returns:
-        The selected items, best-first.
+        The selected items, in greedy PICK order. That is a construction
+        artifact, not a ranking - the objective trades similarity against
+        distribution fit, so an item can be picked early because it
+        patches the list's mix rather than because it scores well. A
+        caller that shows this list to a user must re-sort it by score
+        (see BaseRecommender._update_labels_by_rank).
     """
     if limit <= 0:
         return []
@@ -226,7 +275,10 @@ def calibrate_recommendations(
 
         for i, candidate in enumerate(remaining):
             trial_genres = selected_genres + [get_genres(candidate)]
-            divergence = kl_divergence(target_distribution, list_distribution(trial_genres))
+            trial_distribution = projected_distribution(
+                list_distribution(trial_genres), target_distribution, len(trial_genres), limit
+            )
+            divergence = kl_divergence(target_distribution, trial_distribution)
             value = (1 - calibration_strength) * get_score(candidate) - (
                 calibration_strength * CALIBRATION_DIVERGENCE_SCALE * divergence
             )
@@ -276,7 +328,12 @@ def calibrate_multi(
         calibration_strength: 0 disables; see calibrate_recommendations.
 
     Returns:
-        The selected items, best-first.
+        The selected items, in greedy PICK order. That is a construction
+        artifact, not a ranking - the objective trades similarity against
+        distribution fit, so an item can be picked early because it
+        patches the list's mix rather than because it scores well. A
+        caller that shows this list to a user must re-sort it by score
+        (see BaseRecommender._update_labels_by_rank).
     """
     if limit <= 0:
         return []
@@ -303,7 +360,8 @@ def calibrate_multi(
             divergence = 0.0
             for d_i, dim in enumerate(active):
                 trial = selected_values[d_i] + [dim.get_values(candidate)]
-                divergence += dim.weight * kl_divergence(dim.target, list_distribution(trial))
+                trial_distribution = projected_distribution(list_distribution(trial), dim.target, len(trial), limit)
+                divergence += dim.weight * kl_divergence(dim.target, trial_distribution)
             value = (1 - calibration_strength) * get_score(candidate) - (
                 calibration_strength * CALIBRATION_DIVERGENCE_SCALE * divergence
             )

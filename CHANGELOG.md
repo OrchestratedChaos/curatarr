@@ -2,6 +2,34 @@
 
 All notable changes to Curatarr will be documented in this file.
 
+## [2.22.0] - 2026-08-21
+
+### Fixed
+
+- **`mypy` was unrunnable from an SMB-mounted checkout, reporting it as its own INTERNAL ERROR.** mypy defaults to a 16-shard sqlite cache and puts each shard in WAL mode, which persists in the `.db` file header - and opening a WAL database requires a `-shm` shared-memory file, which `smbfs` cannot provide. This checkout is commonly an SMB mount of the Plex host's own directory (see `.claude/skills/verify-recommendations`), so the moment mypy ran on the host, where WAL is fine, every later run from a mounted checkout died with `sqlite3.OperationalError: unable to open database file` wrapped in `INTERNAL ERROR -- Please try using mypy master on GitHub`. A *fresh* cache dir worked and a stale one did not, which made it look intermittent and like a mypy bug rather than a filesystem one.
+
+  `mypy.ini` now sets `sqlite_cache = False`. The filesystem cache has no shared-memory requirement and works from both machines; at 153 source files the speed difference is noise. `mypy .` passes clean, warm cache included.
+
+- **The recommendation collection was ordered by calibration's greedy pick order, not by score, under a log line claiming otherwise.** `_select_calibrated()` returns the order in which the greedy loop *constructed* the set - an artifact of `(1 - s) * score - s * SCALE * KL(target || list)`, where an item can be taken early because it patches the collection's genre mix rather than because it matches the user. `_update_labels_by_rank()` handed that order straight to `_sync_plex_collection()`, which pushes it into Plex as the collection's `sort="custom"` order, while `base.py` printed `Final collection size: N movies (sorted by similarity)`.
+
+  Measured on a real run: **Brave** (similarity **7.3%**, 93rd of 100 candidates) sat at collection position **3**, while **Sonic the Hedgehog 2** (**37.2%**, 2nd) sat near the bottom. Across the whole collection, position carried no ranking signal at all - the first ten picks averaged 12.6% similarity against 11.7% for the last ten. `_update_labels_by_rank()` now re-sorts by `_rank_key` (score, then TMDB rating, then vote count - the same tiebreak `get_recommendations()` uses) before returning, so the log line is true. Which items are in the collection is still calibration's call and is unchanged by this half.
+
+- **Calibration's greedy selection systematically favored broadly-tagged titles, which on real metadata means kid films.** Each candidate was scored on `KL(target || list-so-far)`, which conflates two different things: how far the committed picks have drifted from the profile, and how little of the target a short list can cover at all. The second dominates early - one item cannot reproduce a twenty-genre profile - so pick 1 degenerated into *whichever candidate covers the most target mass by itself*, i.e. whichever carries the most genre tags.
+
+  That is the `CLAUDE.md` genre-tags-are-unreliable trap resurfacing inside calibration itself. Measured on this library's own 100-candidate pool: G/PG titles average **4.69** genre tags against **3.25** for PG-13/R, and the greedy filled its first ten slots with 5.00-tag items while its last ten averaged 3.40. Brave earns its way in on eight tags (`family, fantasy, animation, action, adventure, comedy, drama, mystery`) at a 7.3% score; at pick 3 its similarity deficit against Sonic 2 was worth **+0.1495** while its divergence advantage was worth **6.845**, a 46x thumb on the scale.
+
+  New `projected_distribution()` holds the list's unfilled slots at the target, so only the deviation the committed picks actually introduce is measured, scaled by the share of the list they occupy. Early picks are no longer asked to carry the whole distribution alone and the similarity axis survives the top of the list. The final step is unchanged - at `filled == total` the projection *is* the list - so this changes the path greedy takes, not the target it converges on. Measured on the same pool: final genre KL **0.1090** vs 0.1103 before, certificate KL unchanged at 0.0030, mean similarity **15.29%** vs 15.03%, G/PG count 8 vs 7, and **three titles of fifty** changed. Sonic 2 returns to position 2; Brave drops out of the collection entirely, which is where a 93rd-place candidate belongs.
+
+  Note this is deliberately *not* a reduction in family content - the G/PG count barely moves. Calibration still includes family titles at the rate the profile watches them; it now picks the highest-scoring examples instead of the most-tagged ones.
+
+## [2.21.3] - 2026-08-18
+
+### Fixed
+
+- **Plex was locking movies out of their own auto-managed franchise collections, and curatarr was causing it.** Two independent write paths set the lock. plexapi's `Label.addLabel`/`removeLabel` default to `locked=True`; separately, Plex Media Server locks the `collection` field server-side on *any* `addItems` / `removeItems` / `createCollection` write, regardless of what the client sends - plexapi exposes no lock parameter on those calls at all (verified live on PMS 1.43.3.10861). A locked field is one Plex's own metadata agent will never write again, so once a movie's `collection` field was locked this way it silently stopped being eligible for auto-addition to its franchise collection on every subsequent run. **378 of 518 movies** were affected, growing 6-15 per day.
+
+  `utils/labels.py` and `utils/plex.py` now pass `locked=False` on the label calls, and a new `_clear_collection_lock()` is wired into all three collection-membership write paths in `update_plex_collection()`. It covers the **removed** set as well as the added set - an item rotated *out* of a collection needs the lock cleared exactly as much as one rotated in. The helper batches via `LibrarySection.multiEdit()` so each call is a single PUT rather than one `item.edit()` per item, keeping a 50-item x 6-collection nightly run to <=18 requests instead of ~300 against a live, resource-constrained server. It is best-effort and never raises: a failed unlock is a missed cleanup of a side effect, not the collection write curatarr actually cares about.
+
 ## [2.21.2] - 2026-08-17
 
 ### Added

@@ -2702,6 +2702,43 @@ class TestCalibrationCannotActGuard:
         recommender._select_calibrated(candidates, media_items, 50)
         assert mock_warn.called
 
+    @patch("recommenders.base.add_labels_to_items")
+    @patch("recommenders.base.remove_labels_from_items")
+    def test_returned_collection_is_ordered_by_score(self, _mock_remove, _mock_add):
+        """
+        Regression: _select_calibrated returns greedy PICK order, and
+        this list is handed to _sync_plex_collection, which pushes it
+        into Plex as the collection's custom sort. Shipping pick order
+        put a 7.3%-similarity title at collection position 3 while a
+        37.2% one sat near the bottom. Membership is calibration's call;
+        the ORDER the user reads must still be the ranking.
+
+        The genres have to VARY across candidates for this to test
+        anything - give every candidate the same genre and the
+        divergence term is equal for all of them, greedy degenerates to
+        picking by score, and pick order matches the ranking by accident.
+        """
+        recommender = _make_recommender()
+        recommender.calibration_strength = 0.5
+        recommender.min_similarity = 0.0
+        recommender.watched_data_counters = {"genres": {"thriller": 50.0, "drama": 30.0, "comedy": 20.0}}
+        recommender.watched_ids = set(range(9000, 9200))
+
+        # Deliberately anti-correlated: the broadly-tagged candidates
+        # calibration reaches for first are the ones scoring worst.
+        genre_sets = [["thriller"], ["drama"], ["comedy"], ["thriller", "drama", "comedy"]]
+        media_items = {str(i): {"genres": genre_sets[i % 4]} for i in range(200)}
+        media_cache = Mock()
+        media_cache.cache = {"movies": media_items}
+        recommender._get_media_cache = Mock(return_value=media_cache)
+
+        candidates = {i: (Mock(ratingKey=i), 1.0 - (i % 4) * 0.25) for i in range(200)}
+
+        result = recommender._update_labels_by_rank(candidates, [], "Recommended_alice", target_count=50)
+
+        scores = [candidates[int(item.ratingKey)][1] for item in result]
+        assert scores == sorted(scores, reverse=True), "collection order is not a ranking"
+
 
 class TestSyncPlexCollectionEmpty:
     """Tests for BaseRecommender._sync_plex_collection with no items."""
