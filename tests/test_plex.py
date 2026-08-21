@@ -632,7 +632,7 @@ class TestCleanupLegacyUnnamedCollection:
         cleanup_legacy_unnamed_collection(mock_section, "🎬 Alice - Recommendation", "🎬")
 
         mock_legacy_collection.delete.assert_called_once()
-        legacy_item.removeLabel.assert_called_once_with("Recommended")
+        legacy_item.removeLabel.assert_called_once_with("Recommended", locked=False)
 
     def test_leaves_current_collection_alone(self):
         """A real user literally named 'Recommended' would legitimately
@@ -2318,7 +2318,7 @@ class TestUpdatePlexCollectionOldLabelUpgrade:
         existing.addItems.assert_called_once()
 
         # New, normalized label form was added additively...
-        existing.addLabel.assert_called_once_with("PrivateCollection_alexpigot")
+        existing.addLabel.assert_called_once_with("PrivateCollection_alexpigot", locked=False)
         # ...while the old form is still present (never stripped here).
         old_form_labels = [label.tag for label in existing.labels]
         assert "PrivateCollection_Alex_Pigot" in old_form_labels
@@ -2765,6 +2765,163 @@ class TestUpdatePlexCollectionSort:
 
         assert result is True
         mock_logger.warning.assert_called_once()
+
+
+class TestClearCollectionLock:
+    """Tests for _clear_collection_lock() - the collection-field-lock
+    half of the fix (label-lock half is covered by TestRemoveLabelsFromItems/
+    TestAddLabelsToItems in test_labels.py). Plex locks 'collection'
+    server-side on any addItems/removeItems/createCollection call
+    (verified live on PMS 1.43.3.10861, no lock param plexapi can pass
+    to prevent it), so every write path needs an explicit unlock after.
+    """
+
+    def test_calls_multi_edit_with_locked_false(self):
+        """A single batched multiEdit call clears the lock for the
+        whole item list, not one item.edit() per item."""
+        from utils.plex import _clear_collection_lock
+
+        mock_section = Mock()
+        items = [Mock(), Mock(), Mock()]
+
+        _clear_collection_lock(mock_section, items, "added to Test Collection")
+
+        mock_section.multiEdit.assert_called_once_with(items, **{"collection.locked": 0})
+
+    def test_noop_for_empty_items(self):
+        """Nothing to unlock - must not call the API at all."""
+        from utils.plex import _clear_collection_lock
+
+        mock_section = Mock()
+
+        _clear_collection_lock(mock_section, [], "removed from Test Collection")
+
+        mock_section.multiEdit.assert_not_called()
+
+    def test_swallows_plex_api_exception_and_logs(self):
+        """An unlock failure must never raise - it's cleanup of a side
+        effect, not the write curatarr actually cares about."""
+        from utils.plex import _clear_collection_lock
+
+        mock_section = Mock()
+        mock_section.multiEdit.side_effect = plexapi.exceptions.PlexApiException("locked field error")
+        mock_logger = Mock()
+
+        _clear_collection_lock(mock_section, [Mock()], "added to Test Collection", logger=mock_logger)
+
+        mock_logger.warning.assert_called_once()
+
+    def test_swallows_request_exception_and_logs(self):
+        """Network failures against the multiEdit PUT must also be
+        swallowed, not just plexapi's own exception type."""
+        from utils.plex import _clear_collection_lock
+
+        mock_section = Mock()
+        mock_section.multiEdit.side_effect = requests.exceptions.ConnectionError("connection reset")
+        mock_logger = Mock()
+
+        _clear_collection_lock(mock_section, [Mock()], "added to Test Collection", logger=mock_logger)
+
+        mock_logger.warning.assert_called_once()
+
+    def test_falls_back_to_print_without_logger(self, capsys):
+        """Matches every other non-fatal warning in update_plex_collection:
+        print(f"WARNING: ...") when no logger is passed."""
+        from utils.plex import _clear_collection_lock
+
+        mock_section = Mock()
+        mock_section.multiEdit.side_effect = plexapi.exceptions.PlexApiException("locked field error")
+
+        _clear_collection_lock(mock_section, [Mock()], "added to Test Collection")
+
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.out
+
+
+class TestUpdatePlexCollectionClearsLocks:
+    """Integration coverage: update_plex_collection() must clear the
+    collection lock for every write path that can trigger it - added
+    items, removed items (rotated OUT, #verified 69 locked movies with
+    no label and no collection had exactly this gap), and items passed
+    to createCollection.
+    """
+
+    def test_create_path_unlocks_added_items(self):
+        """New collection: created items must be unlocked."""
+        from utils.plex import update_plex_collection
+
+        items = [Mock(), Mock()]
+        mock_collection = Mock()
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+        mock_section.createCollection.return_value = mock_collection
+
+        result = update_plex_collection(mock_section, "New Collection", items)
+
+        assert result is True
+        mock_section.multiEdit.assert_called_once_with(items, **{"collection.locked": 0})
+
+    def test_update_path_unlocks_both_added_and_removed_items(self):
+        """Existing collection: BOTH the newly added set AND the
+        rotated-out removed set must each get their own unlock call -
+        removeItems goes through the same locking API path as addItems."""
+        from utils.plex import update_plex_collection
+
+        removed_items = [Mock(), Mock()]
+        added_items = [Mock()]
+
+        mock_existing = Mock()
+        mock_existing.title = "Existing Collection"
+        mock_existing.items.return_value = removed_items
+
+        mock_section = Mock()
+        mock_section.collections.return_value = [mock_existing]
+
+        result = update_plex_collection(mock_section, "Existing Collection", added_items)
+
+        assert result is True
+        assert mock_section.multiEdit.call_count == 2
+        mock_section.multiEdit.assert_any_call(removed_items, **{"collection.locked": 0})
+        mock_section.multiEdit.assert_any_call(added_items, **{"collection.locked": 0})
+
+    def test_update_path_skips_removed_unlock_when_collection_was_empty(self):
+        """No prior items means no removed set to unlock - only the
+        added-items call should fire."""
+        from utils.plex import update_plex_collection
+
+        added_items = [Mock()]
+
+        mock_existing = Mock()
+        mock_existing.title = "Existing Collection"
+        mock_existing.items.return_value = []
+
+        mock_section = Mock()
+        mock_section.collections.return_value = [mock_existing]
+
+        result = update_plex_collection(mock_section, "Existing Collection", added_items)
+
+        assert result is True
+        mock_section.multiEdit.assert_called_once_with(added_items, **{"collection.locked": 0})
+
+    def test_unlock_failure_does_not_abort_the_collection_update(self):
+        """A multiEdit failure must be logged and swallowed, never
+        propagate out of update_plex_collection and fail the whole
+        nightly collection rebuild."""
+        from utils.plex import update_plex_collection
+
+        added_items = [Mock()]
+        mock_section = Mock()
+        mock_section.collections.return_value = []
+        mock_section.createCollection.return_value = Mock()
+        mock_section.multiEdit.side_effect = plexapi.exceptions.PlexApiException("locked field error")
+
+        mock_logger = Mock()
+        result = update_plex_collection(mock_section, "Test Collection", added_items, logger=mock_logger)
+
+        assert result is True
+        mock_logger.warning.assert_any_call(
+            "Could not clear collection lock on 1 item(s) (created in Test Collection): locked field error"
+        )
 
 
 class TestApplyUserLabelRestrictions:
