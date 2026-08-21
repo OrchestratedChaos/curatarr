@@ -43,6 +43,7 @@ from .calibration import (
     item_genre_distribution,
     kl_divergence,
     list_distribution,
+    projected_distribution,
 )
 
 # CLI utilities
@@ -679,6 +680,7 @@ __all__ = [
     "item_genre_distribution",
     "kl_divergence",
     "list_distribution",
+    "projected_distribution",
     # Counters
     "build_profile_from_counters",
     "create_empty_counters",

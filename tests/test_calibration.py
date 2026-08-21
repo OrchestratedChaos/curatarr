@@ -34,6 +34,7 @@ from utils.calibration import (
     item_genre_distribution,
     kl_divergence,
     list_distribution,
+    projected_distribution,
 )
 from utils.config import CALIBRATION_MIN_PROFILE_SAMPLE, CALIBRATION_SMOOTHING_ALPHA
 
@@ -491,3 +492,79 @@ class TestMinimumProfileSample:
         # Genre (trusted, wants thriller) must win; certificate (2 samples,
         # wants G) must be ignored entirely.
         assert sum(1 for i in sel if i["g"] == ["thriller"]) > 5
+
+
+class TestProjectedDistribution:
+    """projected_distribution() - unfilled slots held at target."""
+
+    def test_full_list_is_returned_unchanged(self):
+        actual = {"action": 0.7, "drama": 0.3}
+        target = {"action": 0.5, "drama": 0.5}
+        assert projected_distribution(actual, target, 4, 4) == actual
+
+    def test_overfull_list_is_returned_unchanged(self):
+        actual = {"action": 1.0}
+        assert projected_distribution(actual, {"drama": 1.0}, 5, 4) == actual
+
+    def test_non_positive_total_is_returned_unchanged(self):
+        actual = {"action": 1.0}
+        assert projected_distribution(actual, {"drama": 1.0}, 0, 0) == actual
+
+    def test_blends_toward_target_by_filled_share(self):
+        actual = {"action": 1.0}
+        target = {"drama": 1.0}
+        projected = projected_distribution(actual, target, 1, 4)
+        assert projected["action"] == pytest.approx(0.25)
+        assert projected["drama"] == pytest.approx(0.75)
+
+    def test_stays_a_distribution(self):
+        actual = {"action": 0.6, "comedy": 0.4}
+        target = {"action": 0.2, "drama": 0.8}
+        projected = projected_distribution(actual, target, 2, 5)
+        assert sum(projected.values()) == pytest.approx(1.0)
+
+    def test_early_pick_barely_moves_the_projection(self):
+        """
+        The whole point: one item out of fifty can only shift the mix by
+        1/50, so its divergence penalty must be small enough that the
+        similarity term still decides. Before this, pick 1 was scored on
+        how well that single item reproduced the entire profile.
+        """
+        target = {"action": 0.5, "drama": 0.3, "comedy": 0.2}
+        one_item = list_distribution([["action"]])
+        projected = projected_distribution(one_item, target, 1, 50)
+        assert kl_divergence(target, projected) < kl_divergence(target, one_item)
+
+
+class TestGreedyDoesNotFavorBroadlyTaggedItems:
+    """
+    Regression: the pre-fix greedy scored each candidate on how much of
+    the profile it covered BY ITSELF, so the most-tagged candidate won
+    the early slots regardless of score. On this library that is a
+    standing bias toward kid films, which carry 4.69 genre tags on
+    average against 3.25 for everything else (see CLAUDE.md on genre
+    tags being unreliable).
+    """
+
+    def test_high_scorer_beats_a_broadly_tagged_low_scorer(self):
+        target = {"action": 0.4, "thriller": 0.3, "science fiction": 0.3}
+        # Carries a tag for nearly every genre in the profile, but is a
+        # poor match; the pre-fix objective picked this first.
+        broad = _item("Broad", ["action", "thriller", "science fiction", "family", "animation"], 0.05)
+        strong = _item("Strong", ["action", "thriller"], 0.90)
+        filler = [_item(f"Filler {i}", ["action"], 0.10) for i in range(10)]
+
+        selected = _calibrate([broad, strong] + filler, 4, target, 0.5)
+
+        assert selected[0]["title"] == "Strong"
+
+    def test_still_selects_for_the_profile_mix(self):
+        """The fix must not turn calibration back into plain top-N."""
+        target = {"action": 0.5, "romance": 0.5}
+        action = [_item(f"Action {i}", ["action"], 0.9 - i * 0.01) for i in range(10)]
+        romance = [_item(f"Romance {i}", ["romance"], 0.2 - i * 0.01) for i in range(10)]
+
+        selected = _calibrate(action + romance, 6, target, 0.5)
+
+        genres = [i["genres"][0] for i in selected]
+        assert genres.count("romance") >= 2, genres

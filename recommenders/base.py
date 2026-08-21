@@ -1964,7 +1964,20 @@ class BaseRecommender(ABC):
             add_labels_to_items(items_to_add, label_name, self.label_dates)
 
         print(f"{GREEN}Collection now has top {len(top_candidates)} recommendations by score{RESET}")
-        return [plex_item for item_id, (plex_item, score) in top_candidates]
+
+        # Re-sort by score before returning. _select_calibrated hands back
+        # calibration's greedy PICK order, which is a construction
+        # artifact rather than a ranking, and this list goes straight to
+        # _sync_plex_collection - which pushes it into Plex as the
+        # collection's custom sort order. The two were silently different
+        # things: on a real run Brave (similarity 7.3%, 93rd of 100
+        # candidates) sat at collection position 3 while Sonic the
+        # Hedgehog 2 (37.2%, 2nd) sat near the bottom, under a log line
+        # that claimed the collection was "sorted by similarity".
+        # Sorting here fixes the ORDER only - which items are in the
+        # collection is still calibration's call, unchanged.
+        ranked = sorted(top_candidates, key=_rank_key, reverse=True)
+        return [plex_item for _item_id, (plex_item, _score) in ranked]
 
     def _sync_plex_collection(
         self,
