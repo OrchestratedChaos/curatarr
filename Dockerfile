@@ -27,7 +27,7 @@
 # imagetools inspect python:3.12-slim` (or the registry API) for the
 # new tag's manifest-list digest, and update BOTH FROM lines in this
 # file (this stage and the runtime stage below) together.
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS deps
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS deps
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -56,7 +56,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ---------------------------------------------------------------------
 # Stage 2: lean runtime - just the venv + app code, no compiler.
 # ---------------------------------------------------------------------
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS runtime
 
 LABEL org.opencontainers.image.title="Curatarr" \
       org.opencontainers.image.description="Personalized recommendations for your Plex library" \
